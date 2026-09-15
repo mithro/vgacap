@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import time
+from contextlib import ExitStack
 from typing import Iterator, Protocol, runtime_checkable
 
 CTRL_A = b"\x01"
@@ -32,6 +33,15 @@ CHUNK_TAGS = (b"VGCH", b"RAW ", b"RLE ", b"FRAM", b"EVNT", b"TIME")
 
 #: Bytes in a chunk header: `tag[4] + u32 little-endian payload length`.
 CHUNK_HEADER_LEN = 8
+
+#: Largest payload length `exec_chunks()` will believe, the same bound the
+#: C reader applies (`VGACAP_MAX_CHUNK_LEN`, include/vgacap/stream.h:33).
+#: A known tag followed by a corrupt length would otherwise be read as a
+#: payload of up to 4 GiB, and the only thing that ends that read is the
+#: whole `timeout` expiring -- with the real framing error still unreported
+#: and every byte of it swallowed. The board's own chunks are one DMA
+#: buffer each, four orders of magnitude below this.
+MAX_CHUNK_LEN = 16 * 1024 * 1024
 
 
 class LinkClosed(Exception):
@@ -84,7 +94,16 @@ class WebSocketLink:
     def __init__(self, url: str) -> None:
         from websockets.sync.client import connect
 
-        self._ws = connect(url, max_size=None)
+        # `connect()` is documented for use as a context manager, and using
+        # its result directly is deprecated ("connect() must be used as a
+        # context manager", websockets >= 15). A link outlives the call that
+        # opened it, so the context is entered into an `ExitStack` that
+        # `close()` unwinds. This also works whichever way the version in
+        # use has `connect()` return: `enter_context` gets the connection
+        # either from the connection's own `__enter__` or from the
+        # connector's.
+        self._stack = ExitStack()
+        self._ws = self._stack.enter_context(connect(url, max_size=None))
 
     def write(self, data: bytes) -> None:
         self._ws.send(data)
@@ -106,7 +125,7 @@ class WebSocketLink:
             # else: text frame (JSON event) -- discard and keep waiting.
 
     def close(self) -> None:
-        self._ws.close()
+        self._stack.close()
 
 
 class RawRepl:
@@ -304,6 +323,15 @@ class RawRepl:
         """
         self._link.write(code.encode("utf-8") + CTRL_D)
         self._read_until(b"OK", timeout)
+        yield from self._chunk_stream(timeout)
+
+    def _chunk_stream(self, timeout: float) -> Iterator[tuple[bytes, bytes]]:
+        """Yield chunks until the end of the running command's stdout.
+
+        Split out of `exec_chunks()` so that `drain_chunks()` can read the
+        rest of a command whose chunks nobody wants any more: the framing
+        rules are identical, only the code that starts the command is not.
+        """
         while True:
             first = self.read_exact(1, timeout)
             if first == CTRL_D:
@@ -318,10 +346,39 @@ class RawRepl:
                     f"expected a vgacap chunk header, got {header!r}"
                 )
             length = int.from_bytes(header[4:8], "little")
+            if length > MAX_CHUNK_LEN:
+                raise ReplFramingError(
+                    f"chunk {tag!r} declares {length} bytes, over the "
+                    f"{MAX_CHUNK_LEN}-byte limit the readers accept: the "
+                    "stream has desynchronised"
+                )
             yield tag, self.read_exact(length, timeout)
+
+    def drain_chunks(self, timeout: float = 5.0) -> bool:
+        """Read and discard chunks until the running command's prompt.
+
+        The tidy half of abandoning a capture: the script on the board is
+        still writing, and its bytes have to be taken off the wire (and its
+        stderr and prompt consumed) before anything else can use the link.
+        Returns True if the command really did end -- `last_stderr` is then
+        set exactly as `exec_chunks()` would leave it -- and False if the
+        board did not stop within `timeout` or its framing was already
+        lost, which leaves a real Ctrl-C (`recover()`) as the only way out.
+        """
+        try:
+            for _tag, _payload in self._chunk_stream(timeout):
+                pass
+        except (TimeoutError, ReplFramingError, LinkClosed):
+            return False
+        return True
 
     def upload(self, name: str, source: str) -> None:
         """Write `source` to a file named `name` on the board."""
+        # `ubinascii` is not in a fresh raw REPL's globals: the demo board's
+        # `main.py` leaves `tt` there and nothing else, so without this the
+        # first chunk write below dies with `NameError`. Importing a module
+        # that is already in `sys.modules` costs only the rebind.
+        self._exec_checked("import ubinascii")
         self._exec_checked(f"f=open({name!r},'wb')")
         data = source.encode("utf-8")
         for offset in range(0, len(data), _UPLOAD_CHUNK_SIZE):

@@ -15,7 +15,7 @@ import struct
 import pytest
 from fake_repl import FakeChunkBoard
 
-from ttcap.repl import RawRepl, ReplFramingError
+from ttcap.repl import MAX_CHUNK_LEN, RawRepl, ReplFramingError
 
 #: Stands in for a real capture script: `FakeChunkBoard` streams its canned
 #: chunks for the command carrying the `CFG = ` prefix `ttcap.mp.with_cfg()`
@@ -81,6 +81,33 @@ def test_rejects_an_unknown_tag():
         list(repl.exec_chunks(SCRIPT))
 
 
+def test_rejects_a_length_over_the_readers_limit():
+    # A valid tag with a corrupt length: without a cap the client waits for
+    # the whole `timeout` to expire while buffering, swallowing every byte
+    # after it, and then reports a timeout instead of the framing error it
+    # already had in hand. 16 MiB is the same bound the C reader applies
+    # (VGACAP_MAX_CHUNK_LEN, include/vgacap/stream.h).
+    board = FakeChunkBoard(
+        [b"RAW " + struct.pack("<I", MAX_CHUNK_LEN + 1) + b"junk"], terminate=False
+    )
+    repl = connect(board)
+
+    with pytest.raises(ReplFramingError, match="desynchronised"):
+        list(repl.exec_chunks(SCRIPT, timeout=5.0))
+
+
+def test_accepts_a_length_at_the_limit():
+    # The bound is inclusive: a chunk of exactly the limit is framed, and
+    # only the read itself (never the header check) can fail.
+    board = FakeChunkBoard(
+        [b"RAW " + struct.pack("<I", MAX_CHUNK_LEN) + b"short"], terminate=False
+    )
+    repl = connect(board)
+
+    with pytest.raises(TimeoutError, match=str(MAX_CHUNK_LEN)):
+        list(repl.exec_chunks(SCRIPT, timeout=0.2))
+
+
 def test_truncated_payload_times_out():
     # A header promising 100 bytes with only 5 behind it, and no terminator.
     board = FakeChunkBoard([b"RAW " + struct.pack("<I", 100) + b"short"], terminate=False)
@@ -88,6 +115,34 @@ def test_truncated_payload_times_out():
 
     with pytest.raises(TimeoutError, match="100 bytes"):
         list(repl.exec_chunks(SCRIPT, timeout=0.2))
+
+
+def test_drain_chunks_finishes_a_command_nobody_is_reading_any_more():
+    # Abandoning a capture part way through leaves the board still writing.
+    # Draining takes the rest off the wire, consumes the stderr and the
+    # prompt, and leaves the link ready for the next command.
+    board = FakeChunkBoard(
+        [chunk(b"RAW ", struct.pack("<I", 2) + b"\x01\x02")] * 3,
+        stderr="KeyboardInterrupt\r\n",
+        replies={"print(1)": "1\r\n"},
+    )
+    repl = connect(board)
+    chunks = repl.exec_chunks(SCRIPT)
+    next(chunks)
+    chunks.close()
+
+    assert repl.drain_chunks(timeout=1.0) is True
+    assert "KeyboardInterrupt" in repl.last_stderr
+    assert repl.exec("print(1)") == ("1\r\n", "")
+
+
+def test_drain_chunks_reports_a_board_that_will_not_stop():
+    board = FakeChunkBoard([chunk(b"RAW ", b"\x00" * 8)], terminate=False)
+    repl = connect(board)
+    chunks = repl.exec_chunks(SCRIPT)
+    chunks.close()
+
+    assert repl.drain_chunks(timeout=0.2) is False
 
 
 def test_read_exact_returns_exactly_n_bytes():
