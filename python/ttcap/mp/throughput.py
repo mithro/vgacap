@@ -42,11 +42,16 @@ def build_block_source(block):
 
 
 def write_all(out, data):
-    """Write every byte of `data` to `out`, tolerating short writes."""
+    """Write every byte of `data` to `out`, tolerating short writes.
+
+    `data[pos:]` would copy the whole block on the common first pass, i.e.
+    an extra `block`-sized allocation per write on exactly the path whose
+    speed is being measured -- so pass `data` itself while `pos` is 0.
+    """
     pos = 0
     n = len(data)
     while pos < n:
-        written = out.write(data[pos:])
+        written = out.write(data[pos:] if pos else data)
         if written is None:
             return
         pos += written

@@ -30,8 +30,6 @@ PATTERN_LEN = len(PATTERN)
 DEFAULT_TOTAL = 1_000_000
 DEFAULT_BLOCK = 32768
 
-_DOUBLE = PATTERN + PATTERN
-
 
 def pattern_slice(offset: int, length: int) -> bytes:
     """Return `length` bytes of the repeating pattern starting at `offset`."""
