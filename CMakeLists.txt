@@ -17,6 +17,8 @@ add_library(vgacap_frame STATIC src/frame/modes.c src/frame/timing.c src/frame/f
 # --- tools: command-line utilities (src/tools) ---
 add_executable(vgacap-dump src/tools/vgacap_dump.c)
 target_link_libraries(vgacap-dump PRIVATE vgacap_stream)
+add_executable(vgacap-frames src/tools/vgacap_frames.c)
+target_link_libraries(vgacap-frames PRIVATE vgacap_stream vgacap_frame)
 
 function(vgacap_add_test name)
   add_executable(${name} tests/${name}.c ${ARGN})

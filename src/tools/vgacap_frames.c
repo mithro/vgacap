@@ -4,11 +4,6 @@
 // Reads a vgacap capture stream and reconstructs each frame into a binary
 // PPM (P6) image, <out-prefix>-NNNN.ppm. Partial frames (not every line
 // covered) are only written when --partial is given.
-//
-// NOTE: this tool links against vgacap_stream (for vgacap_reader_*) which is
-// implemented on a separate branch; it is intentionally not wired into
-// CMakeLists.txt here. The controller adds the executable target after the
-// two branches are merged.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
