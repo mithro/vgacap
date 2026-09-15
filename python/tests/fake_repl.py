@@ -144,7 +144,8 @@ class _StubStdout:
 
     def write(self, data) -> int:
         if isinstance(data, str):
-            data = data.encode("utf-8")
+            # Real boards emit \r\n line endings over the serial console.
+            data = data.replace("\n", "\r\n").encode("utf-8")
         self._sink.extend(data)
         return len(data)
 
@@ -242,7 +243,11 @@ class FakeBinaryBoard:
         del self._sink[:]
         err = ""
         try:
-            exec(code, self._globals)  # noqa: S102 - that is the point
+            # `print()` goes to the interpreter's own sys.stdout, not to the
+            # stub `sys` the exec'd code imports, so it needs redirecting too
+            # -- on a board both land on the same console.
+            with contextlib.redirect_stdout(self._stdout):
+                exec(code, self._globals)  # noqa: S102 - that is the point
         except Exception:
             err = traceback.format_exc().replace("\n", "\r\n")
         if self.corrupt is not None:

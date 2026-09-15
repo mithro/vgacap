@@ -28,6 +28,11 @@ def link_from_url(url: str) -> ReplLink:
     raise ValueError(f"unsupported link url {url!r}: expected serial:<port> or ws(s)://...")
 
 
+#: The demo board's `main.py` leaves `tt` in the REPL's globals but not
+#: `GPIOMap`, so the probe has to import it itself.
+GPIO_MAP_CODE = "from ttboard.pins.gpio_map import GPIOMap; print(GPIOMap.all())"
+
+
 def probe(url: str) -> str:
     """Connect to `url`, print the board's sys.version and GPIOMap.all()."""
     link = link_from_url(url)
@@ -38,7 +43,7 @@ def probe(url: str) -> str:
             version, err = repl.exec("import sys; print(sys.version)")
             if err:
                 raise RuntimeError(f"probe failed reading sys.version: {err}")
-            gpio_map_repr, err = repl.exec("print(GPIOMap.all())")
+            gpio_map_repr, err = repl.exec(GPIO_MAP_CODE)
             if err:
                 raise RuntimeError(f"probe failed reading GPIOMap.all(): {err}")
         finally:
