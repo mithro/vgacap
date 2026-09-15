@@ -19,7 +19,7 @@ import types
 
 import pytest
 
-from ttcap.repl import CTRL_A, CTRL_B, CTRL_D, RawRepl, SerialLink
+from ttcap.repl import CTRL_A, CTRL_B, CTRL_D, LinkClosed, RawRepl, SerialLink, WebSocketLink
 
 
 class FakeRawRepl:
@@ -177,4 +177,54 @@ def test_read_until_discards_buffer_on_timeout():
         link.close()
     finally:
         os.close(master_fd)
+
+
+def _ws_echo_handler(websocket):
+    websocket.send("ignored text frame")
+    for message in websocket:
+        if isinstance(message, (bytes, bytearray)):
+            websocket.send(message)
+
+
+@pytest.fixture
+def ws_echo_server():
+    from websockets.sync.server import serve
+
+    server = serve(_ws_echo_handler, "127.0.0.1", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.socket.getsockname()[:2]
+        yield f"ws://{host}:{port}/"
+    finally:
+        server.shutdown()
+        thread.join(timeout=2.0)
+
+
+def test_websocket_link_reads_binary_and_ignores_text_frames(ws_echo_server):
+    link = WebSocketLink(ws_echo_server)
+    try:
+        link.write(b"ping")
+        assert link.read(2.0) == b"ping"
+    finally:
+        link.close()
+
+
+def test_websocket_link_raises_linkclosed_when_server_closes():
+    from websockets.sync.server import serve
+
+    def _close_immediately(websocket):
+        websocket.close()
+
+    server = serve(_close_immediately, "127.0.0.1", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.socket.getsockname()[:2]
+        link = WebSocketLink(f"ws://{host}:{port}/")
+        with pytest.raises(LinkClosed):
+            link.read(2.0)
+    finally:
+        server.shutdown()
+        thread.join(timeout=2.0)
 

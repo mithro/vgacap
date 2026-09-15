@@ -25,6 +25,10 @@ RAW_REPL_BANNER = b"raw REPL; CTRL-B to exit\r\n>"
 _UPLOAD_CHUNK_SIZE = 256
 
 
+class LinkClosed(Exception):
+    """Raised by a `ReplLink` when the underlying connection has closed."""
+
+
 @runtime_checkable
 class ReplLink(Protocol):
     def write(self, data: bytes) -> None: ...
@@ -75,11 +79,15 @@ class WebSocketLink:
     def read(self, timeout: float) -> bytes:
         # The bridge daemon also sends text frames carrying JSON status
         # events; those are not serial data and must be ignored here.
+        from websockets.exceptions import ConnectionClosed
+
         while True:
             try:
                 message = self._ws.recv(timeout=timeout)
             except TimeoutError:
                 return b""
+            except ConnectionClosed as exc:
+                raise LinkClosed(f"websocket link closed: {exc}") from exc
             if isinstance(message, bytes):
                 return message
             # else: text frame (JSON event) -- discard and keep waiting.
