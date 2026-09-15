@@ -184,6 +184,68 @@ anything else -- in particular `ttcap-command`, which is a program to run, or
 not a trusted shell, so those stay settable only as element properties, by
 whoever builds the pipeline.
 
+## `ttcap demo`: a board in, video out
+
+```sh
+uv run ttcap demo --board tt07 --project tt_um_rejunity_vga \
+    --clock-hz 60000 --seconds 60 --outdir out            # PNGs + out/capture.mkv
+uv run ttcap demo --board tt07 --clock-hz 60000 --outdir out --window --serve 8080
+uv run ttcap demo --board tt07 --clock-hz 60000 --outdir out --dry-run   # just the pipeline
+```
+
+One capture feeds every output, through a `tee`:
+
+| output | on by default | pipeline |
+|---|---|---|
+| `out/frame-%04d.png` | yes (`--no-png` to drop) | `pngenc ! multifilesink` |
+| `out/capture.mkv` | yes (`--no-video` to drop) | `x264enc`, else `vp8enc`, into `matroskamux` |
+| a window | `--window` | `autovideosink` |
+| `http://localhost:PORT/` | `--serve PORT` | `jpegenc ! multipartmux` into an MJPEG HTTP server |
+
+`--serve` publishes `multipart/x-mixed-replace` on the loopback address and
+an index page with an `<img src="/stream.mjpg">` in it, which is all a
+browser needs. It is standard library only, and a viewer that falls behind
+loses frames rather than slowing the capture down.
+
+`--dry-run` prints the `gst-launch-1.0` command and exits without touching
+the board, the outdir or the port -- the same command a real run prints
+before it starts, so it can be copied, edited and run by hand. The demo
+drives `gst-launch-1.0` as a child process rather than building the pipeline
+in-process, because the GStreamer Python bindings (`python3-gi`) are an OS
+package and `ttcap` runs under `uv`; the pipeline text is the same either
+way, and `ttcap.demo.use_gst_python()` is the check.
+
+Ctrl-C ends the run cleanly: the interrupt is forwarded once to
+`gst-launch -e`, which turns it into an end-of-stream, so the board winds
+down through `vgacapttsrc`'s cooperative stop and the Matroska file is
+finalised rather than truncated. Allow one DMA buffer for that -- 2.2 s at a
+60 kHz project clock.
+
+### Reaching a Welland board
+
+`--board` takes a slug from the `WELLAND` table (`tt03p5`, `tt04`..`tt08`,
+`fpga-1`..`fpga-4`) and resolves it to a link:
+
+* **on the board's own Pi**, `serial:/dev/ttboard` -- stop the fpgas.online
+  bridge first (`sudo systemctl stop fpgas-tt`), since it holds the device
+  open;
+* **anywhere else**, the bridge at `ws://10.21.2.<port>:8765/serial`, which
+  is on the bench network. From a workstation that means an SSH tunnel:
+
+```sh
+ssh -N -L 7:10.21.2.7:8765 tweed.welland.mithis.com      # tt07; any free port does
+uv run ttcap demo --link ws://127.0.0.1:7/serial --clock-hz 60000 --outdir out
+```
+
+`--link` overrides the board entirely, and a run over the bridge that fails
+to connect prints that tunnel command before it exits.
+
+The source is built by name with its settings as element properties --
+never as a `vgacapbin` URI. `ttcap-command`, which names the program that
+talks to the board, is one of those settings, and a URI query is not allowed
+to set it (see above); a command that publishes a stream to a browser is
+exactly the place that restriction is for.
+
 ## Running on a Raspberry Pi
 
 The board tools (`ttcap`) need only pyserial and websockets. On a Pi, keep
