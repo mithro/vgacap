@@ -24,7 +24,8 @@ get_directory_property(VGACAP_GST_OPTS COMPILE_OPTIONS)
 list(REMOVE_ITEM VGACAP_GST_OPTS -Wconversion)
 set_directory_properties(PROPERTIES COMPILE_OPTIONS "${VGACAP_GST_OPTS}")
 
-add_library(gstvgacap MODULE gstvgacap.c gstvgadecode.c)
+add_library(gstvgacap MODULE
+  gstvgacap.c gstvgadecode.c gstvgacapttsrc.c gstvgacapbin.c gstvgacapuri.c)
 set_target_properties(gstvgacap PROPERTIES
   PREFIX "lib"                       # GStreamer expects libgst<name>.so
   OUTPUT_NAME gstvgacap
@@ -43,6 +44,20 @@ set_property(TARGET vgacap_stream PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET vgacap_frame PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 # gst-inspect-1.0 finds it with GST_PLUGIN_PATH=<build dir>.
-add_test(NAME gst_plugin_inspect
-  COMMAND ${CMAKE_COMMAND} -E env GST_PLUGIN_PATH=${CMAKE_BINARY_DIR}
-          gst-inspect-1.0 vgadecode)
+foreach(element vgadecode vgacapttsrc vgacapbin)
+  add_test(NAME gst_plugin_inspect_${element}
+    COMMAND ${CMAKE_COMMAND} -E env GST_PLUGIN_PATH=${CMAKE_BINARY_DIR}
+            gst-inspect-1.0 ${element})
+endforeach()
+
+# The vgacapbin URI grammar, tested on its own: gstvgacapuri.c needs GLib
+# alone, so the whole table of good and bad URIs runs without a pipeline, a
+# plugin registry or a board.
+add_executable(test_vgacap_uri tests/test_uri.c gstvgacapuri.c)
+set_target_properties(test_vgacap_uri PROPERTIES C_STANDARD 99 C_EXTENSIONS ON)
+target_include_directories(test_vgacap_uri PRIVATE
+  ${GST_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/tests)
+target_compile_options(test_vgacap_uri PRIVATE ${GST_CFLAGS_OTHER})
+target_link_directories(test_vgacap_uri PRIVATE ${GST_LIBRARY_DIRS})
+target_link_libraries(test_vgacap_uri PRIVATE ${GST_LIBRARIES})
+add_test(NAME test_vgacap_uri COMMAND test_vgacap_uri)
