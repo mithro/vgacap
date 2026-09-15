@@ -14,6 +14,8 @@ enable_testing()
 add_library(vgacap_stream STATIC src/stream/writer.c src/stream/reader.c)
 # --- frame: VGA picture reconstruction (src/frame) ---
 # --- tools: command-line utilities (src/tools) ---
+add_executable(vgacap-dump src/tools/vgacap_dump.c)
+target_link_libraries(vgacap-dump PRIVATE vgacap_stream)
 
 function(vgacap_add_test name)
   add_executable(${name} tests/${name}.c ${ARGN})
