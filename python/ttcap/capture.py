@@ -676,6 +676,16 @@ class CaptureSession:
         its closing `TIME` chunk -- the iterator keeps yielding until that
         trailer has been read, and the stream ends with a whole chunk.
 
+        **The stream does not end immediately, and a caller that kills the
+        capture too early loses the board's only overrun and RXSTALL
+        report.** The byte goes out at once, but the board picks it up
+        between chunk writes, so the trailer is up to one DMA buffer away:
+        ~82 ms at 750 kHz with `buf_words=4096`, but **2.2 s** at the
+        RP2040's 60 kHz ceiling. An element's `stop()` should keep pulling
+        until the iterator ends -- or wait at least that long -- before it
+        escalates to `close()`, and a subprocess driver should allow the
+        same before it sends a second signal.
+
         Idempotent, and safe before the capture has started: the request is
         remembered and the byte goes out as soon as the script is running.
         """
@@ -710,19 +720,41 @@ class CaptureSession:
     # -- internals --------------------------------------------------------
 
     def _send_stop(self) -> None:
-        """Write the stop byte at most once, and only while a script runs."""
+        """Write the stop byte at most once, and only while a script runs.
+
+        The write happens **under `self._lock`**, not after releasing it.
+        Checking `_streaming` and then writing outside the lock leaves a
+        window in which another thread's stop has already passed the guard
+        but not yet reached the link: `_end_streaming()` would then return
+        while that byte was still to come, and it would land somewhere in
+        `_abandon_stream()` -- or, worse, after `recover()` had resynchronised
+        to the prompt, where `micropython.kbd_intr` is back to its default
+        and the byte becomes a `KeyboardInterrupt` in whatever the `RawRepl`
+        does next. Holding the lock across the write makes
+        `_end_streaming()`'s acquisition a real fence: after it returns, no
+        stop byte can still be in flight.
+
+        This cannot deadlock. It is one byte, and `RawRepl._write`'s own lock
+        is never held across a read; the iterating thread takes `self._lock`
+        only here, in `_end_streaming()` and to set `_streaming`, never
+        across any link I/O. Lock order is always session lock then repl
+        write lock, and `RawRepl` knows nothing about a session, so there is
+        no cycle.
+        """
         with self._lock:
             if self._stop_sent or not self._streaming:
                 return
             self._stop_sent = True
-        self._repl.request_stop()
+            self._repl.request_stop()
 
     def _end_streaming(self) -> None:
         """Close the window in which `request_stop()` may write to the link.
 
         Called before every teardown, so that a stop arriving from another
         thread while this one is recovering the board cannot put a stray
-        Ctrl-C into the middle of that recovery. Idempotent.
+        Ctrl-C into the middle of that recovery. Because `_send_stop()`
+        holds the same lock across its write, this waits for a stop that is
+        already in flight rather than racing it. Idempotent.
         """
         with self._lock:
             self._streaming = False

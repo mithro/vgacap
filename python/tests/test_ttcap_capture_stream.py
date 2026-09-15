@@ -30,7 +30,7 @@ from ttcap.capture import (
     stream_header_bytes,
 )
 from ttcap.boards import RP2040_TT06
-from ttcap.repl import RawRepl
+from ttcap.repl import CTRL_C, RawRepl
 from vgacap.stream import Header, Writer, read_stream
 
 PROFILE = RP2040_TT06
@@ -463,3 +463,98 @@ def test_stats_can_be_read_while_the_capture_is_still_streaming():
     assert mid.chunks == 1 and mid.samples == 4
     assert final.chunks == 5 and final.samples == 16
     assert final.dropped == 5 and final.overruns == 1
+
+
+# -- a stop racing the teardown ------------------------------------------
+
+
+def _park_the_stop_byte(board):
+    """Make the board's link park inside the `write()` of a stop byte.
+
+    Returns `(entered, release)`: `entered` is set once a thread is inside
+    that write, and `release` lets it finish. That is how a cross-thread
+    `request_stop()` is held *past* `_send_stop()`'s guard and pinned there,
+    which is the only interleaving where the lock discipline is observable.
+    """
+    entered = threading.Event()
+    release = threading.Event()
+    original = board.write
+
+    def write(data: bytes) -> None:
+        if data == CTRL_C:
+            entered.set()
+            release.wait(5.0)
+        original(data)
+
+    board.write = write
+    return entered, release
+
+
+def test_a_stop_byte_in_flight_holds_the_teardown_until_it_has_landed():
+    # `_end_streaming()` exists to guarantee that no stop byte is still to
+    # come once a teardown begins -- otherwise the byte lands inside
+    # `_abandon_stream()`, or after `recover()` has resynchronised to the
+    # prompt, where `kbd_intr` is back to its default and 0x03 becomes a
+    # KeyboardInterrupt in whatever the RawRepl does next.
+    #
+    # It can only guarantee that if `_send_stop()` holds the session lock
+    # *across* its write. Release the lock before writing and the
+    # `_end_streaming()` below returns while the byte is still parked.
+    board = FakeChunkBoard(
+        [raw_chunk(PROFILE, [1, 2])] * 8,
+        on_interrupt=time_chunk(PROFILE, 0, "stopped"),
+    )
+    repl = connect(board)
+    session = CaptureSession(repl, request(max_bytes=10**6))
+    stream = session.chunks()
+    next(stream)  # the header
+    next(stream)  # the first chunk: the script is running, stops may go out
+
+    entered, release = _park_the_stop_byte(board)
+    stopper = threading.Thread(target=session.request_stop)
+    stopper.start()
+    assert entered.wait(5.0), "the stop byte never reached the link"
+
+    finished = threading.Event()
+
+    def teardown() -> None:
+        session._end_streaming()
+        finished.set()
+
+    ender = threading.Thread(target=teardown)
+    ender.start()
+    try:
+        # The byte is past the guard and not yet on the wire, so the
+        # teardown must wait for it rather than run alongside it.
+        assert not finished.wait(0.3)
+    finally:
+        release.set()
+        ender.join(5.0)
+        stopper.join(5.0)
+
+    assert finished.is_set()
+    # And once it has landed, the window really is shut: a later stop is a
+    # no-op rather than a byte aimed at the next command.
+    before = board.interrupts
+    session.request_stop()
+    assert board.interrupts == before
+
+
+def test_a_stop_after_the_window_closes_never_reaches_the_next_command():
+    board = FakeChunkBoard(
+        [raw_chunk(PROFILE, [1, 2])] * 8,
+        on_interrupt=time_chunk(PROFILE, 0, "stopped"),
+        replies={"print(1)": "1\r\n"},
+    )
+    repl = connect(board)
+    session = CaptureSession(repl, request(max_bytes=10**6))
+    stream = session.chunks()
+    next(stream)
+    next(stream)
+    session.close()
+
+    after_teardown = board.interrupts
+    session.request_stop()
+
+    assert board.interrupts == after_teardown
+    assert repl.exec("print(1)") == ("1\r\n", "")
