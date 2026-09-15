@@ -4,6 +4,10 @@
 // Reads a vgacap capture stream and reconstructs each frame into a binary
 // PPM (P6) image, <out-prefix>-NNNN.ppm. Partial frames (not every line
 // covered) are only written when --partial is given.
+//
+// Each frame line reports the spurious sync pulses ignored during that frame
+// as glitches=N; the summary line reports the stream's total as
+// glitches_total=N.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +27,7 @@ typedef struct {
     int max_frames;
     int write_partial;
     uint32_t frames_written;
+    uint32_t glitches_seen;   // lifetime total as of the last reported frame
     int have_frame;
     int failed;
 } app_t;
@@ -47,6 +52,12 @@ static const char *sync_str(uint8_t positive) { return positive ? "pos" : "neg";
 static void on_frame(void *user, const vgaframe_output_t *out) {
     app_t *app = (app_t *)user;
     if (app->failed) return;
+    // timing->glitches is a lifetime total, so the per-frame line reports what
+    // this frame added to it - taken here, before any early return, so a frame
+    // that is not written still hands its glitches on to the next one rather
+    // than losing them.
+    uint32_t glitches = out->timing->glitches - app->glitches_seen;
+    app->glitches_seen = out->timing->glitches;
     if (out->partial && !app->write_partial) return;
     if (app->max_frames > 0 && (int)app->frames_written >= app->max_frames) return;
 
@@ -59,11 +70,12 @@ static void on_frame(void *user, const vgaframe_output_t *out) {
     }
 
     const vgaframe_mode_t *m = out->timing->mode;
-    fprintf(stdout, "frame %u: %ux%u mode=%s cpl=%u lpf=%u hsync=%s vsync=%s partial=%u\n",
+    fprintf(stdout, "frame %u: %ux%u mode=%s cpl=%u lpf=%u hsync=%s vsync=%s partial=%u glitches=%u\n",
            (unsigned)app->frames_written, (unsigned)out->width, (unsigned)out->height,
            m ? m->name : "?", (unsigned)out->timing->clocks_per_line,
            (unsigned)out->timing->lines_per_frame, sync_str(out->timing->hsync_positive),
-           sync_str(out->timing->vsync_positive), (unsigned)out->partial);
+           sync_str(out->timing->vsync_positive), (unsigned)out->partial,
+           (unsigned)glitches);
     app->frames_written++;
     app->have_frame = 1;
 }
@@ -159,7 +171,12 @@ int main(int argc, char **argv) {
     if (!app.failed && (app.max_frames <= 0 || (int)app.frames_written < app.max_frames))
         vgaframe_flush(&app.frame);
 
-    fprintf(stdout, "frames=%u\n", (unsigned)app.frames_written);
+    // Spurious sync pulses the reconstruction ignored over the whole stream
+    // (each frame line above reports its own share): a handful is normal for
+    // real silicon, a lot of them explains a low frame count the same way the
+    // resync lines do.
+    fprintf(stdout, "frames=%u glitches_total=%u\n", (unsigned)app.frames_written,
+            (unsigned)app.frame.learner.t.glitches);
 
     if (app.failed) return 2;
     if (!app.have_frame) return 2;

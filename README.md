@@ -44,9 +44,16 @@ mkdir -p out && build/vgacap-frames capture.vgacap out/frame   # out/frame-0000.
 uv run vgacap-bin2stream dump.bin out.vgacap  # wrap a one-byte-per-clock simulator dump
 ```
 
-A frame is emitted at the next frame boundary once the timing is known, so
-a capture that starts mid-frame needs one boundary plus one full frame
-before the first picture: capture at least three frame periods.
+A frame is emitted at the frame boundary that closes it, once the timing is
+known. A capture that starts mid-frame -- the normal case -- claims the frame
+that its first vsync pulse begins, so two frame periods are enough for the
+first picture and each further period adds one. A capture that happens to
+start exactly on a vsync pulse cannot measure that pulse and waits for the
+next one, so capture at least three frame periods to be sure.
+
+Spurious sync pulses are tolerated: a capture whose hsync carries the odd 2
+to 30 clock glitch (real silicon does) still reconstructs, and the glitches
+are counted and reported as `glitches=N`.
 
 ## Running on a Raspberry Pi
 
@@ -74,8 +81,9 @@ uv run ttcap png capture.vgacap out/frame       # out/frame-0000.png ...
 `--profile` defaults to `auto`, which reads the board's `GPIOMap` and picks
 the RP2040 or RP2350 layout from it. Stop the capture by time (`--seconds`)
 or by size (`--max-bytes N`, or `--frames N` which works the bytes out from
-640x480@60 timing and the board's packing, adding the two frame periods of
-margin described above); `--seconds 0` runs until the byte limit.
+640x480@60 timing and the board's packing, adding two frame periods of
+margin for the convergence described above); `--seconds 0` runs until the
+byte limit.
 
 The board has very little heap -- about 80 KB on the RP2040 demo board --
 so `ttcap capture` clears the previous run's names and collects before it
