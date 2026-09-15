@@ -50,19 +50,31 @@ PROFILES = {"rp2040": RP2040_TT06, "rp2350": RP2350_DBV3}
 #: Where `ttcap png` looks for the C renderer, in order.
 VGACAP_FRAMES = "vgacap-frames"
 
-#: Everything a capture can fail with that is the board's, the link's or the
-#: request's fault rather than a bug here. All of them exit 1: a separate
-#: code for framing and timeouts was considered and dropped, because 2 is
-#: argparse's usage code and overloading it would be worse than one clear
-#: message naming the exception type.
+#: Everything a subcommand can fail with that is the board's, the link's or
+#: the request's fault rather than a bug here. All of them exit 1: a
+#: separate code for framing and timeouts was considered and dropped,
+#: because 2 is argparse's usage code and overloading it would be worse than
+#: one clear message naming the exception type.
+#:
+#: `SyntaxError` is in the list because `ast.literal_eval()` raises it -- not
+#: `ValueError` -- when the board's stdout carries anything besides the
+#: `GPIOMap.all()` dict repr the probe and `--profile auto` ask for. A
+#: firmware banner or a leftover `print()` is a board problem, not a bug.
 CAPTURE_FAILURES = (
     CaptureError,
     ValueError,
+    SyntaxError,
     TimeoutError,
     ReplFramingError,
     LinkClosed,
     OSError,
 )
+
+
+def _failed(what: str, exc: BaseException) -> int:
+    """Report a subcommand's failure the way `main`'s contract promises."""
+    print("%s failed: %s: %s" % (what, type(exc).__name__, exc), file=sys.stderr)
+    return 1
 
 
 def link_from_url(url: str) -> ReplLink:
@@ -79,6 +91,25 @@ def link_from_url(url: str) -> ReplLink:
 GPIO_MAP_CODE = "from ttboard.pins.gpio_map import GPIOMap; print(GPIOMap.all())"
 
 
+def _parse_gpio_map(reply: str) -> dict:
+    """Turn the board's `GPIOMap.all()` reply into a dict.
+
+    Anything else on the board's stdout -- a firmware banner, a `print()`
+    left over from a previous session -- makes `ast.literal_eval()` raise
+    `SyntaxError`, which is neither an `OSError` nor a `ValueError` and so
+    used to reach the user as a traceback. It is a board problem and gets a
+    board problem's message.
+    """
+    try:
+        return ast.literal_eval(reply.strip())
+    except (SyntaxError, ValueError) as exc:
+        raise CaptureError(
+            "board did not reply with a GPIOMap.all() dict (%s); it said "
+            "%r. Pass --profile rp2040 or --profile rp2350 instead."
+            % (exc, reply.strip()[:200])
+        ) from None
+
+
 def probe(url: str) -> str:
     """Connect to `url`, print the board's sys.version and GPIOMap.all()."""
     link = link_from_url(url)
@@ -88,16 +119,16 @@ def probe(url: str) -> str:
         try:
             version, err = repl.exec("import sys; print(sys.version)")
             if err:
-                raise RuntimeError(f"probe failed reading sys.version: {err}")
+                raise CaptureError(f"probe could not read sys.version: {err}")
             gpio_map_repr, err = repl.exec(GPIO_MAP_CODE)
             if err:
-                raise RuntimeError(f"probe failed reading GPIOMap.all(): {err}")
+                raise CaptureError(f"probe could not read GPIOMap.all(): {err}")
         finally:
             repl.exit()
     finally:
         link.close()
 
-    gpio_map = ast.literal_eval(gpio_map_repr.strip())
+    gpio_map = _parse_gpio_map(gpio_map_repr)
     report = f"sys.version: {version.strip()}\nGPIOMap.all(): {gpio_map!r}"
     print(report)
     return report
@@ -126,8 +157,26 @@ def resolve_profile(repl: RawRepl, name: str):
         return PROFILES[name]
     gpio_map_repr, err = repl.exec(GPIO_MAP_CODE)
     if err:
-        raise CaptureError(f"--profile auto could not read GPIOMap.all(): {err}")
-    return profile_from_gpio_map(ast.literal_eval(gpio_map_repr.strip()))
+        raise CaptureError(
+            "--profile auto could not read GPIOMap.all(): %s; pass --profile "
+            "rp2040 or --profile rp2350 instead" % err
+        )
+    return profile_from_gpio_map(_parse_gpio_map(gpio_map_repr))
+
+
+def _discard_empty(out_path: str) -> None:
+    """Remove a `.vgacap` nothing was ever written to.
+
+    The file is only unlinked while it is still zero bytes, so a capture
+    that produced anything at all keeps what it produced -- and a path that
+    has already been replaced by something else is left alone.
+    """
+    try:
+        path = pathlib.Path(out_path)
+        if path.is_file() and path.stat().st_size == 0:
+            path.unlink()
+    except OSError:  # pragma: no cover - whatever is there is not ours to fix
+        pass
 
 
 def capture(
@@ -150,7 +199,9 @@ def capture(
     """Run one capture to `out_path` and print what happened.
 
     The stream file is opened only once the board has accepted every setup
-    command, so a failed run does not leave a header-only `.vgacap` behind.
+    command, and is removed again if the run fails before a single byte is
+    written -- so a failed run leaves neither a header-only nor an empty
+    `.vgacap` behind.
     The stats are printed as soon as they exist -- before the clock is
     stopped -- so a failure during teardown cannot swallow the result of a
     capture that already succeeded.
@@ -180,8 +231,19 @@ def capture(
                 "profile=%s project=%s enable=%s"
                 % (board.name, selection["project"], selection["enable"])
             )
+            # `run_capture()` writes nothing until the board has been
+            # cleaned up and has the heap for the script, so a run refused
+            # there (or one that dies before the first chunk) must not
+            # leave an empty file behind pretending to be a capture.
+            # Anything that did get written is a valid, if short, stream
+            # and is kept.
             with open(out_path, "wb") as fp:
-                stats = run_capture(repl, request, fp)
+                try:
+                    stats = run_capture(repl, request, fp)
+                except BaseException:
+                    if fp.tell() == 0:
+                        _discard_empty(out_path)
+                    raise
             _report(stats, out_path)
             if stop_clock_after:
                 stop_clock(repl)
@@ -379,10 +441,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "probe":
-        probe(args.link)
+        # Wrapped like `capture`: `ttcap probe serial:/dev/nope` is the
+        # first command anyone runs, and a missing device, a board
+        # traceback or a dropped WebSocket is not a bug to report.
+        try:
+            probe(args.link)
+        except CAPTURE_FAILURES as exc:
+            return _failed("probe", exc)
         return 0
     if args.command == "throughput":
-        result = throughput(args.link, total=args.total, block=args.block)
+        try:
+            result = throughput(args.link, total=args.total, block=args.block)
+        except CAPTURE_FAILURES as exc:
+            return _failed("throughput", exc)
         return 1 if (result.corrupt or result.short) else 0
     if args.command == "capture":
         try:
@@ -406,8 +477,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             # `capture()` prints the stats before it tears anything down, so
             # whatever was gathered is already on stdout by now; all that is
             # left to say is why it stopped.
-            print("capture failed: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
-            return 1
+            return _failed("capture", exc)
         if stats.error or stats.timed_out:
             return 1
         if stats.samples == 0:
