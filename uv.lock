@@ -324,28 +324,40 @@ name = "vgacap"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "pillow" },
     { name = "pyserial" },
     { name = "websockets" },
 ]
 
+[package.optional-dependencies]
+synth = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pillow" },
+]
+
 [package.dev-dependencies]
 dev = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pillow" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "pillow", specifier = ">=10" },
+    { name = "numpy", marker = "extra == 'synth'", specifier = ">=1.26" },
+    { name = "pillow", marker = "extra == 'synth'", specifier = ">=10" },
     { name = "pyserial", specifier = ">=3.5" },
     { name = "websockets", specifier = ">=13" },
 ]
+provides-extras = ["synth"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
+dev = [
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pillow", specifier = ">=10" },
+    { name = "pytest", specifier = ">=8" },
+]
 
 [[package]]
 name = "websockets"
