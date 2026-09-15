@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import io
 import json
 import os
 import signal
@@ -118,6 +119,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--deaf", action="store_true",
                         help="--ignore-sigint, and swallow the broken pipe as well, "
                              "so only SIGKILL ends it")
+    parser.add_argument("--flood", action="store_true",
+                        help="repeat one pre-packed chunk in a tight loop, fast "
+                             "enough to keep a reader permanently busy")
 
     # ...and, from here down, exactly what `ttcap capture` takes.
     parser.add_argument("command", choices=["capture"])
@@ -163,6 +167,25 @@ def emit_stream(sink: Tee, args: argparse.Namespace) -> int:
     deadline = time.monotonic() + args.seconds if args.seconds > 0 else None
     frame = 0
     chunks = 0
+
+    if args.flood:
+        # One chunk, packed once, then written as fast as the pipe will take
+        # it. Generating samples is far slower than writing them, so an
+        # ordinary run always leaves gaps a reader can rest in; this one does
+        # not, which is what a reader that drains without a bound needs to
+        # meet before anyone believes the bound matters.
+        scratch = io.BytesIO()
+        packer = Writer(scratch, Header(sample_bits=8, samples_per_word=4,
+                                        signal_map=TINYVGA_MAP, mode=3,
+                                        clock_hz=args.clock_hz, desc="flood"))
+        head_len = scratch.tell()
+        packer.raw(samples[:SAMPLES_PER_CHUNK].tolist())
+        one_chunk = scratch.getvalue()[head_len:]
+        while not _stopping:
+            sink.write(one_chunk)
+            chunks += 1
+        print(f"fake ttcap: flooded {chunks} chunks", file=sys.stderr)
+        return 0
     while not _stopping:
         if args.frames and frame >= args.frames:
             break

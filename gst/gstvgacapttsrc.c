@@ -100,6 +100,9 @@ enum {
 #define STOP_POLL_MS 20
 /* Grace after the two escalations that are not supposed to need long. */
 #define ESCALATION_GRACE_S 2.0
+/* Most that one drain_stdout() call swallows: 1 MiB, in 16 KiB reads. */
+#define DRAIN_SWEEP_BYTES 16384
+#define DRAIN_SWEEPS 64
 
 struct _GstVgaCapTtSrc {
     GstPushSrc parent;
@@ -345,9 +348,10 @@ static gboolean try_reap(GstVgaCapTtSrc *self, gint *status)
  * it blocks in poll() for at most @timeout_ms. */
 static void drain_stdout(GstVgaCapTtSrc *self, gint timeout_ms)
 {
-    gchar scratch[16384];
+    gchar scratch[DRAIN_SWEEP_BYTES];
     struct pollfd pfd;
     gint wait_ms = timeout_ms;
+    guint sweep;
 
     if (self->out_fd < 0 || self->out_eof) {
         g_usleep((gulong)timeout_ms * 1000);
@@ -355,16 +359,21 @@ static void drain_stdout(GstVgaCapTtSrc *self, gint timeout_ms)
     }
     pfd.fd = self->out_fd;
     pfd.events = POLLIN;
-    for (;;) {
+    /* The first poll is the wait; every sweep after it has a zero timeout, so
+     * a whole DMA buffer's worth goes in one call rather than 16 KiB per
+     * STOP_POLL_MS, which a capture at 750 kHz would outrun - and a child
+     * blocked on a full pipe is a child that never writes its trailer.
+     *
+     * The sweep cap is what stops that becoming its own trap: a child that
+     * writes for ever and ignores the signal would otherwise keep this loop
+     * fed and the caller would never look at its deadline again. Returning
+     * after a bounded amount hands the deadline back every time.
+     */
+    for (sweep = 0; sweep < DRAIN_SWEEPS; sweep++) {
         gssize got;
         pfd.revents = 0;
         if (poll(&pfd, 1, wait_ms) <= 0)
             return;
-        /* The first poll is the wait; every sweep after it is a zero-timeout
-         * check for more, so a whole DMA buffer's worth is taken in one call
-         * rather than 16 KiB per STOP_POLL_MS. A capture at 750 kHz outruns
-         * the slower rate, and a child blocked on a full pipe is a child that
-         * never writes its trailer. */
         wait_ms = 0;
         do {
             got = read(self->out_fd, scratch, sizeof scratch);

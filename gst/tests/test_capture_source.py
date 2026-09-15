@@ -300,12 +300,13 @@ def test_stopping_mid_stream_is_prompt_and_reaps_the_child(tmp_path, chunk_delay
     assert any(line.startswith("TIME") for line in tail[-2:]), tail[-4:]
 
 
-def run_stop_probe(tmp_path, fake_flags: list[str], stop_timeout: float) -> dict:
+def run_stop_probe(tmp_path, fake_flags: list[str], stop_timeout: float,
+                   chunk_delay: str = "0.05") -> dict:
     system_python = system_python_path()
     if system_python is None:
         pytest.skip("no system python3 to run the gst-python stop probe with")
     pid_file = tmp_path / "child.pid"
-    command = fake_command("--chunk-delay", "0.05", "--pid-file", str(pid_file),
+    command = fake_command("--chunk-delay", chunk_delay, "--pid-file", str(pid_file),
                            *fake_flags)
     proc = run([system_python, STOP_PROBE, "--ttcap-command", command,
                 "--pid-file", str(pid_file), "--stop-timeout", str(stop_timeout),
@@ -326,11 +327,20 @@ def test_a_child_that_ignores_sigint_is_stopped_by_closing_the_pipe(tmp_path):
     assert 1.0 <= result["stop_seconds"] < 3.0, result
 
 
-def test_a_child_that_ignores_everything_is_killed_and_reaped(tmp_path):
+@pytest.mark.parametrize("flags", [["--deaf"], ["--deaf", "--flood"]])
+def test_a_child_that_ignores_everything_is_killed_and_reaped(tmp_path, flags):
     # Rung three: deaf to the signal and to the broken pipe alike, so only
     # SIGKILL ends it. What matters is that the element still reaps it -
     # a killed child left unwaited-for is exactly the zombie to avoid.
-    result = run_stop_probe(tmp_path, ["--deaf"], stop_timeout=1.0)
+    #
+    # --flood aims at the drain's own trap: a child that writes without pause
+    # could keep the drain loop permanently fed, and a loop that never hands
+    # its deadline back would never escalate. It does not in fact get there -
+    # a Python child cannot outrun 16 KiB reads for long enough to keep the
+    # pipe non-empty - so the sweep cap in drain_stdout() stays a guard this
+    # test does not force. What the case does establish is that the SIGKILL
+    # rung still reaps a child writing flat out.
+    result = run_stop_probe(tmp_path, flags, stop_timeout=1.0, chunk_delay="0")
     assert result["child"] == "gone", result
     assert 3.0 <= result["stop_seconds"] < 8.0, result
 
