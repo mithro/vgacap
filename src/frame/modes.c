@@ -25,3 +25,12 @@ const vgaframe_mode_t *vgaframe_mode_match(uint32_t clocks_per_line, uint32_t li
     }
     return NULL;
 }
+
+const vgaframe_mode_t *vgaframe_mode_match_cpl(uint32_t clocks_per_line) {
+    for (size_t i = 0; i < sizeof table / sizeof table[0]; i++) {
+        const vgaframe_mode_t *m = &table[i];
+        uint32_t cpl = (uint32_t)m->h_active + m->h_front + m->h_sync + m->h_back;
+        if (cpl == clocks_per_line) return m;
+    }
+    return NULL;
+}

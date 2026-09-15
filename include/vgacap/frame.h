@@ -24,6 +24,11 @@ typedef struct vgaframe_mode {
 const vgaframe_mode_t *vgaframe_modes(size_t *count);
 // exact match on clocks_per_line and lines_per_frame; NULL if none
 const vgaframe_mode_t *vgaframe_mode_match(uint32_t clocks_per_line, uint32_t lines_per_frame);
+// match on clocks_per_line alone; NULL if none. clocks_per_line is unique
+// across the built-in table, so this is unambiguous; used to recognise a
+// mode from a single FRAM window, which knows its clocks_per_line but not
+// (by itself) the frame's line count.
+const vgaframe_mode_t *vgaframe_mode_match_cpl(uint32_t clocks_per_line);
 
 typedef struct vgaframe_timing {
     uint32_t clocks_per_line, lines_per_frame;

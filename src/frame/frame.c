@@ -9,7 +9,8 @@ size_t vgaframe_rgb_size(const vgaframe_config_t *c) { return vgaframe_raw_size(
 
 static uint8_t bit(const uint8_t *map, uint32_t s, int sig) {
     uint8_t b = map[sig];
-    return b == VGACAP_SIG_ABSENT ? 0 : (uint8_t)((s >> b) & 1);
+    if (b == VGACAP_SIG_ABSENT) return 0;
+    return (uint8_t)((s >> b) & 1);
 }
 
 uint8_t vgaframe_colour(const uint8_t *m, uint32_t s) {
@@ -28,13 +29,26 @@ int vgaframe_init(vgaframe_t *f, const vgaframe_config_t *cfg, uint8_t *raw, uin
     return 0;
 }
 
+// The mode to use for cropping/coverage, best information currently
+// available: force_mode, else the learner's matched mode, else (FRAM mode
+// only) a table match on the most recent FRAM chunk's clocks_per_line -
+// windows lie inside one frame so the learner alone can never learn
+// lines_per_frame from a pure FRAM stream, but each window still carries its
+// own clocks_per_line, and that is unique across the built-in table.
+static const vgaframe_mode_t *resolved_mode(const vgaframe_t *f) {
+    if (f->cfg.force_mode) return f->cfg.force_mode;
+    if (f->learner.t.mode) return f->learner.t.mode;
+    if (f->fram_mode) return vgaframe_mode_match_cpl(f->fram_cpl);
+    return NULL;
+}
+
 // Lines expected in a full frame, best information currently available:
-// force_mode's table value, else the learner's locked/matched value, else
-// (FRAM mode with no mode known yet) the largest window seen so far.
+// resolved_mode()'s table value, else the learner's raw measurement (a
+// timing that doesn't match any table entry), else (FRAM mode with no mode
+// known at all) the largest window seen so far.
 static uint32_t expected_lines(const vgaframe_t *f) {
-    if (f->cfg.force_mode)
-        return (uint32_t)f->cfg.force_mode->v_active + f->cfg.force_mode->v_front +
-               f->cfg.force_mode->v_sync + f->cfg.force_mode->v_back;
+    const vgaframe_mode_t *m = resolved_mode(f);
+    if (m) return (uint32_t)m->v_active + m->v_front + m->v_sync + m->v_back;
     if (f->learner.t.lines_per_frame) return f->learner.t.lines_per_frame;
     return f->fram_max_line;
 }
@@ -50,7 +64,7 @@ static int covered(const vgaframe_t *f) {
 // Emits the accumulated picture. `lines_known` bounds how much of `raw` to
 // scan for the auto-crop bounding box and to clear afterwards.
 static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint) {
-    const vgaframe_mode_t *m = f->cfg.force_mode ? f->cfg.force_mode : f->learner.t.mode;
+    const vgaframe_mode_t *m = resolved_mode(f);
     uint32_t W = f->cfg.max_clocks_per_line, x0, y0, w, h;
     if (m) {
         x0 = (uint32_t)m->h_sync + m->h_back; y0 = (uint32_t)m->v_sync + m->v_back;
@@ -70,6 +84,10 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint) {
         if (minx > maxx) return; // nothing to show
         x0 = minx; y0 = miny; w = maxx - minx + 1; h = maxy - miny + 1;
     }
+    // A force_mode (or a table/fram_cpl match) whose active area starts at or
+    // past the buffer edge has nothing to crop: bail rather than let the
+    // W - x0 / max_lines - y0 clamps below underflow.
+    if (x0 >= W || y0 >= f->cfg.max_lines) return;
     if (x0 + w > W) w = W - x0;
     if (y0 + h > f->cfg.max_lines) h = f->cfg.max_lines - y0;
     uint8_t partial = partial_hint;
@@ -88,7 +106,12 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint) {
     out.frame_counter = f->fram_mode ? f->fram_counter : f->frames_seen;
     f->frames_seen++;
     if (f->cfg.on_frame) f->cfg.on_frame(f->cfg.user, &out);
-    uint32_t clear_lines = lines_known < f->cfg.max_lines ? lines_known + 1 : f->cfg.max_lines;
+    // In FRAM mode a frame's windows can land anywhere in [0, max_lines), not
+    // just below lines_known (which is only this emit's notion of the frame
+    // height), so clear the whole buffer rather than risk leaving stale
+    // "written" pixels from a differently-shaped frame for the next one.
+    uint32_t clear_lines = f->fram_mode ? f->cfg.max_lines :
+                           (lines_known < f->cfg.max_lines ? lines_known + 1 : f->cfg.max_lines);
     memset(f->raw, 0, (size_t)W * clear_lines);
     memset(f->cover, 0, f->cfg.max_lines);
 }
@@ -112,8 +135,10 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
     if (!f->in_frame && !f->fram_mode) return;
     uint32_t W = f->cfg.max_clocks_per_line;
     if (f->y < f->cfg.max_lines && f->x < W) {
-        uint32_t n = run;
-        if (f->x + n > W) n = W - f->x;
+        // f->x < W is guaranteed above, so W - f->x cannot underflow; compare
+        // against it directly instead of f->x + run, which can itself wrap
+        // for a large run and defeat the clip entirely.
+        uint32_t n = run > (W - f->x) ? (W - f->x) : run;
         memset(f->raw + f->y * W + f->x, vgaframe_colour(f->cfg.signal_map, sample) | 0x80, n);
         f->cover[f->y] = 1;
     }
@@ -136,7 +161,7 @@ void vgaframe_frame_begin(vgaframe_t *f, uint32_t frame_counter, uint16_t first_
         int any = 0;
         for (uint32_t y = 0; y < f->cfg.max_lines; y++)
             if (f->cover[y]) { any = 1; break; }
-        if (any) emit(f, expected_lines(f) ? expected_lines(f) : f->fram_max_line, 1);
+        if (any) emit(f, expected_lines(f), 1);
     }
     f->fram_mode = 1;
     f->fram_counter = frame_counter;
