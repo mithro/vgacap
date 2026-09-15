@@ -19,13 +19,22 @@ uint8_t vgaframe_colour(const uint8_t *m, uint32_t s) {
                      (bit(m, s, VGACAP_SIG_B1) << 1) | bit(m, s, VGACAP_SIG_B0));
 }
 
+void vgaframe_reset(vgaframe_t *f) {
+    vgaframe_timing_init(&f->learner);
+    memset(&f->out_timing, 0, sizeof f->out_timing);
+    f->x = 0; f->y = 0; f->in_frame = 0; f->frames_seen = 0;
+    f->fram_active = 0; f->fram_pending = 0; f->fram_counter = 0;
+    f->fram_first_line = 0; f->fram_line_count = 0; f->fram_cpl = 0;
+    f->fram_remaining = 0; f->fram_max_line = 0;
+    memset(f->raw, 0, vgaframe_raw_size(&f->cfg));
+    memset(f->cover, 0, f->cfg.max_lines);
+}
+
 int vgaframe_init(vgaframe_t *f, const vgaframe_config_t *cfg, uint8_t *raw, uint8_t *rgb, uint8_t *cover) {
     if (!cfg->max_clocks_per_line || !cfg->max_lines || !raw || !rgb || !cover) return -1;
     memset(f, 0, sizeof *f);
     f->cfg = *cfg; f->raw = raw; f->rgb = rgb; f->cover = cover;
-    vgaframe_timing_init(&f->learner);
-    memset(raw, 0, vgaframe_raw_size(cfg));
-    memset(cover, 0, cfg->max_lines);
+    vgaframe_reset(f);
     return 0;
 }
 
@@ -38,7 +47,7 @@ int vgaframe_init(vgaframe_t *f, const vgaframe_config_t *cfg, uint8_t *raw, uin
 static const vgaframe_mode_t *resolved_mode(const vgaframe_t *f) {
     if (f->cfg.force_mode) return f->cfg.force_mode;
     if (f->learner.t.mode) return f->learner.t.mode;
-    if (f->fram_mode) return vgaframe_mode_match_cpl(f->fram_cpl);
+    if (f->fram_active || f->fram_pending) return vgaframe_mode_match_cpl(f->fram_cpl);
     return NULL;
 }
 
@@ -53,6 +62,13 @@ static uint32_t expected_lines(const vgaframe_t *f) {
     return f->fram_max_line;
 }
 
+// Is there anything at all worth publishing as a partial frame?
+static int covered_any(const vgaframe_t *f) {
+    for (uint32_t y = 0; y < f->cfg.max_lines; y++)
+        if (f->cover[y]) return 1;
+    return 0;
+}
+
 static int covered(const vgaframe_t *f) {
     uint32_t n = expected_lines(f);
     if (!n) return 0;
@@ -62,8 +78,11 @@ static int covered(const vgaframe_t *f) {
 }
 
 // Emits the accumulated picture. `lines_known` bounds how much of `raw` to
-// scan for the auto-crop bounding box and to clear afterwards.
-static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint) {
+// scan for the auto-crop bounding box and to clear afterwards. `is_fram`
+// says whether this is the FRAM accumulation being published (which names
+// the frame by its FRAM counter and may have written anywhere in the
+// buffer) or a continuous-mode frame.
+static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int is_fram) {
     const vgaframe_mode_t *m = resolved_mode(f);
     uint32_t W = f->cfg.max_clocks_per_line, x0, y0, w, h;
     if (m) {
@@ -117,15 +136,17 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint) {
     }
     vgaframe_output_t out;
     out.rgb24 = f->rgb; out.width = (uint16_t)w; out.height = (uint16_t)h; out.timing = &f->out_timing;
+    out.stride = w * 3;   // rows are packed; emit() writes them that way above
     out.active_x0 = (uint16_t)x0; out.active_y0 = (uint16_t)y0; out.partial = partial;
-    out.frame_counter = f->fram_mode ? f->fram_counter : f->frames_seen;
+    out.frame_counter = is_fram ? f->fram_counter : f->frames_seen;
     f->frames_seen++;
+    if (is_fram) f->fram_pending = 0;
     if (f->cfg.on_frame) f->cfg.on_frame(f->cfg.user, &out);
     // In FRAM mode a frame's windows can land anywhere in [0, max_lines), not
     // just below lines_known (which is only this emit's notion of the frame
     // height), so clear the whole buffer rather than risk leaving stale
     // "written" pixels from a differently-shaped frame for the next one.
-    uint32_t clear_lines = f->fram_mode ? f->cfg.max_lines :
+    uint32_t clear_lines = is_fram ? f->cfg.max_lines :
                            (lines_known < f->cfg.max_lines ? lines_known + 1 : f->cfg.max_lines);
     memset(f->raw, 0, (size_t)W * clear_lines);
     memset(f->cover, 0, f->cfg.max_lines);
@@ -135,25 +156,30 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
     uint8_t h = bit(f->cfg.signal_map, sample, VGACAP_SIG_HSYNC);
     uint8_t v = bit(f->cfg.signal_map, sample, VGACAP_SIG_VSYNC);
     int r = vgaframe_timing_push(&f->learner, h, v, run);
-    if (f->fram_mode) {
+    if (f->fram_active) {
         if (r == 1) { f->x = 0; f->y++; }
-        // r == 2 (learner-detected frame boundary) is ignored: in FRAM mode
-        // the window metadata (vgaframe_frame_begin), not the free-running
-        // learner, defines line/frame layout.
+        // r == 2 (learner-detected frame boundary) is ignored: inside a FRAM
+        // chunk the window metadata (vgaframe_frame_begin), not the
+        // free-running learner, defines line/frame layout.
     } else if (r == 2) {
+        // A continuous-mode frame has started, so any FRAM accumulation
+        // still waiting for the window that would complete it is never
+        // going to get it: publish what was covered and free the buffer.
+        if (f->fram_pending && covered_any(f)) emit(f, expected_lines(f), 1, 1);
+        f->fram_pending = 0;
         // Trust an exact (clocks_per_line, lines_per_frame) match against
         // the built-in table on the very first fully measured frame, not
         // only a `locked` (two independently agreeing measurements) one:
         // a random signal matching both dimensions of a real VESA mode is
         // strong enough evidence on its own. `locked` remains the stronger
         // signal and is unaffected by this - see vgaframe_timing_t.
-        if (f->in_frame && (f->learner.t.locked || f->learner.t.mode || f->cfg.force_mode)) emit(f, f->y + 1, 0);
+        if (f->in_frame && (f->learner.t.locked || f->learner.t.mode || f->cfg.force_mode)) emit(f, f->y + 1, 0, 0);
         f->y = 0; f->x = 0; f->in_frame = 1;
     } else if (r == 1) {
         f->x = 0;
         if (f->in_frame) f->y++;
     }
-    if (!f->in_frame && !f->fram_mode) return;
+    if (!f->in_frame && !f->fram_active) return;
     uint32_t W = f->cfg.max_clocks_per_line;
     if (f->y < f->cfg.max_lines && f->x < W) {
         // f->x < W is guaranteed above, so W - f->x cannot underflow; compare
@@ -164,27 +190,40 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
         f->cover[f->y] = 1;
     }
     f->x += run;
-    if (f->fram_mode) {
+    if (f->fram_active) {
         uint32_t dec = run < f->fram_remaining ? run : f->fram_remaining;
         f->fram_remaining -= dec;
-        if (f->fram_remaining == 0 && covered(f)) emit(f, expected_lines(f), 0);
+        if (f->fram_remaining == 0) {
+            // This chunk's samples are done. Leave FRAM mode: anything that
+            // follows without a new vgaframe_frame_begin is continuous-mode
+            // data again. The accumulation stays pending unless it is now
+            // complete.
+            f->fram_active = 0;
+            if (covered(f)) emit(f, expected_lines(f), 0, 1);
+        }
     }
 }
 
 void vgaframe_flush(vgaframe_t *f) {
-    if (f->in_frame || f->fram_mode) emit(f, f->y + 1, 1);
+    // A pending FRAM accumulation and an in-progress continuous frame are
+    // mutually exclusive (vgaframe_frame_begin clears in_frame, and a
+    // continuous frame start flushes the pending accumulation), so at most
+    // one of these can fire.
+    if (f->fram_pending) emit(f, expected_lines(f), 1, 1);
+    else if (f->in_frame) emit(f, f->y + 1, 1, 0);
     f->in_frame = 0;
 }
 
 void vgaframe_frame_begin(vgaframe_t *f, uint32_t frame_counter, uint16_t first_line,
                           uint16_t line_count, uint32_t clocks_per_line, uint32_t sample_count) {
-    if (f->fram_mode && frame_counter != f->fram_counter) {
-        int any = 0;
-        for (uint32_t y = 0; y < f->cfg.max_lines; y++)
-            if (f->cover[y]) { any = 1; break; }
-        if (any) emit(f, expected_lines(f), 1);
-    }
-    f->fram_mode = 1;
+    if (f->fram_pending && frame_counter != f->fram_counter && covered_any(f))
+        emit(f, expected_lines(f), 1, 1);
+    f->fram_active = 1;
+    f->fram_pending = 1;
+    // A window interrupts whatever continuous-mode frame was in progress;
+    // it does not continue it. Reconstruction resumes at the next
+    // learner-detected frame start.
+    f->in_frame = 0;
     f->fram_counter = frame_counter;
     f->fram_first_line = first_line;
     f->fram_line_count = line_count;

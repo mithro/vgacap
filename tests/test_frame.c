@@ -174,6 +174,43 @@ TEST(flush_emits_partial) {
     ASSERT_EQ_U(nframes, before + 1); ASSERT_EQ_U(last.partial, 1);
 }
 
+TEST(reset_restores_the_post_init_state) {
+    // vgaframe_reset must leave the object indistinguishable from a fresh
+    // vgaframe_init on the same buffers (I4): a GStreamer flush/seek or a
+    // reconnect goes through it, and it is the way to abandon a half-built
+    // picture or a pending FRAM accumulation.
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+
+    // Reference run: a fresh init, three frames, every pixel recorded.
+    vgaframe_t a; setup(&a, NULL);
+    for (int fr = 0; fr < 3; fr++) for (size_t i = 0; i < n; i++) vgaframe_push(&a, buf[i], 1);
+    ASSERT_TRUE(nframes >= 1);
+    int ref_frames = nframes; uint16_t ref_w = last.width, ref_h = last.height;
+    uint32_t ref_counter = last.frame_counter;
+    static uint8_t ref_rgb[1400 * 900 * 3];
+    memcpy(ref_rgb, last_rgb, (size_t)ref_w * ref_h * 3);
+
+    // Same object, dirtied with a partial frame and an open FRAM window,
+    // then reset and driven with the same stream.
+    for (size_t i = 0; i < n / 2; i++) vgaframe_push(&a, buf[i], 1);
+    vgaframe_frame_begin(&a, 77, 300, 25, 800, 25 * 800);
+    for (uint32_t i = 0; i < 10u * 800u; i++) vgaframe_push(&a, buf[300u * 800u + i], 1);
+    vgaframe_reset(&a);
+    ASSERT_EQ_U(a.frames_seen, 0); ASSERT_EQ_U(a.in_frame, 0);
+    ASSERT_EQ_U(a.fram_active, 0); ASSERT_EQ_U(a.fram_pending, 0);
+    ASSERT_TRUE(a.learner.t.mode == NULL);
+    ASSERT_EQ_U(a.raw[300 * 1400], 0);   // the abandoned window left nothing behind
+
+    nframes = 0;
+    for (int fr = 0; fr < 3; fr++) for (size_t i = 0; i < n; i++) vgaframe_push(&a, buf[i], 1);
+    ASSERT_EQ_U(nframes, ref_frames);
+    ASSERT_EQ_U(last.width, ref_w); ASSERT_EQ_U(last.height, ref_h);
+    ASSERT_EQ_U(last.frame_counter, ref_counter);   // the running count restarted too
+    ASSERT_EQ_U(last.stride, (unsigned)ref_w * 3);
+    ASSERT_EQ_MEM(last_rgb, ref_rgb, (size_t)ref_w * ref_h * 3);
+}
+
 int main(void) {
     RUN(colour_helper);
     RUN(reconstructs_640x480_bars);
@@ -184,5 +221,6 @@ int main(void) {
     RUN(converges_from_a_mid_frame_start);
     RUN(mode_match_trusted_over_disagreeing_measurement);
     RUN(flush_emits_partial);
+    RUN(reset_restores_the_post_init_state);
     RUN_TESTS_END();
 }

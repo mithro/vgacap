@@ -58,7 +58,11 @@ int  vgaframe_timing_push(vgaframe_timing_learner_t *l, uint8_t hsync, uint8_t v
 // ---- frame reconstruction ------------------------------------------------
 
 typedef struct vgaframe_output {
+    // Owned by the vgaframe and reused by the next emitted frame: valid only
+    // for the duration of the vgaframe_frame_fn callback. Copy it if you
+    // need it afterwards. (Same contract as vgacap_event_t's u.time.msg.)
     const uint8_t *rgb24; uint16_t width, height;
+    uint32_t stride;                 // bytes per row of rgb24 (currently width * 3)
     const vgaframe_timing_t *timing;
     uint16_t active_x0, active_y0;   // where the crop came from
     uint8_t  partial;                // 1 if not every line was covered
@@ -84,8 +88,14 @@ typedef struct vgaframe {
     vgaframe_config_t cfg; vgaframe_timing_learner_t learner;
     uint8_t *raw, *rgb, *cover;
     uint32_t x, y; int in_frame; uint32_t frames_seen;
-    // FRAM mode state
-    int fram_mode; uint32_t fram_counter; uint16_t fram_first_line, fram_line_count; uint32_t fram_cpl; uint32_t fram_remaining;
+    // FRAM mode state. FRAM mode is per *chunk*, not for the lifetime of the
+    // object: fram_active is set only while a FRAM chunk still has samples
+    // outstanding, and gates the window-driven line layout. fram_pending is
+    // set while an accumulation is buffered and unemitted, which outlives the
+    // chunk - the window that completes a frame's coverage may be several
+    // chunks later, with continuous-mode samples in between.
+    int fram_active, fram_pending;
+    uint32_t fram_counter; uint16_t fram_first_line, fram_line_count; uint32_t fram_cpl; uint32_t fram_remaining;
     uint32_t fram_max_line;
     // Timing actually used for the most recently emitted frame: the
     // learner's own measurement, unless emit() resolved a different mode
@@ -94,7 +104,15 @@ typedef struct vgaframe {
     vgaframe_timing_t out_timing;
 } vgaframe_t;
 
+// Binds the caller's buffers and puts the object in its starting state; see
+// vgaframe_reset, which vgaframe_init performs as part of its work.
 int  vgaframe_init(vgaframe_t *f, const vgaframe_config_t *cfg, uint8_t *raw, uint8_t *rgb, uint8_t *cover);
+// Returns the object to its post-init state - accumulated picture, coverage,
+// timing learner, FRAM state and frame count all cleared - without touching
+// the config or the caller's buffer pointers, so a second stream reconstructs
+// exactly as it would after a fresh vgaframe_init. Use it after a stream
+// discontinuity, a flush/seek, or a reconnect.
+void vgaframe_reset(vgaframe_t *f);
 void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run);
 void vgaframe_flush(vgaframe_t *f);   // emit whatever is buffered as partial (end of stream)
 // helper: 6-bit colour (rr gg bb) from a sample via the signal map

@@ -24,6 +24,14 @@ extern "C" {
 #define VGACAP_DESC_MAX 255
 #define VGACAP_FLAG_FIRST_SAMPLE_MSB 0x01
 
+// Largest payload a chunk may declare. The format has no sync word, so a
+// plausibility bound on the length is half of what lets the reader tell a
+// real chunk header from four arbitrary bytes (the other half is the tag
+// whitelist); it is also what stops a corrupt length from swallowing the
+// rest of a capture. 16 MiB is ~2 s of uncompressed 640x480@60 samples,
+// far more than any writer here emits in one chunk.
+#define VGACAP_MAX_CHUNK_LEN (16u * 1024u * 1024u)
+
 enum vgacap_mode {
     VGACAP_MODE_EXTCLK = 0,   // sampled on the project's external clock edge
     VGACAP_MODE_SELFCLK = 1,  // the capture hardware generated the clock
@@ -103,6 +111,7 @@ typedef enum vgacap_event_type {
     VGACAP_EV_RUN,          // u.run: `run` consecutive clocks of `value`
     VGACAP_EV_FRAME_BEGIN,  // u.frame: a FRAM chunk starts; its samples follow as RUNs
     VGACAP_EV_TIME,         // u.time
+    VGACAP_EV_RESYNC,       // u.resync; non-fatal, see below
     VGACAP_EV_ERROR         // u.error; the reader stops accepting input
 } vgacap_event_type_t;
 
@@ -119,6 +128,11 @@ typedef struct vgacap_event {
             uint64_t host_time_ns; uint32_t clock_hz; uint32_t dropped_samples;
             const char *msg; uint16_t msg_len;   // msg valid only during the callback
         } time;
+        // Chunk framing was lost and has now been regained: `skipped` bytes
+        // of input were discarded, `what` says what first looked wrong.
+        // Delivered once per episode, at the moment the next plausible chunk
+        // header is found; parsing continues normally from there.
+        struct { uint32_t skipped; const char *what; } resync;
         struct { const char *what; } error;
     } u;
 } vgacap_event_t;
@@ -147,11 +161,24 @@ typedef struct vgacap_reader {
     uint32_t last_event_value;
     int      have_last_event;
     char     msgbuf[256];
+    // Resynchronisation. On a framing error the reader does not stop: it
+    // scans the input byte-wise for the next plausible chunk header (a known
+    // tag plus a length <= VGACAP_MAX_CHUNK_LEN) and reports the loss as a
+    // VGACAP_EV_RESYNC event when it finds one.
+    int         scanning;      // 1 while hunting for the next chunk header
+    uint32_t    skipped;       // bytes discarded in the current episode
+    const char *resync_what;   // what first looked wrong
+    uint8_t     scanbuf[8];    // rolling tag+length candidate window
+    uint8_t     scanfill;
 } vgacap_reader_t;
 
 void vgacap_reader_init(vgacap_reader_t *r, vgacap_event_fn cb, void *user);
 // Feed any number of bytes; events are delivered from inside this call.
-// Returns 0, or -1 after an ERROR event (further input is ignored).
+// Returns 0, or -1 after an ERROR event (further input is ignored). A
+// framing error is not an ERROR: it produces a VGACAP_EV_RESYNC (once sync
+// is regained) and feed keeps returning 0. If the input ends while
+// `scanning` is still set, framing was never regained and `skipped` bytes
+// have been discarded with no event - callers that care should report it.
 int vgacap_reader_feed(vgacap_reader_t *r, const uint8_t *buf, size_t len);
 
 #ifdef __cplusplus

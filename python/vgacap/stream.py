@@ -8,6 +8,12 @@ from typing import Iterator, Sequence
 TINYVGA_MAP = (7, 3, 0, 4, 1, 5, 2, 6)
 FLAG_FIRST_SAMPLE_MSB = 1
 
+#: Largest payload a chunk may declare (mirrors VGACAP_MAX_CHUNK_LEN).
+MAX_CHUNK_LEN = 16 * 1024 * 1024
+
+#: Smallest payload each known tag can have: its fixed fields.
+MIN_CHUNK_LEN = {"VGCH": 20, "RAW ": 4, "RLE ": 4, "FRAM": 16, "EVNT": 4, "TIME": 18}
+
 
 @dataclass
 class Header:
@@ -80,9 +86,23 @@ class Writer:
 
 
 def read_chunks(data: bytes) -> Iterator[tuple[str, bytes]]:
+    """Walk the chunk framing, rejecting anything implausible.
+
+    The C reader resynchronises on a framing error; this mirror does not need
+    to (it reads whole files, not a serial link), so it raises instead. What
+    both must agree on is *which* streams are well formed.
+    """
     pos = 0
     while pos + 8 <= len(data):
-        tag, length = data[pos:pos + 4].decode("ascii"), struct.unpack_from("<I", data, pos + 4)[0]
+        raw_tag = data[pos:pos + 4]
+        if any(b < 0x20 or b > 0x7E for b in raw_tag):
+            raise ValueError(f"non-printable chunk tag {raw_tag!r} at offset {pos}")
+        tag = raw_tag.decode("ascii")
+        length = struct.unpack_from("<I", data, pos + 4)[0]
+        if length > MAX_CHUNK_LEN:
+            raise ValueError(f"chunk {tag!r} at offset {pos} declares {length} bytes (max {MAX_CHUNK_LEN})")
+        if length < MIN_CHUNK_LEN.get(tag, 0):
+            raise ValueError(f"chunk {tag!r} at offset {pos} is too short ({length} bytes)")
         pos += 8
         if pos + length > len(data):
             raise ValueError(f"truncated chunk {tag!r}")
@@ -94,7 +114,18 @@ def parse_header(payload: bytes) -> Header:
     version, bits, mode, clock, smap, spw, flags, dl = struct.unpack_from("<HBBI8sBBH", payload, 0)
     if version != 1:
         raise ValueError(f"unsupported version {version}")
+    if dl != len(payload) - 20:
+        raise ValueError(f"VGCH desc_len {dl} does not match payload ({len(payload) - 20} bytes)")
+    if bits not in (8, 12, 16, 32):
+        raise ValueError(f"bad sample_bits {bits}")
+    if spw not in (1, 2, 4, 8) or spw * bits > 32:
+        raise ValueError(f"bad samples_per_word {spw} for sample_bits {bits}")
     return Header(version, bits, mode, clock, tuple(smap), spw, flags, payload[20:20 + dl].decode())
+
+
+def _check_count(tag: str, name: str, declared: int, expected: int) -> None:
+    if declared != expected:
+        raise ValueError(f"{tag!r} declares {name}={declared} but its length holds {expected}")
 
 
 def read_stream(data: bytes) -> tuple[Header, list]:
@@ -109,16 +140,27 @@ def read_stream(data: bytes) -> tuple[Header, list]:
             off = 4 if tag == "RAW " else 16
             if tag == "FRAM":
                 fc, fl, lc, cpl, n = struct.unpack_from("<IHHII", p, 0)
-                items.append(("frame", fc, fl, lc, cpl, n))
             else:
                 n = struct.unpack_from("<I", p, 0)[0]
-            words = struct.unpack_from(f"<{(len(p) - off) // 4}I", p, off)
+            body = len(p) - off
+            spw = header.samples_per_word
+            if body % 4 or -(-n // spw) != body // 4:
+                raise ValueError(f"{tag!r} declares {n} samples but its length holds {body // 4} words")
+            if tag == "FRAM":
+                items.append(("frame", fc, fl, lc, cpl, n))
+            words = struct.unpack_from(f"<{body // 4}I", p, off)
             items.extend(("run", v, 1) for v in unpack_words(header, words, n))
         elif tag == "RLE ":
             n = struct.unpack_from("<I", p, 0)[0]
+            if (len(p) - 4) % 8:
+                raise ValueError("'RLE ' payload is not a whole number of pairs")
+            _check_count(tag, "pair_count", n, (len(p) - 4) // 8)
             items.extend(("run", v, r) for v, r in struct.iter_unpack("<II", p[4:4 + 8 * n]))
         elif tag == "EVNT":
             n = struct.unpack_from("<I", p, 0)[0]
+            if (len(p) - 4) % 12:
+                raise ValueError("'EVNT' payload is not a whole number of events")
+            _check_count(tag, "event_count", n, (len(p) - 4) // 12)
             evs = list(struct.iter_unpack("<QI", p[4:4 + 12 * n]))
             for (c0, v0), (c1, _) in zip(evs, evs[1:]):
                 if c1 <= c0:
@@ -128,6 +170,11 @@ def read_stream(data: bytes) -> tuple[Header, list]:
                 items.append(("run", evs[-1][1], 1))
         elif tag == "TIME":
             t, clk, dropped, ml = struct.unpack_from("<QIIH", p, 0)
+            if ml > 255:
+                raise ValueError(f"'TIME' msg_len {ml} exceeds 255")
+            # Without this, the message would be read from bytes the chunk
+            # never carried (the C reader had the same hole).
+            _check_count(tag, "msg_len", ml, len(p) - 18)
             items.append(("time", t, clk, dropped, p[18:18 + ml].decode(errors="replace")))
     if header is None:
         raise ValueError("no header")
