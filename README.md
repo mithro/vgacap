@@ -52,8 +52,9 @@ start exactly on a vsync pulse cannot measure that pulse and waits for the
 next one, so capture at least three frame periods to be sure.
 
 Spurious sync pulses are tolerated: a capture whose hsync carries the odd 2
-to 30 clock glitch (real silicon does) still reconstructs, and the glitches
-are counted and reported as `glitches=N`.
+to 30 clock glitch (real silicon does) still reconstructs. `vgacap-frames`
+reports `glitches=N` per frame, counting the pulses rejected since the
+previous frame, and `glitches_total=N` for the whole stream.
 
 ## Running on a Raspberry Pi
 
