@@ -38,17 +38,26 @@
  *    stronger nudge, which is why it comes second rather than first. It is
  *    not first because it cannot be taken back: once the pipe is shut the
  *    trailer has nowhere to go, so the stream ends a chunk short of tidy.
- * 4. Still alive: %SIGKILL the group, and reap. The child is reaped in every
- *    path, so the element never leaves a zombie behind.
- * 5. The process we spawned can be gone while its *group* is not: the shipped
- *    default is `uv run --no-sync ttcap`, so `ttcap` is a grandchild, and if
- *    the wrapper exits first the grandchild is left holding the board and
- *    both pipes. The sign of it is a pipe that still has a writer, and the
- *    answer is a %SIGKILL to the group even though the leader has been
- *    reaped: a process group id stays reserved while the group has members,
- *    so it cannot have been recycled while anything of ours is left.
+ * 4. Still alive: %SIGKILL the group. The child is reaped in every path, so
+ *    the element never leaves a zombie behind.
+ * 5. The process we spawned can have ended while its *group* has not: the
+ *    shipped default is `uv run --no-sync ttcap`, so `ttcap` is a grandchild,
+ *    and if the wrapper exits first the grandchild is left holding the board
+ *    and both pipes. The sign of it is a pipe that still has a writer, and
+ *    the answer is a %SIGKILL to the group.
+ * 6. Only then is the child reaped, which is what releases the pid.
  *
- * Nothing in that sequence may wait without a deadline, because it all runs
+ * That last order is not a detail. A process group id stays reserved only
+ * while the group has a member, and a process is a member until it has been
+ * terminated **and** waited for - so the element keeps the child unreaped
+ * (`waitid()` with %WNOWAIT reports the exit without consuming it) for as
+ * long as it might still want to signal the group. The alternative, reaping
+ * where the exit is noticed and signalling at teardown, aims a %SIGINT at a
+ * number the kernel may have handed to someone else in between, and the gap
+ * is however long the application chooses to leave the pipeline standing.
+ * `signal_group()` refuses to send anything once nothing of ours is left.
+ *
+ * Nothing in the sequence may wait without a deadline, because it all runs
  * inside a state change: a `stop()` that never returns is a pipeline that can
  * never be shut down. That includes the wait for the stderr reader thread,
  * which is abandoned rather than joined if it will not finish (see
@@ -132,6 +141,15 @@ enum {
 #define DRAIN_SWEEP_BYTES 16384
 #define DRAIN_SWEEPS 64
 
+/* How the child ended, in a form that does not depend on the wait-status
+ * encoding: waitid() reports si_code and si_status, waitpid() reports a packed
+ * int, and building one from the other is guesswork about libc internals. */
+typedef struct {
+    gboolean known;     /* it has ended, and the rest of this says how */
+    gboolean signalled; /* killed by a signal rather than having exited */
+    gint value;         /* the exit code, or the signal number */
+} VgaCapChildEnd;
+
 struct _GstVgaCapTtSrc {
     GstPushSrc parent;
 
@@ -156,8 +174,8 @@ struct _GstVgaCapTtSrc {
      * never run at the same time (GstBaseSrc stops its task before stop()) */
     GPid pid;
     gboolean have_child;
-    gboolean reaped;
-    gint exit_status; /* the reaped child's wait status, kept for later asks */
+    VgaCapChildEnd end; /* how it ended, once it has; see child_exited() */
+    gboolean reaped;    /* and the zombie consumed, which is the last act */
     gint out_fd;
     gboolean out_eof;
     gboolean stopping; /* our own stop() is under way: an EOF is expected */
@@ -502,35 +520,89 @@ static gchar **build_argv(GstVgaCapTtSrc *self, GError **error)
     return (gchar **)g_ptr_array_free(argv, FALSE);
 }
 
-/* waitpid() without blocking. TRUE once the child has been reaped. */
-static gboolean try_reap(GstVgaCapTtSrc *self, gint *status)
+/* Has the child ended? Asked with waitid(%WNOWAIT), which reports the exit
+ * *without* consuming the zombie.
+ *
+ * That is the load-bearing part. A process's lifetime ends only once it has
+ * terminated **and** been waited for, and a process group id stays reserved
+ * for as long as its group has a member - so an unreaped leader is a positive
+ * pin on the group id, and every signal the stop sequence sends is provably
+ * aimed at a descendant of ours rather than at whatever the kernel has since
+ * given the number to. Reaping early and signalling afterwards was a SIGINT
+ * addressed to a number the element no longer owned, with an unbounded gap in
+ * between chosen by whoever holds the pipeline up.
+ *
+ * The cost is one zombie held between the capture ending and the element
+ * being stopped: one pid slot per started element, released by reap_child()
+ * at the end of the stop sequence, after the last signal has gone out.
+ */
+static gboolean child_exited(GstVgaCapTtSrc *self, VgaCapChildEnd *end)
 {
-    pid_t got;
+    siginfo_t info;
+    int got;
 
     if (!self->have_child)
         return FALSE;
-    if (self->reaped) {
-        *status = self->exit_status;
+    if (self->end.known) {
+        *end = self->end;
         return TRUE;
     }
+    memset(&info, 0, sizeof info);
+    info.si_pid = 0;
     do {
-        got = waitpid(self->pid, status, WNOHANG);
+        got = waitid(P_PID, (id_t)self->pid, &info, WEXITED | WNOWAIT | WNOHANG);
     } while (got < 0 && errno == EINTR);
-    if (got == self->pid) {
-        self->reaped = TRUE;
-        self->exit_status = *status;
-        return TRUE;
-    }
     if (got < 0) {
-        /* Someone else reaped it (nobody should have) or it was never ours;
-         * either way there is nothing left to wait for. */
-        GST_WARNING_OBJECT(self, "waitpid(%d) failed: %s", (int)self->pid, g_strerror(errno));
+        /* ECHILD: someone else waited for it (nobody should have), or it was
+         * never ours. Either way there is nothing left to wait for, and
+         * nothing pins the group id any more - so nothing may be signalled. */
+        GST_WARNING_OBJECT(self, "waitid(%d) failed: %s", (int)self->pid,
+                           g_strerror(errno));
+        self->end.known = TRUE;
         self->reaped = TRUE;
-        self->exit_status = 0;
-        *status = 0;
+        *end = self->end;
         return TRUE;
     }
-    return FALSE;
+    if (info.si_pid == 0)
+        return FALSE; /* still running */
+
+    self->end.known = TRUE;
+    self->end.signalled = (info.si_code == CLD_KILLED || info.si_code == CLD_DUMPED);
+    self->end.value = info.si_status;
+    *end = self->end;
+    return TRUE;
+}
+
+/* Consume the zombie, releasing the pid and with it the group id. Called once,
+ * at the very end of the stop sequence: nothing may be signalled afterwards.
+ *
+ * Bounded, like everything else in a state change. It only ever waits at all
+ * for a process that survived SIGKILL, which cannot last; giving up and
+ * leaving a zombie is worse than reaping, and far better than never returning.
+ */
+static void reap_child(GstVgaCapTtSrc *self)
+{
+    gint64 deadline;
+
+    if (!self->have_child || self->reaped)
+        return;
+    deadline = g_get_monotonic_time() + (gint64)(ESCALATION_GRACE_S * G_TIME_SPAN_SECOND);
+    for (;;) {
+        pid_t got;
+        do {
+            got = waitpid(self->pid, NULL, WNOHANG);
+        } while (got < 0 && errno == EINTR);
+        if (got != 0) /* reaped, or ECHILD: either way it is not ours now */
+            break;
+        if (g_get_monotonic_time() >= deadline) {
+            GST_ERROR_OBJECT(self, "the capture process %d will not die; leaving it "
+                                   "unreaped rather than blocking the state change",
+                             (int)self->pid);
+            break;
+        }
+        g_usleep(STOP_POLL_MS * 1000);
+    }
+    self->reaped = TRUE;
 }
 
 /* Read and throw away whatever the child has written, so it is never blocked
@@ -575,19 +647,17 @@ static void drain_stdout(GstVgaCapTtSrc *self, gint timeout_ms)
     }
 }
 
-/* Wait up to @timeout_s for the child, draining its stdout meanwhile. */
-static gboolean wait_for_child(GstVgaCapTtSrc *self, gdouble timeout_s, gint *status,
-                               gboolean drain)
+/* Wait up to @timeout_s for the child to end, draining its stdout meanwhile. */
+static gboolean wait_for_child(GstVgaCapTtSrc *self, gdouble timeout_s,
+                               VgaCapChildEnd *end, gboolean drain)
 {
     gint64 deadline = g_get_monotonic_time() + (gint64)(timeout_s * G_TIME_SPAN_SECOND);
 
     for (;;) {
-        gint64 left;
-        if (try_reap(self, status))
+        if (child_exited(self, end))
             return TRUE;
-        left = deadline - g_get_monotonic_time();
-        if (left <= 0)
-            return try_reap(self, status);
+        if (deadline - g_get_monotonic_time() <= 0)
+            return child_exited(self, end);
         if (drain)
             drain_stdout(self, STOP_POLL_MS);
         else
@@ -595,49 +665,68 @@ static gboolean wait_for_child(GstVgaCapTtSrc *self, gdouble timeout_s, gint *st
     }
 }
 
-/* Signal the capture's process group.
+/* Is there anything of the capture's left to signal?
+ *
+ * Two things say yes. The process we spawned has not ended - it is running,
+ * or it is a zombie we have not reaped - which pins the group id by itself.
+ * Or something still holds one of its pipes: the child gets stdin from
+ * /dev/null and these two descriptors and nothing else, so a holder is a
+ * descendant of it, which is the `uv run` case where the wrapper exits before
+ * the `ttcap` under it.
+ *
+ * When neither holds, the group is empty, the id is the kernel's to hand out
+ * again, and a signal sent to it is a signal to a stranger's job. That is not
+ * hypothetical: the ordinary end-of-stream path ends the capture inside
+ * create() and the pipeline can then stand for as long as the application
+ * likes before it is torn down.
+ */
+static gboolean group_is_live(GstVgaCapTtSrc *self)
+{
+    if (!self->have_child || self->reaped)
+        return FALSE;
+    if (!self->end.known)
+        return TRUE;
+    return pipe_has_writer(err_reader_fd(self->err_reader)) ||
+           pipe_has_writer(self->out_fd);
+}
+
+/* Signal the capture's process group. Only ever called through
+ * group_is_live(), so the id is one we still own.
  *
  * The negative pid is the group made in child_setup(): `uv run` and the
  * `ttcap` it execs are both in it, and a signal to only the former would
- * leave the latter holding the board.
- *
- * This deliberately still fires after the leader has been reaped, because
- * that is exactly when it is needed: `uv run` exiting first leaves a
- * grandchild holding the board and the pipes, and refusing to signal then was
- * a teardown that hung for ever. It is safe because a process group id stays
- * reserved while the group has any member, so while anything of ours is left
- * the id cannot have been recycled; an empty group answers ESRCH. The bare
- * `kill(pid)` fallback, on the other hand, is only used *before* reaping -
- * after that the pid alone carries no such guarantee.
+ * leave the latter holding the board. The bare `kill(pid)` fallback covers a
+ * host where `setpgid` did not take, and is only used while the process
+ * itself is unreaped, which is what reserves that number.
  */
 static void signal_group(GstVgaCapTtSrc *self, int sig)
 {
-    if (!self->have_child)
+    if (!group_is_live(self))
         return;
     if (kill(-self->pid, sig) < 0 && errno == ESRCH && !self->reaped)
         (void)kill(self->pid, sig);
 }
 
 /* A one-line account of how a child ended, for a log or an error message. */
-static gchar *describe_status(gint status)
+static gchar *describe_end(const VgaCapChildEnd *end)
 {
-    if (WIFEXITED(status))
-        return g_strdup_printf("exit status %d", WEXITSTATUS(status));
-    if (WIFSIGNALED(status))
-        return g_strdup_printf("killed by signal %d (%s)", WTERMSIG(status),
-                               g_strsignal(WTERMSIG(status)));
-    return g_strdup_printf("wait status 0x%x", (unsigned)status);
+    if (!end->known)
+        return g_strdup("still running");
+    if (end->signalled)
+        return g_strdup_printf("killed by signal %d (%s)", end->value,
+                               g_strsignal(end->value));
+    return g_strdup_printf("exit status %d", end->value);
 }
 
-static gboolean status_is_clean(gint status)
+static gboolean end_is_clean(const VgaCapChildEnd *end)
 {
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    return end->known && !end->signalled && end->value == 0;
 }
 
 /* The stop sequence documented at the top of this file. */
 static void stop_child(GstVgaCapTtSrc *self)
 {
-    gint status = 0;
+    VgaCapChildEnd end = {FALSE, FALSE, 0};
     gint64 began;
     gboolean gone;
     gboolean killed = FALSE;
@@ -648,10 +737,14 @@ static void stop_child(GstVgaCapTtSrc *self)
     self->stopping = TRUE;
     began = g_get_monotonic_time();
 
-    /* 1. Ask. 2. Wait, draining, so the board's last chunk and its trailer
-     *    have somewhere to go. */
+    /* 1. Ask - if there is anything left to ask. On the ordinary
+     *    end-of-stream path the capture ended inside create() and the
+     *    pipeline may have stood for minutes since, so signal_group() checks
+     *    that the group is still ours before it sends anything.
+     * 2. Wait, draining, so the board's last chunk and its trailer have
+     *    somewhere to go. */
     signal_group(self, SIGINT);
-    gone = wait_for_child(self, self->active_stop_timeout, &status, TRUE);
+    gone = wait_for_child(self, self->active_stop_timeout, &end, TRUE);
 
     /* 3. Shut the pipe. ttcap reads EPIPE as "the consumer has gone" and
      *    still exits 0, and this needs no signal handler to be running. */
@@ -664,43 +757,43 @@ static void stop_child(GstVgaCapTtSrc *self)
             self->out_fd = -1;
             self->out_eof = TRUE;
         }
-        gone = wait_for_child(self, ESCALATION_GRACE_S, &status, FALSE);
+        gone = wait_for_child(self, ESCALATION_GRACE_S, &end, FALSE);
     }
 
-    /* 4. Kill, and reap regardless: no zombies. */
+    /* 4. Kill. */
     if (!gone) {
         GST_WARNING_OBJECT(self, "killing the capture process group");
         killed = TRUE;
         signal_group(self, SIGKILL);
-        gone = wait_for_child(self, ESCALATION_GRACE_S, &status, FALSE);
+        gone = wait_for_child(self, ESCALATION_GRACE_S, &end, FALSE);
         if (!gone)
             GST_ERROR_OBJECT(self, "the capture process %d will not die",
                              (int)self->pid);
     }
 
-    /* 5. The process we spawned is gone, but something in its group may not
-     *    be: `uv run` can exit before the `ttcap` under it, and then a
-     *    grandchild is left holding the board and both pipes. The only sign
-     *    of it here is that the pipes still have a writer - our child gets no
-     *    other descriptors, so whoever holds one is a descendant of it - and
-     *    without this the stderr reader would wait on an EOF that never
-     *    comes. */
-    if (self->reaped && (pipe_has_writer(err_reader_fd(self->err_reader)) ||
-                         pipe_has_writer(self->out_fd))) {
+    /* 5. The process we spawned has ended, but something in its group may not
+     *    have: `uv run` can exit before the `ttcap` under it, and then a
+     *    grandchild is left holding the board and both pipes. The sign of it
+     *    here is a pipe that still has a writer, and without this the stderr
+     *    reader would wait on an EOF that never comes. It is safe to signal
+     *    because the leader is still unreaped and so still pins the group id
+     *    - see child_exited(). */
+    if (gone && (pipe_has_writer(err_reader_fd(self->err_reader)) ||
+                 pipe_has_writer(self->out_fd))) {
         GST_WARNING_OBJECT(self, "something in the capture's process group outlived "
                                  "it and still holds the pipes; killing the group");
         signal_group(self, SIGKILL);
     }
 
     if (gone) {
-        gchar *how = describe_status(status);
+        gchar *how = describe_end(&end);
         gdouble took = (gdouble)(g_get_monotonic_time() - began) / G_TIME_SPAN_SECOND;
         GST_INFO_OBJECT(self, "capture stopped after %.2f s: %s", took, how);
         /* A bad status we caused ourselves is not news. One we did not is
          * reported, but only as a warning: by now the pipeline is on its way
          * down and an error message would arrive after the bus has stopped
          * being watched. The live path is create(), below. */
-        if (!status_is_clean(status) && !killed && !self->reported) {
+        if (!end_is_clean(&end) && !killed && !self->reported) {
             gchar *tail = err_tail(self->err_reader);
             GST_ELEMENT_WARNING(self, RESOURCE, READ,
                                 ("the capture ended badly (%s): %s", how, tail), (NULL));
@@ -710,6 +803,9 @@ static void stop_child(GstVgaCapTtSrc *self)
         g_free(how);
     }
 
+    /* Last of all, and only now: consuming the zombie releases the pid and
+     * the group id with it, so nothing may be signalled after this point. */
+    reap_child(self);
     g_spawn_close_pid(self->pid);
     self->have_child = FALSE;
 }
@@ -738,7 +834,9 @@ static gboolean gst_vgacapttsrc_start(GstBaseSrc *bsrc)
     self->stopping = FALSE;
     self->reported = FALSE;
     self->reaped = FALSE;
-    self->exit_status = 0;
+    self->end.known = FALSE;
+    self->end.signalled = FALSE;
+    self->end.value = 0;
 
     argv = build_argv(self, &error);
     if (!argv) {
@@ -875,28 +973,33 @@ static gboolean gst_vgacapttsrc_unlock_stop(GstBaseSrc *bsrc)
     return TRUE;
 }
 
-/* The child's stdout has ended. Reap it and say what that means. */
+/* The child's stdout has ended. Find out how it went and say what that means.
+ *
+ * It is *not* reaped here, only waited for with WNOWAIT: the pipeline can
+ * stand for as long as the application likes between this and the teardown
+ * that stops the element, and the unreaped zombie is what keeps the process
+ * group id ours across that gap. stop_child() reaps, last of all. */
 static GstFlowReturn child_finished(GstVgaCapTtSrc *self)
 {
-    gint status = 0;
+    VgaCapChildEnd end = {FALSE, FALSE, 0};
     gchar *how, *tail;
 
     if (self->stopping)
         return GST_FLOW_FLUSHING;
-    if (!wait_for_child(self, self->active_stop_timeout, &status, FALSE)) {
+    if (!wait_for_child(self, self->active_stop_timeout, &end, FALSE)) {
         /* stdout shut but the process lingers: end the stream and leave the
          * corpse to stop(), which kills and reaps it. */
         GST_WARNING_OBJECT(self, "the capture closed its output but is still running");
         return GST_FLOW_EOS;
     }
-    if (status_is_clean(status)) {
+    if (end_is_clean(&end)) {
         GST_INFO_OBJECT(self, "the capture finished after %" G_GUINT64_FORMAT " bytes",
                         self->offset);
         self->reported = TRUE;
         return GST_FLOW_EOS;
     }
 
-    how = describe_status(status);
+    how = describe_end(&end);
     tail = err_tail(self->err_reader);
     GST_ELEMENT_ERROR(self, RESOURCE, READ,
                       ("the capture failed (%s): %s", how, tail),

@@ -44,6 +44,13 @@ def main() -> int:
     parser.add_argument("--clock-hz", type=int, default=60000)
     parser.add_argument("--stop-timeout", type=float, default=10.0)
     parser.add_argument("--min-buffers", type=int, default=8)
+    parser.add_argument("--until-eos", action="store_true",
+                        help="let the capture finish by itself instead of stopping "
+                             "it mid-stream")
+    parser.add_argument("--dwell", type=float, default=0.0,
+                        help="seconds to leave the pipeline standing before tearing "
+                             "it down; an application may leave it standing for any "
+                             "length of time, which is the point")
     parser.add_argument("--wait", type=float, default=30.0)
     parser.add_argument("--child-grace", type=float, default=3.0,
                         help="how long to let a signalled child actually die before "
@@ -67,19 +74,35 @@ def main() -> int:
     bus = pipeline.get_bus()
     pipeline.set_state(Gst.State.PLAYING)
 
-    # Let the capture get properly under way, then stop it mid-stream.
-    give_up = time.monotonic() + args.wait
-    while counted[0] < args.min_buffers and time.monotonic() < give_up:
-        msg = bus.timed_pop_filtered(50 * Gst.MSECOND, Gst.MessageType.ERROR)
-        if msg is not None:
-            print("pipeline error: %s" % (msg.parse_error(),), file=sys.stderr)
+    eos = False
+    if args.until_eos:
+        # Let the capture end by itself. The element notices inside create(),
+        # and the pipeline then stands until whoever owns it takes it down.
+        msg = bus.timed_pop_filtered(int(args.wait * Gst.SECOND),
+                                     Gst.MessageType.EOS | Gst.MessageType.ERROR)
+        if msg is None or msg.type == Gst.MessageType.ERROR:
+            print("no EOS: %s" % (msg.parse_error() if msg else "timed out",),
+                  file=sys.stderr)
             pipeline.set_state(Gst.State.NULL)
             return 1
-        time.sleep(0.01)
-    if counted[0] < args.min_buffers:
-        print(f"only {counted[0]} buffers in {args.wait}s", file=sys.stderr)
-        pipeline.set_state(Gst.State.NULL)
-        return 1
+        eos = True
+    else:
+        # Let the capture get properly under way, then stop it mid-stream.
+        give_up = time.monotonic() + args.wait
+        while counted[0] < args.min_buffers and time.monotonic() < give_up:
+            msg = bus.timed_pop_filtered(50 * Gst.MSECOND, Gst.MessageType.ERROR)
+            if msg is not None:
+                print("pipeline error: %s" % (msg.parse_error(),), file=sys.stderr)
+                pipeline.set_state(Gst.State.NULL)
+                return 1
+            time.sleep(0.01)
+        if counted[0] < args.min_buffers:
+            print(f"only {counted[0]} buffers in {args.wait}s", file=sys.stderr)
+            pipeline.set_state(Gst.State.NULL)
+            return 1
+
+    if args.dwell:
+        time.sleep(args.dwell)
 
     pid = int(open(args.pid_file).read().strip())
     began = time.monotonic()
@@ -99,7 +122,8 @@ def main() -> int:
         state = child_state(pid)
 
     result = {"buffers": counted[0], "stop_seconds": took, "child": state,
-              "child_at_once": at_once, "parent": os.getpid()}
+              "child_at_once": at_once, "eos": eos, "child_pid": pid,
+              "parent": os.getpid()}
     print(json.dumps(result))
     return 0
 

@@ -289,9 +289,12 @@ def test_stopping_mid_stream_is_prompt_and_reaps_the_child(tmp_path, chunk_delay
     assert result["stop_seconds"] < stop_timeout, result
     assert result["stop_seconds"] >= 0.4, \
         f"the stop did not wait for the board's last buffer: {result}"
-    # Reaped: not merely dead, but waited for. A "Z" here is the zombie the
-    # element would leave if it only signalled and walked away.
-    assert result["child"] == "gone", result
+    # Reaped: not merely dead, but waited for, and by the instant teardown
+    # returned rather than within the probe's grace -- this pid is the
+    # element's own child, which stop_child() waits for before it returns, so
+    # the assertion can be exact. A "Z" here is the zombie the element would
+    # leave if it only signalled and walked away.
+    assert result["child_at_once"] == "gone", result
 
     # And patient: the stream ends whole, with the trailer the board only
     # sends when it was asked to stop rather than killed.
@@ -301,16 +304,17 @@ def test_stopping_mid_stream_is_prompt_and_reaps_the_child(tmp_path, chunk_delay
 
 
 def run_stop_probe(tmp_path, fake_flags: list[str], stop_timeout: float,
-                   chunk_delay: str = "0.05", timeout: int = 90) -> dict:
+                   chunk_delay: str = "0.05", timeout: int = 90,
+                   probe_flags: list[str] = (), wrapper: list[str] = ()) -> dict:
     system_python = system_python_path()
     if system_python is None:
         pytest.skip("no system python3 to run the gst-python stop probe with")
     pid_file = tmp_path / "child.pid"
     command = fake_command("--chunk-delay", chunk_delay, "--pid-file", str(pid_file),
                            *fake_flags)
-    argv = [system_python, STOP_PROBE, "--ttcap-command", command,
+    argv = [*wrapper, system_python, STOP_PROBE, "--ttcap-command", command,
             "--pid-file", str(pid_file), "--stop-timeout", str(stop_timeout),
-            "--min-buffers", "10"]
+            "--min-buffers", "10", *probe_flags]
     try:
         proc = run(argv, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -330,7 +334,9 @@ def test_a_child_that_ignores_sigint_is_stopped_by_closing_the_pipe(tmp_path):
     # which needs no handler to be running, so it works where the signal did
     # not.
     result = run_stop_probe(tmp_path, ["--ignore-sigint"], stop_timeout=1.0)
-    assert result["child"] == "gone", result
+    # The element's own child, so gone by the time teardown returns -- no
+    # grace, or a stop() that returned before reaping would slip through.
+    assert result["child_at_once"] == "gone", result
     assert 1.0 <= result["stop_seconds"] < 3.0, result
 
 
@@ -348,25 +354,67 @@ def test_a_child_that_ignores_everything_is_killed_and_reaped(tmp_path, flags):
     # test does not force. What the case does establish is that the SIGKILL
     # rung still reaps a child writing flat out.
     result = run_stop_probe(tmp_path, flags, stop_timeout=1.0, chunk_delay="0")
-    assert result["child"] == "gone", result
+    assert result["child_at_once"] == "gone", result
     assert 3.0 <= result["stop_seconds"] < 8.0, result
 
 
 def test_a_capture_carried_on_by_an_orphan_still_tears_down(tmp_path):
     # The shape `uv run --no-sync ttcap` can take when the wrapper dies first:
     # the process the element spawned exits at once and a fork of it carries
-    # the capture on, holding both pipes. The element reaps the one it knows
-    # about within milliseconds, so no escalation is triggered and no EOF ever
+    # the capture on, holding both pipes. The element sees the leader end
+    # within milliseconds, so no escalation is triggered and no EOF ever
     # arrives on stderr -- which, before this was fixed, left stop() blocked in
     # an unbounded join for ever, with the board still held.
     #
     # --deaf so nothing but SIGKILL to the *group* can end the orphan.
+    #
+    # This is the one case that needs the grace: the orphan is not the
+    # element's child and cannot be waited for, so the element's job ends at
+    # delivering the signal and the kernel and init do the rest.
     result = run_stop_probe(tmp_path, ["--orphan", "--deaf"], stop_timeout=8.0,
                             timeout=60)
     assert result["child"] == "gone", result
-    # No rung of the ladder applies to a leader that is already reaped, so this
-    # is the group sweep and the bounded join, and both are prompt.
+    # No rung of the ladder applies to a leader that has already ended, so
+    # this is the group sweep and the bounded join, and both are prompt.
     assert result["stop_seconds"] < 5.0, result
+
+
+def test_an_ordinary_end_of_stream_signals_nothing_afterwards(tmp_path):
+    # The capture ends by itself, the element learns of it inside create(),
+    # and the pipeline then stands for a while before anyone tears it down.
+    # Nothing may be signalled at that teardown: if the child had been reaped
+    # when its exit was noticed, its pid would be the kernel's to hand out
+    # again, and `kill(-pid, SIGINT)` at the end of an arbitrarily long dwell
+    # would be a SIGINT to whatever now holds that number -- a stranger's job,
+    # and a SIGINT to a job's process group is not a harmless stray.
+    #
+    # The element instead keeps the child unreaped until the last act, so the
+    # id stays reserved, and refuses to signal once nothing of ours is left.
+    # strace is the only honest way to see "no signal was sent"; the test
+    # skips where it cannot run.
+    strace = shutil.which("strace")
+    if strace is None:
+        pytest.skip("no strace to watch for stray signals with")
+    trace = tmp_path / "kills.txt"
+    try:
+        result = run_stop_probe(
+            tmp_path, ["--frames", "4"], stop_timeout=8.0, timeout=90,
+            probe_flags=["--until-eos", "--dwell", "3"],
+            wrapper=[strace, "-f", "-e", "trace=kill,tgkill", "-o", str(trace)])
+    except AssertionError:
+        if trace.exists() and "ptrace" in trace.read_text():
+            pytest.skip("strace cannot attach here (ptrace_scope)")
+        raise
+    assert result["eos"] is True, result
+    assert result["child_at_once"] == "gone", result
+
+    text = trace.read_text() if trace.exists() else ""
+    if "ptrace" in text and "kill(" not in text:
+        pytest.skip("strace cannot attach here (ptrace_scope)")
+    stray = [line for line in text.splitlines() if "kill(" in line]
+    assert not stray, (
+        "the element signalled after the capture had already ended:\n"
+        + "\n".join(stray))
 
 
 # ----------------------------------------------------------------- vgacapbin
