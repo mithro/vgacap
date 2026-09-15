@@ -12,8 +12,9 @@ RP2040_MAP = (11, 3, 0, 8, 1, 9, 2, 10)
 
 
 def bars(w: int, h: int) -> np.ndarray:
-    x = np.arange(w, dtype=np.uint8)
-    return np.broadcast_to(((x // 10) & 0x3F).astype(np.uint8), (h, w)).copy()
+    x = np.arange(w)  # default (wide) int dtype: must not wrap before the // 10 & 0x3F
+    bar = ((x // 10) & 0x3F).astype(np.uint8)
+    return np.broadcast_to(bar, (h, w)).copy()
 
 
 def grid(w: int, h: int) -> np.ndarray:
@@ -30,8 +31,7 @@ def frame_samples(mode: Mode, image: np.ndarray) -> np.ndarray:
     """One full frame of Tiny VGA samples, starting at the first line of the
     vsync pulse, first clock of the hsync pulse (same convention as
     tests/synth.c)."""
-    cpl = mode.h_active + mode.h_front + mode.h_sync + mode.h_back
-    lpf = mode.v_active + mode.v_front + mode.v_sync + mode.v_back
+    cpl, lpf = mode.cpl, mode.lpf
     clk = np.arange(cpl)
     line = np.arange(lpf)
     h_pulse = clk < mode.h_sync
@@ -61,8 +61,7 @@ def write_stream(path, mode: Mode, image6, frames: int = 3, sample_bits: int = 8
     if sample_bits == 12:
         s = to_rp2040_layout(s)
         smap = RP2040_MAP
-    cpl = mode.h_active + mode.h_front + mode.h_sync + mode.h_back
-    lpf = mode.v_active + mode.v_front + mode.v_sync + mode.v_back
+    cpl, lpf = mode.cpl, mode.lpf
     with open(path, "wb") as fp:
         w = Writer(fp, Header(sample_bits=sample_bits, samples_per_word=samples_per_word,
                                flags=flags, signal_map=smap, mode=3,

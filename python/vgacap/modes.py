@@ -18,6 +18,16 @@ class Mode:
     h_sync_positive: bool
     v_sync_positive: bool
 
+    @property
+    def cpl(self) -> int:
+        """Clocks per line: h_active+h_front+h_sync+h_back."""
+        return self.h_active + self.h_front + self.h_sync + self.h_back
+
+    @property
+    def lpf(self) -> int:
+        """Lines per frame: v_active+v_front+v_sync+v_back."""
+        return self.v_active + self.v_front + self.v_sync + self.v_back
+
 
 _TABLE = [
     Mode("640x480@60",  640, 16,  96,  48, 480, 10, 2, 33, False, False),

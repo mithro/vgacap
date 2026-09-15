@@ -21,6 +21,23 @@ def test_frame_samples_shape():
     assert (s[0] >> 7) & 1 == 0 and (s[0] >> 3) & 1 == 0          # negative syncs: both pulses low at frame start
 
 
+def test_bars_no_wrap():
+    # Regression: np.arange(w, dtype=np.uint8) wraps modulo 256, breaking the
+    # ramp past column 255 for every mode width in the table (640/720/800/1024).
+    b = bars(640, 1)
+    assert b[0, 300] == (300 // 10) & 0x3F
+    assert b[0, 639] == 63
+
+
+def test_bars_matches_c_bars_formula():
+    # tests/test_frame.c's `bars` helper is `(uint8_t)((x / 10) & 0x3F)` for
+    # x a uint16_t. Assert Python's bars() agrees at every column of a
+    # 640-wide row so the two synthetic generators cannot silently drift.
+    b = bars(640, 1)[0]
+    for x in range(640):
+        assert int(b[x]) == (x // 10) & 0x3F
+
+
 @pytest.mark.parametrize("chunk", ["raw", "rle", "fram"])
 @pytest.mark.parametrize("mode_name", ["640x480@60", "800x600@60", "720x400@70"])
 def test_roundtrip_exact(tmp_path, chunk, mode_name):
