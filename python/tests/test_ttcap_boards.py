@@ -1,7 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
-from ttcap.boards import RP2040_TT06, RP2350_DBV3, WELLAND, bridge_ws_url, daemon_url, profile_from_gpio_map
+from ttcap.boards import (
+    RP2040_TT06,
+    RP2350_DBV3,
+    WELLAND,
+    bridge_ws_url,
+    daemon_url,
+    fdebug_addr,
+    pio_base,
+    profile_from_gpio_map,
+    rx_dreq,
+    rxf_addr,
+)
 
 # GPIOMap.all() as returned by the tt07 (RP2040) demo board, MicroPython 1.24.0.
 TT07_GPIO_MAP = {
@@ -114,3 +125,30 @@ def test_daemon_url():
 
 def test_bridge_ws_url():
     assert bridge_ws_url("fpga-1") == "ws://10.21.2.33:8765/serial"
+
+
+def test_push_thresh_is_a_full_fifo_word_of_samples():
+    # 12 bits x 2 samples leaves bits 24..31 of the pushed word zero;
+    # 8 bits x 4 samples fills all 32.
+    assert RP2040_TT06.push_thresh == 24
+    assert RP2350_DBV3.push_thresh == 32
+
+
+def test_pio_base_steps_by_one_mib_per_block():
+    assert pio_base(0) == 0x50200000
+    assert pio_base(1) == 0x50300000
+    assert pio_base(2) == 0x50400000
+
+
+def test_rxf_addr_is_rxf0_plus_four_per_state_machine():
+    assert [rxf_addr(0, sm) for sm in range(4)] == [0x50200020, 0x50200024, 0x50200028, 0x5020002C]
+
+
+def test_rx_dreq_is_four_above_the_tx_dreq_of_the_same_block():
+    assert [rx_dreq(0, sm) for sm in range(4)] == [4, 5, 6, 7]
+    assert [rx_dreq(1, sm) for sm in range(4)] == [12, 13, 14, 15]
+
+
+def test_fdebug_addr():
+    assert fdebug_addr(0) == 0x50200008
+    assert fdebug_addr(1) == 0x50300008

@@ -26,6 +26,15 @@ class BoardProfile:
     flags: int
     signal_map: tuple[int, ...]
 
+    @property
+    def push_thresh(self) -> int:
+        """PIO autopush threshold in bits: one full 32-bit FIFO word of samples.
+
+        24 for the RP2040's 12-bit x2 layout (bits 24..31 of the word stay
+        zero) and 32 for the RP2350's 8-bit x4 layout.
+        """
+        return self.sample_bits * self.samples_per_word
+
 
 RP2040_TT06 = BoardProfile(
     "rp2040-tt06map", 0, (5, 6, 7, 8, 13, 14, 15, 16), 0, 5, 12, 12, 2, 0, (11, 3, 0, 8, 1, 9, 2, 10)
@@ -33,6 +42,54 @@ RP2040_TT06 = BoardProfile(
 RP2350_DBV3 = BoardProfile(
     "rp2350-dbv3", 16, tuple(range(33, 41)), 16, 33, 8, 8, 4, 0, (7, 3, 0, 4, 1, 5, 2, 6)
 )
+
+
+#: Base address of PIO block 0. PIO blocks are 1 MiB apart on both chips:
+#: RP2040 has PIO0 at 0x5020_0000 and PIO1 at 0x5030_0000; RP2350 keeps those
+#: and adds PIO2 at 0x5040_0000 (pico-sdk `addressmap.h`).
+PIO0_BASE = 0x50200000
+PIO_BLOCK_STRIDE = 0x00100000
+#: Offset of RXF0 within a PIO block; RXF1..3 follow at 4-byte steps
+#: (pico-sdk `hardware/structs/pio.h`: `rxf[4]` at 0x20).
+PIO_RXF0_OFFSET = 0x20
+#: Offset of FDEBUG within a PIO block. Its RXSTALL field is bits 0..3, one
+#: per state machine, and is write-1-to-clear.
+PIO_FDEBUG_OFFSET = 0x08
+#: DREQ_PIO0_TX0 == 0 and DREQ_PIO0_RX0 == 4, with 8 DREQs per PIO block
+#: (pico-sdk `hardware/regs/dreq.h`); same layout on RP2040 and RP2350.
+DREQ_PIO0_RX0 = 4
+DREQ_PIO_STRIDE = 8
+
+
+def pio_base(pio: int) -> int:
+    """Base address of PIO block `pio` (0, 1, or 2 on RP2350)."""
+    return PIO0_BASE + PIO_BLOCK_STRIDE * pio
+
+
+def rxf_addr(pio: int, sm: int) -> int:
+    """Address of the RX FIFO register for state machine `sm` of PIO `pio`.
+
+    This is the DMA read address for the sampler: PIO0 SM0 is 0x5020_0020.
+    """
+    return pio_base(pio) + PIO_RXF0_OFFSET + 4 * sm
+
+
+def rx_dreq(pio: int, sm: int) -> int:
+    """DMA data request line for the RX FIFO of `sm` on PIO `pio`.
+
+    | pio | sm | DREQ |
+    |-----|----|------|
+    |  0  |  0 |   4  |
+    |  0  |  3 |   7  |
+    |  1  |  1 |  13  |
+    |  2  |  0 |  20  |
+    """
+    return DREQ_PIO_STRIDE * pio + DREQ_PIO0_RX0 + sm
+
+
+def fdebug_addr(pio: int) -> int:
+    """Address of PIO `pio`'s FDEBUG register (RXSTALL in bits 0..3)."""
+    return pio_base(pio) + PIO_FDEBUG_OFFSET
 
 
 def profile_from_gpio_map(m: dict[str, int]) -> BoardProfile:
