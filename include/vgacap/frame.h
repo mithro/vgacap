@@ -50,6 +50,8 @@ void vgaframe_timing_init(vgaframe_timing_learner_t *l);
 // feed one sample's sync levels for `run` clocks; returns 1 when a new line started, 2 when a new frame started, else 0
 int  vgaframe_timing_push(vgaframe_timing_learner_t *l, uint8_t hsync, uint8_t vsync, uint32_t run);
 
+// ---- frame reconstruction ------------------------------------------------
+
 typedef struct vgaframe_output {
     const uint8_t *rgb24; uint16_t width, height;
     const vgaframe_timing_t *timing;

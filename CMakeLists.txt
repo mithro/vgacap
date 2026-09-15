@@ -12,7 +12,7 @@ enable_testing()
 # Libraries. Each section is owned by one component; add sources in place.
 # --- stream: chunked capture stream encoder/decoder (src/stream) ---
 # --- frame: VGA picture reconstruction (src/frame) ---
-add_library(vgacap_frame STATIC src/frame/modes.c src/frame/timing.c)
+add_library(vgacap_frame STATIC src/frame/modes.c src/frame/timing.c src/frame/frame.c)
 # --- tools: command-line utilities (src/tools) ---
 
 function(vgacap_add_test name)
@@ -30,3 +30,4 @@ endfunction()
 vgacap_add_test(test_harness_smoke)
 vgacap_add_test(test_modes)
 vgacap_add_test(test_timing tests/synth.c)
+vgacap_add_test(test_frame tests/synth.c)
