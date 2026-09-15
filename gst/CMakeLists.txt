@@ -14,12 +14,14 @@ if(NOT GST_FOUND)
 endif()
 message(STATUS "vgacap: building the GStreamer plugin against ${GST_gstreamer-1.0_VERSION}")
 
-# GLib's and GStreamer's macros (G_DEFINE_TYPE, the GST_*_CAST casts, the
-# GParamSpec flags) generate code that -Wconversion and -Wshadow flag in
-# headers we do not own, so the strict flags the rest of the tree builds with
-# are dropped for this directory only. -Wall -Wextra stay, and stay clean.
+# Only -Wconversion is dropped, and only because it fires twice inside
+# GStreamer's own headers, where there is no call site to fix:
+#   gst/video/video-info.h:374   via GST_VIDEO_INFO_SIZE
+#   gst/gstminiobject.h:126      via GST_BUFFER_FLAG_UNSET
+# -Werror and -Wshadow stay, so this directory keeps the same regression
+# guard as the rest of the tree; -Wall -Wextra -Werror -Wshadow is clean.
 get_directory_property(VGACAP_GST_OPTS COMPILE_OPTIONS)
-list(REMOVE_ITEM VGACAP_GST_OPTS -Werror -Wconversion -Wshadow)
+list(REMOVE_ITEM VGACAP_GST_OPTS -Wconversion)
 set_directory_properties(PROPERTIES COMPILE_OPTIONS "${VGACAP_GST_OPTS}")
 
 add_library(gstvgacap MODULE gstvgacap.c gstvgadecode.c)
