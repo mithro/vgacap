@@ -91,6 +91,13 @@ static void on_event(void *user, const vgacap_event_t *ev) {
         break;
     case VGACAP_EV_TIME:
         break;
+    case VGACAP_EV_RESYNC:
+        // Not fatal: the frame layer re-derives timing from the sync bits, so
+        // reconstruction resumes on its own a frame or two later. Report the
+        // loss so a reduced frame count is explainable.
+        fprintf(stderr, "vgacap-frames: resync skipped=%u reason=%s\n",
+                (unsigned)ev->u.resync.skipped, ev->u.resync.what ? ev->u.resync.what : "?");
+        break;
     case VGACAP_EV_ERROR:
         fprintf(stderr, "vgacap-frames: stream error: %s\n", ev->u.error.what ? ev->u.error.what : "?");
         app->failed = 1;
