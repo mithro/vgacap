@@ -10,11 +10,16 @@ the file `run_capture()` produces parses with `vgacap.stream.read_stream`
 
 from __future__ import annotations
 
+import gc
 import io
 import struct
+import sys
+import types
 
 import pytest
 from fake_repl import FakeChunkBoard
+
+from ttcap import mp
 
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
 from ttcap.capture import (
@@ -453,7 +458,7 @@ def test_clears_the_previous_run_names_before_sending_the_script():
     stats = run_capture(repl, request(profile), io.BytesIO())
 
     cleanup = board.commands[0]
-    assert cleanup.startswith("import gc")
+    assert cleanup.startswith("for _n in [")
     assert "gc.collect()" in cleanup and "gc.mem_free()" in cleanup
     # Every name the script is about to bind, so a second run has room.
     for name in ("'CFG'", "'main'", "'FULL'", "'on_a'", "'machine'"):
@@ -470,6 +475,38 @@ def test_prepare_board_returns_the_free_heap():
 
     assert prepare_board(repl, ["A", "B"]) == 84_208
     assert "['A', 'B']" in board.commands[0]
+
+
+def test_the_cleanup_snippet_actually_runs_on_a_dirty_namespace(monkeypatch, capsys):
+    # Regression: the snippet used to `import gc` *first*, and the names it
+    # deletes include the script's own imports -- so the loop popped `gc`
+    # and the next line died with `NameError: name 'gc' isn't defined`, on
+    # every run on tt07. Run the real generated code against a namespace
+    # that already holds a previous run's names, `gc` among them.
+    stub = types.SimpleNamespace(collect=gc.collect, mem_free=lambda: 84_208)
+    monkeypatch.setitem(sys.modules, "gc", stub)
+
+    names = mp.module_level_names(mp.load("capture_rp2.py")) + ["CFG"]
+    assert "gc" in names, "the script imports gc, so the snippet must survive losing it"
+    namespace: dict = {"__builtins__": __builtins__}
+    for name in names:
+        namespace[name] = object()
+
+    exec(_CLEANUP % (sorted(names),), namespace)  # noqa: S102 - that is the point
+
+    assert int(capsys.readouterr().out.strip()) == 84_208
+    for name in ("machine", "main", "FULL", "CFG", "on_a"):
+        assert name not in namespace
+    assert "_n" not in namespace
+    # `gc` is back, and it is the freshly imported module, not the leftover.
+    assert namespace["gc"] is stub
+
+
+def test_the_cleanup_snippet_imports_gc_after_the_deletion_loop():
+    body = _CLEANUP % (["gc"],)
+
+    assert body.index("globals().pop(_n, None)") < body.index("import gc")
+    assert body.index("import gc") < body.index("gc.collect()")
 
 
 def test_prepare_board_reports_a_board_error():

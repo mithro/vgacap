@@ -233,6 +233,46 @@ def test_capture_seconds_zero_without_a_byte_limit_is_rejected(monkeypatch, caps
     assert "never stop" in capsys.readouterr().err
 
 
+def test_capture_prints_the_boards_traceback_when_the_cleanup_is_rejected(
+    monkeypatch, capsys, tmp_path
+):
+    # The pre-run cleanup is the first thing the board sees, and when it
+    # fails the traceback is the only clue -- so it has to reach the user
+    # whole, one line per line, not truncated to its first line.
+    traceback = (
+        "Traceback (most recent call last):\r\n"
+        "  File \"<stdin>\", line 5, in <module>\r\n"
+        "NameError: name 'gc' isn't defined\r\n"
+    )
+    profile = RP2350_DBV3
+    board = capture_board(profile, [])
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+    board.errors = {
+        command: traceback
+        for command in [cli_cleanup_command(profile)]
+    }
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz", "1000",
+         "--seconds", "0.05", "--out", str(tmp_path / "s.vgacap")]
+    )
+
+    assert code == 1
+    printed = capsys.readouterr().err.splitlines()
+    assert printed[0].startswith("capture failed: CaptureError")
+    # Every traceback line is on a line of its own, the NameError included.
+    assert printed[-3:] == traceback.strip().splitlines()
+
+
+def cli_cleanup_command(profile) -> str:
+    """The exact cleanup snippet `run_capture` will send for `profile`."""
+    from ttcap import mp
+    from ttcap.capture import _CLEANUP, capture_cfg
+
+    script = mp.with_cfg(mp.minify(mp.load("capture_rp2.py")), capture_cfg(profile))
+    return _CLEANUP % (mp.module_level_names(script),)
+
+
 def test_capture_reports_a_link_failure_without_a_traceback(monkeypatch, capsys, tmp_path):
     def _explode(url):
         raise OSError(2, "no such device")

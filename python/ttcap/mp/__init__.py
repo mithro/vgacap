@@ -117,8 +117,13 @@ def module_level_names(source: str) -> list[str]:
     each run leaves its names there -- about 64 of them, ~5 KB, for
     `capture_rp2.py`. On a board with ~80 KB of heap that is the difference
     between the next run compiling and not, so the host deletes them before
-    it sends the next script. Import names are included: the module objects
-    stay in `sys.modules`, so re-importing costs nothing.
+    it sends the next script.
+
+    Import names are included: the module objects stay in `sys.modules`, so
+    re-importing costs nothing. That does mean the deleting snippet cannot
+    rely on any import of its own surviving the loop -- see
+    `ttcap.capture._CLEANUP`, which imports `gc` afterwards for exactly that
+    reason.
     """
     names: set[str] = set()
     for node in ast.parse(source).body:

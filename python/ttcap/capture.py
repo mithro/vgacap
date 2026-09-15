@@ -72,11 +72,18 @@ MIN_FREE_BYTES = 40_000
 #: collects and reports the free heap. `globals()` in the raw REPL *is* that
 #: namespace, and `pop(name, None)` tolerates a first run where none of them
 #: exist yet.
+#:
+#: `import gc` comes AFTER the loop, and that ordering is the whole trick:
+#: the names being deleted include the script's imports, `gc` among them, so
+#: importing first meant the loop popped `gc` and the next line died with
+#: `NameError: name 'gc' isn't defined` -- which it did on every run on
+#: tt07. Importing afterwards rebinds it whether or not the loop removed it,
+#: and costs nothing: the module object is still in `sys.modules`.
 _CLEANUP = (
-    "import gc\n"
     "for _n in %r:\n"
     "    globals().pop(_n, None)\n"
     "globals().pop('_n', None)\n"
+    "import gc\n"
     "gc.collect()\n"
     "print(gc.mem_free())\n"
 )
