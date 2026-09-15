@@ -7,7 +7,9 @@ Subcommands:
   `GPIOMap.all()`, so a board/link can be sanity checked.
 * `throughput` measures how fast the board can push bytes over the link,
   which bounds the project clock a capture can keep up with.
-* `capture` enables a design, clocks it, and writes a `.vgacap` stream.
+* `capture` enables a design, clocks it, and writes a `.vgacap` stream --
+  to a file, or, with `--out -`, to stdout as it arrives, so a video
+  pipeline can consume the capture live.
 * `png` renders a captured stream to PNG images via `vgacap-frames`.
 
 Exit codes: 0 success, 1 a board, link or tool error (including a capture
@@ -21,13 +23,16 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import itertools
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import sys
-from typing import Sequence
+import threading
+from typing import Callable, Iterator, Sequence
 
 from .boards import RP2040_TT06, RP2350_DBV3, profile_from_gpio_map
 from .capture import (
@@ -164,6 +169,105 @@ def resolve_profile(repl: RawRepl, name: str):
     return profile_from_gpio_map(_parse_gpio_map(gpio_map_repr))
 
 
+#: `--out` value that means "stream to stdout" rather than "write a file".
+#:
+#: The `-` convention, and it is deliberately not overridable: a capture is
+#: binary, so a stream sent to a file called `-` by accident is unreadable
+#: noise in the working directory, while a stream sent to stdout by accident
+#: is visible immediately. A real file of that name is still reachable, the
+#: way every tool with this convention reaches it: `--out ./-`.
+STDOUT_PATH = "-"
+
+
+class _StdoutStream:
+    """`sys.stdout.buffer`, flushed after every write.
+
+    Three jobs, all of them about being the *live* end of a pipeline:
+
+    * flush per write, so a consumer sees each chunk as the board sends it
+      rather than when some 8 KB buffer happens to fill -- the difference
+      between a video that starts and one that appears to hang;
+    * `tell()` from a counter, because `sys.stdout.buffer.tell()` raises
+      `OSError` on a pipe, and `capture()` asks how much was written to
+      decide whether a failed run left anything behind;
+    * never close the underlying buffer, which belongs to the interpreter.
+    """
+
+    def __init__(self, buffer) -> None:
+        self._buffer = buffer
+        self._written = 0
+
+    def write(self, data) -> int:
+        written = self._buffer.write(data)
+        self._written += len(data)
+        self._buffer.flush()
+        return written
+
+    def flush(self) -> None:
+        self._buffer.flush()
+
+    def tell(self) -> int:
+        return self._written
+
+
+@contextlib.contextmanager
+def _open_output(out_path: str) -> Iterator:
+    """Yield the binary sink for `--out`: a file, or stdout for `-`."""
+    if out_path == STDOUT_PATH:
+        stream = _StdoutStream(sys.stdout.buffer)
+        try:
+            yield stream
+        finally:
+            # Flushed, not closed: the interpreter owns stdout, and closing
+            # it would break the messages still to be written to stderr's
+            # sibling on the way out.
+            with contextlib.suppress(ValueError, OSError):
+                stream.flush()
+        return
+    with open(out_path, "wb") as fp:
+        yield fp
+
+
+@contextlib.contextmanager
+def _sigint_stops_the_capture() -> Iterator[Callable[[], bool]]:
+    """Turn the first SIGINT into a cooperative stop, for a streamed capture.
+
+    A GStreamer source element ends its child with SIGINT and then waits for
+    it (`vgacapttsrc`, M5 Task 4), and a person piping `ttcap capture
+    --out -` into `gst-launch` ends it with Ctrl-C. Neither wants the
+    default `KeyboardInterrupt`: that aborts mid-stream, so the board's
+    closing `TIME` chunk -- the only overrun and RXSTALL report there is --
+    never arrives, and the run exits non-zero on a capture that worked.
+
+    So the first signal only sets a flag, which `CaptureRequest.stop`
+    consults between chunks: the board finishes its chunk, writes its
+    trailer, and the stream ends whole. The cost is one DMA buffer of
+    latency (2.2 s at the RP2040's 60 kHz floor), so the handler is put back
+    immediately and a *second* Ctrl-C interrupts for real.
+
+    Only installed for `--out -`, and only from the main thread; anywhere
+    else the predicate is simply never true and the request's own
+    `seconds`/`max_bytes` bound the run as before.
+    """
+    stopped = threading.Event()
+    try:
+        previous = signal.getsignal(signal.SIGINT)
+
+        def handler(signum, frame) -> None:
+            stopped.set()
+            signal.signal(signal.SIGINT, previous)
+
+        signal.signal(signal.SIGINT, handler)
+    except (ValueError, OSError, AttributeError):  # not the main thread
+        yield stopped.is_set
+        return
+    try:
+        yield stopped.is_set
+    finally:
+        with contextlib.suppress(ValueError, OSError):
+            signal.signal(signal.SIGINT, previous)
+
+
 def _discard_empty(out_path: str) -> None:
     """Remove a `.vgacap` nothing was ever written to.
 
@@ -205,7 +309,20 @@ def capture(
     The stats are printed as soon as they exist -- before the clock is
     stopped -- so a failure during teardown cannot swallow the result of a
     capture that already succeeded.
+
+    `out_path` of `-` streams to stdout instead (`STDOUT_PATH`), flushed per
+    chunk. Then **every** message this function and its callees print goes
+    to stderr, the stats line included: stdout carries the capture and
+    nothing else, because the thing reading it is `vgacap_reader`, not a
+    person, and one stray line of text desynchronises the framing. That
+    mode also accepts a run with no `seconds`/`max-bytes` limit, because
+    SIGINT ends it cooperatively (`_sigint_stops_the_capture`).
     """
+    to_stdout = out_path == STDOUT_PATH
+    # Messages share stdout with the capture only when the capture is not on
+    # stdout. There is no third option and no flag: a stream is either
+    # parseable or it is not.
+    say = sys.stderr if to_stdout else sys.stdout
     link = link_from_url(url)
     try:
         repl = RawRepl(link)
@@ -216,37 +333,42 @@ def capture(
                 # `buf_words` sizes the chunks, and the byte budget has to
                 # allow for each chunk's 12 non-sample bytes.
                 max_bytes = frames_to_max_bytes(board, frames, buf_words=buf_words)
-            request = CaptureRequest(
-                profile=board,
-                project=project,
-                design=design,
-                clock_hz=clock_hz,
-                seconds=seconds,
-                max_bytes=max_bytes,
-                buf_words=buf_words,
-                edge=edge,
-                desc=desc,
-                pio=pio,
-            )
-            selection = select_project(repl, request)
-            print(
-                "profile=%s project=%s enable=%s"
-                % (board.name, selection["project"], selection["enable"])
-            )
-            # `run_capture()` writes nothing until the board has been
-            # cleaned up and has the heap for the script, so a run refused
-            # there (or one that dies before the first chunk) must not
-            # leave an empty file behind pretending to be a capture.
-            # Anything that did get written is a valid, if short, stream
-            # and is kept.
-            with open(out_path, "wb") as fp:
-                try:
-                    stats = run_capture(repl, request, fp)
-                except BaseException:
-                    if fp.tell() == 0:
-                        _discard_empty(out_path)
-                    raise
-            _report(stats, out_path)
+            with _sigint_stops_the_capture() if to_stdout else contextlib.nullcontext(
+                None
+            ) as stop:
+                request = CaptureRequest(
+                    profile=board,
+                    project=project,
+                    design=design,
+                    clock_hz=clock_hz,
+                    seconds=seconds,
+                    max_bytes=max_bytes,
+                    buf_words=buf_words,
+                    edge=edge,
+                    desc=desc,
+                    pio=pio,
+                    stop=stop,
+                )
+                selection = select_project(repl, request)
+                print(
+                    "profile=%s project=%s enable=%s"
+                    % (board.name, selection["project"], selection["enable"]),
+                    file=say,
+                )
+                # `run_capture()` writes nothing until the board has been
+                # cleaned up and has the heap for the script, so a run
+                # refused there (or one that dies before the first chunk)
+                # must not leave an empty file behind pretending to be a
+                # capture. Anything that did get written is a valid, if
+                # short, stream and is kept.
+                with _open_output(out_path) as fp:
+                    try:
+                        stats = run_capture(repl, request, fp)
+                    except BaseException:
+                        if not to_stdout and fp.tell() == 0:
+                            _discard_empty(out_path)
+                        raise
+            _report(stats, "stdout" if to_stdout else out_path, stream=say)
             if stop_clock_after:
                 stop_clock(repl)
         finally:
@@ -257,8 +379,9 @@ def capture(
     return stats
 
 
-def _report(stats: CaptureStats, out_path: str) -> None:
-    print(stats.format())
+def _report(stats: CaptureStats, out_path: str, stream=None) -> None:
+    stream = sys.stdout if stream is None else stream
+    print(stats.format(), file=stream)
     # A high-rate capture can log hundreds of consecutive identical
     # "overrun" TIME chunks (e.g. 320 at 1.5 MHz); coalesce runs of the same
     # message into one line with a count instead of flooding the terminal.
@@ -267,10 +390,10 @@ def _report(stats: CaptureStats, out_path: str) -> None:
     for message, group in itertools.groupby(stats.messages):
         count = sum(1 for _ in group)
         if count > 1:
-            print("  board: %s (x%d)" % (message, count))
+            print("  board: %s (x%d)" % (message, count), file=stream)
         else:
-            print("  board: %s" % message)
-    print("wrote %s" % out_path)
+            print("  board: %s" % message, file=stream)
+    print("wrote %s" % out_path, file=stream)
 
 
 def find_vgacap_frames(explicit: str | None = None) -> str:
@@ -391,7 +514,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--seconds",
         type=float,
         default=5.0,
-        help="capture duration; 0 means run until --max-bytes/--frames (default 5)",
+        help="capture duration; 0 means run until --max-bytes/--frames, or "
+        "until SIGINT when --out - is streaming (default 5)",
     )
     capture_limit = capture_parser.add_mutually_exclusive_group()
     capture_limit.add_argument(
@@ -406,7 +530,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="stop after enough bytes for N frames, assuming 640x480@60 "
         "timing (800x525 clocks) plus one frame of margin",
     )
-    capture_parser.add_argument("--out", required=True, help="output .vgacap file")
+    capture_parser.add_argument(
+        "--out",
+        required=True,
+        help="output .vgacap file, or - to stream the capture to stdout "
+        "(every message then goes to stderr); for a file literally named "
+        "'-', pass ./-",
+    )
     capture_parser.add_argument(
         "--buf-words",
         type=int,
