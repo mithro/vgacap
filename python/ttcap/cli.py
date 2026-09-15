@@ -32,6 +32,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from typing import Callable, Iterator, Sequence
 
 from .boards import RP2040_TT06, RP2350_DBV3, profile_from_gpio_map
@@ -40,6 +41,7 @@ from .capture import (
     DEFAULT_PIO,
     CaptureError,
     CaptureRequest,
+    CaptureSession,
     CaptureStats,
     frames_to_max_bytes,
     run_capture,
@@ -178,11 +180,80 @@ def resolve_profile(repl: RawRepl, name: str):
 #: way every tool with this convention reaches it: `--out ./-`.
 STDOUT_PATH = "-"
 
+#: What `--out -` says when the far end of the pipe goes away. Phrased as an
+#: outcome, not an error: `head -c N`, `num-buffers=N` and a pipeline going
+#: to NULL all end a capture this way and all of them are exit 0.
+CONSUMER_CLOSED_MESSAGE = "capture ended: the consumer closed the stream"
+
+
+class ConsumerClosed(Exception):
+    """`--out -`: the process reading the stream closed it. Not a failure.
+
+    Deliberately not an `OSError`, so it cannot be swept up by
+    `CAPTURE_FAILURES` and reported as "capture failed". It is raised only
+    after the capture has been reported in full, and `main()` turns it into
+    exit 0 -- see `_StdoutStream` for why a broken pipe is a normal end.
+    """
+
+
+class _StopFlag:
+    """One bit meaning "something outside has ended this capture".
+
+    Set by the first SIGINT (`_sigint_stops_the_capture`) and by the
+    consumer closing the pipe (`_StdoutStream`). Read two ways:
+
+    * as `CaptureRequest.stop`, the between-chunks predicate -- which is
+      also what makes an otherwise unbounded `--out -` request legal;
+    * by `_watch_for_stop`, which turns it into an immediate cooperative
+      stop byte instead of waiting for the next chunk to arrive.
+
+    A plain attribute rather than a `threading.Event`, because it is
+    assigned from a signal handler and `Event.set()` takes a condition lock.
+    """
+
+    def __init__(self) -> None:
+        self.stopped = False
+        #: Set by the capture when it is over, to retire the watcher thread.
+        self.done = False
+
+    def set(self) -> None:
+        self.stopped = True
+
+    def __call__(self) -> bool:
+        return self.stopped
+
+
+def _silence_stdout() -> None:
+    """Point fd 1 at /dev/null, after the consumer has gone away.
+
+    A `BrokenPipeError` leaves the unwritten bytes sitting in `sys.stdout`'s
+    `BufferedWriter`, and CPython flushes that buffer again during
+    `Py_FinalizeEx`. The second flush raises too, which prints
+    `Exception ignored in: <_io.BufferedWriter name='<stdout>'>` to stderr
+    and forces exit status **120** on a capture that worked perfectly.
+    Suppressing our own final flush hides the first re-raise but does not
+    empty the buffer; redirecting the file descriptor does, because the
+    shutdown flush then succeeds.
+
+    Best effort: under a test harness `sys.stdout` may have no real fd at
+    all, and there is nothing to protect in that case.
+    """
+    try:
+        null_fd = os.open(os.devnull, os.O_WRONLY)
+    except OSError:  # pragma: no cover - /dev/null is not optional in practice
+        return
+    try:
+        os.dup2(null_fd, sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):
+        pass
+    finally:
+        os.close(null_fd)
+
 
 class _StdoutStream:
     """`sys.stdout.buffer`, flushed after every write.
 
-    Three jobs, all of them about being the *live* end of a pipeline:
+    Four jobs, all of them about being the *live* end of a pipeline:
 
     * flush per write, so a consumer sees each chunk as the board sends it
       rather than when some 8 KB buffer happens to fill -- the difference
@@ -190,17 +261,34 @@ class _StdoutStream:
     * `tell()` from a counter, because `sys.stdout.buffer.tell()` raises
       `OSError` on a pipe, and `capture()` asks how much was written to
       decide whether a failed run left anything behind;
-    * never close the underlying buffer, which belongs to the interpreter.
+    * never close the underlying buffer, which belongs to the interpreter;
+    * treat a `BrokenPipeError` as the **normal end of the stream**, not as
+      a failure. A pipeline source stops pulling whenever it likes
+      (`gst-launch ... num-buffers=N`, `head -c N`), and the capture is not
+      thereby broken -- so the error is absorbed, `on_close` asks the board
+      to stop cooperatively, and the few chunks that arrive before its
+      trailer are counted in the stats and dropped here. That keeps the
+      board's closing `TIME` chunk, which carries the only `overruns` and
+      `rxstall` report there is, and lets the run exit 0.
     """
 
-    def __init__(self, buffer) -> None:
+    def __init__(self, buffer, on_close=None) -> None:
         self._buffer = buffer
         self._written = 0
+        self._on_close = on_close
+        #: True once the far end of the pipe has gone away.
+        self.consumer_closed = False
 
     def write(self, data) -> int:
-        written = self._buffer.write(data)
-        self._written += len(data)
-        self._buffer.flush()
+        if self.consumer_closed:
+            return len(data)  # nowhere to put it; the board is stopping
+        try:
+            written = self._buffer.write(data)
+            self._buffer.flush()
+        except BrokenPipeError:
+            self._consumer_went_away()
+            return len(data)
+        self._written += written
         return written
 
     def flush(self) -> None:
@@ -209,18 +297,25 @@ class _StdoutStream:
     def tell(self) -> int:
         return self._written
 
+    def _consumer_went_away(self) -> None:
+        self.consumer_closed = True
+        _silence_stdout()
+        if self._on_close is not None:
+            self._on_close()
+
 
 @contextlib.contextmanager
-def _open_output(out_path: str) -> Iterator:
+def _open_output(out_path: str, on_consumer_close=None) -> Iterator:
     """Yield the binary sink for `--out`: a file, or stdout for `-`."""
     if out_path == STDOUT_PATH:
-        stream = _StdoutStream(sys.stdout.buffer)
+        stream = _StdoutStream(sys.stdout.buffer, on_close=on_consumer_close)
         try:
             yield stream
         finally:
             # Flushed, not closed: the interpreter owns stdout, and closing
             # it would break the messages still to be written to stderr's
-            # sibling on the way out.
+            # sibling on the way out. After `_silence_stdout()` this flush
+            # goes to /dev/null, which is what empties the buffer.
             with contextlib.suppress(ValueError, OSError):
                 stream.flush()
         return
@@ -228,8 +323,63 @@ def _open_output(out_path: str) -> Iterator:
         yield fp
 
 
+def _watch_for_stop(session: CaptureSession, flag: _StopFlag, poll: float = 0.02) -> None:
+    """Turn `flag` into a cooperative stop byte as soon as it is set.
+
+    On its own thread, so that neither the signal handler nor
+    `_StdoutStream.write` has to touch the link itself.
+    `CaptureSession.request_stop()` is documented as the *cross-thread*
+    verb and `RawRepl`'s write lock is what makes it safe; calling it from
+    a signal handler instead would re-enter a write that the very same
+    thread might be part way through.
+
+    It also makes the stop prompt. Routed through `CaptureRequest.stop`
+    alone, the flag is only consulted after the next chunk has been read --
+    so on a board that has gone quiet the first SIGINT would do nothing for
+    up to `DEFAULT_CHUNK_TIMEOUT` (30 s). Writing the byte immediately
+    leaves only the board's own one-DMA-buffer latency.
+
+    Polling rather than waiting on an `Event`, because `_StopFlag` is a
+    plain attribute set from a signal handler.
+    """
+    while not flag.done:
+        if flag.stopped:
+            session.request_stop()
+            return
+        time.sleep(poll)
+
+
+def _stream_capture(
+    repl: RawRepl, request: CaptureRequest, fp, flag: _StopFlag
+) -> CaptureStats:
+    """`run_capture()` for `--out -`: same bytes, plus a prompt stop.
+
+    Identical to `run_capture` -- the same `CaptureSession`, the same
+    `except BaseException: session.close(); raise` so the board is always
+    recovered before the exception continues -- with a watcher thread that
+    turns `flag` into an immediate stop byte. It exists because the CLI
+    needs the session handle to do that, and `run_capture`'s contract is
+    "write to a file object" and should stay that way.
+    """
+    session = CaptureSession(repl, request)
+    watcher = threading.Thread(
+        target=_watch_for_stop, args=(session, flag), daemon=True
+    )
+    watcher.start()
+    try:
+        for block in session.chunks():
+            fp.write(block)
+    except BaseException:
+        session.close()
+        raise
+    finally:
+        flag.done = True
+        watcher.join(timeout=1.0)
+    return session.stats()
+
+
 @contextlib.contextmanager
-def _sigint_stops_the_capture() -> Iterator[Callable[[], bool]]:
+def _sigint_stops_the_capture(flag: _StopFlag) -> Iterator[Callable[[], bool] | None]:
     """Turn the first SIGINT into a cooperative stop, for a streamed capture.
 
     A GStreamer source element ends its child with SIGINT and then waits for
@@ -239,30 +389,32 @@ def _sigint_stops_the_capture() -> Iterator[Callable[[], bool]]:
     closing `TIME` chunk -- the only overrun and RXSTALL report there is --
     never arrives, and the run exits non-zero on a capture that worked.
 
-    So the first signal only sets a flag, which `CaptureRequest.stop`
-    consults between chunks: the board finishes its chunk, writes its
-    trailer, and the stream ends whole. The cost is one DMA buffer of
-    latency (2.2 s at the RP2040's 60 kHz floor), so the handler is put back
-    immediately and a *second* Ctrl-C interrupts for real.
+    So the first signal only sets `flag`, which `_watch_for_stop` turns into
+    a stop byte at once. The board then finishes the chunk it is writing,
+    emits its trailer, and the stream ends whole; the cost is one DMA buffer
+    (2.2 s at the RP2040's 60 kHz floor). The handler is put back inside
+    itself, so a *second* Ctrl-C interrupts for real.
 
-    Only installed for `--out -`, and only from the main thread; anywhere
-    else the predicate is simply never true and the request's own
-    `seconds`/`max_bytes` bound the run as before.
+    Yields the predicate to use as `CaptureRequest.stop`, or **None** when
+    the handler could not be installed -- off the main thread, `signal` is
+    not available. That distinction is load-bearing: `stop` is what makes an
+    unbounded `--out - --seconds 0` request legal, and a predicate that can
+    never become true would turn the never-stops guard into a capture that
+    really does run forever. `None` puts the guard back.
     """
-    stopped = threading.Event()
     try:
         previous = signal.getsignal(signal.SIGINT)
 
         def handler(signum, frame) -> None:
-            stopped.set()
+            flag.set()
             signal.signal(signal.SIGINT, previous)
 
         signal.signal(signal.SIGINT, handler)
     except (ValueError, OSError, AttributeError):  # not the main thread
-        yield stopped.is_set
+        yield None
         return
     try:
-        yield stopped.is_set
+        yield flag
     finally:
         with contextlib.suppress(ValueError, OSError):
             signal.signal(signal.SIGINT, previous)
@@ -336,8 +488,9 @@ def capture(
             # A cooperative SIGINT only in the streaming mode; a capture to
             # a file keeps the default KeyboardInterrupt, because a person
             # who types Ctrl-C at `ttcap capture --out run.vgacap` means it.
+            flag = _StopFlag()
             stop_ctx = (
-                _sigint_stops_the_capture()
+                _sigint_stops_the_capture(flag)
                 if to_stdout
                 else contextlib.nullcontext(None)
             )
@@ -367,16 +520,26 @@ def capture(
                 # must not leave an empty file behind pretending to be a
                 # capture. Anything that did get written is a valid, if
                 # short, stream and is kept.
-                with _open_output(out_path) as fp:
+                with _open_output(
+                    out_path, on_consumer_close=flag.set if to_stdout else None
+                ) as fp:
                     try:
-                        stats = run_capture(repl, request, fp)
+                        if to_stdout:
+                            stats = _stream_capture(repl, request, fp, flag)
+                        else:
+                            stats = run_capture(repl, request, fp)
                     except BaseException:
                         if not to_stdout and fp.tell() == 0:
                             _discard_empty(out_path)
                         raise
+            # Reported before anything can be raised about how it ended: a
+            # consumer that walked away still produced a real capture, and
+            # its stats are the only overruns/rxstall report there is.
             _report(stats, "stdout" if to_stdout else out_path, stream=say)
             if stop_clock_after:
                 stop_clock(repl)
+            if to_stdout and fp.consumer_closed:
+                raise ConsumerClosed()
         finally:
             repl.exit()
     finally:
@@ -523,6 +686,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="capture duration; 0 means run until --max-bytes/--frames, or "
         "until SIGINT when --out - is streaming (default 5)",
     )
+    # Where a Task 4 author will actually look for the stop contract.
+    capture_parser.epilog = (
+        "Stopping a stream (--out -): the first SIGINT, or the consumer "
+        "closing the pipe, asks the board to stop at its next safe point; "
+        "it then finishes the chunk it is writing and emits its closing "
+        "TIME chunk, which carries the only overruns/rxstall report there "
+        "is. Allow at least one DMA buffer for that -- about 82 ms at "
+        "750 kHz with the default --buf-words, but 2.2 s at the RP2040's "
+        "60 kHz ceiling -- before escalating to a second signal or a kill. "
+        "Both endings exit 0."
+    )
     capture_limit = capture_parser.add_mutually_exclusive_group()
     capture_limit.add_argument(
         "--max-bytes",
@@ -540,8 +714,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--out",
         required=True,
         help="output .vgacap file, or - to stream the capture to stdout "
-        "(every message then goes to stderr); for a file literally named "
-        "'-', pass ./-",
+        "(every message then goes to stderr, and a consumer that stops "
+        "reading ends the capture cleanly with exit 0); for a file "
+        "literally named '-', pass ./-",
     )
     capture_parser.add_argument(
         "--buf-words",
@@ -611,6 +786,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 pio=args.pio,
                 stop_clock_after=args.stop_clock,
             )
+        except ConsumerClosed:
+            # The normal end of a pull: the pipeline stopped reading. The
+            # capture itself succeeded and its stats are already on stderr,
+            # so this is exit 0 -- Task 4 waits on this child's status and
+            # would otherwise turn a good capture into a bus error. Not
+            # even `samples == 0` earns a 3 here: a consumer is entitled to
+            # take the header and leave, and "the sampler never saw a clock
+            # edge" would be a diagnosis of the wrong machine.
+            print(CONSUMER_CLOSED_MESSAGE, file=sys.stderr)
+            return 0
+        except BrokenPipeError as exc:
+            # Defence in depth: `_StdoutStream` absorbs the broken pipe on
+            # the capture's own writes, so reaching here means one escaped
+            # from somewhere else on the stdout path. Same verdict, and the
+            # fd still has to be retired or the interpreter's shutdown
+            # flush re-raises and forces exit 120.
+            if args.out != STDOUT_PATH:
+                return _failed("capture", exc)
+            _silence_stdout()
+            print(CONSUMER_CLOSED_MESSAGE, file=sys.stderr)
+            return 0
         except CAPTURE_FAILURES as exc:
             # `capture()` prints the stats before it tears anything down, so
             # whatever was gathered is already on stdout by now; all that is

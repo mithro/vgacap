@@ -79,8 +79,8 @@ class _BinaryStdout:
     left in a buffer for a pipeline to wait on.
     """
 
-    def __init__(self) -> None:
-        self.buffer = _BinaryBuffer()
+    def __init__(self, fail_after: int | None = None) -> None:
+        self.buffer = _BinaryBuffer(fail_after=fail_after)
         self.text = io.StringIO()
 
     def write(self, data) -> int:
@@ -91,23 +91,30 @@ class _BinaryStdout:
 
 
 class _BinaryBuffer:
-    def __init__(self) -> None:
+    def __init__(self, fail_after: int | None = None) -> None:
         self._sink = io.BytesIO()
         self.flushes = 0
         self.writes = 0
+        #: Raise `BrokenPipeError` on every write after this many, the way a
+        #: pipe behaves once the process on the far end has exited.
+        self.fail_after = fail_after
 
     def write(self, data) -> int:
         self.writes += 1
+        if self.fail_after is not None and self.writes > self.fail_after:
+            raise BrokenPipeError(32, "Broken pipe")
         return self._sink.write(data)
 
     def flush(self) -> None:
         self.flushes += 1
+        if self.fail_after is not None and self.writes > self.fail_after:
+            raise BrokenPipeError(32, "Broken pipe")
 
     def getvalue(self) -> bytes:
         return self._sink.getvalue()
 
 
-def binary_stdout(monkeypatch) -> _BinaryStdout:
+def binary_stdout(monkeypatch, fail_after: int | None = None) -> _BinaryStdout:
     """Replace `sys.stdout` with a binary sink. Call this *inside* the test.
 
     Not a fixture, deliberately: pytest re-activates its own capture at the
@@ -118,9 +125,22 @@ def binary_stdout(monkeypatch) -> _BinaryStdout:
     the body happens after that re-activation and sticks. stderr is left to
     `capsys`, which is where the messages belong.
     """
-    stdout = _BinaryStdout()
+    stdout = _BinaryStdout(fail_after=fail_after)
     monkeypatch.setattr(sys, "stdout", stdout)
     return stdout
+
+
+def no_real_fd_to_silence(monkeypatch) -> list:
+    """Stub `_silence_stdout` and record that it ran.
+
+    It must be stubbed, not merely tolerated: the real one `dup2`s
+    /dev/null over file descriptor 1, which under pytest is the capture
+    file the whole session is writing to. Recording the call is also the
+    assertion that the exit-120 guard was wired up at all.
+    """
+    calls: list = []
+    monkeypatch.setattr(cli, "_silence_stdout", lambda: calls.append(True))
+    return calls
 
 
 def run_capture_cli(monkeypatch, board, *extra: str) -> int:
@@ -366,3 +386,174 @@ def test_no_samples_on_a_streamed_capture_still_exits_three(monkeypatch, capsys)
     assert header.clock_hz == 100_000
     assert [kind for kind, *_ in items] == ["time"]
     assert "no samples captured" in capsys.readouterr().err
+
+
+# -- the consumer going away ----------------------------------------------
+
+
+def test_a_consumer_that_closes_the_pipe_ends_the_capture_cleanly(
+    monkeypatch, capsys
+):
+    # `head -c N`, `num-buffers=N`, a pipeline going to NULL: a source's
+    # reader stops whenever it likes, and that is the normal end of a pull,
+    # not a failure. `BrokenPipeError` is an `OSError` and was landing in
+    # CAPTURE_FAILURES as "capture failed: BrokenPipeError" with exit 1 --
+    # which is what Task 4 would turn into a bus error on a good capture.
+    silenced = no_real_fd_to_silence(monkeypatch)
+    stdout = binary_stdout(monkeypatch, fail_after=2)  # header, one chunk, gone
+    board = capture_board(
+        PROFILE,
+        [raw_chunk(PROFILE, list(range(32)))] * 50,
+        on_interrupt=time_chunk(PROFILE, "overruns=0 rxstall=0"),
+    )
+
+    code = run_capture_cli(monkeypatch, board)
+
+    assert code == 0
+    printed = capsys.readouterr().err
+    assert "capture ended: the consumer closed the stream" in printed
+    # The stats still reach stderr -- they carry the only overruns/rxstall
+    # report there is, and the capture itself succeeded.
+    assert "samples=" in printed and "chunks=" in printed
+    assert "  board: overruns=0 rxstall=0" in printed
+    # The board was stopped cooperatively, not abandoned: one stop byte, no
+    # last-resort Ctrl-C, and its trailer was read (which is what the
+    # "board:" line above proves).
+    assert board.interrupts == 1
+    assert board.remaining == []
+    # And the descriptor was retired, or CPython's shutdown flush would
+    # re-raise on the bytes still buffered and force exit 120.
+    assert silenced == [True]
+    # What did reach the consumer before it left is a valid stream.
+    assert read_stream(stdout.buffer.getvalue())[0].clock_hz == 100_000
+
+
+def test_a_pipe_that_breaks_before_any_samples_still_exits_zero(monkeypatch, capsys):
+    # Exit 3 means "the sampler never saw a clock edge", which is a
+    # diagnosis of the board. A consumer is entitled to take the header and
+    # leave, and that is a diagnosis of nothing.
+    no_real_fd_to_silence(monkeypatch)
+    binary_stdout(monkeypatch, fail_after=0)  # the header write itself fails
+    board = capture_board(
+        PROFILE,
+        [time_chunk(PROFILE, "overruns=0 rxstall=1")],
+        on_interrupt=time_chunk(PROFILE, "overruns=0 rxstall=1"),
+    )
+
+    code = run_capture_cli(monkeypatch, board)
+
+    assert code == 0
+    printed = capsys.readouterr().err
+    assert "capture ended: the consumer closed the stream" in printed
+    assert "no samples captured" not in printed
+
+
+def test_a_broken_pipe_reaching_main_is_still_exit_zero(monkeypatch, capsys):
+    # Defence in depth: `_StdoutStream` absorbs the broken pipe on the
+    # capture's own writes, so this pins the outer guard for one that
+    # escapes from anywhere else on the stdout path.
+    silenced = no_real_fd_to_silence(monkeypatch)
+    binary_stdout(monkeypatch)
+    board = capture_board(PROFILE, [])
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    def explode(*args, **kwargs):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(cli, "capture", explode)
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz",
+         "100000", "--seconds", "0.05", "--out", "-"]
+    )
+
+    assert code == 0
+    assert "capture ended: the consumer closed the stream" in capsys.readouterr().err
+    assert silenced == [True]
+
+
+def test_a_broken_pipe_writing_a_real_file_is_still_a_failure(monkeypatch, capsys, tmp_path):
+    # Only the `--out -` contract says a broken pipe is a normal end; a
+    # file capture that somehow gets one has a real problem.
+    board = capture_board(PROFILE, [])
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    def explode(*args, **kwargs):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(cli, "capture", explode)
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz",
+         "100000", "--seconds", "0.05", "--out", str(tmp_path / "s.vgacap")]
+    )
+
+    assert code == 1
+    assert "capture failed: BrokenPipeError" in capsys.readouterr().err
+
+
+def test_silence_stdout_makes_a_dead_pipe_writable_again():
+    # The real `_silence_stdout`, on a real descriptor: without it the bytes
+    # left in `sys.stdout`'s BufferedWriter are flushed again during
+    # interpreter shutdown, that flush raises, and the process exits 120.
+    #
+    # In a forked child, because the whole point of the function is to
+    # rewire file descriptor 1 -- which under pytest is the capture the
+    # entire session is writing to. Restoring it afterwards is not enough:
+    # doing this in-process corrupts pytest's own capture file.
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - the child never reports coverage
+        status = 1
+        try:
+            os.close(read_fd)  # the consumer has gone
+            os.dup2(write_fd, 1)
+            os.close(write_fd)
+            # pytest's fd capture leaves a `sys.stdout` with no `fileno()`;
+            # give the child the real thing back, because finding the
+            # descriptor through `sys.stdout` is what the function does.
+            sys.stdout = os.fdopen(1, "w", closefd=False)
+            cli._silence_stdout()
+            # Without the redirect this raises BrokenPipeError.
+            os.write(1, b"x" * 64)
+            status = 0
+        except BaseException:
+            status = 1
+        finally:
+            os._exit(status)
+
+    os.close(read_fd)
+    os.close(write_fd)
+    _pid, wait_status = os.waitpid(pid, 0)
+
+    assert os.WIFEXITED(wait_status)
+    assert os.WEXITSTATUS(wait_status) == 0
+
+
+# -- the SIGINT fallback --------------------------------------------------
+
+
+def test_off_the_main_thread_an_unbounded_stream_is_still_refused(
+    monkeypatch, capsys
+):
+    # `signal.signal` only works on the main thread. The fallback must yield
+    # no predicate at all: a predicate that can never become true satisfies
+    # `CaptureRequest.__post_init__` and then leaves the capture with
+    # nothing that can ever end it -- the precise case the guard exists for.
+    board = capture_board(PROFILE, [])
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+    result: dict = {}
+
+    def run() -> None:
+        result["code"] = cli.main(
+            ["capture", "serial:/dev/null", "--profile", "rp2350",
+             "--clock-hz", "100000", "--seconds", "0", "--out", "-"]
+        )
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    worker.join(timeout=10.0)
+
+    assert not worker.is_alive()
+    assert result["code"] == 1
+    assert "never stop" in capsys.readouterr().err
