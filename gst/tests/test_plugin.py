@@ -26,6 +26,7 @@ from vgacap.ppm import read_ppm
 from vgacap.stream import Header, Writer, TINYVGA_MAP
 from vgacap.synth import frame_samples, grid, write_stream
 
+SEEK_PROBE = pathlib.Path(__file__).resolve().parent / "seek_probe.py"
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build"
 PLUGIN = BUILD / "libgstvgacap.so"
@@ -91,16 +92,57 @@ def assert_same_frames(stream: pathlib.Path, work: pathlib.Path) -> int:
     return len(pngs)
 
 
+def system_python_path() -> str | None:
+    """`gi` (gst-python) is an OS package, so the seek probe needs the system
+    interpreter, not the uv venv this test runs in - which is what a plain
+    `which python3` would find."""
+    override = os.environ.get("VGACAP_SYSTEM_PYTHON")
+    if override:
+        return override
+    for candidate in ("/usr/bin/python3", "/usr/local/bin/python3"):
+        if pathlib.Path(candidate).exists():
+            return candidate
+    return None
+
+
+def _writer(fp, clock_hz: int = 0, desc: str = "synth") -> Writer:
+    return Writer(fp, Header(sample_bits=8, samples_per_word=4, signal_map=TINYVGA_MAP,
+                             mode=3, clock_hz=clock_hz, desc=desc))
+
+
+def _write_frames(writer: Writer, samples, frames: int) -> None:
+    for _ in range(frames):
+        for start in range(0, len(samples), 65536):
+            writer.raw(samples[start:start + 65536].tolist())
+
+
 def write_clocked_stream(path: pathlib.Path, mode, image6, frames: int, clock_hz: int) -> None:
     """A synthetic stream that declares a project clock, so `vgadecode` times
     the frames from it rather than counting at output-fps."""
+    with open(path, "wb") as fp:
+        _write_frames(_writer(fp, clock_hz, f"synth {mode.name} clocked"),
+                      frame_samples(mode, image6), frames)
+
+
+def write_rate_change_stream(path: pathlib.Path, mode, image6, frames_before: int,
+                             frames_after: int, hz_before: int, hz_after: int) -> None:
+    """A stream whose header rate and a later TIME chunk disagree, as a device
+    reporting a measured clock produces."""
     samples = frame_samples(mode, image6)
     with open(path, "wb") as fp:
-        writer = Writer(fp, Header(sample_bits=8, samples_per_word=4, signal_map=TINYVGA_MAP,
-                                   mode=3, clock_hz=clock_hz, desc=f"synth {mode.name} clocked"))
-        for _ in range(frames):
-            for start in range(0, len(samples), 65536):
-                writer.raw(samples[start:start + 65536].tolist())
+        writer = _writer(fp, hz_before, f"synth {mode.name} rate change")
+        _write_frames(writer, samples, frames_before)
+        writer.time(0, hz_after, 0, "measured clock")
+        _write_frames(writer, samples, frames_after)
+
+
+def write_multi_mode_stream(path: pathlib.Path, specs, frames_each: int = 4) -> None:
+    """One header, then several modes back to back: the element has to
+    renegotiate its caps as the detected size changes."""
+    with open(path, "wb") as fp:
+        writer = _writer(fp, desc="synth multi mode")
+        for mode, image6 in specs:
+            _write_frames(writer, frame_samples(mode, image6), frames_each)
 
 
 # ------------------------------------------------------------------ fixtures
@@ -169,20 +211,37 @@ def test_timing_is_reported_on_the_bus(tmp_path, synth_stream):
     assert sum("vgacap-timing" in l for l in proc.stdout.splitlines()) == 1
 
 
-def identity_buffers(stream: pathlib.Path, *props: str) -> list[tuple[int, int]]:
-    """(offset, flags) of each buffer, as `identity silent=false` reports it
-    (GStreamer routes that report through the debug log, hence GST_DEBUG)."""
+_BUFFER_RE = re.compile(
+    r"pts:\s*(\S+?),\s*duration:\s*(\S+?),\s*offset:\s*(\d+),\s*offset_end:\s*\d+,"
+    r"\s*flags:\s*([0-9a-f]+)")
+_TIME_RE = re.compile(r"^(\d+):(\d\d):(\d\d)\.(\d{9})$")
+
+
+def _ns(text: str) -> int | None:
+    """GStreamer's H:MM:SS.nnnnnnnnn, exactly, without going through a float."""
+    match = _TIME_RE.match(text)
+    if not match:
+        return None  # "none" / "99:99:99.999999999"
+    hours, minutes, seconds, frac = match.groups()
+    return (int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 10**9 + int(frac)
+
+
+def identity_buffers(stream: pathlib.Path, *props: str) -> list[dict]:
+    """pts/duration/offset/flags of each buffer, as `identity silent=false`
+    reports it (GStreamer routes that report through the debug log, hence
+    GST_DEBUG)."""
     proc = run(["gst-launch-1.0", "filesrc", f"location={stream}", "!", "vgadecode", *props,
                 "!", "identity", "silent=false", "!", "fakesink"], GST_DEBUG="identity:7")
     assert proc.returncode == 0, proc.stderr
     text = proc.stdout + proc.stderr
-    found = re.findall(r"offset:\s*(\d+),\s*offset_end:\s*\d+,\s*flags:\s*([0-9a-f]+)", text)
+    found = _BUFFER_RE.findall(text)
     assert found, f"identity printed no buffers:\n{text[-2000:]}"
-    return [(int(off), int(flags, 16)) for off, flags in found]
+    return [{"pts": _ns(pts), "dur": _ns(dur), "offset": int(off), "flags": int(flags, 16)}
+            for pts, dur, off, flags in found]
 
 
 def test_buffer_offset_carries_the_frame_counter(synth_stream):
-    offsets = [off for off, _ in identity_buffers(synth_stream)]
+    offsets = [b["offset"] for b in identity_buffers(synth_stream)]
     assert offsets == sorted(offsets) and len(set(offsets)) == len(offsets)
 
 
@@ -191,8 +250,67 @@ def test_partial_frames_are_flagged_corrupted(synth_stream):
     complete = identity_buffers(synth_stream)
     with_partial = identity_buffers(synth_stream, "partial=true")
     assert len(with_partial) > len(complete), "partial=true pushed no extra frames"
-    assert not any(flags & GST_BUFFER_FLAG_CORRUPTED for _, flags in complete)
-    assert any(flags & GST_BUFFER_FLAG_CORRUPTED for _, flags in with_partial)
+    assert not any(b["flags"] & GST_BUFFER_FLAG_CORRUPTED for b in complete)
+    assert any(b["flags"] & GST_BUFFER_FLAG_CORRUPTED for b in with_partial)
+
+
+def test_pts_is_monotonic_across_a_clock_rate_change(tmp_path):
+    # A device that measures its own clock reports it in a TIME chunk, and the
+    # measured value need not match the header's nominal one. Rescaling the
+    # whole elapsed time by the new rate sent PTS backwards (84 ms became
+    # 16.8 ms); the timeline base has to be frozen at the change instead.
+    mode = MODES["640x480@60"]
+    stream = tmp_path / "rate-change.vgacap"
+    write_rate_change_stream(stream, mode, grid(mode.h_active, mode.v_active),
+                             frames_before=4, frames_after=4,
+                             hz_before=5_000_000, hz_after=25_175_000)
+    buffers = identity_buffers(stream)
+    pts = [b["pts"] for b in buffers]
+    assert all(p is not None for p in pts), buffers
+    assert pts == sorted(pts), f"PTS goes backwards: {pts}"
+    # The rate change really happened: 420000 clocks a frame is 84 ms at
+    # 5 MHz and 16.68 ms at 25.175 MHz.
+    durations = {b["dur"] for b in buffers}
+    assert len(durations) >= 2, f"the TIME chunk changed nothing: {durations}"
+    assert 84_000_000 in durations and 16_683_217 in durations, durations
+
+
+def test_mid_stream_caps_renegotiation(tmp_path):
+    mode_a, mode_b = MODES["640x480@60"], MODES["800x600@60"]
+    specs = [(mode_a, grid(mode_a.h_active, mode_a.v_active)),
+             (mode_b, grid(mode_b.h_active, mode_b.v_active)),
+             (mode_a, grid(mode_a.h_active, mode_a.v_active))]
+    stream = tmp_path / "modes.vgacap"
+    write_multi_mode_stream(stream, specs, frames_each=4)
+
+    count = assert_same_frames(stream, tmp_path)
+    assert count >= 6, count
+    proc, pngs = decode_with_gst(stream, tmp_path / "png2")
+    sizes = [Image.open(png).size for png in pngs]
+    # 640x480, then 800x600, then 640x480 again: two renegotiations.
+    transitions = [b for a, b in zip(sizes, sizes[1:]) if a != b]
+    assert transitions == [(800, 600), (640, 480)], sizes
+    assert sum("vgacap-timing" in line for line in proc.stdout.splitlines()) == 3
+
+
+def test_flushing_seek_recovers_mid_stream(tmp_path):
+    # A seek lands far from the VGCH header, so after FLUSH_STOP the element
+    # has to re-establish it itself or decode nothing ever again.
+    system_python = system_python_path()
+    if system_python is None:
+        pytest.skip("no system python3 to run the gst-python seek probe with")
+    mode = MODES["640x480@60"]
+    stream = tmp_path / "seek.vgacap"
+    write_stream(stream, mode, grid(mode.h_active, mode.v_active), frames=8)
+
+    proc = run([system_python, SEEK_PROBE, stream, stream.stat().st_size // 3], timeout=120)
+    if proc.returncode != 0 and "No module named 'gi'" in proc.stderr:
+        pytest.skip("gst-python (gi) is not importable by the system python3")
+    assert proc.returncode == 0, proc.stderr
+    counts = {k: int(v) for k, v in (kv.split("=") for kv in proc.stdout.split())}
+    assert counts["before"] > 0, counts
+    assert counts["after_zero"] == counts["before"], counts
+    assert counts["after_mid"] > 0, f"the element went mute after a mid-stream flush: {counts}"
 
 
 def test_repeat_last_frame_yields_at_least_as_many_buffers(tmp_path):
