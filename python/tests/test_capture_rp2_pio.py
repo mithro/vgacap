@@ -69,10 +69,13 @@ def _exec_constant_block(source: str, cfg: dict) -> dict:
 
 
 def _assemble(source: str, cfg: dict, rising: bool = False):
-    """Assemble the script's sampler for `cfg` using the stub assembler."""
+    """Assemble the script's sampler for `cfg` using the stub assembler.
+
+    `clk_gpio` goes in absolute, as `CLK_WAIT_GPIO` does on the board.
+    """
     namespace = _exec_functions(source, ["make_sampler"], {"rp2": STUB_RP2})
     return namespace["make_sampler"](
-        cfg["clk_gpio"] - cfg["gpio_base"], cfg["in_count"], cfg["push_thresh"], rising
+        cfg["clk_gpio"], cfg["in_count"], cfg["push_thresh"], rising
     )
 
 
@@ -111,18 +114,21 @@ def test_rising_edge_program_waits_low_then_high_then_samples(source):
 def test_rp2350_program_samples_eight_bits(source):
     program = _assemble(source, capture_cfg(RP2350_DBV3))
 
-    assert program.instructions == (0x2080, 0x2000, 0x4008)
+    # The wait index is the absolute clk GPIO, 16, even though the block's
+    # window is based at 16: measured on fpga-1, `wait(1, gpio, 16)` samples
+    # and `wait(1, gpio, 0)` stalls forever.
+    assert program.instructions == (0x2090, 0x2010, 0x4008)
 
 
-def test_wait_index_is_encoded_relative_to_the_pio_gpio_base(source):
-    # A case where clk_gpio and gpio_base differ, so the subtraction is
-    # actually load-bearing: GPIO 20 in a window based at 16 is index 4.
+def test_wait_index_is_the_absolute_gpio_not_the_window_offset(source):
+    # A case where clk_gpio and gpio_base differ by something other than 0
+    # or the base itself, so a stray subtraction would be visible.
     cfg = capture_cfg(RP2350_DBV3)
     cfg["clk_gpio"] = 20
     program = _assemble(source, cfg)
 
-    assert program.instructions[0] == 0x2084
-    assert program.instructions[1] == 0x2004
+    assert program.instructions[0] == 0x2094
+    assert program.instructions[1] == 0x2014
 
 
 @pytest.mark.parametrize(
@@ -252,11 +258,23 @@ def test_script_inlines_the_same_address_and_dreq_arithmetic(source):
 
 
 @pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
-def test_clk_wait_index_is_relative_to_the_pio_gpio_base(source, profile):
+def test_the_two_pin_conventions_are_applied_the_right_way_round(source, profile):
+    # `wait ... gpio` takes the absolute GPIO; `StateMachine(in_base=...)`
+    # takes a pin relative to the block's 32-pin window. Verified on fpga-1
+    # (RP2350, MicroPython 1.29-preview): swapping either one gives a state
+    # machine that never produces a sample.
     namespace = _exec_constant_block(source, capture_cfg(profile))
 
-    assert namespace["CLK_PIO_INDEX"] == profile.clk_gpio - profile.pio_gpio_base
-    assert 0 <= namespace["CLK_PIO_INDEX"] < 32
+    assert namespace["CLK_WAIT_GPIO"] == profile.clk_gpio
+    assert namespace["IN_PIO_INDEX"] == profile.in_base - profile.pio_gpio_base
+    assert 0 <= namespace["IN_PIO_INDEX"]
+    assert namespace["IN_PIO_INDEX"] + profile.in_count <= 32
+
+
+def test_state_machine_gets_the_window_relative_in_base(source):
+    assert "in_base=machine.Pin(IN_PIO_INDEX)" in source
+    # ... while the pads are still brought up by their absolute numbers.
+    assert "init_input_pins(machine.Pin, IN_BASE, IN_COUNT)" in source
 
 
 def test_dma_register_offsets_are_the_non_trigger_aliases(source):

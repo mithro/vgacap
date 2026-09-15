@@ -80,6 +80,12 @@ def capture_cfg(
     Ctrl-C), `edge` selects which project-clock edge is sampled, and
     `pio`/`sm` pick the state machine -- see `DEFAULT_PIO` for why that is
     not block 0.
+
+    `clk_gpio` and `in_base` go out as *absolute* GPIO numbers; the board
+    script converts `in_base` to the PIO-window-relative form that
+    `StateMachine(in_base=...)` needs and leaves `clk_gpio` absolute, which
+    is what `wait ... gpio` needs. The sampled window must fit inside the
+    PIO's 32 pins, which is what the check below enforces.
     """
     if edge not in EDGES:
         raise ValueError(f"edge must be one of {EDGES}, got {edge!r}")
@@ -91,6 +97,12 @@ def capture_cfg(
         raise ValueError(f"pio must be 0..2 (RP2040 has 0..1), got {pio}")
     if not 0 <= sm <= 3:
         raise ValueError(f"sm must be 0..3, got {sm}")
+    in_index = profile.in_base - profile.pio_gpio_base
+    if not 0 <= in_index or in_index + profile.in_count > 32:
+        raise ValueError(
+            f"{profile.name}: uo_out at GPIO {profile.in_base} is not inside the "
+            f"PIO's 32-pin window based at {profile.pio_gpio_base}"
+        )
 
     return {
         "clk_gpio": profile.clk_gpio,

@@ -4,8 +4,9 @@
 MicroPython, run by the host via `RawRepl.exec_stream()` with a `CFG` dict
 prepended by `ttcap.mp.with_cfg()`. Keys:
 
-    clk_gpio     GPIO carrying the project clock (rp_projclk)
-    in_base      first uo_out GPIO; the PIO input window starts here
+    clk_gpio     absolute GPIO carrying the project clock (rp_projclk)
+    in_base      absolute GPIO of uo_out[0]; the sampled window starts here
+                 (the PIO wants it relative to gpio_base -- see below)
     in_count     bits sampled per clock edge (12 on RP2040, 8 on RP2350)
     gpio_base    PIO GPIO base: 0, or 16 on RP2350 where uo_out is GPIO 33+
     push_thresh  autopush threshold in bits: 24 for 12-bit x2, 32 for 8-bit x4
@@ -112,12 +113,28 @@ PIO_NUM = CFG["pio"]  # noqa: F821
 SM_NUM = CFG["sm"]  # noqa: F821
 SYSCLK_HZ = CFG["sysclk_hz"]  # noqa: F821 - informational
 
-# The PIO assembler cannot know which block the program will run on, so it
-# emits the WAIT GPIO index verbatim and the hardware adds the block's
-# GPIOBASE to it. The index must therefore be relative to GPIO_BASE: on
-# RP2040 GPIOBASE is always 0 and this is just clk_gpio; on RP2350 the whole
-# 32-pin window starts at GPIO 16.
-CLK_PIO_INDEX = CLK_GPIO - GPIO_BASE
+# The two pin numbers this program needs use *different* conventions.
+# Both were measured on fpga-1 (RP2350, MicroPython 1.29-preview
+# b006887db6, ttboard 3.1.0) with the PIO block's window at gpio_base 16,
+# by running small programs on PIO1 and reading the RX FIFO by hand:
+#
+#   `wait(1, gpio, n)` takes the ABSOLUTE GPIO number. `wait(1, gpio, 16)`
+#   proceeds and samples; `wait(1, gpio, 0)` -- the same pad counted from
+#   the window's base -- stalls forever. The pin-relative form is no way
+#   out either: it does not wrap within the window, and with in_base 17,
+#   `wait(1, pin, 15)` stalled.
+#
+#   `StateMachine(in_base=...)` takes a pin RELATIVE to the window. With
+#   `Pin(17)` the sampler reads GPIO 33..40 and the FIFO fills; with
+#   `Pin(33)` PINCTRL.IN_BASE stays 0 and the state machine never runs its
+#   program at all -- pico-sdk's `sm_config_set_in_pins()` wants a number
+#   below 32.
+#
+# On RP2040 GPIO_BASE is 0 and the two conventions coincide. Pad setup
+# (`init_input_pins`) is absolute in both cases: it goes through
+# `machine.Pin`, not through the PIO.
+CLK_WAIT_GPIO = CLK_GPIO
+IN_PIO_INDEX = IN_BASE - GPIO_BASE
 
 SAMPLES_PER_WORD = PUSH_THRESH // IN_COUNT
 BUF_BYTES = 4 * BUF_WORDS
@@ -209,10 +226,14 @@ def init_input_pins(pin_cls, in_base, in_count):
         pin_cls(gpio, pin_cls.IN)
 
 
-def make_sampler(clk_index, in_count, push, rising):
+def make_sampler(clk_gpio, in_count, push, rising):
     """Assemble the sampler program with its operands as closure cells.
 
-    `clk_index` and `in_count` are read inside the program body, so they
+    `clk_gpio` is the *absolute* GPIO number of the project clock, which is
+    what `wait ... gpio` wants even on a relocated RP2350 window -- see the
+    CLK_WAIT_GPIO note above.
+
+    `clk_gpio` and `in_count` are read inside the program body, so they
     must be cells (`LOAD_DEREF`) rather than module globals: `asm_pio`
     clears `__globals__` while it assembles. `push` is only a decorator
     argument, evaluated before that happens.
@@ -227,8 +248,8 @@ def make_sampler(clk_index, in_count, push, rising):
         )
         def sampler():
             wrap_target()  # noqa: F821 - PIO assembler directives
-            wait(0, gpio, clk_index)  # noqa: F821
-            wait(1, gpio, clk_index)  # noqa: F821 - rising edge
+            wait(0, gpio, clk_gpio)  # noqa: F821
+            wait(1, gpio, clk_gpio)  # noqa: F821 - rising edge
             in_(pins, in_count)  # noqa: F821
             wrap()  # noqa: F821
 
@@ -242,8 +263,8 @@ def make_sampler(clk_index, in_count, push, rising):
         )
         def sampler():
             wrap_target()  # noqa: F821
-            wait(1, gpio, clk_index)  # noqa: F821
-            wait(0, gpio, clk_index)  # noqa: F821 - falling: outputs settled
+            wait(1, gpio, clk_gpio)  # noqa: F821
+            wait(0, gpio, clk_gpio)  # noqa: F821 - falling: outputs settled
             in_(pins, in_count)  # noqa: F821
             wrap()  # noqa: F821
 
@@ -300,8 +321,10 @@ def main(out):
 
     init_input_pins(machine.Pin, IN_BASE, IN_COUNT)
 
-    sampler = make_sampler(CLK_PIO_INDEX, IN_COUNT, PUSH_THRESH, EDGE == "rising")
-    sm = rp2.StateMachine(PIO_NUM * 4 + SM_NUM, sampler, in_base=machine.Pin(IN_BASE))
+    sampler = make_sampler(CLK_WAIT_GPIO, IN_COUNT, PUSH_THRESH, EDGE == "rising")
+    sm = rp2.StateMachine(
+        PIO_NUM * 4 + SM_NUM, sampler, in_base=machine.Pin(IN_PIO_INDEX)
+    )
 
     bufs = [bytearray(BUF_BYTES), bytearray(BUF_BYTES)]
     full = [False, False]
