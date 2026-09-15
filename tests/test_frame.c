@@ -53,10 +53,11 @@ TEST(reconstructs_with_runs_and_800x600) {
 }
 
 TEST(table_match_wins_over_odd_porches) {
-    // 640x480 timing but with an odd back porch => no table match; auto crop finds the bar area.
+    // 640x480 timing but with an odd back porch: (cpl, lpf) is still (800, 525),
+    // which the table matches on length alone, so the crop is the table's
+    // mode rather than an auto bounding box of the (shifted) active area.
     vgaframe_mode_t odd = *vgaframe_mode_match(800, 525); odd.h_back = 50; odd.h_front = 14; // still 800 clocks
     odd.v_back = 30; odd.v_front = 13; odd.name = "odd";
-    // Make the picture non-black everywhere in the active area except colour 0 bars: use bars+1
     size_t n = synth_frame(&odd, bars, NULL, buf, sizeof buf / sizeof buf[0]);
     vgaframe_t f; setup(&f, NULL);
     for (int fr = 0; fr < 3; fr++) for (size_t i = 0; i < n; i++) vgaframe_push(&f, buf[i], 1);
@@ -64,6 +65,40 @@ TEST(table_match_wins_over_odd_porches) {
     // table still matches on 800x525 (mode chosen by lengths) so the crop is the table's; verify the shift shows up as expected
     ASSERT_EQ_U(last.width, 640); ASSERT_EQ_U(last.height, 480);
     ASSERT_TRUE(last.timing->mode != NULL);
+}
+
+TEST(oversized_run_does_not_overflow) {
+    // A run length decoded from an untrusted stream can be an arbitrary
+    // uint32_t. f->x + run must not be allowed to wrap and defeat the clip
+    // to the buffer width (C1); it must clip exactly at the buffer edge.
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+    vgaframe_t f; setup(&f, m);
+    for (int fr = 0; fr < 2; fr++) for (size_t k = 0; k < n; k++) vgaframe_push(&f, buf[k], 1); // get in_frame == 1
+    size_t i = 0;
+    for (; i < 100; i++) vgaframe_push(&f, buf[i], 1); // f.x == 100, W - f.x == 1300
+    vgaframe_push(&f, buf[i], 0xFFFFFFF0u);            // f.x + run wraps to 84 (< W) if unclipped
+    ASSERT_EQ_U(f.cover[f.y], 1);
+    ASSERT_TRUE((f.raw[f.y * f.cfg.max_clocks_per_line + (f.cfg.max_clocks_per_line - 1)] & 0x80) != 0);
+}
+
+TEST(force_mode_wider_than_buffer_emits_nothing) {
+    // A force_mode whose active area starts at or past the buffer edge
+    // (h_sync + h_back >= max_clocks_per_line) must not underflow the crop
+    // clamp (I1); emit() should just skip the frame rather than crash.
+    vgaframe_mode_t narrow; memset(&narrow, 0, sizeof narrow);
+    narrow.name = "narrow";
+    narrow.h_active = 10; narrow.h_front = 5; narrow.h_sync = 5; narrow.h_back = 400; // h_sync+h_back = 405
+    narrow.v_active = 5;  narrow.v_front = 2; narrow.v_sync = 2; narrow.v_back = 3;
+    size_t n = synth_frame(&narrow, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+    ASSERT_TRUE(n > 0);
+    vgaframe_config_t c; memset(&c, 0, sizeof c);
+    c.max_clocks_per_line = 300; c.max_lines = 50; // narrower than h_sync+h_back
+    static const uint8_t map[8] = { 7, 3, 0, 4, 1, 5, 2, 6 }; memcpy(c.signal_map, map, 8);
+    c.force_mode = &narrow; c.on_frame = on_frame; nframes = 0;
+    vgaframe_t f; ASSERT_EQ_U(vgaframe_init(&f, &c, raw, rgb, cover), 0);
+    for (int fr = 0; fr < 3; fr++) for (size_t i = 0; i < n; i++) vgaframe_push(&f, buf[i], 1);
+    ASSERT_EQ_U(nframes, 0);
 }
 
 TEST(flush_emits_partial) {
@@ -76,4 +111,13 @@ TEST(flush_emits_partial) {
     ASSERT_EQ_U(nframes, before + 1); ASSERT_EQ_U(last.partial, 1);
 }
 
-int main(void) { RUN(colour_helper); RUN(reconstructs_640x480_bars); RUN(reconstructs_with_runs_and_800x600); RUN(table_match_wins_over_odd_porches); RUN(flush_emits_partial); RUN_TESTS_END(); }
+int main(void) {
+    RUN(colour_helper);
+    RUN(reconstructs_640x480_bars);
+    RUN(reconstructs_with_runs_and_800x600);
+    RUN(table_match_wins_over_odd_porches);
+    RUN(oversized_run_does_not_overflow);
+    RUN(force_mode_wider_than_buffer_emits_nothing);
+    RUN(flush_emits_partial);
+    RUN_TESTS_END();
+}

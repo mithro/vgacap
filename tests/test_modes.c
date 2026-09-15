@@ -5,4 +5,6 @@ TEST(table_has_640x480) { size_t n; const vgaframe_mode_t *m = vgaframe_modes(&n
 TEST(match_640x480) { const vgaframe_mode_t *m = vgaframe_mode_match(800, 525); ASSERT_TRUE(m != NULL); ASSERT_EQ_U(m->h_active, 640); ASSERT_EQ_U(m->v_back, 33); }
 TEST(match_800x600) { const vgaframe_mode_t *m = vgaframe_mode_match(1056, 628); ASSERT_TRUE(m != NULL); ASSERT_EQ_U(m->h_sync_positive, 1); }
 TEST(no_match) { ASSERT_TRUE(vgaframe_mode_match(801, 525) == NULL); }
-int main(void) { RUN(table_has_640x480); RUN(match_640x480); RUN(match_800x600); RUN(no_match); RUN_TESTS_END(); }
+TEST(match_cpl_640x480) { const vgaframe_mode_t *m = vgaframe_mode_match_cpl(800); ASSERT_TRUE(m != NULL); ASSERT_TRUE(strcmp(m->name, "640x480@60") == 0); }
+TEST(match_cpl_no_match) { ASSERT_TRUE(vgaframe_mode_match_cpl(801) == NULL); }
+int main(void) { RUN(table_has_640x480); RUN(match_640x480); RUN(match_800x600); RUN(no_match); RUN(match_cpl_640x480); RUN(match_cpl_no_match); RUN_TESTS_END(); }
