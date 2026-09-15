@@ -18,7 +18,7 @@ ttcap = "ttcap.cli:main"
 dev = ["pytest>=8", "numpy>=1.26", "pillow>=10"]
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests"]
+testpaths = ["python/tests", "gst/tests"]
 
 [tool.setuptools]
 package-dir = {"" = "python"}

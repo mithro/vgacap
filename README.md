@@ -56,6 +56,44 @@ to 30 clock glitch (real silicon does) still reconstructs. `vgacap-frames`
 reports `glitches=N` per frame, counting the pulses rejected since the
 previous frame, and `glitches_total=N` for the whole stream.
 
+## GStreamer plugin
+
+`gst/` builds `libgstvgacap.so`, whose `vgadecode` element turns a capture
+stream (`application/x-vgacap`) into `video/x-raw` RGB frames. The plugin is
+optional: CMake skips it when the GStreamer development files are missing,
+and the plugin tests skip with it.
+
+```sh
+export GST_PLUGIN_PATH=$PWD/build
+gst-inspect-1.0 vgadecode
+gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! \
+    pngenc ! multifilesink location=frame-%04d.png
+```
+
+| property | default | |
+|---|---|---|
+| `repeat-last-frame` | false | re-push the last frame to hold a steady `output-fps` cadence |
+| `output-fps` | 30/1 | rate used when repeating, and when the stream declares no project clock |
+| `max-width`, `max-height` | 1400, 900 | size of the reconstruction buffers, allocated once when the element starts |
+| `force-mode` | `""` | force a mode table entry instead of detecting one |
+| `partial` | false | also push frames whose lines were not all covered |
+
+Frames are timestamped in project time -- clocks since the first emitted
+frame divided by the stream's `clock_hz` -- when the header declares a clock,
+and at `output-fps` otherwise. A clock rate that changes mid-stream (a `TIME`
+chunk reporting a measured rate, say) freezes the elapsed time and continues
+from there, so the timeline never runs backwards.
+
+A partial frame carries `GST_BUFFER_FLAG_CORRUPTED`, and every frame's
+counter rides in `GST_BUFFER_OFFSET`. That counter is the *source's* frame
+number, not an output index: it skips the frames the `partial` property
+filters out, and it restarts at zero when the stream restarts (a second
+`VGCH` header, or a flushing seek). Number output frames downstream, or use
+the PTS, if you need something that only ever goes up.
+
+The detected timing is posted on the bus as an element message named
+`vgacap-timing`, once when it is first known and again whenever it changes.
+
 ## Running on a Raspberry Pi
 
 The board tools (`ttcap`) need only pyserial and websockets. On a Pi, keep
