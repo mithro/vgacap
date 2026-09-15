@@ -19,7 +19,7 @@ import types
 import pytest
 from fake_repl import FakeChunkBoard
 
-from ttcap import mp
+from ttcap import capture, mp
 
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
 from ttcap.capture import (
@@ -619,8 +619,112 @@ def test_frames_to_max_bytes_covers_the_requested_frames_plus_two():
 
 
 def test_time_chunk_shorter_than_its_fixed_fields_is_an_error():
-    board = FakeChunkBoard([b"TIME" + struct.pack("<I", 4) + b"\x00\x00\x00\x00"])
+    board = FakeChunkBoard(
+        [b"TIME" + struct.pack("<I", 4) + b"\x00\x00\x00\x00"],
+        replies={"print(1)": "1\r\n"},
+    )
     repl = connect(board)
 
     with pytest.raises(CaptureError, match="TIME chunk"):
         run_capture(repl, request(), io.BytesIO())
+
+    # The error is the caller's, but the board is not left running: it was
+    # asked to stop and the rest of its command was taken off the wire.
+    assert board.interrupts == 1
+    assert repl.exec("print(1)") == ("1\r\n", "")
+
+
+class _FailingWrites:
+    """A file object that fails on the `nth` write, like a full disk."""
+
+    def __init__(self, nth: int, exc: BaseException) -> None:
+        self.nth = nth
+        self.exc = exc
+        self.writes = 0
+        self.buf = io.BytesIO()
+
+    def write(self, data: bytes) -> int:
+        self.writes += 1
+        if self.writes == self.nth:
+            raise self.exc
+        return self.buf.write(data)
+
+
+class _StubbornBoard(FakeChunkBoard):
+    """Keeps streaming through the cooperative stop; only Ctrl-C ends it.
+
+    A board that is mid-chunk, or busy enough that the stop byte waits,
+    looks exactly like this for a while -- and a board that never picks the
+    byte up at all looks like it forever.
+    """
+
+    def _request_stop(self) -> None:
+        if self.interrupts >= 2:
+            super()._request_stop()
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [OSError(28, "No space left on device"), KeyboardInterrupt()],
+    ids=["oserror", "keyboardinterrupt"],
+)
+def test_a_failure_in_the_chunk_loop_still_stops_the_board(exc):
+    # Neither is the board's fault and neither used to tear it down: the
+    # generator was dropped with the script still writing chunks, and the
+    # next command read those instead of its own output.
+    profile = RP2040_TT06
+    board = FakeChunkBoard(
+        [raw_chunk(profile, [1, 2])] * 6,
+        on_interrupt=time_chunk(profile, 0, "overruns=0 rxstall=0"),
+        terminate=False,
+        replies={"print(1)": "1\r\n"},
+    )
+    repl = connect(board)
+    out = _FailingWrites(3, exc)  # the header, one chunk, then the failure
+
+    with pytest.raises(type(exc)):
+        run_capture(repl, request(profile, max_bytes=0, seconds=30), out)
+
+    # Stopped cooperatively -- one stop byte, no last-resort Ctrl-C -- and
+    # the link is back at a prompt for whatever the caller does next.
+    assert board.interrupts == 1
+    assert repl.exec("print(1)") == ("1\r\n", "")
+
+
+def test_a_board_that_ignores_the_stop_gets_a_real_ctrl_c(monkeypatch):
+    profile = RP2040_TT06
+    monkeypatch.setattr(capture, "STOP_DRAIN_TIMEOUT", 0.05)
+    board = _StubbornBoard(
+        [raw_chunk(profile, [1, 2])] * 6,
+        terminate=False,
+        on_quiet_stderr="KeyboardInterrupt\r\n",
+        replies={"print(1)": "1\r\n"},
+    )
+    repl = connect(board)
+    out = _FailingWrites(3, OSError(28, "No space left on device"))
+
+    with pytest.raises(OSError):
+        run_capture(repl, request(profile, max_bytes=0, seconds=30), out)
+
+    # The stop byte, then the real Ctrl-C the script could not ignore.
+    assert board.interrupts == 2
+    assert repl.exec("print(1)") == ("1\r\n", "")
+
+
+def test_a_short_raw_payload_stops_the_board_too():
+    # `struct.unpack_from("<I", payload, 0)` on a RAW chunk carrying fewer
+    # than four bytes raises `struct.error`, which is neither a
+    # `CaptureError` nor an `OSError`.
+    profile = RP2040_TT06
+    board = FakeChunkBoard(
+        [b"RAW " + struct.pack("<I", 2) + b"\x00\x01"],
+        terminate=False,
+        replies={"print(1)": "1\r\n"},
+    )
+    repl = connect(board)
+
+    with pytest.raises(struct.error):
+        run_capture(repl, request(profile), io.BytesIO())
+
+    assert board.interrupts == 1
+    assert repl.exec("print(1)") == ("1\r\n", "")

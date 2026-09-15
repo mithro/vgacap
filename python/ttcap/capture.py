@@ -84,6 +84,7 @@ def min_free_bytes(buf_words: int) -> int:
     """
     return 8 * buf_words + COMPILE_HEADROOM_BYTES
 
+
 #: Deletes the names a previous run left in the board's REPL globals, then
 #: collects and reports the free heap. `globals()` in the raw REPL *is* that
 #: namespace, and `pop(name, None)` tolerates a first run where none of them
@@ -450,6 +451,41 @@ def _keyed_int(msg: str, key: str) -> int | None:
     return None
 
 
+#: How long an abandoned capture waits for the board's own trailer after a
+#: cooperative stop before falling back to a real Ctrl-C. One DMA buffer at
+#: the RP2040's 60 kHz ceiling is 2.2 s, so this is a little over the
+#: slowest legitimate gap and far below `DEFAULT_CHUNK_TIMEOUT`: this is the
+#: unhappy path, and waiting out a 30 s read for a board that is not coming
+#: back helps nobody.
+STOP_DRAIN_TIMEOUT = 5.0
+
+
+def _abandon_stream(repl: RawRepl, stream, timeout: float | None = None) -> None:
+    """Leave the board at a prompt after a capture that ended early.
+
+    Closing the generator only stops *this* side reading: the script is
+    still executing on the board and still writing chunks, so the link has
+    to be brought back to a prompt or every later command will read the
+    capture's output instead of its own.
+
+    Politely first -- the same cooperative stop byte a normal run sends, so
+    the script finishes its chunk and emits its trailer -- and only if that
+    does not end the command within `timeout` does it come to a real
+    Ctrl-C. Best effort throughout: this runs while another exception is
+    propagating, and that exception is the one worth reporting, so nothing
+    raised here is allowed to replace it.
+    """
+    if timeout is None:
+        timeout = STOP_DRAIN_TIMEOUT
+    try:
+        stream.close()
+        repl.request_stop()
+        if not repl.drain_chunks(timeout):
+            repl.recover()
+    except Exception:
+        pass
+
+
 def _should_stop(req: CaptureRequest, start: float, total_bytes: int) -> bool:
     """True once the run has reached whichever limit the request set."""
     if req.seconds and time.monotonic() - start >= req.seconds:
@@ -479,6 +515,12 @@ def run_capture(
     lost, the run ends through `RawRepl.recover()` (a real Ctrl-C, by then
     re-enabled) and says so in `CaptureStats.error`; everything written
     before that is still a valid stream.
+
+    Any *other* failure -- a malformed chunk, a write that fails, the
+    operator's Ctrl-C -- is the caller's to handle and is re-raised, but
+    never before the board has been stopped and its command drained to a
+    prompt (`_abandon_stream`). A script left streaming would otherwise
+    write its chunks into the next command's output.
 
     The clock is left running: stopping it is `stop_clock()`, so a caller
     can take several captures of one design without restarting it.
@@ -536,8 +578,9 @@ def run_capture(
     error = ""
 
     start = time.monotonic()
+    stream = repl.exec_chunks(script, timeout=chunk_timeout)
     try:
-        for tag, payload in repl.exec_chunks(script, timeout=chunk_timeout):
+        for tag, payload in stream:
             out.write(tag + struct.pack("<I", len(payload)) + payload)
             total_bytes += 8 + len(payload)
             chunks += 1
@@ -570,13 +613,26 @@ def run_capture(
         # output instead of its own.
         timed_out = True
         error = "board went quiet: %s" % exc
+        stream.close()
         repl.recover()
     except ReplFramingError as exc:
         # The stream desynchronised, so nothing further can be read by
         # length. Same teardown: the alternative is a script that keeps
         # writing into the next command's output.
         error = "framing lost: %s" % exc
+        stream.close()
         repl.recover()
+    except BaseException:
+        # Everything else the loop can raise: a `CaptureError` from a short
+        # TIME payload, a `struct.error` from a short RAW one, an `OSError`
+        # from `out.write()` (a full disk, or M5's pipeline going away), or
+        # a `KeyboardInterrupt` from the operator. None of them are the
+        # board's fault, and all of them used to drop the generator with
+        # the script still streaming -- after which the next command read
+        # its chunks instead of its own output. The exception is the
+        # caller's to see, so it is re-raised once the board is quiet.
+        _abandon_stream(repl, stream)
+        raise
     elapsed = time.monotonic() - start
 
     return CaptureStats(
