@@ -380,13 +380,65 @@ def test_main_catches_keyboardinterrupt(source):
     )
 
 
+def _function_node(source: str, name: str) -> ast.FunctionDef:
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"script has no top-level {name}()")
+
+
 def test_irq_handlers_rearm_before_flagging(source):
     # The re-arm must happen before the flag: the partner's chain can
     # re-trigger this channel as soon as it completes.
-    handler = source[source.index("def on_a(") : source.index("def on_b(")]
-    assert handler.index("mem[wr_a] = addr_a") < handler.index("full[0] = True")
-    assert handler.index("mem[tc_a] = BUF_WORDS") < handler.index("full[0] = True")
-    assert "overruns[0] += 1" in handler
+    handler = ast.unparse(_function_node(source, "on_a"))
+    assert handler.index("MEM[WR_A] = ADDR_A") < handler.index("FULL[0] = True")
+    assert handler.index("MEM[TC_A] = BUF_WORDS") < handler.index("FULL[0] = True")
+    assert "OVERRUNS[0] += 1" in handler
+
+
+@pytest.mark.parametrize("name", ["on_a", "on_b"])
+def test_irq_handlers_are_module_level_not_closures(source, name):
+    # A hard IRQ runs with the heap locked. Measured on fpga-1 under
+    # micropython.heap_lock(): this exact body as a closure over main()'s
+    # locals raises MemoryError at its first statement, and as a
+    # module-level function reading module globals it runs clean.
+    _function_node(source, name)  # raises unless it is top level
+
+    nested = [
+        node.name
+        for node in ast.walk(_main_node(source))
+        if isinstance(node, ast.FunctionDef)
+    ]
+    assert name not in nested
+
+
+@pytest.mark.parametrize("name", ["on_a", "on_b"])
+def test_irq_handlers_allocate_nothing(source, name):
+    # Arithmetic on a register or buffer address allocates: they are big
+    # ints on this 31-bit-small-int build. A precomputed one used as a
+    # `mem32` index does not. So the handler body may only store and update
+    # small ints -- no BinOp, no call, no literal above the small-int range.
+    node = _function_node(source, name)
+
+    assert not [n for n in ast.walk(node) if isinstance(n, ast.BinOp)]
+    assert not [n for n in ast.walk(node) if isinstance(n, ast.Call)]
+    constants = [
+        n.value
+        for n in ast.walk(node)
+        if isinstance(n, ast.Constant) and isinstance(n.value, int)
+    ]
+    assert all(abs(value) < 2**30 for value in constants)
+
+
+def test_main_hands_the_module_level_handlers_to_the_dma(source):
+    main_src = ast.unparse(_main_node(source))
+
+    assert "dma_a.irq(on_a, hard=True)" in main_src
+    assert "dma_b.irq(on_b, hard=True)" in main_src
+    # The addresses the handlers read are all computed here, once.
+    for name in ("WR_A", "WR_B", "TC_A", "TC_B", "ADDR_A", "ADDR_B"):
+        assert "%s = " % name in main_src
+    assert "global WR_A" in main_src
 
 
 def test_dma_is_armed_before_the_state_machine(source):

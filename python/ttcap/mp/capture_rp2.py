@@ -77,7 +77,12 @@ the PIO never stalls while the main loop is writing a buffer out over USB.
 The chain re-triggers a channel but reloads neither its write address nor
 its transfer count, so each channel's own completion IRQ re-arms it -- from
 the hard IRQ, before its partner can finish, which is what makes the handoff
-race-free. There is therefore at most one buffer of latency. If a handler
+race-free. Those handlers and every address they touch are module-level,
+because a hard IRQ runs with the heap locked and a nested closure over
+main()'s locals raises MemoryError at its first statement -- see the "hard
+IRQ state" block below.
+
+There is therefore at most one buffer of latency. If a handler
 finds its buffer still marked full, the main loop did not consume it in
 time: the DMA is now overwriting data the host never saw. That is counted
 as an overrun and reported in a `TIME` chunk with
@@ -271,6 +276,59 @@ def make_sampler(clk_gpio, in_count, push, rising):
     return sampler
 
 
+# --- hard IRQ state ------------------------------------------------------
+#
+# `on_a`/`on_b` run as *hard* IRQ handlers, where the heap is locked: any
+# allocation raises `MemoryError` ("Uncaught exception in IRQ callback
+# handler"), and the capture dies with no samples. Measured on fpga-1 under
+# `micropython.heap_lock()`:
+#
+#   * the handler body as a nested closure over main()'s locals raises
+#     MemoryError at its *first* statement -- building the closure's cell
+#     access is enough;
+#   * the same body as a module-level function reading module globals runs
+#     clean, and driven by a real `rp2.DMA` interrupt it re-armed
+#     WRITE_ADDR and TRANS_COUNT correctly;
+#   * a precomputed address is fine as a `mem32` index, but *arithmetic* on
+#     one inside the handler allocates -- these are big ints on this
+#     31-bit-small-int build, so 0x50000000 + x is a heap object. (The
+#     negative-index trick does not help: the magnitude is still over 2^30.)
+#
+# Hence: every address is computed once in `main()` and stored here, and
+# the handlers below do nothing but stores and small-int list updates.
+MEM = machine.mem32
+WR_A = 0
+WR_B = 0
+TC_A = 0
+TC_B = 0
+ADDR_A = 0
+ADDR_B = 0
+#: Whether each buffer holds samples the main loop has not written out yet.
+FULL = [False, False]
+#: Buffers the main loop failed to drain before the DMA came round again.
+OVERRUNS = [0]
+
+
+def on_a(_channel):
+    # Re-arm channel A first: its partner's chain re-triggers it the moment
+    # B completes, which can be long before the main loop gets back here.
+    # Both are non-trigger aliases, so this arms the channel without
+    # starting it.
+    MEM[WR_A] = ADDR_A
+    MEM[TC_A] = BUF_WORDS
+    if FULL[0]:
+        OVERRUNS[0] += 1
+    FULL[0] = True
+
+
+def on_b(_channel):
+    MEM[WR_B] = ADDR_B
+    MEM[TC_B] = BUF_WORDS
+    if FULL[1]:
+        OVERRUNS[0] += 1
+    FULL[1] = True
+
+
 def gpio_base_is(pio, want):
     """True when PIO block `pio` already has its 32-pin window at `want`.
 
@@ -326,9 +384,12 @@ def main(out):
         PIO_NUM * 4 + SM_NUM, sampler, in_base=machine.Pin(IN_PIO_INDEX)
     )
 
+    global WR_A, WR_B, TC_A, TC_B, ADDR_A, ADDR_B
+
     bufs = [bytearray(BUF_BYTES), bytearray(BUF_BYTES)]
-    full = [False, False]
-    overruns = [0]
+    FULL[0] = False
+    FULL[1] = False
+    OVERRUNS[0] = 0
     in_flight = [False]
     dma_a = None
     dma_b = None
@@ -336,7 +397,6 @@ def main(out):
     try:
         dma_a = rp2.DMA()
         dma_b = rp2.DMA()
-        dmas = [dma_a, dma_b]
 
         ctrl_a = dma_a.pack_ctrl(
             size=2,
@@ -357,43 +417,26 @@ def main(out):
         dma_a.config(read=RXF_ADDR, write=bufs[0], count=BUF_WORDS, ctrl=ctrl_a, trigger=False)
         dma_b.config(read=RXF_ADDR, write=bufs[1], count=BUF_WORDS, ctrl=ctrl_b, trigger=False)
 
-        mem = machine.mem32
-        wr_a = dma_reg(dma_a.channel, DMA_CH_WRITE_ADDR)
-        wr_b = dma_reg(dma_b.channel, DMA_CH_WRITE_ADDR)
-        tc_a = dma_reg(dma_a.channel, DMA_CH_TRANS_COUNT)
-        tc_b = dma_reg(dma_b.channel, DMA_CH_TRANS_COUNT)
-        addr_a = uctypes.addressof(bufs[0])
-        addr_b = uctypes.addressof(bufs[1])
+        # Every address the hard IRQ handlers touch is computed here, once,
+        # and stored in a module global: see the `on_a`/`on_b` note above.
+        WR_A = dma_reg(dma_a.channel, DMA_CH_WRITE_ADDR)
+        WR_B = dma_reg(dma_b.channel, DMA_CH_WRITE_ADDR)
+        TC_A = dma_reg(dma_a.channel, DMA_CH_TRANS_COUNT)
+        TC_B = dma_reg(dma_b.channel, DMA_CH_TRANS_COUNT)
+        ADDR_A = uctypes.addressof(bufs[0])
+        ADDR_B = uctypes.addressof(bufs[1])
 
         # Self-check the register map before anything can run: config() has
         # just programmed these two write addresses, so if the offsets were
         # wrong the re-arm below would point the DMA at arbitrary memory.
-        if mem[wr_a] != addr_a or mem[wr_b] != addr_b:
+        if MEM[WR_A] != ADDR_A or MEM[WR_B] != ADDR_B:
             write_time_chunk(out, 0, b"error=dma write-addr register offset mismatch")
             return
-
-        def on_a(_channel):
-            # Re-arm channel A first: its partner's chain re-triggers it the
-            # moment B completes, which can be long before the main loop
-            # gets back here. Both are non-trigger aliases, so this arms the
-            # channel without starting it.
-            mem[wr_a] = addr_a
-            mem[tc_a] = BUF_WORDS
-            if full[0]:
-                overruns[0] += 1
-            full[0] = True
-
-        def on_b(_channel):
-            mem[wr_b] = addr_b
-            mem[tc_b] = BUF_WORDS
-            if full[1]:
-                overruns[0] += 1
-            full[1] = True
 
         dma_a.irq(on_a, hard=True)
         dma_b.irq(on_b, hard=True)
 
-        mem[FDEBUG_ADDR] = RXSTALL_BIT  # write-1-to-clear a stale stall
+        MEM[FDEBUG_ADDR] = RXSTALL_BIT  # write-1-to-clear a stale stall
 
         # Arm the DMA before the state machine, so the first samples cannot
         # stall the RX FIFO during the call overhead between the two.
@@ -404,24 +447,24 @@ def main(out):
         reported = 0
         index = 0
         while True:
-            while not full[index]:
+            while not FULL[index]:
                 machine.idle()
             in_flight[0] = True
             sent += write_raw_chunk(out, bufs[index], SAMPLES_PER_CHUNK)
             in_flight[0] = False
-            full[index] = False
-            if overruns[0] > reported:
-                dropped = (overruns[0] - reported) * SAMPLES_PER_CHUNK
+            FULL[index] = False
+            if OVERRUNS[0] > reported:
+                dropped = (OVERRUNS[0] - reported) * SAMPLES_PER_CHUNK
                 sent += write_time_chunk(out, dropped, b"overrun")
-                reported = overruns[0]
+                reported = OVERRUNS[0]
             index = 1 - index
             if MAX_BYTES and sent >= MAX_BYTES:
                 break
     except KeyboardInterrupt:
         pass
     finally:
-        overrun_total = overruns[0]
-        rxstall = (machine.mem32[FDEBUG_ADDR] >> SM_NUM) & 1
+        overrun_total = OVERRUNS[0]
+        rxstall = (MEM[FDEBUG_ADDR] >> SM_NUM) & 1
         # Drop the IRQ handlers before aborting: an abort can raise a
         # spurious completion IRQ (and on RP2350, errata RP2350-E5, a chain
         # partner can re-trigger the aborted channel), which would inflate
