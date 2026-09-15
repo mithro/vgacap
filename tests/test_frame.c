@@ -221,8 +221,12 @@ TEST(glitchy_hsync_still_reconstructs_640x480) {
     ASSERT_EQ_U(last.width, 640); ASSERT_EQ_U(last.height, 480); ASSERT_EQ_U(last.partial, 0);
     ASSERT_TRUE(last.timing->mode != NULL);
     ASSERT_EQ_U(last.timing->lines_per_frame, 525);
-    ASSERT_EQ_U(last.timing->glitches, per_frame);        // the emitted frame's own
-    ASSERT_EQ_U(f.learner.t.glitches, 2 * per_frame);     // both glitchy frames'
+    // timing.glitches is a lifetime running total, so at this emit - the end
+    // of the first glitchy frame - it holds that frame's three, and by the
+    // end of the stream both glitchy frames' six. (vgacap-frames turns the
+    // difference between successive frames into its per-frame glitches=N.)
+    ASSERT_EQ_U(last.timing->glitches, per_frame);
+    ASSERT_EQ_U(f.learner.t.glitches, 2 * per_frame);
     for (uint16_t y = 0; y < 480; y++) for (uint16_t x = 0; x < 640; x++) {
         uint8_t c = bars(NULL, x, y); const uint8_t *q = last_rgb + (y * 640 + x) * 3;
         ASSERT_EQ_U(q[0], ((c >> 4) & 3) * 85); ASSERT_EQ_U(q[1], ((c >> 2) & 3) * 85); ASSERT_EQ_U(q[2], (c & 3) * 85);
@@ -243,7 +247,7 @@ TEST(glitchy_hsync_still_reconstructs_800x600) {
     ASSERT_EQ_U(nframes, 1);
     ASSERT_EQ_U(last.width, 800); ASSERT_EQ_U(last.height, 600); ASSERT_EQ_U(last.partial, 0);
     ASSERT_EQ_U(last.timing->lines_per_frame, 628);
-    ASSERT_EQ_U(last.timing->glitches, per_frame);
+    ASSERT_EQ_U(last.timing->glitches, per_frame);     // running total at this emit
     ASSERT_EQ_U(f.learner.t.glitches, 2 * per_frame);
     for (uint16_t y = 0; y < 600; y++) for (uint16_t x = 0; x < 800; x++) {
         uint8_t c = bars(NULL, x, y); const uint8_t *q = last_rgb + (y * 800 + x) * 3;
