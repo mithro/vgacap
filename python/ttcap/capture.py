@@ -59,14 +59,30 @@ MODE_EXTCLK = 0
 #: needs `--max-bytes` worked out by hand.
 CLOCKS_PER_FRAME_640X480 = 800 * 525
 
-#: Free heap the board needs before a capture script is worth sending.
-#:
-#: The stock RP2040 firmware leaves ~80 KB and the minified script still
-#: needs room to compile, so anything much below half of that is a run that
-#: will fail -- and its failure mode is not always a clean `MemoryError`:
-#: twice on tt07 the board printed `FATAL: uncaught exception` and halted,
-#: needing a power cycle. Refusing early is strictly kinder.
-MIN_FREE_BYTES = 40_000
+#: Free heap the script needs for everything that is *not* the two DMA
+#: buffers: compiling the minified source and the ~64 module-level names it
+#: then leaves in the REPL's globals. Measured on tt07, where the script
+#: compiles with 84,208 bytes free and 32 KB of that goes to the buffers.
+COMPILE_HEADROOM_BYTES = 24_000
+
+
+def min_free_bytes(buf_words: int) -> int:
+    """Free heap the board needs before this capture is worth sending.
+
+    The stock RP2040 firmware leaves ~80 KB and the script allocates two
+    `4 * buf_words`-byte DMA buffers out of it (`capture_rp2.py`'s `bufs`)
+    on top of what compiling it costs -- 32 KB at the default 4096 words,
+    64 KB at 8192, 128 KB at 16384. A flat floor passed all three, which
+    made the check useless at the one job it was added for: `--buf-words`
+    is a user-facing flag with no upper bound, and on tt07 (~80-84 KB free)
+    the 8192 case cannot possibly fit.
+
+    The failure it is protecting against is not always a clean
+    `MemoryError`: twice on tt07 the board printed `FATAL: uncaught
+    exception` and halted, needing a power cycle. Refusing early is
+    strictly kinder.
+    """
+    return 8 * buf_words + COMPILE_HEADROOM_BYTES
 
 #: Deletes the names a previous run left in the board's REPL globals, then
 #: collects and reports the free heap. `globals()` in the raw REPL *is* that
@@ -283,7 +299,8 @@ class CaptureStats:
     #: Whatever was written before it is still a valid stream.
     error: str = ""
     #: `gc.mem_free()` the board reported after the pre-run cleanup. Worth
-    #: watching: below `MIN_FREE_BYTES` the script may not compile at all.
+    #: watching: below `min_free_bytes(buf_words)` the script may not
+    #: compile at all, or its DMA buffers may not fit.
     mem_free_before: int = 0
 
     @property
@@ -473,13 +490,23 @@ def run_capture(
     profile = req.profile
     script = mp.with_cfg(mp.minify(mp.load("capture_rp2.py")), req.cfg())
 
+    needed = min_free_bytes(req.buf_words)
     mem_free = prepare_board(repl, mp.module_level_names(script))
-    if mem_free < MIN_FREE_BYTES:
+    if mem_free < needed:
         raise CaptureError(
-            "board has only %d bytes of free heap after a collect, need %d; "
-            "compiling the capture script there can fail without a clean "
-            "error (tt07 printed 'FATAL: uncaught exception' and halted). "
-            "Reset the board and try again." % (mem_free, MIN_FREE_BYTES)
+            "board has only %d bytes of free heap after a collect, need %d "
+            "(2 x %d bytes of DMA buffer for --buf-words %d, plus %d to "
+            "compile the script); compiling it there can fail without a "
+            "clean error (tt07 printed 'FATAL: uncaught exception' and "
+            "halted). Reset the board, or ask for fewer buffer words, and "
+            "try again."
+            % (
+                mem_free,
+                needed,
+                4 * req.buf_words,
+                req.buf_words,
+                COMPILE_HEADROOM_BYTES,
+            )
         )
 
     Writer(

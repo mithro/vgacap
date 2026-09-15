@@ -23,12 +23,13 @@ from ttcap import mp
 
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
 from ttcap.capture import (
+    DEFAULT_BUF_WORDS,
     DEFAULT_PIO,
-    MIN_FREE_BYTES,
     MODE_EXTCLK,
     CaptureError,
     CaptureRequest,
     frames_to_max_bytes,
+    min_free_bytes,
     prepare_board,
     run_capture,
     select_project,
@@ -530,7 +531,8 @@ def test_refuses_to_run_when_the_board_has_too_little_heap():
     # The script may not even compile there, and on tt07 that failure was
     # twice a `FATAL: uncaught exception` that needed a power cycle.
     profile = RP2040_TT06
-    board = FakeChunkBoard(sample_run(profile, [1, 2]), mem_free=MIN_FREE_BYTES - 1)
+    floor = min_free_bytes(DEFAULT_BUF_WORDS)
+    board = FakeChunkBoard(sample_run(profile, [1, 2]), mem_free=floor - 1)
     repl = connect(board)
     out = io.BytesIO()
 
@@ -540,6 +542,42 @@ def test_refuses_to_run_when_the_board_has_too_little_heap():
     # Nothing was sent and no header-only file was left behind.
     assert not any(c.startswith("CFG = ") for c in board.commands)
     assert out.getvalue() == b""
+
+
+def test_the_heap_floor_scales_with_the_dma_buffers():
+    # Two buffers of 4 * buf_words, plus a fixed allowance for compiling the
+    # script. The old floor was a flat 40,000 whatever was asked for, which
+    # is below even the default request's two 16 KB buffers.
+    assert min_free_bytes(1024) == 8 * 1024 + 24_000
+    assert min_free_bytes(DEFAULT_BUF_WORDS) == 56_768
+    assert min_free_bytes(8192) == 8 * 8192 + 24_000
+    assert min_free_bytes(8192) - min_free_bytes(4096) == 4 * 2 * 4096
+
+
+@pytest.mark.parametrize("buf_words", [1024, 4096, 8192])
+def test_a_bigger_buffer_request_needs_a_bigger_heap(buf_words):
+    # The tt07 case the flat 40,000-byte floor let through: ~84 KB free is
+    # plenty for the default request and nowhere near enough for 8192 words
+    # (64 KB of buffers on an 80 KB heap).
+    profile = RP2040_TT06
+    floor = min_free_bytes(buf_words)
+    board = FakeChunkBoard(sample_run(profile, [1, 2]), mem_free=floor - 1)
+    repl = connect(board)
+
+    with pytest.raises(CaptureError) as excinfo:
+        run_capture(repl, request(profile, buf_words=buf_words), io.BytesIO())
+
+    # The message carries the numbers, so the operator can see why.
+    message = str(excinfo.value)
+    assert str(floor) in message
+    assert str(floor - 1) in message
+    assert "--buf-words %d" % buf_words in message
+    assert not any(c.startswith("CFG = ") for c in board.commands)
+
+    # One byte more and the same request is accepted.
+    ok_board = FakeChunkBoard(sample_run(profile, [1, 2]), mem_free=floor)
+    stats = run_capture(connect(ok_board), request(profile, buf_words=buf_words), io.BytesIO())
+    assert stats.mem_free_before == floor
 
 
 def test_a_lost_framing_ends_the_run_instead_of_escaping():
