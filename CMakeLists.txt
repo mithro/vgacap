@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(vgacap C)
+project(vgacap VERSION 0.0.1 LANGUAGES C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE)
@@ -19,6 +19,9 @@ add_executable(vgacap-dump src/tools/vgacap_dump.c)
 target_link_libraries(vgacap-dump PRIVATE vgacap_stream)
 add_executable(vgacap-frames src/tools/vgacap_frames.c)
 target_link_libraries(vgacap-frames PRIVATE vgacap_stream vgacap_frame)
+
+# --- gst: GStreamer plugin (gst/), built only when GStreamer is installed ---
+add_subdirectory(gst)
 
 function(vgacap_add_test name)
   add_executable(${name} tests/${name}.c ${ARGN})
