@@ -333,9 +333,15 @@ def capture(
                 # `buf_words` sizes the chunks, and the byte budget has to
                 # allow for each chunk's 12 non-sample bytes.
                 max_bytes = frames_to_max_bytes(board, frames, buf_words=buf_words)
-            with _sigint_stops_the_capture() if to_stdout else contextlib.nullcontext(
-                None
-            ) as stop:
+            # A cooperative SIGINT only in the streaming mode; a capture to
+            # a file keeps the default KeyboardInterrupt, because a person
+            # who types Ctrl-C at `ttcap capture --out run.vgacap` means it.
+            stop_ctx = (
+                _sigint_stops_the_capture()
+                if to_stdout
+                else contextlib.nullcontext(None)
+            )
+            with stop_ctx as stop:
                 request = CaptureRequest(
                     profile=board,
                     project=project,

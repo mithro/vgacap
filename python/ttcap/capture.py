@@ -695,12 +695,17 @@ class CaptureSession:
         if self._closed:
             return
         self._closed = True
-        if self._gen is not None:
-            # Raises GeneratorExit inside `_iter`, whose handler does the
-            # teardown; a generator that never started, or already ended,
-            # takes this as a no-op.
-            self._gen.close()
-        self._finalise()
+        try:
+            if self._gen is not None:
+                # Raises GeneratorExit inside `_iter`, whose handler does
+                # the teardown; a generator that never started, or already
+                # ended, takes this as a no-op.
+                self._gen.close()
+        finally:
+            # Whatever the close did, the stats stop moving here: a caller
+            # reading them after a failed teardown still gets what the
+            # capture produced.
+            self._finalise()
 
     # -- internals --------------------------------------------------------
 
@@ -711,6 +716,16 @@ class CaptureSession:
                 return
             self._stop_sent = True
         self._repl.request_stop()
+
+    def _end_streaming(self) -> None:
+        """Close the window in which `request_stop()` may write to the link.
+
+        Called before every teardown, so that a stop arriving from another
+        thread while this one is recovering the board cannot put a stray
+        Ctrl-C into the middle of that recovery. Idempotent.
+        """
+        with self._lock:
+            self._streaming = False
 
     def _account(self, tag: bytes, payload: bytes) -> None:
         """Fold one chunk into the running totals."""
@@ -840,6 +855,7 @@ class CaptureSession:
                 # would make every later command read its output.
                 self._timed_out = True
                 self._error = "board went quiet: %s" % exc
+                self._end_streaming()
                 stream.close()
                 repl.recover()
             except ReplFramingError as exc:
@@ -847,6 +863,7 @@ class CaptureSession:
                 # by length. Same teardown: the alternative is a script that
                 # keeps writing into the next command's output.
                 self._error = "framing lost: %s" % exc
+                self._end_streaming()
                 stream.close()
                 repl.recover()
             except BaseException:
@@ -859,11 +876,11 @@ class CaptureSession:
                 # arbitrary moments, and every one of them must still leave
                 # the board at a prompt. The exception is the caller's to
                 # see, so it is re-raised once the board is quiet.
+                self._end_streaming()
                 _abandon_stream(repl, stream)
                 raise
             finally:
-                with self._lock:
-                    self._streaming = False
+                self._end_streaming()
         finally:
             self._finalise()
 
