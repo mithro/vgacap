@@ -60,3 +60,45 @@ int vgacap_writer_raw_samples(vgacap_writer_t *w, const uint32_t *samples, uint3
     vgacap_pack_samples(&w->header, samples, n, wordbuf);
     return vgacap_writer_raw(w, wordbuf, n);
 }
+
+int vgacap_writer_rle(vgacap_writer_t *w, const uint32_t *values, const uint32_t *runs, uint32_t pair_count) {
+    if (write_chunk_head(w, VGACAP_TAG_RLE, 4u + 8u * pair_count)) return -1;
+    uint8_t c[8]; put_u32(c, pair_count); if (w->write(w->user, c, 4)) return -1;
+    for (uint32_t i = 0; i < pair_count; i++) {
+        put_u32(c, values[i]); put_u32(c + 4, runs[i]); if (w->write(w->user, c, 8)) return -1;
+    }
+    return 0;
+}
+
+int vgacap_writer_frame(vgacap_writer_t *w, uint32_t frame_counter, uint16_t first_line,
+                        uint16_t line_count, uint32_t clocks_per_line,
+                        const uint32_t *words, uint32_t sample_count) {
+    uint32_t spw = w->header.samples_per_word, nwords = (sample_count + spw - 1) / spw;
+    if (write_chunk_head(w, VGACAP_TAG_FRAME, 16u + 4u * nwords)) return -1;
+    uint8_t c[16]; put_u32(c, frame_counter); put_u16(c + 4, first_line); put_u16(c + 6, line_count);
+    put_u32(c + 8, clocks_per_line); put_u32(c + 12, sample_count);
+    if (w->write(w->user, c, 16)) return -1;
+    for (uint32_t i = 0; i < nwords; i++) { put_u32(c, words[i]); if (w->write(w->user, c, 4)) return -1; }
+    return 0;
+}
+
+static void put_u64(uint8_t *p, uint64_t v) { put_u32(p, (uint32_t)v); put_u32(p + 4, (uint32_t)(v >> 32)); }
+
+int vgacap_writer_events(vgacap_writer_t *w, const uint64_t *clocks, const uint32_t *values, uint32_t count) {
+    if (write_chunk_head(w, VGACAP_TAG_EVENT, 4u + 12u * count)) return -1;
+    uint8_t c[12]; put_u32(c, count); if (w->write(w->user, c, 4)) return -1;
+    for (uint32_t i = 0; i < count; i++) {
+        put_u64(c, clocks[i]); put_u32(c + 8, values[i]); if (w->write(w->user, c, 12)) return -1;
+    }
+    return 0;
+}
+
+int vgacap_writer_time(vgacap_writer_t *w, uint64_t host_time_ns, uint32_t clock_hz, uint32_t dropped, const char *msg) {
+    size_t ml = msg ? strlen(msg) : 0; if (ml > 255) ml = 255;
+    if (write_chunk_head(w, VGACAP_TAG_TIME, (uint32_t)(18 + ml))) return -1;
+    uint8_t c[18]; put_u64(c, host_time_ns); put_u32(c + 8, clock_hz); put_u32(c + 12, dropped);
+    put_u16(c + 16, (uint16_t)ml);
+    if (w->write(w->user, c, 18)) return -1;
+    if (ml && w->write(w->user, (const uint8_t *)msg, ml)) return -1;
+    return 0;
+}
