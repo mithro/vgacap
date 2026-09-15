@@ -572,3 +572,88 @@ def test_an_interrupted_run_leaves_a_playable_video(tmp_path):
     # no readable duration, and `gst-launch -e` is what turns the interrupt
     # into an end-of-stream that reaches it.
     assert video_duration_ns(video) > 0
+# --------------------------------------------------------------- the outdir
+
+
+def test_an_outdir_holding_a_previous_run_is_refused(tmp_path):
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "frame-0000.png").write_bytes(b"old")
+    (outdir / "capture.mkv").write_bytes(b"old")
+    with pytest.raises(CaptureError) as exc:
+        demo_mod.prepare_outdir(outdir)
+    message = str(exc.value)
+    assert "--force" in message and "frame-0000.png" in message
+    # Refused means refused: nothing was touched.
+    assert (outdir / "frame-0000.png").read_bytes() == b"old"
+
+
+def test_force_clears_the_previous_run_but_nothing_else(tmp_path):
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "frame-0000.png").write_bytes(b"old")
+    (outdir / "capture.mkv").write_bytes(b"old")
+    (outdir / "notes.md").write_text("mine")
+    demo_mod.prepare_outdir(outdir, force=True)
+    assert not list(outdir.glob("frame-*.png"))
+    assert not (outdir / "capture.mkv").exists()
+    # Only this command's own outputs go; the rest is not ours to delete.
+    assert (outdir / "notes.md").read_text() == "mine"
+
+
+def test_a_fresh_outdir_is_made(tmp_path):
+    outdir = tmp_path / "deep" / "out"
+    demo_mod.prepare_outdir(outdir)
+    assert outdir.is_dir()
+
+
+def test_an_outdir_that_is_a_file_says_so(tmp_path):
+    path = tmp_path / "afile"
+    path.write_text("not a directory")
+    with pytest.raises(CaptureError) as exc:
+        demo_mod.prepare_outdir(path)
+    assert "--outdir" in str(exc.value)
+
+
+@needs_gstreamer
+def test_a_second_run_into_the_same_outdir_refuses_rather_than_blending(tmp_path):
+    """The lie this used to tell.
+
+    A short capture into a directory holding a long one overwrote the first
+    frames and left the rest, and the summary counted every `frame-*.png` it
+    found -- so a run that wrote nothing reported the previous run's six.
+    """
+    outdir = tmp_path / "out"
+    first = run_demo_process(demo_argv(outdir, "--no-video", fake=("--frames", "8")))
+    assert first.returncode == 0, first.stdout + first.stderr
+    kept = {p.name: p.read_bytes() for p in outdir.glob("frame-*.png")}
+    assert kept
+
+    second = run_demo_process(demo_argv(outdir, "--no-video", fake=("--frames", "3")))
+    assert second.returncode != 0
+    assert "--force" in second.stderr
+    assert {p.name: p.read_bytes() for p in outdir.glob("frame-*.png")} == kept
+
+    forced = run_demo_process(
+        demo_argv(outdir, "--no-video", "--force", fake=("--frames", "3"))
+    )
+    assert forced.returncode == 0, forced.stdout + forced.stderr
+    assert "removed %d file(s)" % len(kept) in forced.stderr
+    now = sorted(outdir.glob("frame-*.png"))
+    # The shorter run, alone -- not blended with the longer one underneath.
+    assert 0 < len(now) < len(kept)
+    assert "%d png(s)" % len(now) in forced.stderr
+
+
+@needs_gstreamer
+def test_a_run_that_captures_nothing_does_not_report_success(tmp_path):
+    # `--frames 1` is too little for vgadecode to close a frame, so the
+    # pipeline runs happily and produces no picture at all. Exit 0 there is
+    # the one lie this command must not tell.
+    outdir = tmp_path / "out"
+    proc = run_demo_process(
+        demo_argv(outdir, "--no-video", fake=("--frames", "1"))
+    )
+    assert not list(outdir.glob("frame-*.png"))
+    assert proc.returncode == demo_mod.EXIT_NOTHING_CAPTURED
+    assert "nothing was captured" in proc.stderr

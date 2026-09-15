@@ -223,6 +223,14 @@ in-process, because the GStreamer Python bindings (`python3-gi`) are an OS
 package and `ttcap` runs under `uv`; the pipeline text is the same either
 way, and `ttcap.demo.use_gst_python()` is the check.
 
+`--outdir` is one run's alone. A directory that already holds a
+`frame-*.png` or a `capture.mkv` is **refused**, because a shorter capture
+would overwrite the first frames and leave the rest — two runs mixed
+together, which is the worst thing to find in `docs/results/` later.
+`--force` clears the previous run's outputs first and leaves everything else
+in the directory alone. A run that finishes without producing any frames
+exits **3**, the same code `ttcap capture` uses for "no samples at all".
+
 Ctrl-C ends the run cleanly: the signal is forwarded once to
 `gst-launch -e`, which turns it into an end-of-stream, so the board winds
 down through `vgacapttsrc`'s cooperative stop and the Matroska file is

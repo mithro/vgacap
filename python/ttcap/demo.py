@@ -295,6 +295,61 @@ def resolve_link(
     )
 
 
+# ------------------------------------------------------------- the outdir
+
+
+#: What a run writes into `--outdir`, as globs. Used to find a previous
+#: run's leftovers, and to count what this one produced.
+OUTPUT_GLOBS = ("frame-*.png", VIDEO_FILENAME)
+
+
+def existing_outputs(outdir: pathlib.Path) -> list[pathlib.Path]:
+    """Files in `outdir` that a previous run of this command left there."""
+    if not outdir.is_dir():
+        return []
+    found: list[pathlib.Path] = []
+    for pattern in OUTPUT_GLOBS:
+        found.extend(sorted(outdir.glob(pattern)))
+    return found
+
+
+def prepare_outdir(outdir: pathlib.Path, force: bool = False) -> None:
+    """Make `--outdir`, and make sure it is this run's alone.
+
+    A capture writes `frame-0000.png` upwards, so a short run into a
+    directory holding a long one overwrites the first frames and leaves the
+    rest: a silently mixed set, some of them a different design, which is
+    the worst possible thing to find in `docs/results/` later. It used to
+    happen without a word.
+
+    So a directory that already holds outputs is refused, and `--force`
+    clears them first rather than blending into them. Anything else in the
+    directory is left alone -- it is not ours to delete.
+    """
+    if outdir.exists() and not outdir.is_dir():
+        raise CaptureError(
+            "--outdir %s is not a directory; pass a directory to write the "
+            "frames and the video into" % outdir
+        )
+    stale = existing_outputs(outdir)
+    if stale and not force:
+        raise CaptureError(
+            "--outdir %s already holds %d file(s) from a previous run (%s%s). "
+            "A shorter capture would overwrite the first frames and leave the "
+            "rest, mixing two runs together. Pass --force to clear them, or "
+            "give a fresh --outdir."
+            % (
+                outdir,
+                len(stale),
+                ", ".join(p.name for p in stale[:3]),
+                ", ..." if len(stale) > 3 else "",
+            )
+        )
+    outdir.mkdir(parents=True, exist_ok=True)
+    for path in stale:
+        path.unlink()
+
+
 # ----------------------------------------------------------- the pipeline
 
 
@@ -631,31 +686,56 @@ def line_buffered(argv: list[str]) -> list[str]:
     return [stdbuf, "-oL", *argv] if stdbuf else list(argv)
 
 
-def _summarise(plan: DemoPlan, progress: Progress, returncode: int,
-               server: MjpegServer | None = None) -> None:
-    """What the run produced, counted from the files themselves.
+#: `demo()`'s exit code for a run that finished without producing anything.
+#: The same 3 `ttcap capture` uses for "no samples at all" -- the same
+#: verdict, one layer up, and the one failure worth telling apart from a
+#: board or link error.
+EXIT_NOTHING_CAPTURED = 3
 
-    The PNGs are counted on disk rather than from the bus, so a sink that
-    stopped writing halfway through cannot be summarised as a success.
+
+def _summarise(plan: DemoPlan, progress: Progress, returncode: int,
+               server: MjpegServer | None = None) -> bool:
+    """Say what the run produced; return True if it produced anything.
+
+    The outputs are counted from the files themselves, so a sink that
+    stopped writing halfway through cannot be summarised as a success --
+    and only files *this* run wrote are counted, because `prepare_outdir`
+    cleared the directory of any others before it started. Counting a
+    previous run's frames as this one's was how a run that wrote nothing at
+    all came to report "6 png(s)" and exit 0.
     """
+    produced = False
     progress.say("")
-    progress.say("capture finished after %.1fs (gst-launch exit %d)"
-                 % (progress.elapsed, returncode))
+    progress.say("capture %s after %.1fs (gst-launch exit %d)"
+                 % ("finished" if returncode == 0 else "failed",
+                    progress.elapsed, returncode))
     if progress.timing is not None:
         progress.say("  " + describe_timing(progress.timing))
     if plan.png:
         pngs = sorted(plan.outdir.glob("frame-*.png"))
+        produced = produced or bool(pngs)
         progress.say("  %d png(s) in %s" % (len(pngs), plan.outdir))
-    if plan.video and plan.video_path is not None:
-        if plan.video_path.exists():
+        # The bus said one thing, the directory another: a sink that failed
+        # part way, or something else writing into the same names.
+        if len(pngs) != progress.frames:
             progress.say(
-                "  %s, %.1f KiB" % (plan.video_path, plan.video_path.stat().st_size / 1024)
+                "  (multifilesink reported %d file(s); %d are on disk)"
+                % (progress.frames, len(pngs))
             )
+    if plan.video and plan.video_path is not None:
+        size = plan.video_path.stat().st_size if plan.video_path.exists() else 0
+        if size > 0:
+            produced = True
+            progress.say("  %s, %.1f KiB" % (plan.video_path, size / 1024))
+        elif plan.video_path.exists():
+            progress.say("  %s is empty" % plan.video_path)
         else:
             progress.say("  %s was not written" % plan.video_path)
     if server is not None:
-        progress.say("  %d frame(s) published on port %s"
-                     % (server.broadcaster.parts, plan.serve_port))
+        parts = server.broadcaster.parts
+        produced = produced or bool(parts)
+        progress.say("  %d frame(s) published on port %s" % (parts, plan.serve_port))
+    return produced
 
 
 #: The signals that mean "this run is over": Ctrl-C, `kill`, and the
@@ -804,10 +884,21 @@ def run_demo(
                 signal.signal(number, handler)
         if server is not None:
             server.close()
-    _summarise(plan, progress, returncode, server)
+    produced = _summarise(plan, progress, returncode, server)
     if returncode != 0 and plan.link.through_bridge:
         progress.say("")
         progress.say(tunnel_hint_for(plan.link))
+    if returncode == 0 and not produced:
+        # Exit 0 on a run that wrote nothing is the one lie this command
+        # must not tell: the pipeline ran, so gst-launch is content, but
+        # there is no capture.
+        progress.say("")
+        progress.say(
+            "nothing was captured: the pipeline ran but produced no frames. "
+            "Check that the design is driving the Tiny VGA Pmod, and that "
+            "--clock-hz is a rate the link can keep up with."
+        )
+        return EXIT_NOTHING_CAPTURED
     return returncode
 
 
@@ -928,7 +1019,11 @@ def demo(args: argparse.Namespace) -> int:
     progress.say("board link: %s (%s)" % (plan.link.url, plan.link.why))
     for note in plan.link.notes:
         progress.say("  note: %s" % note)
-    plan.outdir.mkdir(parents=True, exist_ok=True)
+    stale = existing_outputs(plan.outdir)
+    prepare_outdir(plan.outdir, args.force)
+    if stale:
+        progress.say("--force: removed %d file(s) from a previous run in %s"
+                     % (len(stale), plan.outdir))
     for output in plan.outputs:
         progress.say("writing %s" % output)
     if server is not None:
@@ -1006,6 +1101,12 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--outdir", required=True, help="where the PNGs and the video go"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="clear a previous run's frames and video out of --outdir first; "
+        "without it, an --outdir that already holds them is refused",
     )
     parser.add_argument(
         "--window", action="store_true", help="also show the capture in a window"
