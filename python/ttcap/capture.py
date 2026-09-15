@@ -14,9 +14,10 @@ from .boards import BoardProfile
 
 EDGES = ("falling", "rising")
 
-#: Informational only: the script reports it back so the host can record the
-#: sampler's clock domain. The rp2 port boots at 133 MHz on RP2040 and the
-#: capture never changes the system clock.
+#: Informational only, and only a guess: the rp2 port boots RP2040 at
+#: 133 MHz but RP2350 at 150 MHz, and the capture never changes the system
+#: clock. The authoritative value comes back from the board, which reports
+#: `machine.freq()` as `sysclk_hz=` in its closing `TIME` chunk.
 DEFAULT_SYSCLK_HZ = 133_000_000
 
 DEFAULT_BUF_WORDS = 4096
@@ -27,12 +28,16 @@ def capture_cfg(
     buf_words: int = DEFAULT_BUF_WORDS,
     max_bytes: int = 0,
     edge: str = "falling",
+    pio: int = 0,
+    sm: int = 0,
 ) -> dict:
     """Build the `CFG` dict for `capture_rp2.py` from a board profile.
 
     `buf_words` is the size of each of the two ping-pong DMA buffers in
     32-bit words, `max_bytes` caps the bytes the script emits (0 = run until
-    Ctrl-C), and `edge` selects which project-clock edge is sampled.
+    Ctrl-C), `edge` selects which project-clock edge is sampled, and
+    `pio`/`sm` pick the state machine (0/0 unless something else on the
+    board has already claimed it).
     """
     if edge not in EDGES:
         raise ValueError(f"edge must be one of {EDGES}, got {edge!r}")
@@ -40,6 +45,10 @@ def capture_cfg(
         raise ValueError(f"buf_words must be positive, got {buf_words}")
     if max_bytes < 0:
         raise ValueError(f"max_bytes must not be negative, got {max_bytes}")
+    if not 0 <= pio <= 2:
+        raise ValueError(f"pio must be 0..2 (RP2040 has 0..1), got {pio}")
+    if not 0 <= sm <= 3:
+        raise ValueError(f"sm must be 0..3, got {sm}")
 
     return {
         "clk_gpio": profile.clk_gpio,
@@ -50,7 +59,7 @@ def capture_cfg(
         "buf_words": buf_words,
         "max_bytes": max_bytes,
         "edge": edge,
-        "pio": 0,
-        "sm": 0,
+        "pio": pio,
+        "sm": sm,
         "sysclk_hz": DEFAULT_SYSCLK_HZ,
     }
