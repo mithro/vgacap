@@ -24,6 +24,7 @@ import builtins
 import contextlib
 import io
 import os
+import sys
 import threading
 import time
 import traceback
@@ -34,12 +35,33 @@ from ttcap.repl import CTRL_A, CTRL_B, CTRL_C, CTRL_D
 RAW_BANNER = b"raw REPL; CTRL-B to exit\r\n>"
 
 
+def _install_ubinascii() -> None:
+    """Make `import ubinascii` work in code the fake boards exec.
+
+    MicroPython ships `ubinascii` as a built-in module; CPython does not,
+    so the fakes put a one-function stand-in in `sys.modules`. It is only
+    ever reachable through an `import`, never pre-bound in the board's
+    globals -- which is the distinction `RawRepl.upload()` has to respect.
+    """
+    if "ubinascii" not in sys.modules:
+        module = types.ModuleType("ubinascii")
+        module.a2b_base64 = base64.b64decode
+        module.b2a_base64 = base64.b64encode
+        sys.modules["ubinascii"] = module
+
+
 class FakeRawRepl:
     """Plays the board side of the documented raw-REPL protocol on a pty.
 
     Keeps a single persistent globals dict across `exec()` calls, matching
-    real MicroPython raw REPL sessions, and a tiny `ubinascii` shim so
-    `RawRepl.upload()`'s generated code runs unmodified.
+    real MicroPython raw REPL sessions.
+
+    The globals start as bare as a board's: a fresh raw REPL there holds
+    whatever `main.py` left (`tt`, on a demo board) and nothing else. In
+    particular `ubinascii` is *not* pre-bound -- it is importable, as it is
+    on a board, and code that uses it without importing it gets the
+    `NameError` a board would give. A fake that is more generous than the
+    hardware hides exactly the defects it exists to catch.
 
     Set `reply_chunk_size` (and optionally `reply_delay`) before driving the
     board to force replies to be written in several small `os.write()`
@@ -52,8 +74,8 @@ class FakeRawRepl:
         self._stop = threading.Event()
         self.reply_chunk_size: int | None = None
         self.reply_delay: float = 0.0
-        ubinascii = types.SimpleNamespace(a2b_base64=base64.b64decode)
-        self._globals = {"__builtins__": __builtins__, "ubinascii": ubinascii}
+        _install_ubinascii()
+        self._globals = {"__builtins__": __builtins__}
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
 

@@ -59,14 +59,31 @@ MODE_EXTCLK = 0
 #: needs `--max-bytes` worked out by hand.
 CLOCKS_PER_FRAME_640X480 = 800 * 525
 
-#: Free heap the board needs before a capture script is worth sending.
-#:
-#: The stock RP2040 firmware leaves ~80 KB and the minified script still
-#: needs room to compile, so anything much below half of that is a run that
-#: will fail -- and its failure mode is not always a clean `MemoryError`:
-#: twice on tt07 the board printed `FATAL: uncaught exception` and halted,
-#: needing a power cycle. Refusing early is strictly kinder.
-MIN_FREE_BYTES = 40_000
+#: Free heap the script needs for everything that is *not* the two DMA
+#: buffers: compiling the minified source and the ~64 module-level names it
+#: then leaves in the REPL's globals. Measured on tt07, where the script
+#: compiles with 84,208 bytes free and 32 KB of that goes to the buffers.
+COMPILE_HEADROOM_BYTES = 24_000
+
+
+def min_free_bytes(buf_words: int) -> int:
+    """Free heap the board needs before this capture is worth sending.
+
+    The stock RP2040 firmware leaves ~80 KB and the script allocates two
+    `4 * buf_words`-byte DMA buffers out of it (`capture_rp2.py`'s `bufs`)
+    on top of what compiling it costs -- 32 KB at the default 4096 words,
+    64 KB at 8192, 128 KB at 16384. A flat floor passed all three, which
+    made the check useless at the one job it was added for: `--buf-words`
+    is a user-facing flag with no upper bound, and on tt07 (~80-84 KB free)
+    the 8192 case cannot possibly fit.
+
+    The failure it is protecting against is not always a clean
+    `MemoryError`: twice on tt07 the board printed `FATAL: uncaught
+    exception` and halted, needing a power cycle. Refusing early is
+    strictly kinder.
+    """
+    return 8 * buf_words + COMPILE_HEADROOM_BYTES
+
 
 #: Deletes the names a previous run left in the board's REPL globals, then
 #: collects and reports the free heap. `globals()` in the raw REPL *is* that
@@ -131,6 +148,19 @@ def capture_cfg(
         raise ValueError(f"max_bytes must not be negative, got {max_bytes}")
     if not 0 <= pio <= 2:
         raise ValueError(f"pio must be 0..2 (RP2040 has 0..1), got {pio}")
+    if pio == 0 and profile.pio_gpio_base != 0:
+        # Reaching the uo_out pins on this board means moving the block's
+        # 32-pin window, and a block only moves once its instruction memory
+        # is empty -- so a capture on PIO0 could only work by wiping the
+        # stock firmware's own program (the FPGA bitstream loader), which
+        # costs a power cycle to put back. The board script refuses too;
+        # this is the half that never lets the request leave the host.
+        raise ValueError(
+            f"{profile.name}: pio 0 would have to move its pin window to "
+            f"GPIO {profile.pio_gpio_base} to reach uo_out, and that means "
+            "erasing PIO0's programs -- the stock firmware keeps the FPGA "
+            "bitstream loader there. Use --pio 1 or --pio 2."
+        )
     if not 0 <= sm <= 3:
         raise ValueError(f"sm must be 0..3, got {sm}")
     in_index = profile.in_base - profile.pio_gpio_base
@@ -159,7 +189,17 @@ def capture_cfg(
     }
 
 
-def frames_to_max_bytes(profile: BoardProfile, frames: int) -> int:
+#: Bytes in each `RAW ` chunk that are not sample data: the 4-byte tag, the
+#: 4-byte length and the 4-byte `sample_count` that opens the payload
+#: (`capture_rp2.py`'s `write_raw_chunk()`). Both sides count them in the
+#: running total they compare against `max_bytes`, so a byte budget that
+#: ignores them buys fewer samples than it asked for.
+RAW_CHUNK_OVERHEAD = 12
+
+
+def frames_to_max_bytes(
+    profile: BoardProfile, frames: int, buf_words: int = DEFAULT_BUF_WORDS
+) -> int:
     """Bytes the board must emit to be sure of `frames` complete frames.
 
     Assumes 640x480@60 timing (`CLOCKS_PER_FRAME_640X480`), and asks for
@@ -170,14 +210,25 @@ def frames_to_max_bytes(profile: BoardProfile, frames: int) -> int:
     a single extra frame gave 837,632 samples on tt07 and `vgacap-frames`
     produced **zero** frames from it.
 
-    Only the packed sample words are counted. Chunk headers add 8 bytes per
-    ~16 KB buffer, which the margin covers many times over.
+    The budget is the packed sample words *plus* the 12 non-sample bytes
+    each `RAW ` chunk carries (`RAW_CHUNK_OVERHEAD`), because the limit the
+    board stops on counts whole chunks, not payloads: asking for exactly
+    the sample bytes buys ~0.2% fewer samples than requested (1,257,472
+    where 1,260,000 was wanted). `buf_words` is what decides how many
+    chunks that is, so it has to match the request's.
+
+    Any `TIME` chunk the board emits is counted in that total too, but only
+    an overrun produces one mid-run -- and an overrun has already lost more
+    samples than the 26 bytes of its report.
     """
     if frames <= 0:
         raise ValueError(f"frames must be positive, got {frames}")
+    if buf_words <= 0:
+        raise ValueError(f"buf_words must be positive, got {buf_words}")
     samples = CLOCKS_PER_FRAME_640X480 * (frames + 2)
     words = -(-samples // profile.samples_per_word)
-    return 4 * words
+    chunks = -(-words // buf_words)
+    return 4 * words + RAW_CHUNK_OVERHEAD * chunks
 
 
 @dataclass
@@ -270,7 +321,8 @@ class CaptureStats:
     #: Whatever was written before it is still a valid stream.
     error: str = ""
     #: `gc.mem_free()` the board reported after the pre-run cleanup. Worth
-    #: watching: below `MIN_FREE_BYTES` the script may not compile at all.
+    #: watching: below `min_free_bytes(buf_words)` the script may not
+    #: compile at all, or its DMA buffers may not fit.
     mem_free_before: int = 0
 
     @property
@@ -420,6 +472,41 @@ def _keyed_int(msg: str, key: str) -> int | None:
     return None
 
 
+#: How long an abandoned capture waits for the board's own trailer after a
+#: cooperative stop before falling back to a real Ctrl-C. One DMA buffer at
+#: the RP2040's 60 kHz ceiling is 2.2 s, so this is a little over the
+#: slowest legitimate gap and far below `DEFAULT_CHUNK_TIMEOUT`: this is the
+#: unhappy path, and waiting out a 30 s read for a board that is not coming
+#: back helps nobody.
+STOP_DRAIN_TIMEOUT = 5.0
+
+
+def _abandon_stream(repl: RawRepl, stream, timeout: float | None = None) -> None:
+    """Leave the board at a prompt after a capture that ended early.
+
+    Closing the generator only stops *this* side reading: the script is
+    still executing on the board and still writing chunks, so the link has
+    to be brought back to a prompt or every later command will read the
+    capture's output instead of its own.
+
+    Politely first -- the same cooperative stop byte a normal run sends, so
+    the script finishes its chunk and emits its trailer -- and only if that
+    does not end the command within `timeout` does it come to a real
+    Ctrl-C. Best effort throughout: this runs while another exception is
+    propagating, and that exception is the one worth reporting, so nothing
+    raised here is allowed to replace it.
+    """
+    if timeout is None:
+        timeout = STOP_DRAIN_TIMEOUT
+    try:
+        stream.close()
+        repl.request_stop()
+        if not repl.drain_chunks(timeout):
+            repl.recover()
+    except Exception:
+        pass
+
+
 def _should_stop(req: CaptureRequest, start: float, total_bytes: int) -> bool:
     """True once the run has reached whichever limit the request set."""
     if req.seconds and time.monotonic() - start >= req.seconds:
@@ -450,6 +537,12 @@ def run_capture(
     re-enabled) and says so in `CaptureStats.error`; everything written
     before that is still a valid stream.
 
+    Any *other* failure -- a malformed chunk, a write that fails, the
+    operator's Ctrl-C -- is the caller's to handle and is re-raised, but
+    never before the board has been stopped and its command drained to a
+    prompt (`_abandon_stream`). A script left streaming would otherwise
+    write its chunks into the next command's output.
+
     The clock is left running: stopping it is `stop_clock()`, so a caller
     can take several captures of one design without restarting it.
 
@@ -460,13 +553,23 @@ def run_capture(
     profile = req.profile
     script = mp.with_cfg(mp.minify(mp.load("capture_rp2.py")), req.cfg())
 
+    needed = min_free_bytes(req.buf_words)
     mem_free = prepare_board(repl, mp.module_level_names(script))
-    if mem_free < MIN_FREE_BYTES:
+    if mem_free < needed:
         raise CaptureError(
-            "board has only %d bytes of free heap after a collect, need %d; "
-            "compiling the capture script there can fail without a clean "
-            "error (tt07 printed 'FATAL: uncaught exception' and halted). "
-            "Reset the board and try again." % (mem_free, MIN_FREE_BYTES)
+            "board has only %d bytes of free heap after a collect, need %d "
+            "(2 x %d bytes of DMA buffer for --buf-words %d, plus %d to "
+            "compile the script); compiling it there can fail without a "
+            "clean error (tt07 printed 'FATAL: uncaught exception' and "
+            "halted). Reset the board, or ask for fewer buffer words, and "
+            "try again."
+            % (
+                mem_free,
+                needed,
+                4 * req.buf_words,
+                req.buf_words,
+                COMPILE_HEADROOM_BYTES,
+            )
         )
 
     Writer(
@@ -496,8 +599,9 @@ def run_capture(
     error = ""
 
     start = time.monotonic()
+    stream = repl.exec_chunks(script, timeout=chunk_timeout)
     try:
-        for tag, payload in repl.exec_chunks(script, timeout=chunk_timeout):
+        for tag, payload in stream:
             out.write(tag + struct.pack("<I", len(payload)) + payload)
             total_bytes += 8 + len(payload)
             chunks += 1
@@ -530,13 +634,26 @@ def run_capture(
         # output instead of its own.
         timed_out = True
         error = "board went quiet: %s" % exc
+        stream.close()
         repl.recover()
     except ReplFramingError as exc:
         # The stream desynchronised, so nothing further can be read by
         # length. Same teardown: the alternative is a script that keeps
         # writing into the next command's output.
         error = "framing lost: %s" % exc
+        stream.close()
         repl.recover()
+    except BaseException:
+        # Everything else the loop can raise: a `CaptureError` from a short
+        # TIME payload, a `struct.error` from a short RAW one, an `OSError`
+        # from `out.write()` (a full disk, or M5's pipeline going away), or
+        # a `KeyboardInterrupt` from the operator. None of them are the
+        # board's fault, and all of them used to drop the generator with
+        # the script still streaming -- after which the next command read
+        # its chunks instead of its own output. The exception is the
+        # caller's to see, so it is re-raised once the board is quiet.
+        _abandon_stream(repl, stream)
+        raise
     elapsed = time.monotonic() - start
 
     return CaptureStats(

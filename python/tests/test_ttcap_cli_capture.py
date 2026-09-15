@@ -262,6 +262,47 @@ def test_capture_prints_the_boards_traceback_when_the_cleanup_is_rejected(
     assert printed[0].startswith("capture failed: CaptureError")
     # Every traceback line is on a line of its own, the NameError included.
     assert printed[-3:] == traceback.strip().splitlines()
+    # And no zero-byte .vgacap pretending a capture happened.
+    assert not (tmp_path / "s.vgacap").exists()
+
+
+def test_a_refused_run_leaves_no_empty_file_behind(monkeypatch, capsys, tmp_path):
+    # The heap check refuses before a single byte is written, so there is
+    # nothing to keep: an empty `.vgacap` is worse than no file, because
+    # every tool downstream has to decide what an empty stream means.
+    profile = RP2350_DBV3
+    board = capture_board(profile, sample_chunks(profile, [1, 2]), mem_free=1000)
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+    out = tmp_path / "refused.vgacap"
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz", "1000",
+         "--seconds", "0.05", "--out", str(out)]
+    )
+
+    assert code == 1
+    assert "free heap" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_a_run_that_wrote_something_keeps_its_file(monkeypatch, tmp_path):
+    # The other half of the rule: whatever reached the file is a valid
+    # stream and is never deleted, however the run ended.
+    profile = RP2350_DBV3
+    board = capture_board(
+        profile, [], terminate=False, on_quiet_stderr="KeyboardInterrupt\r\n"
+    )
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+    monkeypatch.setattr(cli, "run_capture", _short_timeout(cli.run_capture))
+    out = tmp_path / "partial.vgacap"
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz", "1000",
+         "--seconds", "0.05", "--out", str(out)]
+    )
+
+    assert code == 1
+    assert out.exists() and out.stat().st_size > 0
 
 
 def cli_cleanup_command(profile) -> str:

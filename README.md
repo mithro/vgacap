@@ -79,9 +79,11 @@ margin described above); `--seconds 0` runs until the byte limit.
 
 The board has very little heap -- about 80 KB on the RP2040 demo board --
 so `ttcap capture` clears the previous run's names and collects before it
-sends anything, and refuses to start if less than 40 KB is free. If it does,
-reset the board: a script that fails to compile up there does not always say
-so, and can halt the firmware outright. `ttcap png` needs Pillow, so it wants
+sends anything, and refuses to start unless the free heap covers the two
+DMA buffers plus room to compile the script (`8 * --buf-words + 24000`
+bytes, so ~56 KB at the default and ~90 KB at `--buf-words 8192`, which no
+demo board has). If it refuses, reset the board: a script that fails to
+compile up there does not always say so, and can halt the firmware outright. `ttcap png` needs Pillow, so it wants
 the `synth` extra (`uv sync --extra synth`) and a built `build/vgacap-frames`.
 
 Performance captures should own the serial device: stop the fpgas.online

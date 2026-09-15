@@ -70,6 +70,32 @@ def test_upload_writes_file_via_base64_chunks(repl, tmp_path):
     assert target.read_text() == source
 
 
+def test_a_fresh_board_has_no_ubinascii_bound(repl):
+    # What the board actually looks like: the demo board's main.py leaves
+    # `tt` in the REPL's globals and nothing else, so anything using
+    # `ubinascii` without importing it first fails there. The fake used to
+    # pre-bind it, which hid exactly that bug in `upload()`.
+    stdout, stderr = repl.exec("print(ubinascii)")
+
+    assert stdout == ""
+    assert "NameError" in stderr
+
+
+def test_upload_imports_ubinascii_before_using_it(repl, tmp_path, monkeypatch):
+    sent = []
+    original = repl._exec_checked
+
+    def record(code, **kwargs):
+        sent.append(code)
+        return original(code, **kwargs)
+
+    monkeypatch.setattr(repl, "_exec_checked", record)
+    repl.upload(str(tmp_path / "sampler.py"), "print('hi')\n")
+
+    first_use = next(i for i, code in enumerate(sent) if "ubinascii." in code)
+    assert "import ubinascii" in sent[:first_use]
+
+
 def test_exec_stream_surfaces_stderr_containing_gt(repl):
     # The traceback's "<module>" frame name contains ">" -- a naive drain
     # that scans for the literal byte ">" right after the first 0x04 would
