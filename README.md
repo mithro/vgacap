@@ -61,6 +61,32 @@ uv sync
 uv run --no-sync ttcap probe ws://127.0.0.1:8765/serial
 ```
 
+## Capturing from a board
+
+```sh
+uv run ttcap probe serial:/dev/ttyACM0          # sys.version and the GPIO map
+uv run ttcap throughput serial:/dev/ttyACM0     # what clock the link can keep up with
+uv run ttcap capture serial:/dev/ttyACM0 \
+    --project tt_um_rejunity_vga --clock-hz 100000 --seconds 1 --out capture.vgacap
+uv run ttcap png capture.vgacap out/frame       # out/frame-0000.png ...
+```
+
+`--profile` defaults to `auto`, which reads the board's `GPIOMap` and picks
+the RP2040 or RP2350 layout from it. Stop the capture by time (`--seconds`)
+or by size (`--max-bytes N`, or `--frames N` which works the bytes out from
+640x480@60 timing and the board's packing, adding the two frame periods of
+margin described above); `--seconds 0` runs until the byte limit.
+
+The board has very little heap -- about 80 KB on the RP2040 demo board --
+so `ttcap capture` clears the previous run's names and collects before it
+sends anything, and refuses to start if less than 40 KB is free. If it does,
+reset the board: a script that fails to compile up there does not always say
+so, and can halt the firmware outright. `ttcap png` needs Pillow, so it wants
+the `synth` extra (`uv sync --extra synth`) and a built `build/vgacap-frames`.
+
+Performance captures should own the serial device: stop the fpgas.online
+bridge first (`sudo systemctl stop fpgas-tt`) and start it again afterwards.
+
 ## License
 
 Apache-2.0, see [LICENSE](LICENSE).

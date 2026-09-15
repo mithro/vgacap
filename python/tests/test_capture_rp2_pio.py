@@ -69,10 +69,13 @@ def _exec_constant_block(source: str, cfg: dict) -> dict:
 
 
 def _assemble(source: str, cfg: dict, rising: bool = False):
-    """Assemble the script's sampler for `cfg` using the stub assembler."""
+    """Assemble the script's sampler for `cfg` using the stub assembler.
+
+    `clk_gpio` goes in absolute, as `CLK_WAIT_GPIO` does on the board.
+    """
     namespace = _exec_functions(source, ["make_sampler"], {"rp2": STUB_RP2})
     return namespace["make_sampler"](
-        cfg["clk_gpio"] - cfg["gpio_base"], cfg["in_count"], cfg["push_thresh"], rising
+        cfg["clk_gpio"], cfg["in_count"], cfg["push_thresh"], rising
     )
 
 
@@ -111,18 +114,21 @@ def test_rising_edge_program_waits_low_then_high_then_samples(source):
 def test_rp2350_program_samples_eight_bits(source):
     program = _assemble(source, capture_cfg(RP2350_DBV3))
 
-    assert program.instructions == (0x2080, 0x2000, 0x4008)
+    # The wait index is the absolute clk GPIO, 16, even though the block's
+    # window is based at 16: measured on fpga-1, `wait(1, gpio, 16)` samples
+    # and `wait(1, gpio, 0)` stalls forever.
+    assert program.instructions == (0x2090, 0x2010, 0x4008)
 
 
-def test_wait_index_is_encoded_relative_to_the_pio_gpio_base(source):
-    # A case where clk_gpio and gpio_base differ, so the subtraction is
-    # actually load-bearing: GPIO 20 in a window based at 16 is index 4.
+def test_wait_index_is_the_absolute_gpio_not_the_window_offset(source):
+    # A case where clk_gpio and gpio_base differ by something other than 0
+    # or the base itself, so a stray subtraction would be visible.
     cfg = capture_cfg(RP2350_DBV3)
     cfg["clk_gpio"] = 20
     program = _assemble(source, cfg)
 
-    assert program.instructions[0] == 0x2084
-    assert program.instructions[1] == 0x2004
+    assert program.instructions[0] == 0x2094
+    assert program.instructions[1] == 0x2014
 
 
 @pytest.mark.parametrize(
@@ -168,8 +174,101 @@ def test_sampler_operands_are_closures_not_globals(source):
 def test_rp2350_sets_the_pio_gpio_base_before_the_state_machine(source):
     # gpio_base shifts the whole PIO block's pin window; it must be set
     # before the state machine is created.
-    assert ".gpio_base(GPIO_BASE)" in source
-    assert source.index(".gpio_base(GPIO_BASE)") < source.index("rp2.StateMachine(")
+    main_src = ast.unparse(_main_node(source))
+    assert main_src.index("set_gpio_base(") < main_src.index("rp2.StateMachine(")
+
+
+class _StubPioBlock:
+    """A PIO block that refuses to move its window while it holds programs.
+
+    Models what fpga-1 does: `gpio_base(n)` raises EINVAL (pico-sdk
+    `pio_set_gpio_base_unsafe()` -> PICO_ERROR_INVALID_STATE) until
+    `remove_program()` has emptied the block's instruction memory.
+    """
+
+    def __init__(self, base: int, loaded: bool = True) -> None:
+        self.base = base
+        self.loaded = loaded
+        self.moves = 0
+        self.removals = 0
+
+    def gpio_base(self, want=None):
+        if want is None:
+            # Matches ports/rp2/rp2_pio.c, which returns a Pin, not an int.
+            return "Pin(GPIO%d, mode=IN)" % self.base
+        self.moves += 1
+        if self.loaded:
+            raise OSError(22, "EINVAL")
+        self.base = want
+
+    def remove_program(self, program=None):
+        assert program is None, "no argument means: remove every program"
+        self.removals += 1
+        self.loaded = False
+
+
+def _gpio_base_helpers(source: str) -> dict:
+    return _exec_functions(source, ["gpio_base_is", "set_gpio_base"])
+
+
+def test_gpio_base_is_reads_the_pin_the_board_returns(source):
+    check = _gpio_base_helpers(source)["gpio_base_is"]
+
+    assert check(_StubPioBlock(16), 16)
+    assert not check(_StubPioBlock(0), 16)
+    # Not a prefix match on the number: GPIO16 must not satisfy a want of 1.
+    assert not check(_StubPioBlock(16), 1)
+
+
+def test_set_gpio_base_removes_the_block_programs_first(source):
+    # `gpio_base(16)` alone raises EINVAL while the block holds programs;
+    # `remove_program()` with no argument drops all of them and then the
+    # move succeeds. Verified on fpga-1.
+    set_gpio_base = _gpio_base_helpers(source)["set_gpio_base"]
+    block = _StubPioBlock(0)
+
+    assert set_gpio_base(block, 16)
+    assert (block.base, block.removals) == (16, 1)
+
+
+def test_set_gpio_base_leaves_a_block_already_in_place_alone(source):
+    # Removing programs is destructive, so it must not happen for nothing.
+    set_gpio_base = _gpio_base_helpers(source)["set_gpio_base"]
+    block = _StubPioBlock(16)
+
+    assert set_gpio_base(block, 16)
+    assert (block.removals, block.moves) == (0, 0)
+
+
+def test_set_gpio_base_reports_failure_instead_of_raising(source):
+    set_gpio_base = _gpio_base_helpers(source)["set_gpio_base"]
+
+    class _Stuck(_StubPioBlock):
+        def remove_program(self, program=None):
+            raise OSError(22, "EINVAL")
+
+    block = _Stuck(0)
+    assert set_gpio_base(block, 16) is False
+    assert block.base == 0
+
+
+def test_time_chunks_report_a_cumulative_dropped_count(source):
+    # Every TIME chunk carries the running total, so a reader takes the last
+    # value rather than summing; an increment would stop meaning anything
+    # the moment a stream was truncated.
+    main_src = ast.unparse(_main_node(source))
+
+    assert "OVERRUNS[0] * SAMPLES_PER_CHUNK" in main_src
+    assert "overrun_total * SAMPLES_PER_CHUNK" in main_src
+    assert "OVERRUNS[0] - reported" not in main_src
+
+
+def test_main_reports_a_refused_gpio_base_move(source):
+    main_src = ast.unparse(_main_node(source))
+
+    assert "set_gpio_base(rp2.PIO(PIO_NUM), GPIO_BASE)" in main_src
+    assert "gpio_base is not " in main_src
+    assert "write_time_chunk" in main_src
 
 
 # -- (c) RX FIFO address, DREQ and DMA register arithmetic ----------------
@@ -200,11 +299,19 @@ def test_script_inlines_the_same_address_and_dreq_arithmetic(source):
 
 
 @pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
-def test_clk_wait_index_is_relative_to_the_pio_gpio_base(source, profile):
+def test_every_pin_number_handed_to_micropython_is_absolute(source, profile):
+    # Verified on fpga-1 with PIO1's window genuinely at base 16 (checked by
+    # reading the test pattern's bars back off uo_out): `Pin(33)` gives
+    # PINCTRL.IN_BASE 17 because MicroPython subtracts the base itself, and
+    # `wait(1, gpio, 16)` works because the loader relocates the index.
     namespace = _exec_constant_block(source, capture_cfg(profile))
 
-    assert namespace["CLK_PIO_INDEX"] == profile.clk_gpio - profile.pio_gpio_base
-    assert 0 <= namespace["CLK_PIO_INDEX"] < 32
+    assert namespace["CLK_WAIT_GPIO"] == profile.clk_gpio
+    assert "IN_PIO_INDEX" not in namespace
+
+
+def test_state_machine_gets_the_absolute_in_base(source):
+    assert "in_base=machine.Pin(IN_BASE)" in source
 
 
 def test_dma_register_offsets_are_the_non_trigger_aliases(source):
@@ -238,25 +345,44 @@ class _RecordingPin:
         _RecordingPin.calls.append((gpio, mode, pull))
 
 
-@pytest.mark.parametrize(
-    "profile,expected_clk",
-    [(RP2040_TT06, 0), (RP2350_DBV3, 16)],
-    ids=lambda v: getattr(v, "name", v),
-)
-def test_init_input_pins_brings_up_the_clock_and_every_sampled_pad(source, profile, expected_clk):
+def _init_pins(source, profile) -> list[int]:
     namespace = _exec_functions(source, ["init_input_pins"])
     _RecordingPin.calls = []
+    namespace["init_input_pins"](_RecordingPin, capture_cfg(profile)["uo_gpios"])
+    return [gpio for gpio, _, _ in _RecordingPin.calls]
 
-    namespace["init_input_pins"](
-        _RecordingPin, profile.clk_gpio, profile.in_base, profile.in_count
-    )
 
-    gpios = [gpio for gpio, _, _ in _RecordingPin.calls]
-    assert gpios == [expected_clk] + list(range(profile.in_base, profile.in_base + profile.in_count))
+@pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
+def test_init_input_pins_brings_up_exactly_the_uo_out_pads(source, profile):
+    assert _init_pins(source, profile) == list(profile.uo_gpios)
     # Every pad is configured as an input, and no pulls are enabled: the
-    # project and the clock generator drive these lines.
+    # project drives these lines.
     assert all(mode == _RecordingPin.IN for _, mode, _ in _RecordingPin.calls)
     assert all(pull is None for _, _, pull in _RecordingPin.calls)
+
+
+@pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
+def test_init_input_pins_never_touches_the_project_clock_pad(source, profile):
+    # Regression: `machine.Pin(clk, Pin.IN)` moves the pad's FUNCSEL from
+    # PWM to SIO, which stops the clock `tt.clock_project_PWM()` is
+    # generating -- on fpga-1 that left the state machine waiting forever
+    # and no chunk was ever emitted. The PIO reads the pad's input
+    # synchroniser whatever its FUNCSEL is, so the pad needs no setup.
+    assert profile.clk_gpio not in _init_pins(source, profile)
+    assert "init_input_pins(machine.Pin, UO_GPIOS)" in source
+
+
+def test_init_input_pins_never_touches_the_rp2040_ui_in_pads(source):
+    # The RP2040's 12-bit window is uo_out 5-8, *ui_in 9-12*, uo_out 13-16.
+    # The RP2 drives ui_in, so configuring those pads would leave the
+    # project's own inputs floating for the whole capture -- the wrong
+    # picture rather than no picture, for a design that takes a mode
+    # selection there.
+    touched = _init_pins(source, RP2040_TT06)
+    window = range(RP2040_TT06.in_base, RP2040_TT06.in_base + RP2040_TT06.in_count)
+
+    assert set(window) - set(touched) == {9, 10, 11, 12}
+    assert touched == [5, 6, 7, 8, 13, 14, 15, 16]
 
 
 def test_main_initialises_pins_before_creating_the_state_machine(source):
@@ -300,13 +426,65 @@ def test_main_catches_keyboardinterrupt(source):
     )
 
 
+def _function_node(source: str, name: str) -> ast.FunctionDef:
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"script has no top-level {name}()")
+
+
 def test_irq_handlers_rearm_before_flagging(source):
     # The re-arm must happen before the flag: the partner's chain can
     # re-trigger this channel as soon as it completes.
-    handler = source[source.index("def on_a(") : source.index("def on_b(")]
-    assert handler.index("mem[wr_a] = addr_a") < handler.index("full[0] = True")
-    assert handler.index("mem[tc_a] = BUF_WORDS") < handler.index("full[0] = True")
-    assert "overruns[0] += 1" in handler
+    handler = ast.unparse(_function_node(source, "on_a"))
+    assert handler.index("MEM[WR_A] = ADDR_A") < handler.index("FULL[0] = True")
+    assert handler.index("MEM[TC_A] = BUF_WORDS") < handler.index("FULL[0] = True")
+    assert "OVERRUNS[0] += 1" in handler
+
+
+@pytest.mark.parametrize("name", ["on_a", "on_b"])
+def test_irq_handlers_are_module_level_not_closures(source, name):
+    # A hard IRQ runs with the heap locked. Measured on fpga-1 under
+    # micropython.heap_lock(): this exact body as a closure over main()'s
+    # locals raises MemoryError at its first statement, and as a
+    # module-level function reading module globals it runs clean.
+    _function_node(source, name)  # raises unless it is top level
+
+    nested = [
+        node.name
+        for node in ast.walk(_main_node(source))
+        if isinstance(node, ast.FunctionDef)
+    ]
+    assert name not in nested
+
+
+@pytest.mark.parametrize("name", ["on_a", "on_b"])
+def test_irq_handlers_allocate_nothing(source, name):
+    # Arithmetic on a register or buffer address allocates: they are big
+    # ints on this 31-bit-small-int build. A precomputed one used as a
+    # `mem32` index does not. So the handler body may only store and update
+    # small ints -- no BinOp, no call, no literal above the small-int range.
+    node = _function_node(source, name)
+
+    assert not [n for n in ast.walk(node) if isinstance(n, ast.BinOp)]
+    assert not [n for n in ast.walk(node) if isinstance(n, ast.Call)]
+    constants = [
+        n.value
+        for n in ast.walk(node)
+        if isinstance(n, ast.Constant) and isinstance(n.value, int)
+    ]
+    assert all(abs(value) < 2**30 for value in constants)
+
+
+def test_main_hands_the_module_level_handlers_to_the_dma(source):
+    main_src = ast.unparse(_main_node(source))
+
+    assert "dma_a.irq(on_a, hard=True)" in main_src
+    assert "dma_b.irq(on_b, hard=True)" in main_src
+    # The addresses the handlers read are all computed here, once.
+    for name in ("WR_A", "WR_B", "TC_A", "TC_B", "ADDR_A", "ADDR_B"):
+        assert "%s = " % name in main_src
+    assert "global WR_A" in main_src
 
 
 def test_dma_is_armed_before_the_state_machine(source):
@@ -376,12 +554,17 @@ def test_capture_cfg_for_rp2040():
         "clk_gpio": 0,
         "in_base": 5,
         "in_count": 12,
+        # The window spans ui_in 9..12, which the board script must not
+        # configure -- so it is told the uo_out pads explicitly.
+        "uo_gpios": [5, 6, 7, 8, 13, 14, 15, 16],
         "gpio_base": 0,
         "push_thresh": 24,
         "buf_words": 4096,
         "max_bytes": 0,
         "edge": "falling",
-        "pio": 0,
+        # Not PIO0: the stock firmware keeps its own program there, which
+        # on RP2350 also makes that block's pin window immovable.
+        "pio": 1,
         "sm": 0,
         "sysclk_hz": 133_000_000,
     }
