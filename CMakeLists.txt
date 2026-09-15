@@ -29,3 +29,4 @@ endfunction()
 # Tests.
 vgacap_add_test(test_harness_smoke)
 vgacap_add_test(test_stream_header)
+vgacap_add_test(test_stream_raw)

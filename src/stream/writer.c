@@ -31,3 +31,32 @@ int vgacap_writer_init(vgacap_writer_t *w, vgacap_write_fn write, void *user, co
     if (h->desc_len && w->write(w->user, (const uint8_t *)h->desc, h->desc_len)) return -1;
     return 0;
 }
+
+static uint32_t sample_mask(uint8_t bits) { return bits == 32 ? 0xFFFFFFFFu : ((1u << bits) - 1u); }
+
+int vgacap_writer_raw(vgacap_writer_t *w, const uint32_t *words, uint32_t sample_count) {
+    uint32_t spw = w->header.samples_per_word;
+    uint32_t nwords = (sample_count + spw - 1) / spw;
+    if (write_chunk_head(w, VGACAP_TAG_RAW, 4u + 4u * nwords)) return -1;
+    uint8_t c[4]; put_u32(c, sample_count); if (w->write(w->user, c, 4)) return -1;
+    for (uint32_t i = 0; i < nwords; i++) { put_u32(c, words[i]); if (w->write(w->user, c, 4)) return -1; }
+    return 0;
+}
+
+uint32_t vgacap_pack_samples(const vgacap_header_t *h, const uint32_t *samples, uint32_t n, uint32_t *words) {
+    uint32_t spw = h->samples_per_word, bits = h->sample_bits, mask = sample_mask(h->sample_bits);
+    uint32_t nwords = (n + spw - 1) / spw;
+    for (uint32_t i = 0; i < nwords; i++) words[i] = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t slot = i % spw; if (h->flags & VGACAP_FLAG_FIRST_SAMPLE_MSB) slot = spw - 1 - slot;
+        uint32_t shift = slot * bits; words[i / spw] |= (samples[i] & mask) << shift;
+    }
+    return nwords;
+}
+
+int vgacap_writer_raw_samples(vgacap_writer_t *w, const uint32_t *samples, uint32_t n, uint32_t *wordbuf, size_t wordbuf_len) {
+    uint32_t spw = w->header.samples_per_word;
+    if ((size_t)((n + spw - 1) / spw) > wordbuf_len) return -1;
+    vgacap_pack_samples(&w->header, samples, n, wordbuf);
+    return vgacap_writer_raw(w, wordbuf, n);
+}

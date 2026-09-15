@@ -7,6 +7,8 @@ static uint32_t get_u32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+static uint32_t sample_mask(uint8_t bits) { return bits == 32 ? 0xFFFFFFFFu : ((1u << bits) - 1u); }
+
 void vgacap_reader_init(vgacap_reader_t *r, vgacap_event_fn cb, void *user) {
     memset(r, 0, sizeof *r); r->cb = cb; r->user = user;
 }
@@ -65,8 +67,29 @@ static int header_byte(vgacap_reader_t *r, uint8_t b) {
     return 0;
 }
 
+static void emit_run(vgacap_reader_t *r, uint32_t value, uint32_t run) {
+    vgacap_event_t ev; ev.type = VGACAP_EV_RUN; ev.u.run.value = value; ev.u.run.run = run; r->cb(r->user, &ev);
+}
+
+static void unpack_word(vgacap_reader_t *r, uint32_t word) {
+    uint32_t spw = r->header.samples_per_word, bits = r->header.sample_bits;
+    uint32_t mask = sample_mask((uint8_t)bits);
+    for (uint32_t s = 0; s < spw && r->sample_index < r->remaining_items; s++, r->sample_index++) {
+        uint32_t slot = (r->header.flags & VGACAP_FLAG_FIRST_SAMPLE_MSB) ? spw - 1 - s : s;
+        emit_run(r, (word >> (slot * bits)) & mask, 1);
+    }
+}
+
+static int raw_byte(vgacap_reader_t *r, uint8_t b) {
+    r->pbuf[r->pfill++] = b;
+    if (r->consumed < 4) { if (r->pfill == 4) { r->remaining_items = get_u32(r->pbuf); r->pfill = 0; } return 0; }
+    if (r->pfill == 4) { unpack_word(r, get_u32(r->pbuf)); r->pfill = 0; }
+    return 0;
+}
+
 static int payload_byte(vgacap_reader_t *r, uint8_t b) {
     if (tag_is(r, VGACAP_TAG_HEADER)) return header_byte(r, b);
+    if (tag_is(r, VGACAP_TAG_RAW)) return raw_byte(r, b);
     return 0; // skip unknown
 }
 
