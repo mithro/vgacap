@@ -476,6 +476,19 @@ def main(out):
     init_input_pins(machine.Pin, UO_GPIOS)
 
     sampler = make_sampler(CLK_WAIT_GPIO, IN_COUNT, PUSH_THRESH, EDGE == "rising")
+    # Defensively drop any MicroPython-managed programs left in this block by
+    # an earlier capture: `finally` below removes the sampler on a clean
+    # exit, but a board that was reset between runs or lost that cleanup
+    # some other way accumulates programs until the block's 32-slot
+    # instruction memory is full, and the StateMachine() call below then
+    # fails with `OSError: [Errno 12] ENOMEM` (measured on tt07 after about
+    # ten captures). Only PIO_NUM != 0: PIO0 holds the stock firmware's own
+    # program (the FPGA loader) on FPGA boards, so it must be left alone.
+    if PIO_NUM != 0:
+        try:
+            rp2.PIO(PIO_NUM).remove_program()
+        except Exception:
+            pass
     sm = rp2.StateMachine(PIO_NUM * 4 + SM_NUM, sampler, in_base=machine.Pin(IN_BASE))
 
     global WR_A, WR_B, TC_A, TC_B, ADDR_A, ADDR_B
@@ -591,6 +604,14 @@ def main(out):
             if dma is not None:
                 dma.irq(None)
         sm.active(0)
+        # Remove the sampler from the block's instruction memory so the next
+        # capture does not add on top of it -- see the pre-add removal above
+        # for what happens when this is skipped. Guarded: the program may
+        # never have been added (e.g. StateMachine() itself raised ENOMEM).
+        try:
+            rp2.PIO(PIO_NUM).remove_program(sampler)
+        except Exception:
+            pass
         for dma in (dma_a, dma_b):
             if dma is not None:
                 dma.active(0)

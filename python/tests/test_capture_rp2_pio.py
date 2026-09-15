@@ -418,6 +418,31 @@ def test_main_cleans_up_in_a_finally_block(source):
     )
 
 
+def test_main_removes_the_sampler_program_from_the_block_in_finally(source):
+    # Without this the block's 32-slot instruction memory fills up after
+    # about ten captures since the board's last reset, and the next
+    # StateMachine() call fails with OSError ENOMEM (measured on tt07).
+    main = _main_node(source)
+    tries = [n for n in main.body if isinstance(n, ast.Try) and n.finalbody]
+    finally_src = ast.unparse(ast.Module(body=tries[0].finalbody, type_ignores=[]))
+
+    assert "remove_program(" in finally_src
+    # After the state machine has stopped, not before.
+    assert finally_src.index("sm.active(0)") < finally_src.index("remove_program(")
+
+
+def test_main_defensively_clears_the_block_before_adding_the_sampler(source):
+    # PIO0 is skipped: it holds the stock firmware's own program (the FPGA
+    # loader) on FPGA boards, so it must not be touched here.
+    main_src = ast.unparse(_main_node(source))
+
+    assert "PIO_NUM != 0" in main_src
+    idx_guard = main_src.index("PIO_NUM != 0")
+    idx_remove = main_src.index("remove_program()")  # the no-argument, pre-add call
+    idx_sm = main_src.index("rp2.StateMachine(")
+    assert idx_guard < idx_remove < idx_sm
+
+
 def test_main_catches_keyboardinterrupt(source):
     main = _main_node(source)
     handlers = [h for t in main.body if isinstance(t, ast.Try) for h in t.handlers]
