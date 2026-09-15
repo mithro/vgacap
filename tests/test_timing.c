@@ -48,4 +48,34 @@ TEST(reports_line_and_frame_starts) {
     ASSERT_TRUE(frames >= 2); ASSERT_TRUE(lines >= 2 * 525);
 }
 
-int main(void) { RUN(learns_640x480_negative_syncs); RUN(learns_800x600_positive_syncs); RUN(runs_are_equivalent_to_samples); RUN(reports_line_and_frame_starts); RUN_TESTS_END(); }
+TEST(locks_from_a_stream_that_starts_mid_frame) {
+    // A capture that begins well before the first vsync pulse (the
+    // realistic case - nothing guarantees capture starts at a frame
+    // boundary) must still converge on the right timing. The first pulse
+    // entry after such a start can never be recognised as one (its own
+    // duration has never been measured when it begins), which used to
+    // leave line_in_frame counting "lines since the process started"
+    // instead of "lines since the last frame start", corrupting the very
+    // next measurement even though vsync polarity/width were identified
+    // correctly.
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, black, NULL, buf, sizeof buf / sizeof buf[0]);
+    vgaframe_timing_learner_t l; vgaframe_timing_init(&l);
+    size_t offset = 300u * 800u; // start 300 lines into a frame
+    for (size_t k = 0; k < 3u * n; k++) {
+        size_t i = (offset + k) % n;
+        vgaframe_timing_push(&l, (uint8_t)((buf[i] >> 7) & 1), (uint8_t)((buf[i] >> 3) & 1), 1);
+    }
+    ASSERT_EQ_U(l.t.clocks_per_line, 800); ASSERT_EQ_U(l.t.lines_per_frame, 525);
+    ASSERT_EQ_U(l.t.vsync_lines, 2); ASSERT_EQ_U(l.t.locked, 1);
+    ASSERT_TRUE(l.t.mode != NULL); ASSERT_TRUE(strcmp(l.t.mode->name, "640x480@60") == 0);
+}
+
+int main(void) {
+    RUN(learns_640x480_negative_syncs);
+    RUN(learns_800x600_positive_syncs);
+    RUN(runs_are_equivalent_to_samples);
+    RUN(reports_line_and_frame_starts);
+    RUN(locks_from_a_stream_that_starts_mid_frame);
+    RUN_TESTS_END();
+}

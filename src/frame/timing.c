@@ -34,6 +34,21 @@ static void vsync_sample(vgaframe_timing_learner_t *l, uint8_t v, int *ret) {
                 l->t.mode = vgaframe_mode_match(l->t.clocks_per_line, l->t.lines_per_frame);
                 l->line_in_frame = 0;
                 *ret = 2;
+            } else {
+                // Leaving the pulse. line_in_frame should equal "lines
+                // since the pulse's leading edge", i.e. pulse_len: true
+                // whenever the entry itself was recognised (the normal
+                // case - this is then a no-op, since line_in_frame is
+                // already pulse_len). But if a stream begins mid-frame,
+                // well before its first vsync pulse, that pulse's *entry*
+                // is unrecoverably missed here (this comparison needs
+                // both phases measured, and the pulse phase has never
+                // been seen before it begins) - line_in_frame has been
+                // counting since stream start instead of since the
+                // pulse's entry. Correct it now so the *next* entry
+                // measures the true frame length instead of "lines since
+                // the process started".
+                l->line_in_frame = pulse_len;
             }
         }
         if (v) l->v_high_lines = 0; else l->v_low_lines = 0;
