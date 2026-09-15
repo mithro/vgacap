@@ -23,6 +23,7 @@ from ttcap import capture, mp
 
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
 from ttcap.capture import (
+    CLOCKS_PER_FRAME_640X480,
     DEFAULT_BUF_WORDS,
     DEFAULT_PIO,
     MODE_EXTCLK,
@@ -608,14 +609,44 @@ def test_frames_to_max_bytes_covers_the_requested_frames_plus_two():
     # that frame is unusable and the next boundary only locates the frames.
     # Measured on tt07: one extra frame gave 837,632 samples and
     # `vgacap-frames` rendered nothing at all.
-    assert frames_to_max_bytes(RP2040_TT06, 3) == 4 * (420_000 * 5 // 2)
-    assert frames_to_max_bytes(RP2350_DBV3, 3) == 4 * (420_000 * 5 // 4)
+    #
+    # Plus 12 bytes per RAW chunk, which the board counts towards the limit
+    # it stops on: 4 tag + 4 length + the 4-byte sample_count that opens
+    # the payload.
+    words_2040 = 420_000 * 5 // 2
+    words_2350 = 420_000 * 5 // 4
+    assert frames_to_max_bytes(RP2040_TT06, 3) == 4 * words_2040 + 12 * 257
+    assert frames_to_max_bytes(RP2350_DBV3, 3) == 4 * words_2350 + 12 * 129
     # More frames is more bytes, and the RP2350 packs twice as densely.
     assert frames_to_max_bytes(RP2040_TT06, 9) > frames_to_max_bytes(RP2040_TT06, 3)
-    assert frames_to_max_bytes(RP2040_TT06, 3) == 2 * frames_to_max_bytes(RP2350_DBV3, 3)
+    assert frames_to_max_bytes(RP2040_TT06, 3) > 2 * 4 * words_2350
 
     with pytest.raises(ValueError):
         frames_to_max_bytes(RP2040_TT06, 0)
+    with pytest.raises(ValueError):
+        frames_to_max_bytes(RP2040_TT06, 1, buf_words=0)
+
+
+@pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
+@pytest.mark.parametrize("frames", [1, 3, 9])
+@pytest.mark.parametrize("buf_words", [1024, 4096, 8192])
+def test_the_frames_budget_actually_buys_the_samples(profile, frames, buf_words):
+    # Replay the board's own stop rule: it writes whole chunks and stops
+    # once `sent` -- which counts each chunk's 12 non-sample bytes -- has
+    # reached the limit. Budgeting only the sample bytes left the capture
+    # ~0.2% short (1,257,472 samples where 1,260,000 were asked for), which
+    # the +2 frame margin covered but the arithmetic should not need it to.
+    budget = frames_to_max_bytes(profile, frames, buf_words=buf_words)
+    wire_per_chunk = 12 + 4 * buf_words
+    samples_per_chunk = buf_words * profile.samples_per_word
+
+    sent = 0
+    captured = 0
+    while sent < budget:
+        sent += wire_per_chunk
+        captured += samples_per_chunk
+
+    assert captured >= CLOCKS_PER_FRAME_640X480 * (frames + 2)
 
 
 def test_time_chunk_shorter_than_its_fixed_fields_is_an_error():

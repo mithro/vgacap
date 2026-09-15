@@ -189,7 +189,17 @@ def capture_cfg(
     }
 
 
-def frames_to_max_bytes(profile: BoardProfile, frames: int) -> int:
+#: Bytes in each `RAW ` chunk that are not sample data: the 4-byte tag, the
+#: 4-byte length and the 4-byte `sample_count` that opens the payload
+#: (`capture_rp2.py`'s `write_raw_chunk()`). Both sides count them in the
+#: running total they compare against `max_bytes`, so a byte budget that
+#: ignores them buys fewer samples than it asked for.
+RAW_CHUNK_OVERHEAD = 12
+
+
+def frames_to_max_bytes(
+    profile: BoardProfile, frames: int, buf_words: int = DEFAULT_BUF_WORDS
+) -> int:
     """Bytes the board must emit to be sure of `frames` complete frames.
 
     Assumes 640x480@60 timing (`CLOCKS_PER_FRAME_640X480`), and asks for
@@ -200,14 +210,25 @@ def frames_to_max_bytes(profile: BoardProfile, frames: int) -> int:
     a single extra frame gave 837,632 samples on tt07 and `vgacap-frames`
     produced **zero** frames from it.
 
-    Only the packed sample words are counted. Chunk headers add 8 bytes per
-    ~16 KB buffer, which the margin covers many times over.
+    The budget is the packed sample words *plus* the 12 non-sample bytes
+    each `RAW ` chunk carries (`RAW_CHUNK_OVERHEAD`), because the limit the
+    board stops on counts whole chunks, not payloads: asking for exactly
+    the sample bytes buys ~0.2% fewer samples than requested (1,257,472
+    where 1,260,000 was wanted). `buf_words` is what decides how many
+    chunks that is, so it has to match the request's.
+
+    Any `TIME` chunk the board emits is counted in that total too, but only
+    an overrun produces one mid-run -- and an overrun has already lost more
+    samples than the 26 bytes of its report.
     """
     if frames <= 0:
         raise ValueError(f"frames must be positive, got {frames}")
+    if buf_words <= 0:
+        raise ValueError(f"buf_words must be positive, got {buf_words}")
     samples = CLOCKS_PER_FRAME_640X480 * (frames + 2)
     words = -(-samples // profile.samples_per_word)
-    return 4 * words
+    chunks = -(-words // buf_words)
+    return 4 * words + RAW_CHUNK_OVERHEAD * chunks
 
 
 @dataclass

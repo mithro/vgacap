@@ -213,7 +213,9 @@ def capture(
         try:
             board = resolve_profile(repl, profile)
             if frames is not None:
-                max_bytes = frames_to_max_bytes(board, frames)
+                # `buf_words` sizes the chunks, and the byte budget has to
+                # allow for each chunk's 12 non-sample bytes.
+                max_bytes = frames_to_max_bytes(board, frames, buf_words=buf_words)
             request = CaptureRequest(
                 profile=board,
                 project=project,
