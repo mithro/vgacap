@@ -80,11 +80,19 @@ gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! \
 
 Frames are timestamped in project time -- clocks since the first emitted
 frame divided by the stream's `clock_hz` -- when the header declares a clock,
-and at `output-fps` otherwise. A partial frame carries
-`GST_BUFFER_FLAG_CORRUPTED`, and every frame's counter rides in
-`GST_BUFFER_OFFSET`. The detected timing is posted on the bus as an element
-message named `vgacap-timing`, once when it is first known and again whenever
-it changes.
+and at `output-fps` otherwise. A clock rate that changes mid-stream (a `TIME`
+chunk reporting a measured rate, say) freezes the elapsed time and continues
+from there, so the timeline never runs backwards.
+
+A partial frame carries `GST_BUFFER_FLAG_CORRUPTED`, and every frame's
+counter rides in `GST_BUFFER_OFFSET`. That counter is the *source's* frame
+number, not an output index: it skips the frames the `partial` property
+filters out, and it restarts at zero when the stream restarts (a second
+`VGCH` header, or a flushing seek). Number output frames downstream, or use
+the PTS, if you need something that only ever goes up.
+
+The detected timing is posted on the bus as an element message named
+`vgacap-timing`, once when it is first known and again whenever it changes.
 
 ## Running on a Raspberry Pi
 
