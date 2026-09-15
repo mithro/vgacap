@@ -285,14 +285,23 @@ class FakeChunkBoard:
         terminate: bool = True,
         trigger: str = "CFG = ",
         replies: dict[str, str] | None = None,
+        errors: dict[str, str] | None = None,
+        on_quiet_stderr: str = "",
     ) -> None:
         self.chunks = list(chunks)
         self.stderr = stderr
         self.delay = delay
         self.on_interrupt = on_interrupt
+        #: False models a board that never finishes the command on its own,
+        #: so only a Ctrl-C gets the host back to a prompt.
         self.terminate = terminate
         self.trigger = trigger
+        #: exact command text -> stdout, for commands that are not the script
         self.replies = dict(replies or {})
+        #: exact command text -> stderr, for a command the board rejects
+        self.errors = dict(errors or {})
+        #: stderr to report once a Ctrl-C ends a command that had stalled
+        self.on_quiet_stderr = on_quiet_stderr
         self.commands: list[str] = []
         self.interrupts = 0
         self.closed = False
@@ -301,7 +310,8 @@ class FakeChunkBoard:
         self._out: list[bytes] = []
         self._in = bytearray()
         self._raw_mode = False
-        self._streaming = False
+        self._open = False
+        self._terminate = terminate
 
     # -- ReplLink ---------------------------------------------------------
     def write(self, data: bytes) -> None:
@@ -323,8 +333,14 @@ class FakeChunkBoard:
             elif CTRL_C in self._in:
                 self._in = bytearray(self._in.split(CTRL_C, 1)[1])
                 self.interrupts += 1
-                if self._streaming:
+                if self._open:
+                    # The board-side script's `finally` gets to emit one
+                    # last chunk, and then the command ends however long it
+                    # would otherwise have run.
                     self.remaining = [self.on_interrupt] if self.on_interrupt else []
+                    self._terminate = True
+                    if self.on_quiet_stderr:
+                        self.stderr = self.on_quiet_stderr
                 progressed = True
             elif CTRL_D in self._in:
                 code, rest = self._in.split(CTRL_D, 1)
@@ -335,13 +351,13 @@ class FakeChunkBoard:
     def read(self, timeout: float) -> bytes:
         if self._out:
             return self._out.pop(0)
-        if self._streaming:
+        if self._open:
             if self.remaining:
                 if self.delay:
                     time.sleep(min(self.delay, max(timeout, 0.0)))
                 return self.remaining.pop(0)
-            self._streaming = False
-            if self.terminate:
+            if self._terminate:
+                self._open = False
                 return CTRL_D + self.stderr.encode("utf-8") + CTRL_D + b">"
         return b""
 
@@ -354,7 +370,9 @@ class FakeChunkBoard:
         if self.trigger and self.trigger in code:
             self._out.append(b"OK")
             self.remaining = list(self.chunks)
-            self._streaming = True
+            self._open = True
+            self._terminate = self.terminate
             return
         out = self.replies.get(code, "").encode("utf-8")
-        self._out.append(b"OK" + out + CTRL_D + CTRL_D + b">")
+        err = self.errors.get(code, "").encode("utf-8")
+        self._out.append(b"OK" + out + CTRL_D + err + CTRL_D + b">")

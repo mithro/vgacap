@@ -172,6 +172,58 @@ def test_rp2350_sets_the_pio_gpio_base_before_the_state_machine(source):
     assert source.index(".gpio_base(GPIO_BASE)") < source.index("rp2.StateMachine(")
 
 
+class _StubPioBlock:
+    """A PIO block whose window may or may not be movable, like the real one."""
+
+    def __init__(self, base: int, movable: bool) -> None:
+        self.base = base
+        self.movable = movable
+        self.moves = 0
+
+    def gpio_base(self, want=None):
+        if want is None:
+            # Matches ports/rp2/rp2_pio.c, which returns a Pin, not an int.
+            return "Pin(GPIO%d, mode=IN)" % self.base
+        self.moves += 1
+        if not self.movable:
+            # pico-sdk pio_set_gpio_base_unsafe() -> PICO_ERROR_INVALID_STATE
+            # whenever the block's instruction memory is already in use.
+            raise OSError(22, "EINVAL")
+        self.base = want
+
+
+def test_gpio_base_is_reads_the_pin_the_board_returns(source):
+    check = _exec_functions(source, ["gpio_base_is"])["gpio_base_is"]
+
+    assert check(_StubPioBlock(16, True), 16)
+    assert not check(_StubPioBlock(0, True), 16)
+    # Not a prefix match on the number: GPIO16 must not satisfy a want of 1.
+    assert not check(_StubPioBlock(16, True), 1)
+
+
+def test_main_only_moves_the_gpio_base_when_it_is_wrong(source):
+    main_src = ast.unparse(_main_node(source))
+
+    # Guard before the move, and a re-check after it, so a refusal is
+    # reported rather than leaving the sampler pointed at the wrong pins.
+    assert main_src.count("gpio_base_is(block, GPIO_BASE)") == 2
+    assert main_src.index("gpio_base_is(block, GPIO_BASE)") < main_src.index(
+        "block.gpio_base(GPIO_BASE)"
+    )
+    assert "gpio_base is not " in main_src
+    assert "write_time_chunk" in main_src
+
+
+def test_gpio_base_is_lets_a_block_already_at_the_right_base_be_left_alone(source):
+    # PIO1 and PIO2 on the stock RP2350 firmware are already at base 16 and
+    # would refuse to be moved; the capture must not ask them to.
+    check = _exec_functions(source, ["gpio_base_is"])["gpio_base_is"]
+    block = _StubPioBlock(16, movable=False)
+
+    assert check(block, 16)
+    assert block.moves == 0
+
+
 # -- (c) RX FIFO address, DREQ and DMA register arithmetic ----------------
 
 
@@ -238,25 +290,35 @@ class _RecordingPin:
         _RecordingPin.calls.append((gpio, mode, pull))
 
 
-@pytest.mark.parametrize(
-    "profile,expected_clk",
-    [(RP2040_TT06, 0), (RP2350_DBV3, 16)],
-    ids=lambda v: getattr(v, "name", v),
-)
-def test_init_input_pins_brings_up_the_clock_and_every_sampled_pad(source, profile, expected_clk):
+@pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
+def test_init_input_pins_brings_up_every_sampled_pad(source, profile):
     namespace = _exec_functions(source, ["init_input_pins"])
     _RecordingPin.calls = []
 
-    namespace["init_input_pins"](
-        _RecordingPin, profile.clk_gpio, profile.in_base, profile.in_count
-    )
+    namespace["init_input_pins"](_RecordingPin, profile.in_base, profile.in_count)
 
     gpios = [gpio for gpio, _, _ in _RecordingPin.calls]
-    assert gpios == [expected_clk] + list(range(profile.in_base, profile.in_base + profile.in_count))
+    assert gpios == list(range(profile.in_base, profile.in_base + profile.in_count))
     # Every pad is configured as an input, and no pulls are enabled: the
-    # project and the clock generator drive these lines.
+    # project drives these lines.
     assert all(mode == _RecordingPin.IN for _, mode, _ in _RecordingPin.calls)
     assert all(pull is None for _, _, pull in _RecordingPin.calls)
+
+
+@pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
+def test_init_input_pins_never_touches_the_project_clock_pad(source, profile):
+    # Regression: `machine.Pin(clk, Pin.IN)` moves the pad's FUNCSEL from
+    # PWM to SIO, which stops the clock `tt.clock_project_PWM()` is
+    # generating -- on fpga-1 that left the state machine waiting forever
+    # and no chunk was ever emitted. The PIO reads the pad's input
+    # synchroniser whatever its FUNCSEL is, so the pad needs no setup.
+    namespace = _exec_functions(source, ["init_input_pins"])
+    _RecordingPin.calls = []
+
+    namespace["init_input_pins"](_RecordingPin, profile.in_base, profile.in_count)
+
+    assert profile.clk_gpio not in [gpio for gpio, _, _ in _RecordingPin.calls]
+    assert "init_input_pins(machine.Pin, IN_BASE, IN_COUNT)" in source
 
 
 def test_main_initialises_pins_before_creating_the_state_machine(source):
@@ -381,7 +443,9 @@ def test_capture_cfg_for_rp2040():
         "buf_words": 4096,
         "max_bytes": 0,
         "edge": "falling",
-        "pio": 0,
+        # Not PIO0: the stock firmware keeps its own program there, which
+        # on RP2350 also makes that block's pin window immovable.
+        "pio": 1,
         "sm": 0,
         "sysclk_hz": 133_000_000,
     }

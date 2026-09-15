@@ -12,7 +12,9 @@ prepended by `ttcap.mp.with_cfg()`. Keys:
     buf_words    32-bit words per DMA buffer (two are allocated), e.g. 4096
     max_bytes    stop after this many emitted bytes; 0 = run until Ctrl-C
     edge         "falling" (default) or "rising" project-clock edge to sample
-    pio          PIO block index (0)
+    pio          PIO block index; 1 by default, *not* 0 -- the stock
+                 firmware keeps its own program (the FPGA loader) in PIO0,
+                 which on RP2350 also blocks moving that block's pin window
     sm           state machine index within that block (0)
     sysclk_hz    informational; the capture never changes the system clock
 
@@ -82,10 +84,15 @@ as an overrun and reported in a `TIME` chunk with
 RXSTALL bit is cleared at the start and read back at the end -- if it is
 set, the RX FIFO overflowed and samples were lost regardless.
 
-Known limitation: the raw REPL terminates stdout with a 0x04 byte and does
-not escape the payload, so a host that scans for 0x04 will stop early. Every
-chunk is `4-byte tag + u32 length + payload` and nothing else is printed, so
-the host must read length-driven instead. See the task 2-3 report.
+The raw REPL terminates stdout with a 0x04 byte and does not escape the
+payload, so a host that scans for 0x04 stops early. Every chunk is
+`4-byte tag + u32 length + payload` and nothing else is printed, so the
+host reads length-driven instead (`ttcap.repl.RawRepl.exec_chunks`).
+
+The project clock pad is never configured here. Driving it through
+`machine.Pin(clk, Pin.IN)` takes the pad away from the firmware's PWM and
+stops the clock outright, and the PIO's `wait gpio` reads the pad's input
+synchroniser whatever its FUNCSEL is -- see `init_input_pins()`.
 """
 
 import machine
@@ -180,18 +187,24 @@ def dma_reg(channel, offset):
     return DMA_BASE + DMA_CH_STRIDE * channel + offset
 
 
-def init_input_pins(pin_cls, clk_gpio, in_base, in_count):
-    """Bring the clock pad and every sampled pad up as a plain input.
+def init_input_pins(pin_cls, in_base, in_count):
+    """Bring every sampled pad up as a plain input -- never the clock pad.
 
     RP2350 pads come out of reset with `PADS_BANK0_GPIOn.ISO` set, and
-    MicroPython calls `pio_gpio_init()` only for out/set/sideset pins -- so
-    an untouched `in_base` pad, and the wait-gpio clock pad (which is not a
-    `jmp_pin`), would read 0 forever and the capture would be silently
-    all-zero with no RXSTALL to warn you. A bare `machine.Pin(n)` with no
-    mode does not touch the hardware; passing a mode does. No pulls: the
-    project and the clock generator drive these lines.
+    MicroPython calls `pio_gpio_init()` only for out/set/sideset pins, so an
+    untouched `in_base` pad would read 0 forever and the capture would be
+    silently all-zero with no RXSTALL to warn you. A bare `machine.Pin(n)`
+    with no mode does not touch the hardware; passing a mode does. No pulls:
+    the project drives these lines.
+
+    The clock pad is deliberately left alone. `machine.Pin(clk, Pin.IN)`
+    switches its FUNCSEL from PWM to SIO, which *stops* the clock the
+    firmware's `tt.clock_project_PWM()` is generating -- measured on fpga-1:
+    after this ran, GPIO16 read 0 in 32 consecutive samples and the state
+    machine sat in its `wait` forever, so not one chunk was ever emitted.
+    The PIO samples a pad's input synchroniser whatever its FUNCSEL is, so
+    `wait gpio` needs no pad setup at all.
     """
-    pin_cls(clk_gpio, pin_cls.IN)
     for gpio in range(in_base, in_base + in_count):
         pin_cls(gpio, pin_cls.IN)
 
@@ -237,14 +250,55 @@ def make_sampler(clk_index, in_count, push, rising):
     return sampler
 
 
+def gpio_base_is(pio, want):
+    """True when PIO block `pio` already has its 32-pin window at `want`.
+
+    `PIO.gpio_base()` with no argument returns a *Pin*, not an int
+    (micropython ports/rp2/rp2_pio.c: `return pio_get_gpio_base(self->pio)
+    == 0 ? pin_GPIO0 : pin_GPIO16`), so there is nothing to compare
+    numerically. rp2 `Pin` objects come from one static table, so
+    `is machine.Pin(want)` would likely work too, but the repr check is
+    what was verified on fpga-1 and it does not depend on `pin_GPIOn` and
+    `machine_pin_obj_table[n]` being the same objects.
+    """
+    return str(pio.gpio_base()).startswith("Pin(GPIO" + str(want) + ",")
+
+
 def main(out):
     """Run the sampler, streaming RAW chunks to `out` until told to stop."""
     if GPIO_BASE:
         # RP2350 only, and it must happen before the state machine exists:
         # it shifts the whole PIO block's 32-pin window up to GPIO 16..47.
-        rp2.PIO(PIO_NUM).gpio_base(GPIO_BASE)
+        #
+        # Only when it is not already there: pico-sdk's
+        # `pio_set_gpio_base_unsafe()` returns PICO_ERROR_INVALID_STATE (an
+        # OSError EINVAL here) whenever the block's instruction memory is in
+        # use, and on the stock firmware every block is -- PIO0 holds the
+        # FPGA loader, and PIO1/PIO2 hold programs of their own but already
+        # sit at base 16, so for them the move is a no-op that only needs
+        # skipping. Measured on fpga-1, firmware 3.1.0.
+        block = rp2.PIO(PIO_NUM)
+        if not gpio_base_is(block, GPIO_BASE):
+            try:
+                block.gpio_base(GPIO_BASE)
+            except Exception:
+                pass
+            if not gpio_base_is(block, GPIO_BASE):
+                write_time_chunk(
+                    out,
+                    0,
+                    (
+                        "error=PIO"
+                        + str(PIO_NUM)
+                        + " gpio_base is not "
+                        + str(GPIO_BASE)
+                        + " and cannot be moved (instruction memory in use);"
+                        + " try another pio block"
+                    ).encode(),
+                )
+                return
 
-    init_input_pins(machine.Pin, CLK_GPIO, IN_BASE, IN_COUNT)
+    init_input_pins(machine.Pin, IN_BASE, IN_COUNT)
 
     sampler = make_sampler(CLK_PIO_INDEX, IN_COUNT, PUSH_THRESH, EDGE == "rising")
     sm = rp2.StateMachine(PIO_NUM * 4 + SM_NUM, sampler, in_base=machine.Pin(IN_BASE))

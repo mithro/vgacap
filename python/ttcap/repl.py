@@ -194,6 +194,32 @@ class RawRepl:
         """
         self._link.write(CTRL_C)
 
+    def recover(self, timeout: float = 5.0) -> str:
+        """Interrupt a running script and resynchronise to the next prompt.
+
+        The recovery path for a command whose framing has been lost (a
+        timed-out `exec_chunks()`, say): the script is still running on the
+        board, and leaving it there would make every later command read its
+        output. Ctrl-C raises `KeyboardInterrupt` in it, and the trailer it
+        then prints ends `0x04 >` -- the one two-byte sequence worth
+        scanning for, since a lost position rules out reading by length.
+        Sets and returns `last_stderr`, which for an interrupted script is
+        its traceback.
+        """
+        self._link.write(CTRL_C)
+        try:
+            tail = self._read_until(CTRL_D + b">", timeout)
+        except TimeoutError:
+            self.last_stderr = ""
+            return ""
+        body = tail[: -len(CTRL_D + b">")]
+        # Everything after the *last* 0x04 in the body is stderr: the ones
+        # before it end the script's stdout (or are payload bytes).
+        end_of_stdout = body.rfind(CTRL_D)
+        stderr = body[end_of_stdout + 1 :] if end_of_stdout >= 0 else b""
+        self.last_stderr = stderr.decode("utf-8", "replace")
+        return self.last_stderr
+
     def exec(self, code: str, timeout: float = 10.0) -> tuple[str, str]:
         self._link.write(code.encode("utf-8") + CTRL_D)
         self._read_until(b"OK", timeout)
