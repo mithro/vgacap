@@ -5,9 +5,11 @@ MicroPython, run by the host via `RawRepl.exec_chunks()` with a `CFG` dict
 prepended by `ttcap.mp.with_cfg()`. Keys:
 
     clk_gpio     absolute GPIO carrying the project clock (rp_projclk)
-    in_base      absolute GPIO of uo_out[0]; the sampled window starts here
-                 (the PIO wants it relative to gpio_base -- see below)
+    in_base      absolute GPIO the sampled window starts at
     in_count     bits sampled per clock edge (12 on RP2040, 8 on RP2350)
+    uo_gpios     the eight absolute uo_out GPIOs -- the only pads this
+                 script may configure; the window can also span pins the
+                 RP2 itself drives (RP2040 ui_in[0..3] at GPIO 9..12)
     gpio_base    PIO GPIO base: 0, or 16 on RP2350 where uo_out is GPIO 33+
     push_thresh  autopush threshold in bits: 24 for 12-bit x2, 32 for 8-bit x4
     buf_words    32-bit words per DMA buffer (two are allocated), e.g. 4096
@@ -97,6 +99,17 @@ payload, so a host that scans for 0x04 stops early. Every chunk is
 `4-byte tag + u32 length + payload` and nothing else is printed, so the
 host reads length-driven instead (`ttcap.repl.RawRepl.exec_chunks`).
 
+Stopping is COOPERATIVE, and that is load-bearing. `micropython.kbd_intr(-1)`
+turns Ctrl-C back into an ordinary byte for the duration of the capture, and
+the loop checks stdin for it only *between* chunk writes. A raised
+`KeyboardInterrupt` could not do that: on rp2 `mp_hal_stdout_tx_strn()`
+blocks for CDC TX space and runs pending handlers while it waits, so the
+exception lands inside `out.write()` -- which is where most of a 16 KB
+chunk's wall-clock time is spent. Measured on fpga-1: a capture stopped that
+way cut a chunk at 2183 of 16388 declared bytes, the host then read the
+raw-REPL trailer as payload, and a clean 9-frame capture was reported as a
+30 s timeout. Between chunks there is nothing to truncate.
+
 The project clock pad is never configured here. Driving it through
 `machine.Pin(clk, Pin.IN)` takes the pad away from the firmware's PWM and
 stops the clock outright, and the PIO's `wait gpio` reads the pad's input
@@ -104,13 +117,16 @@ synchroniser whatever its FUNCSEL is -- see `init_input_pins()`.
 """
 
 import machine
+import micropython
 import rp2
+import select
 import sys
 import uctypes
 
 CLK_GPIO = CFG["clk_gpio"]  # noqa: F821 - CFG is prepended by the host
 IN_BASE = CFG["in_base"]  # noqa: F821
 IN_COUNT = CFG["in_count"]  # noqa: F821
+UO_GPIOS = CFG["uo_gpios"]  # noqa: F821
 GPIO_BASE = CFG["gpio_base"]  # noqa: F821
 PUSH_THRESH = CFG["push_thresh"]  # noqa: F821
 BUF_WORDS = CFG["buf_words"]  # noqa: F821
@@ -213,25 +229,35 @@ def dma_reg(channel, offset):
     return DMA_BASE + DMA_CH_STRIDE * channel + offset
 
 
-def init_input_pins(pin_cls, in_base, in_count):
-    """Bring every sampled pad up as a plain input -- never the clock pad.
+def init_input_pins(pin_cls, gpios):
+    """Bring up exactly the `uo_out` pads -- nothing else in the window.
 
     RP2350 pads come out of reset with `PADS_BANK0_GPIOn.ISO` set, and
     MicroPython calls `pio_gpio_init()` only for out/set/sideset pins, so an
-    untouched `in_base` pad would read 0 forever and the capture would be
+    untouched `uo_out` pad would read 0 forever and the capture would be
     silently all-zero with no RXSTALL to warn you. A bare `machine.Pin(n)`
     with no mode does not touch the hardware; passing a mode does. No pulls:
     the project drives these lines.
 
-    The clock pad is deliberately left alone. `machine.Pin(clk, Pin.IN)`
-    switches its FUNCSEL from PWM to SIO, which *stops* the clock the
-    firmware's `tt.clock_project_PWM()` is generating -- measured on fpga-1:
-    after this ran, GPIO16 read 0 in 32 consecutive samples and the state
-    machine sat in its `wait` forever, so not one chunk was ever emitted.
-    The PIO samples a pad's input synchroniser whatever its FUNCSEL is, so
-    `wait gpio` needs no pad setup at all.
+    Every *other* pad in the sampled window is left alone, because
+    `machine.Pin(n, Pin.IN)` takes a pad away from whatever is driving it
+    and hands it to SIO:
+
+    * the project clock. Measured on fpga-1: after this ran, GPIO16 read 0
+      in 32 consecutive samples and the state machine sat in its `wait`
+      forever, so not one chunk was ever emitted -- the pad had been taken
+      from the firmware's `tt.clock_project_PWM()`.
+    * the RP2040's `ui_in[0..3]`, GPIO 9..12, which sit *inside* that
+      board's 12-bit window (uo_out 5-8, ui_in 9-12, uo_out 13-16) and are
+      driven by the RP2040 itself. Configuring them would leave the
+      project's inputs floating for the whole capture, which for a design
+      that takes a mode selection on `ui_in` means capturing the wrong
+      picture rather than no picture.
+
+    The PIO reads a pad's input synchroniser whatever its FUNCSEL is, so
+    none of those pads need any setup for sampling to work.
     """
-    for gpio in range(in_base, in_base + in_count):
+    for gpio in gpios:
         pin_cls(gpio, pin_cls.IN)
 
 
@@ -333,6 +359,41 @@ def on_b(_channel):
     FULL[1] = True
 
 
+#: Bytes the host can send to ask for a clean stop. 0x03 is Ctrl-C, which
+#: `micropython.kbd_intr(-1)` has demoted to an ordinary byte for the
+#: duration of the capture; "q" is there for a human on a terminal.
+STOP_BYTES = (b"\x03", b"q")
+
+
+def stdin_stream(stdin):
+    """The pollable, *binary* view of stdin.
+
+    `sys.stdin` and `sys.stdin.buffer` are distinct objects on bare-metal
+    ports (`shared/runtime/sys_stdio_mphal.c`: `stdio_obj_type` with
+    `is_text = true`, `stdio_buffer_obj_type` with `is_text = false`), but
+    both route `ioctl` to the same `stdio_ioctl`, which answers
+    `MP_STREAM_POLL` via `mp_hal_stdio_poll()`. The binary one is the one to
+    use, so `read(1)` returns bytes rather than a decoded str.
+    """
+    return getattr(stdin, "buffer", stdin)
+
+
+def stop_requested(poller, stream):
+    """True when the host has sent a stop byte. Never blocks.
+
+    `poll(0)` returns immediately with an empty list when nothing is
+    waiting, so this is safe to call from the buffer-wait spin.
+    """
+    if not poller.poll(0):
+        return False
+    data = stream.read(1)
+    if not data:
+        return False
+    if isinstance(data, str):  # a port without sys.stdin.buffer
+        data = data.encode()
+    return data in STOP_BYTES
+
+
 def gpio_base_is(pio, want):
     """True when PIO block `pio` reports its 32-pin window at `want`.
 
@@ -396,7 +457,7 @@ def main(out):
             )
             return
 
-    init_input_pins(machine.Pin, IN_BASE, IN_COUNT)
+    init_input_pins(machine.Pin, UO_GPIOS)
 
     sampler = make_sampler(CLK_WAIT_GPIO, IN_COUNT, PUSH_THRESH, EDGE == "rising")
     sm = rp2.StateMachine(PIO_NUM * 4 + SM_NUM, sampler, in_base=machine.Pin(IN_BASE))
@@ -407,11 +468,18 @@ def main(out):
     FULL[0] = False
     FULL[1] = False
     OVERRUNS[0] = 0
-    in_flight = [False]
     dma_a = None
     dma_b = None
 
     try:
+        # Ctrl-C becomes an ordinary byte for the whole capture, so that a
+        # stop can only ever be noticed between chunk writes and no chunk
+        # can be cut short on the wire. Restored in `finally`.
+        micropython.kbd_intr(-1)
+        stdin = stdin_stream(sys.stdin)
+        poller = select.poll()
+        poller.register(stdin, select.POLLIN)
+
         dma_a = rp2.DMA()
         dma_b = rp2.DMA()
 
@@ -463,12 +531,16 @@ def main(out):
         sent = 0
         reported = 0
         index = 0
+        stopping = False
         while True:
             while not FULL[index]:
+                if stop_requested(poller, stdin):
+                    stopping = True
+                    break
                 machine.idle()
-            in_flight[0] = True
+            if stopping:
+                break
             sent += write_raw_chunk(out, bufs[index], SAMPLES_PER_CHUNK)
-            in_flight[0] = False
             FULL[index] = False
             if OVERRUNS[0] > reported:
                 # Cumulative, not an increment: see write_time_chunk().
@@ -477,11 +549,20 @@ def main(out):
                 )
                 reported = OVERRUNS[0]
             index = 1 - index
+            # Both stop checks are here, between whole chunks: MAX_BYTES so
+            # the board can finish on its own if the host never asks, and
+            # the stdin byte for when it does.
             if MAX_BYTES and sent >= MAX_BYTES:
                 break
+            if stop_requested(poller, stdin):
+                break
     except KeyboardInterrupt:
+        # Only reachable from outside the kbd_intr(-1) window -- a Ctrl-C
+        # that arrived before the capture armed itself, or the host's
+        # last-resort second Ctrl-C after `finally` has restored it.
         pass
     finally:
+        micropython.kbd_intr(3)
         overrun_total = OVERRUNS[0]
         rxstall = (MEM[FDEBUG_ADDR] >> SM_NUM) & 1
         # Drop the IRQ handlers before aborting: an abort can raise a
@@ -498,18 +579,19 @@ def main(out):
         for dma in (dma_a, dma_b):
             if dma is not None:
                 dma.close()
-        if not in_flight[0]:
-            # A chunk interrupted mid-write would leave the stream desynced;
-            # appending a trailer after it only makes that worse.
-            summary = (
-                "overruns="
-                + str(overrun_total)
-                + " rxstall="
-                + str(rxstall)
-                + " sysclk_hz="
-                + str(machine.freq())
-            )
-            write_time_chunk(out, overrun_total * SAMPLES_PER_CHUNK, summary.encode())
+        # Unconditional: with a cooperative stop there is no such thing as a
+        # half-written chunk to desync the stream, so the host always gets
+        # its overruns/rxstall summary -- which is the only place those
+        # numbers exist.
+        summary = (
+            "overruns="
+            + str(overrun_total)
+            + " rxstall="
+            + str(rxstall)
+            + " sysclk_hz="
+            + str(machine.freq())
+        )
+        write_time_chunk(out, overrun_total * SAMPLES_PER_CHUNK, summary.encode())
         if hasattr(out, "flush"):
             out.flush()
 

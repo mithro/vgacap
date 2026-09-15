@@ -270,10 +270,16 @@ class FakeChunkBoard:
 
     Only the command containing `trigger` streams `chunks`; every other
     command gets an immediate empty (or `replies`-supplied) result, so the
-    same board can serve the `tt.*` setup commands and the probe. A Ctrl-C
-    while streaming drops whatever is still queued and substitutes
-    `on_interrupt`, mirroring the board-side script whose `finally` replaces
-    the rest of the capture with one closing `TIME` chunk.
+    same board can serve the `tt.*` setup commands and the probe.
+
+    The stop is COOPERATIVE, like the real script's: a stop byte finishes
+    whatever chunk is already going out, then substitutes `on_interrupt`
+    (the trailer the script's `finally` emits) and ends the command. Set
+    `split` to hand each chunk out in pieces of that many bytes, and
+    `stop_at_read` to have the stop byte "arrive" just before the Nth read
+    -- together they put the stop in the middle of a chunk, which is exactly
+    the case that truncated a chunk on fpga-1 before the cooperative
+    handshake existed.
     """
 
     def __init__(
@@ -287,6 +293,8 @@ class FakeChunkBoard:
         replies: dict[str, str] | None = None,
         errors: dict[str, str] | None = None,
         on_quiet_stderr: str = "",
+        split: int = 0,
+        stop_at_read: int | None = None,
     ) -> None:
         self.chunks = list(chunks)
         self.stderr = stderr
@@ -302,16 +310,23 @@ class FakeChunkBoard:
         self.errors = dict(errors or {})
         #: stderr to report once a Ctrl-C ends a command that had stalled
         self.on_quiet_stderr = on_quiet_stderr
+        #: bytes per `read()` within one chunk; 0 hands each chunk out whole
+        self.split = split
+        #: pretend the host's stop byte landed just before this read
+        self.stop_at_read = stop_at_read
         self.commands: list[str] = []
         self.interrupts = 0
         self.closed = False
-        #: chunks not yet handed out; a test can assert a Ctrl-C cut it short
+        #: chunks not yet handed out; a test can assert a stop cut them short
         self.remaining: list[bytes] = []
         self._out: list[bytes] = []
         self._in = bytearray()
         self._raw_mode = False
         self._open = False
         self._terminate = terminate
+        self._pieces: list[bytes] = []
+        self._reads = 0
+        self._stopping = False
 
     # -- ReplLink ---------------------------------------------------------
     def write(self, data: bytes) -> None:
@@ -333,14 +348,7 @@ class FakeChunkBoard:
             elif CTRL_C in self._in:
                 self._in = bytearray(self._in.split(CTRL_C, 1)[1])
                 self.interrupts += 1
-                if self._open:
-                    # The board-side script's `finally` gets to emit one
-                    # last chunk, and then the command ends however long it
-                    # would otherwise have run.
-                    self.remaining = [self.on_interrupt] if self.on_interrupt else []
-                    self._terminate = True
-                    if self.on_quiet_stderr:
-                        self.stderr = self.on_quiet_stderr
+                self._request_stop()
                 progressed = True
             elif CTRL_D in self._in:
                 code, rest = self._in.split(CTRL_D, 1)
@@ -352,24 +360,55 @@ class FakeChunkBoard:
         if self._out:
             return self._out.pop(0)
         if self._open:
-            if self.remaining:
+            self._reads += 1
+            if self.stop_at_read is not None and self._reads == self.stop_at_read:
+                self._request_stop()
+            if not self._pieces and self.remaining:
+                self._pieces = self._split(self.remaining.pop(0))
+            if self._pieces:
                 if self.delay:
                     time.sleep(min(self.delay, max(timeout, 0.0)))
-                return self.remaining.pop(0)
+                return self._pieces.pop(0)
             if self._terminate:
                 self._open = False
                 return CTRL_D + self.stderr.encode("utf-8") + CTRL_D + b">"
+        # Nothing to say: wait a slice of the caller's timeout rather than
+        # spinning, so a test that exercises a timeout does not burn a core.
+        time.sleep(min(0.02, max(timeout, 0.0)))
         return b""
 
     def close(self) -> None:
         self.closed = True
 
     # -- board side -------------------------------------------------------
+    def _request_stop(self) -> None:
+        """React to a stop byte the way the cooperative script does.
+
+        Whatever chunk is already going out (`self._pieces`) is finished
+        first -- that is the whole point -- and only the chunks not yet
+        started are dropped in favour of the trailer.
+        """
+        if not self._open or self._stopping:
+            return
+        self._stopping = True
+        self.remaining = [self.on_interrupt] if self.on_interrupt else []
+        self._terminate = True
+        if self.on_quiet_stderr:
+            self.stderr = self.on_quiet_stderr
+
+    def _split(self, chunk: bytes) -> list[bytes]:
+        if not self.split:
+            return [chunk]
+        return [chunk[i : i + self.split] for i in range(0, len(chunk), self.split)]
+
     def _start(self, code: str) -> None:
         self.commands.append(code)
         if self.trigger and self.trigger in code:
             self._out.append(b"OK")
             self.remaining = list(self.chunks)
+            self._pieces = []
+            self._reads = 0
+            self._stopping = False
             self._open = True
             self._terminate = self.terminate
             return

@@ -10,9 +10,11 @@ Subcommands:
 * `capture` enables a design, clocks it, and writes a `.vgacap` stream.
 * `png` renders a captured stream to PNG images via `vgacap-frames`.
 
-Exit codes: 0 success, 1 a board or tool error, 2 a usage error (argparse),
-3 a capture that produced no samples at all -- which is the failure worth
-telling apart, because it means the sampler never saw a clock edge.
+Exit codes: 0 success, 1 a board, link or tool error (including a capture
+that ended through `CaptureStats.error`/`timed_out`), 2 a usage error
+(argparse's own), 3 a capture that produced no samples at all -- the one
+failure worth telling apart, because it means the sampler never saw a clock
+edge.
 """
 
 from __future__ import annotations
@@ -33,11 +35,12 @@ from .capture import (
     CaptureError,
     CaptureRequest,
     CaptureStats,
+    frames_to_max_bytes,
     run_capture,
     select_project,
     stop_clock,
 )
-from .repl import RawRepl, ReplLink, SerialLink, WebSocketLink
+from .repl import LinkClosed, RawRepl, ReplFramingError, ReplLink, SerialLink, WebSocketLink
 from .throughput import DEFAULT_BLOCK, DEFAULT_TOTAL, ThroughputResult, measure_throughput
 
 #: `--profile` values that name a board directly; "auto" asks the board.
@@ -45,6 +48,20 @@ PROFILES = {"rp2040": RP2040_TT06, "rp2350": RP2350_DBV3}
 
 #: Where `ttcap png` looks for the C renderer, in order.
 VGACAP_FRAMES = "vgacap-frames"
+
+#: Everything a capture can fail with that is the board's, the link's or the
+#: request's fault rather than a bug here. All of them exit 1: a separate
+#: code for framing and timeouts was considered and dropped, because 2 is
+#: argparse's usage code and overloading it would be worse than one clear
+#: message naming the exception type.
+CAPTURE_FAILURES = (
+    CaptureError,
+    ValueError,
+    TimeoutError,
+    ReplFramingError,
+    LinkClosed,
+    OSError,
+)
 
 
 def link_from_url(url: str) -> ReplLink:
@@ -121,6 +138,8 @@ def capture(
     design: str | None = None,
     clock_hz: int,
     seconds: float,
+    max_bytes: int = 0,
+    frames: int | None = None,
     buf_words: int = DEFAULT_BUF_WORDS,
     edge: str = "falling",
     desc: str = "",
@@ -131,6 +150,9 @@ def capture(
 
     The stream file is opened only once the board has accepted every setup
     command, so a failed run does not leave a header-only `.vgacap` behind.
+    The stats are printed as soon as they exist -- before the clock is
+    stopped -- so a failure during teardown cannot swallow the result of a
+    capture that already succeeded.
     """
     link = link_from_url(url)
     try:
@@ -138,21 +160,28 @@ def capture(
         repl.enter()
         try:
             board = resolve_profile(repl, profile)
+            if frames is not None:
+                max_bytes = frames_to_max_bytes(board, frames)
             request = CaptureRequest(
                 profile=board,
                 project=project,
                 design=design,
                 clock_hz=clock_hz,
                 seconds=seconds,
-                max_bytes=0,
+                max_bytes=max_bytes,
                 buf_words=buf_words,
                 edge=edge,
                 desc=desc,
                 pio=pio,
             )
             selection = select_project(repl, request)
+            print(
+                "profile=%s project=%s enable=%s"
+                % (board.name, selection["project"], selection["enable"])
+            )
             with open(out_path, "wb") as fp:
                 stats = run_capture(repl, request, fp)
+            _report(stats, out_path)
             if stop_clock_after:
                 stop_clock(repl)
         finally:
@@ -160,19 +189,22 @@ def capture(
     finally:
         link.close()
 
-    print(
-        "profile=%s project=%s enable=%s"
-        % (board.name, selection["project"], selection["enable"])
-    )
+    return stats
+
+
+def _report(stats: CaptureStats, out_path: str) -> None:
     print(stats.format())
     for message in stats.messages:
         print("  board: %s" % message)
     print("wrote %s" % out_path)
-    return stats
 
 
 def find_vgacap_frames(explicit: str | None = None) -> str:
-    """Locate the C frame renderer: --vgacap-frames, the build tree, then PATH."""
+    """Locate the C frame renderer.
+
+    In order: `--vgacap-frames`, the in-tree `build/`, `$VGACAP_FRAMES`,
+    then `PATH`.
+    """
     if explicit:
         return explicit
     # python/ttcap/cli.py -> the repo root, where CMake puts build/.
@@ -282,7 +314,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--clock-hz", type=int, required=True, help="project clock to program"
     )
     capture_parser.add_argument(
-        "--seconds", type=float, default=5.0, help="capture duration (default 5)"
+        "--seconds",
+        type=float,
+        default=5.0,
+        help="capture duration; 0 means run until --max-bytes/--frames (default 5)",
+    )
+    capture_limit = capture_parser.add_mutually_exclusive_group()
+    capture_limit.add_argument(
+        "--max-bytes",
+        type=int,
+        default=0,
+        help="stop once the board has emitted this many bytes (0 = no limit)",
+    )
+    capture_limit.add_argument(
+        "--frames",
+        type=int,
+        help="stop after enough bytes for N frames, assuming 640x480@60 "
+        "timing (800x525 clocks) plus one frame of margin",
     )
     capture_parser.add_argument("--out", required=True, help="output .vgacap file")
     capture_parser.add_argument(
@@ -336,14 +384,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 design=args.design,
                 clock_hz=args.clock_hz,
                 seconds=args.seconds,
+                max_bytes=args.max_bytes,
+                frames=args.frames,
                 buf_words=args.buf_words,
                 edge=args.edge,
                 desc=args.desc,
                 pio=args.pio,
                 stop_clock_after=args.stop_clock,
             )
-        except (CaptureError, ValueError) as exc:
-            print("capture failed: %s" % exc, file=sys.stderr)
+        except CAPTURE_FAILURES as exc:
+            # `capture()` prints the stats before it tears anything down, so
+            # whatever was gathered is already on stdout by now; all that is
+            # left to say is why it stopped.
+            print("capture failed: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+            return 1
+        if stats.error or stats.timed_out:
             return 1
         if stats.samples == 0:
             print(

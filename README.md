@@ -72,7 +72,10 @@ uv run ttcap png capture.vgacap out/frame       # out/frame-0000.png ...
 ```
 
 `--profile` defaults to `auto`, which reads the board's `GPIOMap` and picks
-the RP2040 or RP2350 layout from it. `ttcap png` needs Pillow, so it wants
+the RP2040 or RP2350 layout from it. Stop the capture by time (`--seconds`)
+or by size (`--max-bytes N`, or `--frames N` which works the bytes out from
+640x480@60 timing and the board's packing); `--seconds 0` runs until the
+byte limit. `ttcap png` needs Pillow, so it wants
 the `synth` extra (`uv sync --extra synth`) and a built `build/vgacap-frames`.
 
 Performance captures should own the serial device: stop the fpgas.online

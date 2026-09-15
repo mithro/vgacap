@@ -17,7 +17,7 @@ from fake_repl import FakeChunkBoard
 
 from ttcap import cli
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
-from ttcap.capture import CaptureError
+from ttcap.capture import CaptureError, frames_to_max_bytes
 from vgacap.stream import Header, Writer, read_stream
 
 
@@ -177,6 +177,106 @@ def test_capture_passes_the_pio_block_and_edge_through(monkeypatch, tmp_path):
     assert "'pio': 2" in cfg_line
     assert "'edge': 'rising'" in cfg_line
     assert "'buf_words': 256" in cfg_line
+
+
+def test_capture_max_bytes_reaches_the_board(monkeypatch, tmp_path):
+    profile = RP2350_DBV3
+    board = capture_board(profile, sample_chunks(profile, [1, 2, 3, 4]))
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz", "1000",
+         "--seconds", "0", "--max-bytes", "65536",
+         "--out", str(tmp_path / "s.vgacap")]
+    )
+
+    assert code == 0  # --seconds 0 is legal once a byte limit is set
+    assert "'max_bytes': 65536" in script_of(board).splitlines()[0]
+
+
+def test_capture_frames_converts_to_bytes_for_the_profile(monkeypatch, tmp_path):
+    profile = RP2350_DBV3
+    board = capture_board(profile, sample_chunks(profile, [1, 2, 3, 4]))
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz", "1000",
+         "--seconds", "0", "--frames", "3", "--out", str(tmp_path / "s.vgacap")]
+    )
+
+    expected = frames_to_max_bytes(profile, 3)
+    assert "'max_bytes': %d" % expected in script_of(board).splitlines()[0]
+
+
+def test_capture_rejects_frames_and_max_bytes_together(capsys, tmp_path):
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(
+            ["capture", "serial:/dev/null", "--clock-hz", "1000",
+             "--frames", "3", "--max-bytes", "1000",
+             "--out", str(tmp_path / "s.vgacap")]
+        )
+
+    assert excinfo.value.code == 2  # argparse's usage code
+    assert "not allowed with" in capsys.readouterr().err
+
+
+def test_capture_seconds_zero_without_a_byte_limit_is_rejected(monkeypatch, capsys, tmp_path):
+    board = capture_board(RP2350_DBV3, [])
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz", "1000",
+         "--seconds", "0", "--out", str(tmp_path / "s.vgacap")]
+    )
+
+    assert code == 1
+    assert "never stop" in capsys.readouterr().err
+
+
+def test_capture_reports_a_link_failure_without_a_traceback(monkeypatch, capsys, tmp_path):
+    def _explode(url):
+        raise OSError(2, "no such device")
+
+    monkeypatch.setattr(cli, "link_from_url", _explode)
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz", "1000",
+         "--seconds", "0.05", "--out", str(tmp_path / "s.vgacap")]
+    )
+
+    assert code == 1
+    # Named, not a traceback. (errno 2 makes Python pick the OSError
+    # subclass, which is exactly the shape pyserial raises too.)
+    assert "capture failed: FileNotFoundError" in capsys.readouterr().err
+
+
+def test_capture_exits_one_when_the_board_goes_quiet(monkeypatch, capsys, tmp_path):
+    profile = RP2350_DBV3
+    board = capture_board(
+        profile, [], terminate=False, on_quiet_stderr="KeyboardInterrupt\r\n"
+    )
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+    out = tmp_path / "quiet.vgacap"
+    monkeypatch.setattr(cli, "run_capture", _short_timeout(cli.run_capture))
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz", "1000",
+         "--seconds", "0.05", "--out", str(out)]
+    )
+
+    assert code == 1
+    printed = capsys.readouterr().out
+    assert "timed_out=yes" in printed  # the stats still reached the user
+    assert "wrote %s" % out in printed
+
+
+def _short_timeout(run_capture):
+    """Wrap `run_capture` so the quiet-board test does not wait 30 s."""
+
+    def _call(repl, req, out, chunk_timeout=0.3):
+        return run_capture(repl, req, out, chunk_timeout=chunk_timeout)
+
+    return _call
 
 
 def test_capture_rejects_naming_both_a_project_and_a_design(monkeypatch, capsys, tmp_path):

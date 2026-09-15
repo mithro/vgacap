@@ -186,11 +186,26 @@ class RawRepl:
         self._link.write(CTRL_B)
 
     def interrupt(self) -> None:
-        """Send a single Ctrl-C, raising `KeyboardInterrupt` on the board.
+        """Send a single Ctrl-C.
 
-        Used to stop a still-running `exec_chunks()` script: the script's
-        own `finally` gets to run and emit its trailer, so the caller must
-        keep draining the iterator afterwards.
+        What that does depends on the running script. Normally it raises
+        `KeyboardInterrupt` on the board; a script that has called
+        `micropython.kbd_intr(-1)` -- as the capture script does, so that a
+        stop cannot land inside a chunk write -- instead receives it as an
+        ordinary byte on stdin. Either way the script's `finally` gets to
+        run and emit its trailer, so the caller must keep draining the
+        iterator afterwards.
+        """
+        self._link.write(CTRL_C)
+
+    def request_stop(self) -> None:
+        """Ask a cooperative script to stop at its next safe point.
+
+        The same byte as `interrupt()`, named for what the capture script
+        does with it: picks it up off stdin *between* chunk writes, so no
+        chunk is ever cut short on the wire. 0x03 rather than something
+        exotic so that it still works as a real Ctrl-C on a script that
+        never disabled the keyboard interrupt.
         """
         self._link.write(CTRL_C)
 

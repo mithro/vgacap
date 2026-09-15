@@ -25,7 +25,7 @@ from vgacap.stream import Header, Writer
 
 from . import mp
 from .boards import BoardProfile
-from .repl import RawRepl
+from .repl import RawRepl, ReplFramingError
 
 EDGES = ("falling", "rising")
 
@@ -52,6 +52,12 @@ DEFAULT_PIO = 1
 #: `VGACAP_MODE_EXTCLK` from include/vgacap/stream.h: every sample is taken
 #: on an edge of the project's own clock, which is what the sampler does.
 MODE_EXTCLK = 0
+
+#: Project clocks in one 640x480@60 frame: 800 x 525 including blanking.
+#: `frames_to_max_bytes()` assumes this timing, which is what every Tiny
+#: Tapeout VGA design on the shuttle uses; a design at another resolution
+#: needs `--max-bytes` worked out by hand.
+CLOCKS_PER_FRAME_640X480 = 800 * 525
 
 #: Per-read timeout while a capture is streaming. Generous, because the gap
 #: between chunks is a whole DMA buffer of project clocks: at 100 kHz with
@@ -99,7 +105,7 @@ def capture_cfg(
     if not 0 <= sm <= 3:
         raise ValueError(f"sm must be 0..3, got {sm}")
     in_index = profile.in_base - profile.pio_gpio_base
-    if not 0 <= in_index or in_index + profile.in_count > 32:
+    if in_index < 0 or in_index + profile.in_count > 32:
         raise ValueError(
             f"{profile.name}: uo_out at GPIO {profile.in_base} is not inside the "
             f"PIO's 32-pin window based at {profile.pio_gpio_base}"
@@ -109,6 +115,10 @@ def capture_cfg(
         "clk_gpio": profile.clk_gpio,
         "in_base": profile.in_base,
         "in_count": profile.in_count,
+        # The only pads the board script may configure. The sampled window
+        # can span pins the RP2 itself drives -- RP2040 ui_in[0..3] sit at
+        # GPIO 9..12, between uo_out[0..3] and uo_out[4..7].
+        "uo_gpios": list(profile.uo_gpios),
         "gpio_base": profile.pio_gpio_base,
         "push_thresh": profile.push_thresh,
         "buf_words": buf_words,
@@ -118,6 +128,24 @@ def capture_cfg(
         "sm": sm,
         "sysclk_hz": DEFAULT_SYSCLK_HZ,
     }
+
+
+def frames_to_max_bytes(profile: BoardProfile, frames: int) -> int:
+    """Bytes the board must emit to be sure of `frames` complete frames.
+
+    Assumes 640x480@60 timing (`CLOCKS_PER_FRAME_640X480`), and asks for one
+    frame more than requested: a capture starts mid-frame, so the first
+    boundary plus one whole frame are needed before the first picture can be
+    reconstructed at all (see the README).
+
+    Only the packed sample words are counted. Chunk headers add 8 bytes per
+    ~16 KB buffer, which the margin frame covers many times over.
+    """
+    if frames <= 0:
+        raise ValueError(f"frames must be positive, got {frames}")
+    samples = CLOCKS_PER_FRAME_640X480 * (frames + 1)
+    words = -(-samples // profile.samples_per_word)
+    return 4 * words
 
 
 @dataclass
@@ -205,10 +233,20 @@ class CaptureStats:
     #: counts are cumulative by convention (see `vgacap.stream.Writer.time`),
     #: so this is the total -- summing the chunks would double-count.
     dropped: int = 0
+    #: A host-side failure that ended the run early (a lost framing, a link
+    #: that went quiet). Empty when the board finished on its own terms.
+    #: Whatever was written before it is still a valid stream.
+    error: str = ""
 
     @property
     def clean(self) -> bool:
-        return not (self.overruns or self.rxstall or self.stderr or self.timed_out)
+        return not (
+            self.overruns
+            or self.rxstall
+            or self.stderr
+            or self.timed_out
+            or self.error
+        )
 
     def format(self) -> str:
         line = (
@@ -228,6 +266,8 @@ class CaptureStats:
             line += " samples_per_s=%.0f" % (self.samples / self.seconds)
         if self.timed_out:
             line += " timed_out=yes"
+        if self.error:
+            line += " error=%r" % self.error
         if self.stderr:
             line += " board_error=%r" % self.stderr.strip()
         return line
@@ -283,13 +323,24 @@ def stop_clock(repl: RawRepl) -> None:
 
 
 def _describe(req: CaptureRequest) -> str:
-    """The header `desc` line: what the host knows and the board does not."""
-    detail = "clock=%d edge=%s profile=%s" % (
-        req.clock_hz,
-        req.edge,
-        req.profile.name,
+    """The header `desc` line: what the host knows and the board does not.
+
+    The selected macro goes in automatically, so `ttcap capture --project X`
+    records which design produced the samples without the caller having to
+    repeat it in `--desc`. `mode=extclk` is spelled out even though the
+    header's `mode` field says the same thing: `desc` is what a human reads
+    out of `vgacap-dump`.
+    """
+    parts = []
+    if req.desc:
+        parts.append(req.desc)
+    if req.selection:
+        parts.append("project=%s" % req.selection)
+    parts.append(
+        "clock=%d mode=extclk edge=%s profile=%s"
+        % (req.clock_hz, req.edge, req.profile.name)
     )
-    return f"{req.desc} {detail}" if req.desc else detail
+    return " ".join(parts)
 
 
 def _time_fields(payload: bytes) -> tuple[int, str]:
@@ -330,10 +381,18 @@ def run_capture(
 
     Writes the `VGCH` header, runs `capture_rp2.py` on the board, and
     appends every chunk the board emits byte for byte. Once `seconds` have
-    passed (or `max_bytes` arrived) it sends one Ctrl-C and *keeps reading*:
-    the script's `finally` still has a closing `TIME` chunk to emit, and
-    dropping it would throw away the only overrun and RXSTALL report there
-    is.
+    passed (or `max_bytes` arrived) it sends one stop byte and *keeps
+    reading*: the script's `finally` still has a closing `TIME` chunk to
+    emit, and dropping it would throw away the only overrun and RXSTALL
+    report there is.
+
+    The stop is cooperative. The board has run `micropython.kbd_intr(-1)`,
+    so 0x03 is just a byte it picks up between chunk writes -- never one
+    that interrupts a write half way and leaves a chunk shorter than its
+    declared length. If the board goes quiet anyway, or its framing is
+    lost, the run ends through `RawRepl.recover()` (a real Ctrl-C, by then
+    re-enabled) and says so in `CaptureStats.error`; everything written
+    before that is still a valid stream.
 
     The clock is left running: stopping it is `stop_clock()`, so a caller
     can take several captures of one design without restarting it.
@@ -365,6 +424,7 @@ def run_capture(
     messages: list[str] = []
     interrupted = False
     timed_out = False
+    error = ""
 
     start = time.monotonic()
     try:
@@ -379,7 +439,9 @@ def run_capture(
                 # simply replaces the old value -- never `+=`.
                 dropped, msg = _time_fields(payload)
                 messages.append(msg)
-                if msg.startswith("overrun"):
+                # Exactly "overrun": the closing summary starts "overruns="
+                # and would otherwise be counted as one more overrun report.
+                if msg == "overrun":
                     overrun_reports += 1
                 value = _keyed_int(msg, "overruns")
                 if value is not None:
@@ -388,16 +450,23 @@ def run_capture(
                 if value is not None:
                     rxstall = value
             if not interrupted and _should_stop(req, start, total_bytes):
-                repl.interrupt()
+                repl.request_stop()
                 interrupted = True
     except TimeoutError as exc:
-        # The board stopped mid-stream -- typically the state machine is
-        # stuck in its `wait` because the project clock is not running. The
-        # script is still executing up there, so interrupt it and take its
+        # The board went quiet mid-stream -- typically the state machine is
+        # stuck in its `wait` because the project clock is not running, or
+        # the cooperative stop byte never arrived. The script is still
+        # executing up there, so interrupt it for real and take its
         # traceback: leaving it would make every later command read its
         # output instead of its own.
         timed_out = True
-        messages.append("host timeout: %s" % exc)
+        error = "board went quiet: %s" % exc
+        repl.recover()
+    except ReplFramingError as exc:
+        # The stream desynchronised, so nothing further can be read by
+        # length. Same teardown: the alternative is a script that keeps
+        # writing into the next command's output.
+        error = "framing lost: %s" % exc
         repl.recover()
     elapsed = time.monotonic() - start
 
@@ -415,4 +484,5 @@ def run_capture(
         messages=tuple(messages),
         timed_out=timed_out,
         dropped=dropped,
+        error=error,
     )

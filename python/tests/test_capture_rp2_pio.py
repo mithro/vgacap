@@ -310,9 +310,8 @@ def test_every_pin_number_handed_to_micropython_is_absolute(source, profile):
     assert "IN_PIO_INDEX" not in namespace
 
 
-def test_state_machine_and_pads_both_get_the_absolute_in_base(source):
+def test_state_machine_gets_the_absolute_in_base(source):
     assert "in_base=machine.Pin(IN_BASE)" in source
-    assert "init_input_pins(machine.Pin, IN_BASE, IN_COUNT)" in source
 
 
 def test_dma_register_offsets_are_the_non_trigger_aliases(source):
@@ -346,15 +345,16 @@ class _RecordingPin:
         _RecordingPin.calls.append((gpio, mode, pull))
 
 
-@pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
-def test_init_input_pins_brings_up_every_sampled_pad(source, profile):
+def _init_pins(source, profile) -> list[int]:
     namespace = _exec_functions(source, ["init_input_pins"])
     _RecordingPin.calls = []
+    namespace["init_input_pins"](_RecordingPin, capture_cfg(profile)["uo_gpios"])
+    return [gpio for gpio, _, _ in _RecordingPin.calls]
 
-    namespace["init_input_pins"](_RecordingPin, profile.in_base, profile.in_count)
 
-    gpios = [gpio for gpio, _, _ in _RecordingPin.calls]
-    assert gpios == list(range(profile.in_base, profile.in_base + profile.in_count))
+@pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
+def test_init_input_pins_brings_up_exactly_the_uo_out_pads(source, profile):
+    assert _init_pins(source, profile) == list(profile.uo_gpios)
     # Every pad is configured as an input, and no pulls are enabled: the
     # project drives these lines.
     assert all(mode == _RecordingPin.IN for _, mode, _ in _RecordingPin.calls)
@@ -368,13 +368,21 @@ def test_init_input_pins_never_touches_the_project_clock_pad(source, profile):
     # generating -- on fpga-1 that left the state machine waiting forever
     # and no chunk was ever emitted. The PIO reads the pad's input
     # synchroniser whatever its FUNCSEL is, so the pad needs no setup.
-    namespace = _exec_functions(source, ["init_input_pins"])
-    _RecordingPin.calls = []
+    assert profile.clk_gpio not in _init_pins(source, profile)
+    assert "init_input_pins(machine.Pin, UO_GPIOS)" in source
 
-    namespace["init_input_pins"](_RecordingPin, profile.in_base, profile.in_count)
 
-    assert profile.clk_gpio not in [gpio for gpio, _, _ in _RecordingPin.calls]
-    assert "init_input_pins(machine.Pin, IN_BASE, IN_COUNT)" in source
+def test_init_input_pins_never_touches_the_rp2040_ui_in_pads(source):
+    # The RP2040's 12-bit window is uo_out 5-8, *ui_in 9-12*, uo_out 13-16.
+    # The RP2 drives ui_in, so configuring those pads would leave the
+    # project's own inputs floating for the whole capture -- the wrong
+    # picture rather than no picture, for a design that takes a mode
+    # selection there.
+    touched = _init_pins(source, RP2040_TT06)
+    window = range(RP2040_TT06.in_base, RP2040_TT06.in_base + RP2040_TT06.in_count)
+
+    assert set(window) - set(touched) == {9, 10, 11, 12}
+    assert touched == [5, 6, 7, 8, 13, 14, 15, 16]
 
 
 def test_main_initialises_pins_before_creating_the_state_machine(source):
@@ -546,6 +554,9 @@ def test_capture_cfg_for_rp2040():
         "clk_gpio": 0,
         "in_base": 5,
         "in_count": 12,
+        # The window spans ui_in 9..12, which the board script must not
+        # configure -- so it is told the uo_out pads explicitly.
+        "uo_gpios": [5, 6, 7, 8, 13, 14, 15, 16],
         "gpio_base": 0,
         "push_thresh": 24,
         "buf_words": 4096,

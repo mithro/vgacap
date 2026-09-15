@@ -22,6 +22,7 @@ from ttcap.capture import (
     MODE_EXTCLK,
     CaptureError,
     CaptureRequest,
+    frames_to_max_bytes,
     run_capture,
     select_project,
     stop_clock,
@@ -200,7 +201,9 @@ def test_writes_a_stream_that_parses_with_the_right_header_and_samples():
     assert header.mode == MODE_EXTCLK
     assert header.clock_hz == 100_000
     assert tuple(header.signal_map) == profile.signal_map
-    assert header.desc == "tt07 clock=100000 edge=falling profile=rp2040-tt06map"
+    assert header.desc == (
+        "tt07 clock=100000 mode=extclk edge=falling profile=rp2040-tt06map"
+    )
 
     runs = [item[1] for item in items if item[0] == "run"]
     assert runs == first + second
@@ -312,6 +315,48 @@ def test_sends_ctrl_c_once_after_seconds_elapse():
     assert stats.seconds >= 0.1
 
 
+def test_a_stop_arriving_mid_chunk_still_delivers_the_whole_chunk():
+    # The regression that cost a 10 s fpga-1 capture: the stop used to raise
+    # KeyboardInterrupt from inside `out.write()`, cutting a chunk at
+    # 2183 of its declared 16388 bytes. The stop is cooperative now -- the
+    # board picks the byte up between chunk writes -- so a stop landing
+    # while a chunk is going out must not shorten it.
+    profile = RP2040_TT06
+    samples = list(range(256))
+    big = raw_chunk(profile, samples)
+    board = FakeChunkBoard(
+        [big, big, big],
+        split=64,
+        stop_at_read=3,  # mid-way through the first chunk
+        on_interrupt=time_chunk(profile, 0, "overruns=0 rxstall=0"),
+    )
+    repl = connect(board)
+    out = io.BytesIO()
+
+    stats = run_capture(repl, request(profile, max_bytes=10**6), out)
+
+    # Whole chunk, whole sample list, and the trailer behind it.
+    _header, items = read_stream(out.getvalue())
+    assert [item[1] for item in items if item[0] == "run"] == samples
+    assert stats.samples == len(samples)
+    assert stats.messages == ("overruns=0 rxstall=0",)
+    assert not stats.timed_out and not stats.error
+
+
+def test_a_stop_between_chunks_drops_only_the_chunks_not_started():
+    profile = RP2040_TT06
+    chunk = raw_chunk(profile, [1, 2, 3, 4])
+    board = FakeChunkBoard(
+        [chunk] * 8, stop_at_read=2, on_interrupt=time_chunk(profile, 0, "stopped")
+    )
+    repl = connect(board)
+
+    stats = run_capture(repl, request(profile, max_bytes=10**6), io.BytesIO())
+
+    assert stats.chunks == 2  # the one in flight, then the trailer
+    assert stats.messages == ("stopped",)
+
+
 def test_sends_ctrl_c_once_after_max_bytes():
     profile = RP2040_TT06
     chunk = raw_chunk(profile, list(range(8)))
@@ -338,7 +383,7 @@ def test_interrupts_and_takes_the_traceback_when_the_board_goes_quiet():
     assert board.interrupts == 1
     assert "KeyboardInterrupt" in stats.stderr
     assert not stats.clean
-    assert any("host timeout" in m for m in stats.messages)
+    assert "board went quiet" in stats.error
 
 
 def test_ships_the_profile_and_pio_in_the_script_it_runs():
@@ -388,6 +433,41 @@ def test_stream_with_no_samples_is_still_a_valid_file():
 def test_capture_request_rejects_impossible_requests(kwargs):
     with pytest.raises(ValueError):
         request(**kwargs)
+
+
+def test_a_lost_framing_ends_the_run_instead_of_escaping():
+    # A bad tag means nothing further can be read by length. The script is
+    # still running on the board, so it has to be interrupted -- otherwise
+    # every later command reads its output.
+    profile = RP2040_TT06
+    board = FakeChunkBoard(
+        [raw_chunk(profile, [1, 2]), b"JUNK\x04\x00\x00\x00payload!"],
+        on_quiet_stderr="KeyboardInterrupt\r\n",
+    )
+    repl = connect(board)
+    out = io.BytesIO()
+
+    stats = run_capture(repl, request(profile), out)
+
+    assert "framing lost" in stats.error
+    assert board.interrupts == 1
+    assert not stats.clean
+    # What arrived before the desync is still a valid stream.
+    _header, items = read_stream(out.getvalue())
+    assert [item[1] for item in items if item[0] == "run"] == [1, 2]
+
+
+def test_frames_to_max_bytes_covers_the_requested_frames_plus_one():
+    # 640x480@60 is 800 x 525 = 420_000 clocks per frame, and one extra
+    # frame of margin because a capture starts mid-frame.
+    assert frames_to_max_bytes(RP2040_TT06, 3) == 4 * (420_000 * 4 // 2)
+    assert frames_to_max_bytes(RP2350_DBV3, 3) == 4 * (420_000 * 4 // 4)
+    # More frames is more bytes, and the RP2350 packs twice as densely.
+    assert frames_to_max_bytes(RP2040_TT06, 9) > frames_to_max_bytes(RP2040_TT06, 3)
+    assert frames_to_max_bytes(RP2040_TT06, 3) == 2 * frames_to_max_bytes(RP2350_DBV3, 3)
+
+    with pytest.raises(ValueError):
+        frames_to_max_bytes(RP2040_TT06, 0)
 
 
 def test_time_chunk_shorter_than_its_fixed_fields_is_an_error():
