@@ -439,6 +439,24 @@ def test_main_cleans_up_in_a_finally_block(source):
     )
 
 
+def test_main_restores_the_keyboard_interrupt_last_of_all(source):
+    # `kbd_intr(3)` makes Ctrl-C an exception again, and every write in
+    # `finally` blocks for USB CDC TX space with pending handlers running --
+    # so restoring it before the trailer is written puts a KeyboardInterrupt
+    # through the one chunk that carries the overrun and RXSTALL counts.
+    # The host's own `recover()` writes a real Ctrl-C into that window.
+    main = _main_node(source)
+    tries = [n for n in main.body if isinstance(n, ast.Try) and n.finalbody]
+    finally_src = ast.unparse(ast.Module(body=tries[0].finalbody, type_ignores=[]))
+
+    assert "micropython.kbd_intr(3)" in finally_src
+    assert finally_src.index("write_time_chunk") < finally_src.index("kbd_intr(3)")
+    assert finally_src.index("out.flush()") < finally_src.index("kbd_intr(3)")
+    assert finally_src.index("dma.close()") < finally_src.index("kbd_intr(3)")
+    # Nothing after it: it is the last statement of the block.
+    assert finally_src.rstrip().endswith("micropython.kbd_intr(3)")
+
+
 def test_main_removes_the_sampler_program_from_the_block_in_finally(source):
     # Without this the block's 32-slot instruction memory fills up after
     # about ten captures since the board's last reset, and the next

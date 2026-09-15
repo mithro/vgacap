@@ -598,12 +598,22 @@ def main(out):
             if stop_requested(poller, stdin):
                 break
     except KeyboardInterrupt:
-        # Only reachable from outside the kbd_intr(-1) window -- a Ctrl-C
-        # that arrived before the capture armed itself, or the host's
-        # last-resort second Ctrl-C after `finally` has restored it.
+        # Only reachable from outside the kbd_intr(-1) window: a Ctrl-C that
+        # arrived in the handful of instructions before the capture armed
+        # itself. Once `finally` has restored the keyboard interrupt there
+        # is nothing left in this try, so a later Ctrl-C simply ends the
+        # script -- which is what the host's last-resort one is for.
         pass
     finally:
-        micropython.kbd_intr(3)
+        # NOTE: `micropython.kbd_intr(3)` is deliberately the LAST statement
+        # of this block, not the first. Everything below writes to `out`,
+        # and a multi-byte write blocks in `mp_hal_stdout_tx_strn()` waiting
+        # for CDC TX space while pending handlers run -- so re-enabling the
+        # keyboard interrupt any earlier puts a `KeyboardInterrupt` right
+        # through the trailer write and truncates the one chunk that carries
+        # the overrun and RXSTALL counts. The host's own recovery path
+        # (`RawRepl.recover()`) writes a real Ctrl-C into exactly that
+        # window when a slow board looks like a dead one.
         overrun_total = OVERRUNS[0]
         rxstall = (MEM[FDEBUG_ADDR] >> SM_NUM) & 1
         # Drop the IRQ handlers before aborting: an abort can raise a
@@ -653,6 +663,9 @@ def main(out):
         poller = None
         stdin = None
         gc.collect()
+        # Last: from here a Ctrl-C is an exception again, and there is
+        # nothing left to write that it could cut in half.
+        micropython.kbd_intr(3)
 
 
 _OUT = sys.stdout.buffer
