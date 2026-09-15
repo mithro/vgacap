@@ -94,6 +94,10 @@ class RawRepl:
     def __init__(self, link: ReplLink) -> None:
         self._link = link
         self._buf = b""
+        #: stderr text captured by the most recent `exec_stream()` call
+        #: (empty string if that command produced no stderr, or if
+        #: `exec_stream()` has not been called yet).
+        self.last_stderr: str = ""
 
     def _read_until(self, marker: bytes, timeout: float) -> bytes:
         deadline = time.monotonic() + timeout
@@ -136,6 +140,9 @@ class RawRepl:
         the first 0x04. `timeout` is the per-read timeout used while polling
         the link for more data -- for a long-running capture the caller may
         get empty reads for a while before more chunks are yielded.
+
+        Once the generator is exhausted, `self.last_stderr` holds the
+        board's stderr text for this command (empty string if none).
         """
         self._link.write(code.encode("utf-8") + CTRL_D)
         self._read_until(b"OK", ok_timeout)
@@ -150,9 +157,14 @@ class RawRepl:
         idx = self._buf.index(CTRL_D)
         if idx:
             yield self._buf[:idx]
-        self._buf = self._buf[idx:]
-        # Drain the trailing "\x04<stderr>\x04>" so the link is clean for
-        # the next command.
+        # self._buf[idx] is the first 0x04 (end of stdout). Drop it, then
+        # read through the *second* 0x04 to consume the stderr block --
+        # stderr text (e.g. a traceback naming "<module>") can itself
+        # contain ">", so we must not search for the trailing prompt until
+        # the whole stderr block has been consumed.
+        self._buf = self._buf[idx + 1 :]
+        stderr_and_marker = self._read_until(CTRL_D, ok_timeout)
+        self.last_stderr = stderr_and_marker[:-1].decode("utf-8")
         self._read_until(b">", ok_timeout)
 
     def upload(self, name: str, source: str) -> None:

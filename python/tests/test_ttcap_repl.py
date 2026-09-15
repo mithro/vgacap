@@ -145,3 +145,22 @@ def test_upload_writes_file_via_base64_chunks(repl, tmp_path):
 
     assert target.read_text() == source
 
+
+def test_exec_stream_surfaces_stderr_containing_gt(repl):
+    # The traceback's "<module>" frame name contains ">" -- a naive drain
+    # that scans for the literal byte ">" right after the first 0x04 would
+    # stop inside this traceback instead of at the real trailing prompt.
+    chunks = list(repl.exec_stream("print('abc', end='')\nraise ValueError('boom')"))
+
+    assert b"".join(chunks) == b"abc"
+    assert "ValueError: boom" in repl.last_stderr
+    assert "<module>" in repl.last_stderr
+
+    # The link is left clean: a normal exec still works afterwards.
+    assert repl.exec("print(1)") == ("1\r\n", "")
+
+
+def test_exec_stream_no_stderr_leaves_last_stderr_empty(repl):
+    list(repl.exec_stream("print('ok')"))
+    assert repl.last_stderr == ""
+
