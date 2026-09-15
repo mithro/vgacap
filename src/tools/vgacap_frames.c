@@ -59,11 +59,12 @@ static void on_frame(void *user, const vgaframe_output_t *out) {
     }
 
     const vgaframe_mode_t *m = out->timing->mode;
-    fprintf(stdout, "frame %u: %ux%u mode=%s cpl=%u lpf=%u hsync=%s vsync=%s partial=%u\n",
+    fprintf(stdout, "frame %u: %ux%u mode=%s cpl=%u lpf=%u hsync=%s vsync=%s partial=%u glitches=%u\n",
            (unsigned)app->frames_written, (unsigned)out->width, (unsigned)out->height,
            m ? m->name : "?", (unsigned)out->timing->clocks_per_line,
            (unsigned)out->timing->lines_per_frame, sync_str(out->timing->hsync_positive),
-           sync_str(out->timing->vsync_positive), (unsigned)out->partial);
+           sync_str(out->timing->vsync_positive), (unsigned)out->partial,
+           (unsigned)out->timing->glitches);
     app->frames_written++;
     app->have_frame = 1;
 }
@@ -159,7 +160,11 @@ int main(int argc, char **argv) {
     if (!app.failed && (app.max_frames <= 0 || (int)app.frames_written < app.max_frames))
         vgaframe_flush(&app.frame);
 
-    fprintf(stdout, "frames=%u\n", (unsigned)app.frames_written);
+    // Spurious sync pulses the reconstruction ignored: a handful over a
+    // capture is normal for real silicon, a lot of them explains a low frame
+    // count the same way the resync lines above do.
+    fprintf(stdout, "frames=%u glitches=%u\n", (unsigned)app.frames_written,
+            (unsigned)app.frame.learner.t.glitches);
 
     if (app.failed) return 2;
     if (!app.have_frame) return 2;
