@@ -23,6 +23,31 @@ ctest --test-dir build --output-on-failure
 uv run pytest -q
 ```
 
+## Layout
+
+| | |
+|---|---|
+| `include/vgacap/stream.h`, `src/stream/` | capture stream format: `VGCH` header, `RAW`, `RLE`, `FRAM`, `EVNT`, `TIME` chunks; writer and incremental reader that emits `(value, run)` pairs |
+| `include/vgacap/frame.h`, `src/frame/` | `libvgaframe`: mode table, sync timing learner, frame reconstruction to RGB24, `FRAM` window reassembly |
+| `src/tools/` | `vgacap-dump` (chunk list, sample checksum), `vgacap-frames` (stream to PPM frames) |
+| `python/vgacap/` | Python mirror of the stream format, synthetic generators, `vgacap-bin2stream` |
+| `tests/`, `python/tests/` | C unit tests (ctest) and Python + end-to-end tests (pytest) |
+
+The stream format is described in
+[tt-vga-capture/docs/research/2026-09-15-stream-format.md](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-09-15-stream-format.md).
+
+## Tools
+
+```sh
+build/vgacap-dump capture.vgacap              # chunk list, total samples, checksum
+mkdir -p out && build/vgacap-frames capture.vgacap out/frame   # out/frame-0000.ppm ...
+uv run vgacap-bin2stream dump.bin out.vgacap  # wrap a one-byte-per-clock simulator dump
+```
+
+A frame is emitted at the next frame boundary once the timing is known, so
+a capture that starts mid-frame needs one boundary plus one full frame
+before the first picture: capture at least three frame periods.
+
 ## License
 
 Apache-2.0, see [LICENSE](LICENSE).
