@@ -24,9 +24,22 @@ RAW_REPL_BANNER = b"raw REPL; CTRL-B to exit\r\n>"
 
 _UPLOAD_CHUNK_SIZE = 256
 
+#: Every chunk tag `vgacap.stream` knows (mirrors `MIN_CHUNK_LEN`'s keys).
+#: `exec_chunks()` accepts only these as the start of an 8-byte chunk
+#: header, so a desynchronised stream is caught at the first bad header
+#: instead of being interpreted as a 4 GiB payload.
+CHUNK_TAGS = (b"VGCH", b"RAW ", b"RLE ", b"FRAM", b"EVNT", b"TIME")
+
+#: Bytes in a chunk header: `tag[4] + u32 little-endian payload length`.
+CHUNK_HEADER_LEN = 8
+
 
 class LinkClosed(Exception):
     """Raised by a `ReplLink` when the underlying connection has closed."""
+
+
+class ReplFramingError(Exception):
+    """Raised when the board's binary output is not valid chunk framing."""
 
 
 @runtime_checkable
@@ -102,9 +115,9 @@ class RawRepl:
     def __init__(self, link: ReplLink) -> None:
         self._link = link
         self._buf = b""
-        #: stderr text captured by the most recent `exec_stream()` call
-        #: (empty string if that command produced no stderr, or if
-        #: `exec_stream()` has not been called yet).
+        #: stderr text captured by the most recent `exec_stream()` or
+        #: `exec_chunks()` call (empty string if that command produced no
+        #: stderr, or if neither has been called yet).
         self.last_stderr: str = ""
 
     def reset(self) -> None:
@@ -140,6 +153,29 @@ class RawRepl:
         result, self._buf = self._buf[:idx], self._buf[idx:]
         return result
 
+    def read_exact(self, n: int, timeout: float) -> bytes:
+        """Return exactly `n` bytes from the link, or raise `TimeoutError`.
+
+        The counterpart to `_read_until` for length-driven reads: the bytes
+        may take any value, 0x04 included, so nothing is scanned for. As
+        with `_read_until`, a timeout discards the partial buffer rather
+        than leaving half a chunk to desynchronise the next read.
+        """
+        deadline = time.monotonic() + timeout
+        while len(self._buf) < n:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                buffered = self._buf
+                self._buf = b""
+                raise TimeoutError(
+                    f"timed out waiting for {n} bytes; got {len(buffered)}: {buffered!r}"
+                )
+            chunk = self._link.read(min(remaining, 0.5))
+            if chunk:
+                self._buf += chunk
+        result, self._buf = self._buf[:n], self._buf[n:]
+        return result
+
     def enter(self, timeout: float = 5.0) -> None:
         # Two Ctrl-C first, to interrupt anything already running.
         self._link.write(CTRL_C + CTRL_C)
@@ -148,6 +184,15 @@ class RawRepl:
 
     def exit(self) -> None:
         self._link.write(CTRL_B)
+
+    def interrupt(self) -> None:
+        """Send a single Ctrl-C, raising `KeyboardInterrupt` on the board.
+
+        Used to stop a still-running `exec_chunks()` script: the script's
+        own `finally` gets to run and emit its trailer, so the caller must
+        keep draining the iterator afterwards.
+        """
+        self._link.write(CTRL_C)
 
     def exec(self, code: str, timeout: float = 10.0) -> tuple[str, str]:
         self._link.write(code.encode("utf-8") + CTRL_D)
@@ -192,6 +237,47 @@ class RawRepl:
         stderr_and_marker = self._read_until(CTRL_D, ok_timeout)
         self.last_stderr = stderr_and_marker[:-1].decode("utf-8")
         self._read_until(b">", ok_timeout)
+
+    def exec_chunks(self, code: str, timeout: float = 10.0) -> Iterator[tuple[bytes, bytes]]:
+        """Run `code` and yield the vgacap chunks it writes to stdout.
+
+        The raw REPL ends a script's stdout with an *unescaped* 0x04, and
+        binary sample data contains 0x04 like any other byte -- so
+        `exec_stream()`, which scans for that marker, cannot be used for a
+        capture. This reads length-driven instead: each chunk is
+        `tag[4] + u32 little-endian length + payload`, so the payload
+        length is known before a single payload byte is read and no byte of
+        it is ever inspected.
+
+        End of stdout is detected on the *first* byte of what would be the
+        next header: only there can a 0x04 not be payload. It is read on
+        its own because the trailer that follows it (stderr, 0x04, `>`) can
+        be as short as three bytes -- waiting for a full 8-byte header
+        would hang. Afterwards `self.last_stderr` holds the board's stderr
+        for this command and the link is positioned at the next command,
+        exactly as `exec()` leaves it.
+
+        `timeout` bounds each individual read, not the whole run: a capture
+        may legitimately stream for minutes, but a gap longer than
+        `timeout` between bytes is treated as a dead board.
+        """
+        self._link.write(code.encode("utf-8") + CTRL_D)
+        self._read_until(b"OK", timeout)
+        while True:
+            first = self.read_exact(1, timeout)
+            if first == CTRL_D:
+                stderr_and_marker = self._read_until(CTRL_D, timeout)
+                self.last_stderr = stderr_and_marker[:-1].decode("utf-8")
+                self._read_until(b">", timeout)
+                return
+            header = first + self.read_exact(CHUNK_HEADER_LEN - 1, timeout)
+            tag = header[:4]
+            if tag not in CHUNK_TAGS:
+                raise ReplFramingError(
+                    f"expected a vgacap chunk header, got {header!r}"
+                )
+            length = int.from_bytes(header[4:8], "little")
+            yield tag, self.read_exact(length, timeout)
 
     def upload(self, name: str, source: str) -> None:
         """Write `source` to a file named `name` on the board."""

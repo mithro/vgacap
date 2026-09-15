@@ -12,6 +12,9 @@ https://docs.micropython.org/en/latest/reference/repl.html#raw-mode-and-raw-past
   whose `stdout.buffer.write()` appends to the reply buffer. It is the one to
   use for scripts that emit binary (the pty's line discipline would mangle
   control bytes), and it runs the real MicroPython script text on the host.
+* `FakeChunkBoard` is an in-memory `ReplLink` that replays canned stdout
+  bytes one `read()` at a time instead of running anything, so a test can
+  pace a capture and interrupt it part way through.
 """
 
 from __future__ import annotations
@@ -253,3 +256,105 @@ class FakeBinaryBoard:
         if self.corrupt is not None:
             self.corrupt(self._sink)
         return b"OK" + bytes(self._sink) + CTRL_D + err.encode("utf-8") + CTRL_D + b">"
+
+
+class FakeChunkBoard:
+    """An in-memory `ReplLink` that replies to one command with canned bytes.
+
+    Unlike `FakeBinaryBoard` this does not execute the script: the test
+    supplies the exact stdout the board would emit, as a list of byte
+    strings handed out one per `read()`. That gives a test control over the
+    *pacing* of a capture -- and therefore over what the host gets to do
+    between chunks -- which a board that runs to completion inside
+    `write()` cannot.
+
+    Only the command containing `trigger` streams `chunks`; every other
+    command gets an immediate empty (or `replies`-supplied) result, so the
+    same board can serve the `tt.*` setup commands and the probe. A Ctrl-C
+    while streaming drops whatever is still queued and substitutes
+    `on_interrupt`, mirroring the board-side script whose `finally` replaces
+    the rest of the capture with one closing `TIME` chunk.
+    """
+
+    def __init__(
+        self,
+        chunks,
+        stderr: str = "",
+        delay: float = 0.0,
+        on_interrupt: bytes = b"",
+        terminate: bool = True,
+        trigger: str = "CFG = ",
+        replies: dict[str, str] | None = None,
+    ) -> None:
+        self.chunks = list(chunks)
+        self.stderr = stderr
+        self.delay = delay
+        self.on_interrupt = on_interrupt
+        self.terminate = terminate
+        self.trigger = trigger
+        self.replies = dict(replies or {})
+        self.commands: list[str] = []
+        self.interrupts = 0
+        self.closed = False
+        #: chunks not yet handed out; a test can assert a Ctrl-C cut it short
+        self.remaining: list[bytes] = []
+        self._out: list[bytes] = []
+        self._in = bytearray()
+        self._raw_mode = False
+        self._streaming = False
+
+    # -- ReplLink ---------------------------------------------------------
+    def write(self, data: bytes) -> None:
+        self._in += data
+        progressed = True
+        while progressed:
+            progressed = False
+            if CTRL_A in self._in:
+                self._in = bytearray(self._in.split(CTRL_A, 1)[1])
+                self._raw_mode = True
+                self._out.append(RAW_BANNER)
+                progressed = True
+            elif not self._raw_mode:
+                self._in = bytearray()
+            elif CTRL_B in self._in:
+                self._in = bytearray(self._in.split(CTRL_B, 1)[1])
+                self._raw_mode = False
+                progressed = True
+            elif CTRL_C in self._in:
+                self._in = bytearray(self._in.split(CTRL_C, 1)[1])
+                self.interrupts += 1
+                if self._streaming:
+                    self.remaining = [self.on_interrupt] if self.on_interrupt else []
+                progressed = True
+            elif CTRL_D in self._in:
+                code, rest = self._in.split(CTRL_D, 1)
+                self._in = bytearray(rest)
+                self._start(bytes(code).decode("utf-8"))
+                progressed = True
+
+    def read(self, timeout: float) -> bytes:
+        if self._out:
+            return self._out.pop(0)
+        if self._streaming:
+            if self.remaining:
+                if self.delay:
+                    time.sleep(min(self.delay, max(timeout, 0.0)))
+                return self.remaining.pop(0)
+            self._streaming = False
+            if self.terminate:
+                return CTRL_D + self.stderr.encode("utf-8") + CTRL_D + b">"
+        return b""
+
+    def close(self) -> None:
+        self.closed = True
+
+    # -- board side -------------------------------------------------------
+    def _start(self, code: str) -> None:
+        self.commands.append(code)
+        if self.trigger and self.trigger in code:
+            self._out.append(b"OK")
+            self.remaining = list(self.chunks)
+            self._streaming = True
+            return
+        out = self.replies.get(code, "").encode("utf-8")
+        self._out.append(b"OK" + out + CTRL_D + CTRL_D + b">")
