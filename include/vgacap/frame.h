@@ -84,8 +84,14 @@ typedef struct vgaframe {
     vgaframe_config_t cfg; vgaframe_timing_learner_t learner;
     uint8_t *raw, *rgb, *cover;
     uint32_t x, y; int in_frame; uint32_t frames_seen;
-    // FRAM mode state
-    int fram_mode; uint32_t fram_counter; uint16_t fram_first_line, fram_line_count; uint32_t fram_cpl; uint32_t fram_remaining;
+    // FRAM mode state. FRAM mode is per *chunk*, not for the lifetime of the
+    // object: fram_active is set only while a FRAM chunk still has samples
+    // outstanding, and gates the window-driven line layout. fram_pending is
+    // set while an accumulation is buffered and unemitted, which outlives the
+    // chunk - the window that completes a frame's coverage may be several
+    // chunks later, with continuous-mode samples in between.
+    int fram_active, fram_pending;
+    uint32_t fram_counter; uint16_t fram_first_line, fram_line_count; uint32_t fram_cpl; uint32_t fram_remaining;
     uint32_t fram_max_line;
     // Timing actually used for the most recently emitted frame: the
     // learner's own measurement, unless emit() resolved a different mode
