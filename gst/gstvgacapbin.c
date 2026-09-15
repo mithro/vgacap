@@ -5,9 +5,15 @@
  * A URI in, RGB video out: the source the URI names, plus `vgadecode`.
  *
  * ## Example
+ *
+ * The URI is quoted twice: once for the shell, which would otherwise
+ * background the command at the `&`, and once for GStreamer's own pipeline
+ * parser, which needs it when the line arrives as one string rather than as
+ * an already-split argument vector.
+ *
  * |[
  * gst-launch-1.0 vgacapbin \
- *     uri="tt-ws://welland:8765/serial?project=tt_um_rejunity_vga&clock-hz=60000" ! \
+ *     'uri="tt-ws://welland:8765/serial?project=tt_um_rejunity_vga&clock-hz=60000"' ! \
  *     videoconvert ! autovideosink
  * ]|
  */

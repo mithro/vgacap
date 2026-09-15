@@ -71,9 +71,10 @@ gst-inspect-1.0 vgadecode
 gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! \
     pngenc ! multifilesink location=frame-%04d.png
 
-# ...or straight off a board, through either link:
+# ...or straight off a board, through either link. The URI is quoted twice:
+# once for the shell, once for GStreamer's pipeline parser -- see below.
 gst-launch-1.0 vgacapbin \
-    uri="tt-ws://welland:8765/serial?project=tt_um_rejunity_vga&clock-hz=60000" ! \
+    'uri="tt-ws://welland:8765/serial?project=tt_um_rejunity_vga&clock-hz=60000"' ! \
     videoconvert ! autovideosink
 ```
 
@@ -132,7 +133,23 @@ stdout*, because a child blocked writing into a full pipe never reaches the
 code that emits its trailer. Only when `stop-timeout` runs out does it close
 the read end (`ttcap` reads the `EPIPE` as a clean end and still exits 0, but
 the trailer then has nowhere to go), and only after that does it `SIGKILL`.
-Every path reaps the child.
+Every path reaps the child. The default command makes `ttcap` a *grandchild*
+(`uv run` is in between), so if the wrapper exits first a `SIGKILL` also goes
+to the process group -- otherwise the capture would carry on holding the
+board with nothing left to signal. No wait in the sequence is unbounded: it
+all runs inside a state change, and a state change that never returns is a
+pipeline nobody can shut down.
+
+**A live capture cannot be paused, only stopped.** The board samples in real
+time and the element's pipe is the only buffer between it and the pipeline,
+so a PAUSED pipeline gives the capture exactly one pipe buffer of grace --
+measured at 65,548 bytes, about 90 ms at 750 kHz and about 1.1 s at 60 kHz --
+and after that the DMA buffers overrun and samples are lost. Worse, the
+overrun count lives in the closing `TIME` chunk, which the stop sequence
+drains and discards, so a capture that was paused and then stopped is
+silently short with nothing on the bus to say so. Go straight to PLAYING and
+stop when finished; if something must pause, treat what comes after as a
+different capture.
 
 A child that exits non-zero raises a pipeline `ERROR` quoting the last lines
 of its stderr, so a capture that fails on the board is an error and not a
@@ -141,16 +158,31 @@ silent end of stream; the rest of its stderr is logged at `INFO` under the
 
 ### `vgacapbin`: a URI in, video out
 
+```sh
+gst-launch-1.0 vgacapbin 'uri="tt-serial:///dev/ttyACM0?project=tt_um_x&clock-hz=60000"' ! ...
+gst-launch-1.0 vgacapbin 'uri="tt-ws://welland:8765/serial?clock-hz=60000"' ! ...   # or tt-wss://
+gst-launch-1.0 vgacapbin 'uri="file:///captures/tt08.vgacap"' ! ...
 ```
-vgacapbin uri=tt-serial:///dev/ttyACM0?project=tt_um_x&clock-hz=60000
-vgacapbin uri=tt-ws://welland:8765/serial?clock-hz=60000      # or tt-wss://
-vgacapbin uri=file:///captures/tt08.vgacap
-```
+
+**Quote the URI twice**, as above. The outer quotes are for the shell, which
+would otherwise background the command at the `&` and glob the `?`; the inner
+ones are for GStreamer's own pipeline parser, needed when the line is handed
+to `gst_parse_launch()` as a single string -- from Python, say -- rather than
+as an already-split argument vector. An unquoted URI usually fails before the
+element ever sees it.
 
 The query string sets the source's properties by name, and the source's
 properties are mirrored on the bin, so `?seconds=10` and `seconds=10` do the
 same thing (the query wins if both are given). `tt-ws://host:8765` with no
 path means the bridge's `/serial` endpoint.
+
+A query may only carry the **capture parameters**: `project`, `design`,
+`clock-hz`, `profile`, `pio`, `buf-words`, `seconds`, `stop-timeout`. Naming
+anything else -- in particular `ttcap-command`, which is a program to run, or
+`link`, which would move the capture somewhere other than where the URI says
+-- is an error, not a silent no-op. A URI can arrive from somewhere that is
+not a trusted shell, so those stay settable only as element properties, by
+whoever builds the pipeline.
 
 ## Running on a Raspberry Pi
 
