@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Reconstructs RGB24 frames from a continuous stream of (sample, run) pairs.
+// Reconstructs RGB24 frames from a continuous stream of (sample, run) pairs,
+// and from FRAM partial-frame windows (see vgaframe_frame_begin).
 #include "vgacap/frame.h"
 #include <string.h>
 
@@ -25,6 +26,25 @@ int vgaframe_init(vgaframe_t *f, const vgaframe_config_t *cfg, uint8_t *raw, uin
     memset(raw, 0, vgaframe_raw_size(cfg));
     memset(cover, 0, cfg->max_lines);
     return 0;
+}
+
+// Lines expected in a full frame, best information currently available:
+// force_mode's table value, else the learner's locked/matched value, else
+// (FRAM mode with no mode known yet) the largest window seen so far.
+static uint32_t expected_lines(const vgaframe_t *f) {
+    if (f->cfg.force_mode)
+        return (uint32_t)f->cfg.force_mode->v_active + f->cfg.force_mode->v_front +
+               f->cfg.force_mode->v_sync + f->cfg.force_mode->v_back;
+    if (f->learner.t.lines_per_frame) return f->learner.t.lines_per_frame;
+    return f->fram_max_line;
+}
+
+static int covered(const vgaframe_t *f) {
+    uint32_t n = expected_lines(f);
+    if (!n) return 0;
+    for (uint32_t y = 0; y < n && y < f->cfg.max_lines; y++)
+        if (!f->cover[y]) return 0;
+    return 1;
 }
 
 // Emits the accumulated picture. `lines_known` bounds how much of `raw` to
@@ -65,7 +85,7 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint) {
     vgaframe_output_t out;
     out.rgb24 = f->rgb; out.width = (uint16_t)w; out.height = (uint16_t)h; out.timing = &f->learner.t;
     out.active_x0 = (uint16_t)x0; out.active_y0 = (uint16_t)y0; out.partial = partial;
-    out.frame_counter = f->frames_seen;
+    out.frame_counter = f->fram_mode ? f->fram_counter : f->frames_seen;
     f->frames_seen++;
     if (f->cfg.on_frame) f->cfg.on_frame(f->cfg.user, &out);
     uint32_t clear_lines = lines_known < f->cfg.max_lines ? lines_known + 1 : f->cfg.max_lines;
@@ -77,14 +97,19 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
     uint8_t h = bit(f->cfg.signal_map, sample, VGACAP_SIG_HSYNC);
     uint8_t v = bit(f->cfg.signal_map, sample, VGACAP_SIG_VSYNC);
     int r = vgaframe_timing_push(&f->learner, h, v, run);
-    if (r == 2) {
+    if (f->fram_mode) {
+        if (r == 1) { f->x = 0; f->y++; }
+        // r == 2 (learner-detected frame boundary) is ignored: in FRAM mode
+        // the window metadata (vgaframe_frame_begin), not the free-running
+        // learner, defines line/frame layout.
+    } else if (r == 2) {
         if (f->in_frame && (f->learner.t.locked || f->cfg.force_mode)) emit(f, f->y + 1, 0);
         f->y = 0; f->x = 0; f->in_frame = 1;
     } else if (r == 1) {
         f->x = 0;
         if (f->in_frame) f->y++;
     }
-    if (!f->in_frame) return;
+    if (!f->in_frame && !f->fram_mode) return;
     uint32_t W = f->cfg.max_clocks_per_line;
     if (f->y < f->cfg.max_lines && f->x < W) {
         uint32_t n = run;
@@ -93,9 +118,44 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
         f->cover[f->y] = 1;
     }
     f->x += run;
+    if (f->fram_mode) {
+        uint32_t dec = run < f->fram_remaining ? run : f->fram_remaining;
+        f->fram_remaining -= dec;
+        if (f->fram_remaining == 0 && covered(f)) emit(f, expected_lines(f), 0);
+    }
 }
 
 void vgaframe_flush(vgaframe_t *f) {
-    if (f->in_frame) emit(f, f->y + 1, 1);
+    if (f->in_frame || f->fram_mode) emit(f, f->y + 1, 1);
     f->in_frame = 0;
+}
+
+void vgaframe_frame_begin(vgaframe_t *f, uint32_t frame_counter, uint16_t first_line,
+                          uint16_t line_count, uint32_t clocks_per_line, uint32_t sample_count) {
+    if (f->fram_mode && frame_counter != f->fram_counter) {
+        int any = 0;
+        for (uint32_t y = 0; y < f->cfg.max_lines; y++)
+            if (f->cover[y]) { any = 1; break; }
+        if (any) emit(f, expected_lines(f) ? expected_lines(f) : f->fram_max_line, 1);
+    }
+    f->fram_mode = 1;
+    f->fram_counter = frame_counter;
+    f->fram_first_line = first_line;
+    f->fram_line_count = line_count;
+    f->fram_cpl = clocks_per_line;
+    f->fram_remaining = sample_count;
+    f->y = first_line;
+    f->x = 0;
+    if ((uint32_t)first_line + line_count > f->fram_max_line) f->fram_max_line = (uint32_t)first_line + line_count;
+    // The window starts at an hsync leading edge, but is not contiguous with
+    // whatever the learner last saw (a different, possibly distant, window).
+    // Forget the in-progress hsync phase so the discontinuity is not
+    // mistaken for a real edge; vgaframe_timing_push will treat the first
+    // sample of this window as a fresh start, exactly like stream start.
+    f->learner.clk_in_line = 0;
+    f->learner.have_prev = 0;
+    f->learner.h_high = 0;
+    f->learner.h_low = 0;
+    f->learner.v_high_lines = 0;
+    f->learner.v_low_lines = 0;
 }
