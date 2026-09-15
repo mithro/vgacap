@@ -17,7 +17,7 @@ testpaths = ["python/tests"]
 
 [tool.setuptools]
 package-dir = {"" = "python"}
-packages = ["vgacap", "ttcap"]
+packages = ["vgacap", "ttcap", "ttcap.mp"]
 
 [build-system]
 requires = ["setuptools>=68"]

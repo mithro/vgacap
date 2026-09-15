@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """ttcap command-line entry point.
 
-Only the `probe` subcommand exists so far: it connects to a board's raw REPL
-and prints `sys.version` and `GPIOMap.all()`, so a board/link can be sanity
-checked before the throughput and capture subcommands (added in later
-milestone-3 tasks) are used.
+Subcommands:
+
+* `probe` connects to a board's raw REPL and prints `sys.version` and
+  `GPIOMap.all()`, so a board/link can be sanity checked.
+* `throughput` measures how fast the board can push bytes over the link,
+  which bounds the project clock a capture can keep up with.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import ast
 from typing import Sequence
 
 from .repl import RawRepl, ReplLink, SerialLink, WebSocketLink
+from .throughput import DEFAULT_BLOCK, DEFAULT_TOTAL, ThroughputResult, measure_throughput
 
 
 def link_from_url(url: str) -> ReplLink:
@@ -49,6 +52,23 @@ def probe(url: str) -> str:
     return report
 
 
+def throughput(url: str, total: int = DEFAULT_TOTAL, block: int = DEFAULT_BLOCK) -> ThroughputResult:
+    """Measure link throughput to `url` and print the one-line summary."""
+    link = link_from_url(url)
+    try:
+        repl = RawRepl(link)
+        repl.enter()
+        try:
+            result = measure_throughput(repl, total=total, block=block)
+        finally:
+            repl.exit()
+    finally:
+        link.close()
+
+    print(result.format())
+    return result
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ttcap")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -60,10 +80,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         "link", help="serial:/dev/ttyACM0 or ws://host:8765/serial"
     )
 
+    throughput_parser = subparsers.add_parser(
+        "throughput", help="measure how fast the board can push bytes over the link"
+    )
+    throughput_parser.add_argument(
+        "link", help="serial:/dev/ttyACM0 or ws://host:8765/serial"
+    )
+    throughput_parser.add_argument(
+        "--bytes",
+        dest="total",
+        type=int,
+        default=DEFAULT_TOTAL,
+        help=f"payload bytes to send (default {DEFAULT_TOTAL})",
+    )
+    throughput_parser.add_argument(
+        "--block",
+        type=int,
+        default=DEFAULT_BLOCK,
+        help=f"board-side write size in bytes (default {DEFAULT_BLOCK})",
+    )
+
     args = parser.parse_args(argv)
     if args.command == "probe":
         probe(args.link)
         return 0
+    if args.command == "throughput":
+        result = throughput(args.link, total=args.total, block=args.block)
+        return 1 if (result.corrupt or result.short) else 0
     parser.error(f"unknown command {args.command!r}")
     return 2
 

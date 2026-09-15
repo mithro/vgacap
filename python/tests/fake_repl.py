@@ -125,9 +125,12 @@ class _StubBuffer:
 
     def __init__(self, sink: bytearray) -> None:
         self._sink = sink
+        self.write_sizes: list[int] | None = None
 
     def write(self, data) -> int:
         self._sink.extend(data)
+        if self.write_sizes is not None:
+            self.write_sizes.append(len(data))
         return len(data)
 
     def flush(self) -> None:
@@ -171,8 +174,9 @@ class FakeBinaryBoard:
         self._in = bytearray()
         self._in_raw_mode = False
         self._sink = bytearray()
+        self._stdout = _StubStdout(self._sink)
         stub_sys = types.SimpleNamespace(
-            stdout=_StubStdout(self._sink),
+            stdout=self._stdout,
             version="3.4.0",
             implementation=types.SimpleNamespace(name="micropython"),
         )
@@ -189,6 +193,10 @@ class FakeBinaryBoard:
         self._builtins = dict(vars(builtins))
         self._builtins["__import__"] = _import
         self._globals: dict = {"__builtins__": self._builtins}
+
+    def record_write_sizes(self, sink: list[int]) -> None:
+        """Append the length of every `sys.stdout.buffer.write()` to `sink`."""
+        self._stdout.buffer.write_sizes = sink
 
     # -- ReplLink ---------------------------------------------------------
     def write(self, data: bytes) -> None:
