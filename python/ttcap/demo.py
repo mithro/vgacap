@@ -801,6 +801,21 @@ def demo(args: argparse.Namespace) -> int:
     return returncode if returncode >= 0 else 128 - returncode
 
 
+def for_help(text: str) -> str:
+    """`text` as an argparse help string, with its per cents kept literal.
+
+    argparse runs every help string through `% params` so that `%(default)s`
+    works, which means a `%` that is part of the *text* is read as a format
+    placeholder: `frame-%04d.png` in a help string made
+    `ttcap demo --help` die with `TypeError: %d format: a real number is
+    required, not dict`, and the first thing anyone types is `--help`.
+
+    Applied to values interpolated into help, not to the help string's own
+    `%(default)s` -- those are placeholders and are meant to be expanded.
+    """
+    return text.replace("%", "%%")
+
+
 def add_parser(subparsers) -> argparse.ArgumentParser:
     """Register `demo` on `ttcap`'s subparsers."""
     parser = subparsers.add_parser(
@@ -810,6 +825,9 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
             "Point the capture pipeline at a Tiny Tapeout board and produce "
             "video. One capture feeds every output that is switched on."
         ),
+        # An epilog is only interpolated when it contains `%(prog)`, so it is
+        # *not* escaped the way a help string is -- doubling a per cent here
+        # would print it doubled. Neither value below carries one.
         epilog=(
             "Welland boards (%s) are reached through the fpgas.online bridge, "
             "which is on the bench network; from a workstation open an SSH "
@@ -819,7 +837,9 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
             % (board_choices(), PI_SERIAL_LINK)
         ),
     )
-    parser.add_argument("--board", help="Welland board slug: %s" % board_choices())
+    parser.add_argument(
+        "--board", help=for_help("Welland board slug: %s" % board_choices())
+    )
     parser.add_argument(
         "--link",
         help="reach the board this way instead: serial:/dev/ttyACM0, or "
@@ -856,20 +876,22 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
         "--no-png",
         dest="png",
         action="store_false",
-        help="do not write %s" % PNG_PATTERN,
+        help=for_help("do not write %s" % PNG_PATTERN),
     )
     parser.add_argument(
         "--no-video",
         dest="video",
         action="store_false",
-        help="do not write %s" % VIDEO_FILENAME,
+        help=for_help("do not write %s" % VIDEO_FILENAME),
     )
     parser.add_argument(
         "--video-encoder",
         choices=["auto", *(name for name, _ in VIDEO_ENCODERS)],
         default="auto",
-        help="encoder for %s; auto takes the first one installed (default)"
-        % VIDEO_FILENAME,
+        help=for_help(
+            "encoder for %s; auto takes the first one installed (default)"
+            % VIDEO_FILENAME
+        ),
     )
     parser.add_argument(
         "--profile",
@@ -882,8 +904,10 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     parser.add_argument(
         "--ttcap-command",
         default=DEFAULT_TTCAP_COMMAND,
-        help="the command vgacapttsrc runs to capture (default %r)"
-        % DEFAULT_TTCAP_COMMAND,
+        help=for_help(
+            "the command vgacapttsrc runs to capture (default %r)"
+            % DEFAULT_TTCAP_COMMAND
+        ),
     )
     parser.add_argument(
         "--dry-run",

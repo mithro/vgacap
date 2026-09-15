@@ -630,7 +630,15 @@ def png(stream_path: str, out_prefix: str, vgacap_frames: str | None = None) -> 
     return written
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Every subcommand `ttcap` has, with nothing parsed yet.
+
+    Separate from `main` so the parser can be had without running anything --
+    `--help` for every subcommand is tested that way, and a help string that
+    raises is a real failure mode: argparse expands help text with
+    `% params`, so a literal per cent in one (a `frame-%04d.png` pattern,
+    say) turns `--help` into a `TypeError`.
+    """
     parser = argparse.ArgumentParser(prog="ttcap")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -757,6 +765,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     add_demo_parser(subparsers)
 
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "probe":
         # Wrapped like `capture`: `ttcap probe serial:/dev/nope` is the
