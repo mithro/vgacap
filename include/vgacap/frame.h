@@ -64,6 +64,7 @@ typedef struct vgaframe_timing_learner {
     // which puts every pixel at its true position in the line.
     uint32_t report_x;
     uint32_t line_in_frame;
+    uint8_t  v_started;          // 1 once a vsync phase boundary has been placed (see the retroactive first frame)
     uint32_t v_high_lines, v_low_lines;
     uint32_t last_cpl, last_lpf; // previous measurements for the lock check
     uint32_t h_edge_count;
@@ -71,7 +72,21 @@ typedef struct vgaframe_timing_learner {
 
 void vgaframe_timing_init(vgaframe_timing_learner_t *l);
 // Feeds one sample's sync levels for `run` clocks; returns 1 when a new line
-// started, 2 when a new frame started, else 0.
+// started, 2 when a new frame started, 3 when a new line started and the
+// current frame is found to have started vsync_lines lines ago, else 0.
+//
+// Retroactive first frame: a capture that starts mid-frame cannot recognise
+// its first vsync pulse as it begins (the pulse phase has never been
+// measured at that point, so there is nothing to compare against). The
+// moment that first pulse *ends*, though, both levels have been seen: the
+// pulse is known to have been vsync_lines lines long, and the frame it began
+// is known to have started that many lines ago. That is reported as 3 so the
+// frame can be claimed retroactively - the caller sets y = vsync_lines and
+// starts filling in - instead of being discarded, which used to cost one
+// whole frame per capture. The lines before the decision are not recoverable
+// (they were never stored), but they hold only the vsync pulse, which for
+// every real mode is well outside the active area, so the frame is still
+// complete.
 //
 // Glitch tolerance: real silicon (seen on tt08's tt_um_rejunity_vga_logo)
 // emits spurious hsync pulses of 2 to 30 clocks a few times per capture, and

@@ -24,6 +24,8 @@ static void vsync_sample(vgaframe_timing_learner_t *l, uint8_t v, int *ret) {
             else                   { pulse_level = v;         pulse_len = other; }
             l->t.vsync_positive = pulse_level;
             l->t.vsync_lines = pulse_len;
+            int first = !l->v_started;
+            l->v_started = 1;
             if (v == pulse_level) {
                 l->t.lines_per_frame = l->line_in_frame;
                 l->t.locked = (uint8_t)(l->last_lpf != 0 &&
@@ -49,6 +51,11 @@ static void vsync_sample(vgaframe_timing_learner_t *l, uint8_t v, int *ret) {
                 // measures the true frame length instead of "lines since
                 // the process started".
                 l->line_in_frame = pulse_len;
+                // This is also the first moment at which that missed entry
+                // can be placed: it was pulse_len lines ago. Report it, so
+                // the frame it began is claimed retroactively rather than
+                // thrown away - it is a whole frame per capture.
+                if (first) *ret = 3;
             }
         }
         if (v) l->v_high_lines = 0; else l->v_low_lines = 0;

@@ -152,6 +152,14 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
     memset(f->cover, 0, f->cfg.max_lines);
 }
 
+// A continuous-mode frame has started, so any FRAM accumulation still
+// waiting for the window that would complete it is never going to get it:
+// publish what was covered and free the buffer for the new frame.
+static void flush_pending_fram(vgaframe_t *f) {
+    if (f->fram_pending && covered_any(f)) emit(f, expected_lines(f), 1, 1);
+    f->fram_pending = 0;
+}
+
 void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
     uint8_t h = bit(f->cfg.signal_map, sample, VGACAP_SIG_HSYNC);
     uint8_t v = bit(f->cfg.signal_map, sample, VGACAP_SIG_VSYNC);
@@ -163,16 +171,22 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
     // every pixel at its true position in the line. It also keeps the
     // ignored clocks of a glitch in place instead of restarting the line.
     if (f->fram_active) {
-        if (r == 1) { f->x = f->learner.report_x; f->y++; }
-        // r == 2 (learner-detected frame boundary) is ignored: inside a FRAM
-        // chunk the window metadata (vgaframe_frame_begin), not the
-        // free-running learner, defines line/frame layout.
+        if (r == 1 || r == 3) { f->x = f->learner.report_x; f->y++; }
+        // r == 2 (learner-detected frame boundary) is ignored, and r == 3 is
+        // taken as a plain line start: inside a FRAM chunk the window
+        // metadata (vgaframe_frame_begin), not the free-running learner,
+        // defines line/frame layout.
+    } else if (r == 3) {
+        // The learner has just placed the frame start it could not recognise
+        // as it happened: it was vsync_lines lines ago, so this line is line
+        // vsync_lines of a frame that is already under way. Those lines hold
+        // only the vsync pulse and were never stored, which costs nothing -
+        // no real mode puts active pixels inside its own vsync.
+        f->x = f->learner.report_x;
+        if (f->in_frame) f->y++;
+        else { flush_pending_fram(f); f->in_frame = 1; f->y = f->learner.t.vsync_lines; }
     } else if (r == 2) {
-        // A continuous-mode frame has started, so any FRAM accumulation
-        // still waiting for the window that would complete it is never
-        // going to get it: publish what was covered and free the buffer.
-        if (f->fram_pending && covered_any(f)) emit(f, expected_lines(f), 1, 1);
-        f->fram_pending = 0;
+        flush_pending_fram(f);
         // Trust an exact (clocks_per_line, lines_per_frame) match against
         // the built-in table on the very first fully measured frame, not
         // only a `locked` (two independently agreeing measurements) one:

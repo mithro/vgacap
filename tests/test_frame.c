@@ -101,33 +101,50 @@ TEST(force_mode_wider_than_buffer_emits_nothing) {
     ASSERT_EQ_U(nframes, 0);
 }
 
-TEST(converges_from_a_mid_frame_start) {
-    // A capture has no reason to start aligned to a frame boundary. Feed
-    // three full frames' worth of samples, but starting mid-frame (300
-    // lines + 100 clocks in, wrapping around) with no force_mode: the
-    // pulse that begins the first (conceptual) frame in this data can
-    // never be recognised as a frame start (its own duration has not been
-    // measured yet when it begins - see the timing.c fix), so capture and
-    // measurement only really begin at the *second* pulse entry, needing a
-    // third to complete and confirm a capture. Two full frames' worth of
-    // data - the naive reading of "no reason to start aligned" - is
-    // provably not enough for *any* implementation of this design to
-    // produce a captured, complete frame, since capturing cannot start
-    // before the first recognisable entry and a full subsequent period is
-    // needed after that to complete one; confirmed empirically (a variant
-    // of this test with `2u * n` fails: nframes stays 0).
-    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
-    size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
-    vgaframe_t f; setup(&f, NULL);
-    size_t offset = 300u * 800u + 100u;
-    for (size_t k = 0; k < 3u * n; k++) vgaframe_push(&f, buf[(offset + k) % n], 1);
-    ASSERT_TRUE(nframes >= 1);
+static void assert_bars_640x480(void) {
     ASSERT_EQ_U(last.width, 640); ASSERT_EQ_U(last.height, 480); ASSERT_EQ_U(last.partial, 0);
     ASSERT_TRUE(last.timing->mode != NULL);
     for (uint16_t y = 0; y < 480; y++) for (uint16_t x = 0; x < 640; x++) {
         uint8_t c = bars(NULL, x, y); const uint8_t *q = last_rgb + (y * 640 + x) * 3;
         ASSERT_EQ_U(q[0], ((c >> 4) & 3) * 85); ASSERT_EQ_U(q[1], ((c >> 2) & 3) * 85); ASSERT_EQ_U(q[2], (c & 3) * 85);
     }
+}
+
+TEST(converges_from_a_mid_frame_start) {
+    // A capture has no reason to start aligned to a frame boundary. Feed
+    // two full frames' worth of samples, but starting mid-frame (300 lines
+    // + 100 clocks in, wrapping around) with no force_mode.
+    //
+    // The pulse that begins the first (conceptual) frame in this data can
+    // never be recognised *as it begins* - its own duration has not been
+    // measured yet - but two lines later, when the pulse ends, the learner
+    // knows how long it was and therefore that a frame began vsync_lines
+    // lines ago. That frame is claimed retroactively, so it is the frame
+    // between the first and second pulses that gets emitted, not the one
+    // between the second and third: two frame periods are enough, where
+    // three used to be needed. The lines before the decision hold nothing
+    // but the vsync pulse, which is never inside the active area, so the
+    // picture is still complete and pixel-exact.
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+    vgaframe_t f; setup(&f, NULL);
+    size_t offset = 300u * 800u + 100u;
+    for (size_t k = 0; k < 2u * n; k++) vgaframe_push(&f, buf[(offset + k) % n], 1);
+    ASSERT_EQ_U(nframes, 1);
+    assert_bars_640x480();
+}
+
+TEST(three_mid_frame_periods_yield_two_frames) {
+    // The retroactive first frame must not cost a later one: every
+    // subsequent pulse still closes exactly one frame.
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+    vgaframe_t f; setup(&f, NULL);
+    size_t offset = 300u * 800u + 100u;
+    for (size_t k = 0; k < 3u * n; k++) vgaframe_push(&f, buf[(offset + k) % n], 1);
+    ASSERT_EQ_U(nframes, 2);
+    ASSERT_EQ_U(last.frame_counter, 1);
+    assert_bars_640x480();
 }
 
 TEST(mode_match_trusted_over_disagreeing_measurement) {
@@ -289,6 +306,7 @@ int main(void) {
     RUN(oversized_run_does_not_overflow);
     RUN(force_mode_wider_than_buffer_emits_nothing);
     RUN(converges_from_a_mid_frame_start);
+    RUN(three_mid_frame_periods_yield_two_frames);
     RUN(mode_match_trusted_over_disagreeing_measurement);
     RUN(glitchy_hsync_still_reconstructs_640x480);
     RUN(glitchy_hsync_still_reconstructs_800x600);
