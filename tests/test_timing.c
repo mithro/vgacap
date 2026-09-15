@@ -148,6 +148,29 @@ TEST(a_pulse_of_the_right_shape_is_never_filtered) {
     }
 }
 
+TEST(recovers_from_a_mislearned_pulse_shape) {
+    // The filter judges pulses against what it has learned, so a bad first
+    // measurement must not be able to wedge it for ever. A capture that
+    // begins *inside* an hsync pulse (46 of its 96 clocks are left) and
+    // meets a 2-clock spurious pulse before its first clean line learns
+    // that 2-clock pulse as the sync width - the only pulse it has ever
+    // measured end to end - and would then reject every real pulse from
+    // then on, learning nothing at all. After enough consecutive
+    // rejections the learner must conclude that it is its own reference
+    // that is wrong and bootstrap again.
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, black, NULL, buf, sizeof buf / sizeof buf[0]);
+    inject_hsync_glitch(buf, m, 0, 400, 2);
+    vgaframe_timing_learner_t l; vgaframe_timing_init(&l);
+    for (size_t k = 0; k < 4u * n; k++) {
+        size_t i = (50u + k) % n;   // 50 clocks into the first hsync pulse
+        vgaframe_timing_push(&l, (uint8_t)((buf[i] >> 7) & 1), (uint8_t)((buf[i] >> 3) & 1), 1);
+    }
+    ASSERT_EQ_U(l.t.clocks_per_line, 800); ASSERT_EQ_U(l.t.lines_per_frame, 525);
+    ASSERT_EQ_U(l.t.hsync_width, 96); ASSERT_EQ_U(l.t.locked, 1);
+    ASSERT_TRUE(l.t.mode != NULL);
+}
+
 int main(void) {
     RUN(learns_640x480_negative_syncs);
     RUN(learns_800x600_positive_syncs);
@@ -157,5 +180,6 @@ int main(void) {
     RUN(ignores_hsync_glitches_640x480);
     RUN(ignores_hsync_glitches_800x600);
     RUN(a_pulse_of_the_right_shape_is_never_filtered);
+    RUN(recovers_from_a_mislearned_pulse_shape);
     RUN_TESTS_END();
 }

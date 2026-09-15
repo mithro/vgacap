@@ -58,6 +58,7 @@ typedef struct vgaframe_timing_learner {
     // caller's x position follows clk_in_line (see vgaframe_push).
     uint8_t  pulse_open;
     uint32_t pulse_start_clk;
+    uint32_t ignored_run;        // consecutive pulses the filter has rejected (see the give-up rule)
     // Clock offset, within the line just started, of the sample that carried
     // the report: the pulse's width, since the report comes at its trailing
     // edge. The caller starts the new line's pixels there (vgaframe_push),
@@ -104,6 +105,10 @@ void vgaframe_timing_init(vgaframe_timing_learner_t *l);
 // increments vgaframe_timing_t.glitches. Because a pulse's width is only
 // known at its trailing edge, that is where a line start is reported - see
 // report_x, which keeps the caller's pixel positions exact regardless.
+// Should the filter reject many pulses in a row it throws its own
+// measurement away and bootstraps again, so a bad first measurement (a
+// stream that starts inside a pulse and meets a glitch before its first
+// clean line can learn a 2-clock pulse as the sync width) cannot wedge it.
 int  vgaframe_timing_push(vgaframe_timing_learner_t *l, uint8_t hsync, uint8_t vsync, uint32_t run);
 
 // ---- frame reconstruction ------------------------------------------------

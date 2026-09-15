@@ -64,6 +64,13 @@ static void vsync_sample(vgaframe_timing_learner_t *l, uint8_t v, int *ret) {
     l->prev_v = v;
 }
 
+// Consecutive rejected pulses after which the learner stops believing its own
+// measurement and starts over. Real glitch bursts chop up a line or two at a
+// time (five rejections in a row is the worst the tt08 capture shows), so this
+// is far above anything the filter should reject legitimately, and it still
+// recovers within a handful of lines.
+#define GIVE_UP_AFTER 16u
+
 // Is the glitch filter armed? Only once a full measurement exists to judge a
 // candidate pulse against; before that every pulse is taken at face value,
 // which is what lets the learner bootstrap at all.
@@ -120,17 +127,35 @@ int vgaframe_timing_push(vgaframe_timing_learner_t *l, uint8_t h, uint8_t v, uin
             // `completed` is its full width and the line it would start
             // began `completed` clocks ago.
             l->pulse_open = 0;
-            if (!filter_armed(l) || pulse_is_a_line_start(l, completed)) {
+            if (l->ignored_run >= GIVE_UP_AFTER) {
+                // Nothing has looked like a line for many lines, so it is
+                // the reference that must be wrong, not the signal: a
+                // stream that starts inside an hsync pulse and meets a
+                // glitch before its first clean line learns the glitch's
+                // width as the pulse width, and would reject every real
+                // pulse from then on. Throw the measurement away and
+                // bootstrap the hsync side exactly as at stream start,
+                // rather than trust it and lock onto a wrong line length.
+                l->t.hsync_width = 0;
+                l->t.clocks_per_line = 0;
+                l->clk_in_line = 0;
+                l->h_high = l->h_low = 0;
+                l->pulse_open = 0;
+                l->ignored_run = 0;
+                l->t.glitches++;
+            } else if (!filter_armed(l) || pulse_is_a_line_start(l, completed)) {
                 l->t.hsync_positive = pulse_level;
                 l->t.hsync_width = completed;
                 if (l->pulse_start_clk) l->t.clocks_per_line = l->pulse_start_clk;
                 l->clk_in_line = completed;
                 l->report_x = completed;
+                l->ignored_run = 0;
                 l->line_in_frame++;
                 ret = 1;
                 vsync_sample(l, v, &ret);
             } else {
                 l->t.glitches++;
+                l->ignored_run++;
                 ignored = 1;
             }
         }
