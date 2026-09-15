@@ -164,6 +164,76 @@ TEST(mode_match_trusted_over_disagreeing_measurement) {
     }
 }
 
+// Overwrites `width` clocks of hsync, starting `clk` clocks into `line`, with
+// the mode's pulse level: the spurious pulses real silicon produces. Only
+// bit 7 (hsync) is touched, so no pixel's colour changes and the
+// reconstruction stays comparable against the generator.
+static void inject_hsync_glitch(uint32_t *b, const vgaframe_mode_t *m,
+                                uint32_t line, uint32_t clk, uint32_t width) {
+    uint32_t cpl = (uint32_t)m->h_active + m->h_front + m->h_sync + m->h_back;
+    for (uint32_t i = 0; i < width; i++) {
+        size_t k = (size_t)line * cpl + clk + i;
+        if (m->h_sync_positive) b[k] |= 0x80u; else b[k] &= ~0x80u;
+    }
+}
+
+// Two pulses in mid-active-area (one shorter and one longer than a real sync
+// pulse, both far enough into the line to pass the distance test on their
+// own, so only the width test can reject them) and one in the blanking.
+static uint32_t inject_glitch_set(uint32_t *b, const vgaframe_mode_t *m) {
+    uint32_t cpl = (uint32_t)m->h_active + m->h_front + m->h_sync + m->h_back;
+    inject_hsync_glitch(b, m, 100, cpl / 2 + 60, 2);
+    inject_hsync_glitch(b, m, 200, cpl / 2 + 140, 30);
+    inject_hsync_glitch(b, m, 300, cpl - 10, 6);   // front porch: blanking
+    return 3;
+}
+
+TEST(glitchy_hsync_still_reconstructs_640x480) {
+    // One clean frame to learn the timing, then every following frame
+    // carries three spurious hsync pulses. Before the glitch filter each of
+    // them started a line, the frame came up two lines short, and nothing
+    // was emitted at all; now the frames are complete and pixel-exact and
+    // the pulses are only counted.
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+    vgaframe_t f; setup(&f, NULL);
+    for (size_t i = 0; i < n; i++) vgaframe_push(&f, buf[i], 1);
+    uint32_t per_frame = inject_glitch_set(buf, m);
+    for (int fr = 0; fr < 2; fr++) for (size_t i = 0; i < n; i++) vgaframe_push(&f, buf[i], 1);
+    ASSERT_EQ_U(nframes, 1);
+    ASSERT_EQ_U(last.width, 640); ASSERT_EQ_U(last.height, 480); ASSERT_EQ_U(last.partial, 0);
+    ASSERT_TRUE(last.timing->mode != NULL);
+    ASSERT_EQ_U(last.timing->lines_per_frame, 525);
+    ASSERT_EQ_U(last.timing->glitches, per_frame);        // the emitted frame's own
+    ASSERT_EQ_U(f.learner.t.glitches, 2 * per_frame);     // both glitchy frames'
+    for (uint16_t y = 0; y < 480; y++) for (uint16_t x = 0; x < 640; x++) {
+        uint8_t c = bars(NULL, x, y); const uint8_t *q = last_rgb + (y * 640 + x) * 3;
+        ASSERT_EQ_U(q[0], ((c >> 4) & 3) * 85); ASSERT_EQ_U(q[1], ((c >> 2) & 3) * 85); ASSERT_EQ_U(q[2], (c & 3) * 85);
+    }
+}
+
+TEST(glitchy_hsync_still_reconstructs_800x600) {
+    // The same with positive syncs (so the spurious pulses are high, not
+    // low) and run-coalesced input, which is how a real RLE stream arrives.
+    const vgaframe_mode_t *m = vgaframe_mode_match(1056, 628);
+    size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+    vgaframe_t f; setup(&f, NULL);
+    size_t i = 0;
+    while (i < n) { size_t j = i; while (j < n && buf[j] == buf[i]) j++; vgaframe_push(&f, buf[i], (uint32_t)(j - i)); i = j; }
+    uint32_t per_frame = inject_glitch_set(buf, m);
+    for (int fr = 0; fr < 2; fr++) { i = 0; while (i < n) { size_t j = i; while (j < n && buf[j] == buf[i]) j++;
+        vgaframe_push(&f, buf[i], (uint32_t)(j - i)); i = j; } }
+    ASSERT_EQ_U(nframes, 1);
+    ASSERT_EQ_U(last.width, 800); ASSERT_EQ_U(last.height, 600); ASSERT_EQ_U(last.partial, 0);
+    ASSERT_EQ_U(last.timing->lines_per_frame, 628);
+    ASSERT_EQ_U(last.timing->glitches, per_frame);
+    ASSERT_EQ_U(f.learner.t.glitches, 2 * per_frame);
+    for (uint16_t y = 0; y < 600; y++) for (uint16_t x = 0; x < 800; x++) {
+        uint8_t c = bars(NULL, x, y); const uint8_t *q = last_rgb + (y * 800 + x) * 3;
+        ASSERT_EQ_U(q[0], ((c >> 4) & 3) * 85); ASSERT_EQ_U(q[1], ((c >> 2) & 3) * 85); ASSERT_EQ_U(q[2], (c & 3) * 85);
+    }
+}
+
 TEST(flush_emits_partial) {
     const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
     size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
@@ -220,6 +290,8 @@ int main(void) {
     RUN(force_mode_wider_than_buffer_emits_nothing);
     RUN(converges_from_a_mid_frame_start);
     RUN(mode_match_trusted_over_disagreeing_measurement);
+    RUN(glitchy_hsync_still_reconstructs_640x480);
+    RUN(glitchy_hsync_still_reconstructs_800x600);
     RUN(flush_emits_partial);
     RUN(reset_restores_the_post_init_state);
     RUN_TESTS_END();
