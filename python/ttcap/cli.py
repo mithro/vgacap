@@ -11,6 +11,8 @@ Subcommands:
   to a file, or, with `--out -`, to stdout as it arrives, so a video
   pipeline can consume the capture live.
 * `png` renders a captured stream to PNG images via `vgacap-frames`.
+* `demo` points the whole GStreamer pipeline at a board and writes PNGs, a
+  video file, a window and a browser-viewable MJPEG stream (`ttcap.demo`).
 
 Exit codes: 0 success, 1 a board, link or tool error (including a capture
 that ended through `CaptureStats.error`/`timed_out`), 2 a usage error
@@ -48,6 +50,7 @@ from .capture import (
     select_project,
     stop_clock,
 )
+from .demo import add_parser as add_demo_parser, demo
 from .repl import LinkClosed, RawRepl, ReplFramingError, ReplLink, SerialLink, WebSocketLink
 from .throughput import DEFAULT_BLOCK, DEFAULT_TOTAL, ThroughputResult, measure_throughput
 
@@ -752,6 +755,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--vgacap-frames", help="path to the vgacap-frames binary"
     )
 
+    add_demo_parser(subparsers)
+
     args = parser.parse_args(argv)
     if args.command == "probe":
         # Wrapped like `capture`: `ttcap probe serial:/dev/nope` is the
@@ -828,6 +833,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("png failed: %s" % exc, file=sys.stderr)
             return 1
         return 0
+    if args.command == "demo":
+        try:
+            return demo(args)
+        except CAPTURE_FAILURES as exc:
+            # A board slug that is not on the bench, a missing encoder, a
+            # missing gst-launch: all of them are the run's circumstances
+            # rather than a bug, and all of them have already said what to
+            # do about it in the exception's own message.
+            return _failed("demo", exc)
+        except KeyboardInterrupt:
+            # `run_demo` installs its own handler for the duration of the
+            # pipeline, so reaching here means the interrupt landed before
+            # it or after it -- with nothing to wind down either way.
+            print("demo interrupted", file=sys.stderr)
+            return 130
     parser.error(f"unknown command {args.command!r}")
     return 2
 
