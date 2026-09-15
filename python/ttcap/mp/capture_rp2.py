@@ -114,8 +114,24 @@ The project clock pad is never configured here. Driving it through
 `machine.Pin(clk, Pin.IN)` takes the pad away from the firmware's PWM and
 stops the clock outright, and the PIO's `wait gpio` reads the pad's input
 synchroniser whatever its FUNCSEL is -- see `init_input_pins()`.
+
+MEMORY. The stock RP2040 firmware leaves roughly 80 KB of free heap, and
+compiling a script needs most of it at once, so this file's prose is a real
+cost on the wire: the host ships it through `ttcap.mp.minify()`, which
+strips comments and docstrings while keeping the line numbers so a board
+traceback still points here. Measured on tt07 (MicroPython v1.24): the
+unminified 25,358-byte script failed at compile time on some runs -- once
+reporting `MemoryError: memory allocation failed, allocating 6934 bytes`,
+and twice printing `FATAL: uncaught exception` and halting, which is
+`nlr_jump_fail`, an allocation failure where no handler exists; that one
+needs a power cycle. Success depended on fragmentation, so it looked
+intermittent. Each run also leaves ~64 module-level names (~5 KB) in the
+REPL's globals; the host deletes them and collects before the next run
+(`ttcap.capture.prepare_board`), and this script's `finally` drops the two
+DMA buffers (32 KB at the default `buf_words`) and collects as well.
 """
 
+import gc
 import machine
 import micropython
 import rp2
@@ -470,6 +486,8 @@ def main(out):
     OVERRUNS[0] = 0
     dma_a = None
     dma_b = None
+    poller = None
+    stdin = None
 
     try:
         # Ctrl-C becomes an ordinary byte for the whole capture, so that a
@@ -594,6 +612,16 @@ def main(out):
         write_time_chunk(out, overrun_total * SAMPLES_PER_CHUNK, summary.encode())
         if hasattr(out, "flush"):
             out.flush()
+        # Hand the heap back before the host's next command. The two DMA
+        # buffers are 32 KB at the default buf_words, on a board with ~80 KB
+        # free -- waiting for main() to return is too late to be sure the
+        # next compile has room.
+        del bufs
+        dma_a = None
+        dma_b = None
+        poller = None
+        stdin = None
+        gc.collect()
 
 
 _OUT = sys.stdout.buffer

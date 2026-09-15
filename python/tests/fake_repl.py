@@ -295,6 +295,7 @@ class FakeChunkBoard:
         on_quiet_stderr: str = "",
         split: int = 0,
         stop_at_read: int | None = None,
+        mem_free: int = 120_000,
     ) -> None:
         self.chunks = list(chunks)
         self.stderr = stderr
@@ -314,6 +315,8 @@ class FakeChunkBoard:
         self.split = split
         #: pretend the host's stop byte landed just before this read
         self.stop_at_read = stop_at_read
+        #: what any command printing `gc.mem_free()` reports back
+        self.mem_free = mem_free
         self.commands: list[str] = []
         self.interrupts = 0
         self.closed = False
@@ -412,6 +415,12 @@ class FakeChunkBoard:
             self._open = True
             self._terminate = self.terminate
             return
-        out = self.replies.get(code, "").encode("utf-8")
+        if code in self.replies:
+            reply = self.replies[code]
+        elif "gc.mem_free()" in code:
+            # The host's pre-run cleanup, which reads the free heap back.
+            reply = "%d\r\n" % self.mem_free
+        else:
+            reply = ""
         err = self.errors.get(code, "").encode("utf-8")
-        self._out.append(b"OK" + out + CTRL_D + err + CTRL_D + b">")
+        self._out.append(b"OK" + reply.encode("utf-8") + CTRL_D + err + CTRL_D + b">")

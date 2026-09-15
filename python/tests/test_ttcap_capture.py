@@ -19,14 +19,17 @@ from fake_repl import FakeChunkBoard
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
 from ttcap.capture import (
     DEFAULT_PIO,
+    MIN_FREE_BYTES,
     MODE_EXTCLK,
     CaptureError,
     CaptureRequest,
     frames_to_max_bytes,
+    prepare_board,
     run_capture,
     select_project,
     stop_clock,
 )
+from ttcap.capture import _CLEANUP
 from ttcap.repl import RawRepl
 from vgacap.stream import Header, Writer, read_stream
 
@@ -59,6 +62,14 @@ def raw_chunk(profile, samples) -> bytes:
 
 def time_chunk(profile, dropped: int, msg: str) -> bytes:
     return _after_header(header_for(profile), lambda w: w.time(0, 0, dropped, msg))
+
+
+def sample_run(profile, samples) -> list[bytes]:
+    """One RAW chunk plus a clean trailer, as a whole capture would look."""
+    return [
+        raw_chunk(profile, samples),
+        time_chunk(profile, 0, "overruns=0 rxstall=0 sysclk_hz=133000000"),
+    ]
 
 
 def request(profile=RP2040_TT06, **kwargs) -> CaptureRequest:
@@ -393,8 +404,7 @@ def test_ships_the_profile_and_pio_in_the_script_it_runs():
 
     run_capture(repl, request(profile, buf_words=1024, edge="rising"), io.BytesIO())
 
-    (script,) = board.commands
-    assert script.startswith("CFG = ")
+    (script,) = [c for c in board.commands if c.startswith("CFG = ")]
     cfg = eval(script.splitlines()[0][len("CFG = ") :])  # noqa: S307 - our own repr
     assert cfg["gpio_base"] == 16
     assert cfg["push_thresh"] == 32
@@ -435,6 +445,66 @@ def test_capture_request_rejects_impossible_requests(kwargs):
         request(**kwargs)
 
 
+def test_clears_the_previous_run_names_before_sending_the_script():
+    profile = RP2040_TT06
+    board = FakeChunkBoard(sample_run(profile, [1, 2, 3, 4]), mem_free=90_000)
+    repl = connect(board)
+
+    stats = run_capture(repl, request(profile), io.BytesIO())
+
+    cleanup = board.commands[0]
+    assert cleanup.startswith("import gc")
+    assert "gc.collect()" in cleanup and "gc.mem_free()" in cleanup
+    # Every name the script is about to bind, so a second run has room.
+    for name in ("'CFG'", "'main'", "'FULL'", "'on_a'", "'machine'"):
+        assert name in cleanup
+    # ... and it runs before the script, not after.
+    assert board.commands[1].startswith("CFG = ")
+    assert stats.mem_free_before == 90_000
+    assert "mem_free=90000" in stats.format()
+
+
+def test_prepare_board_returns_the_free_heap():
+    board = FakeChunkBoard([], mem_free=84_208)
+    repl = connect(board)
+
+    assert prepare_board(repl, ["A", "B"]) == 84_208
+    assert "['A', 'B']" in board.commands[0]
+
+
+def test_prepare_board_reports_a_board_error():
+    code = _CLEANUP % (["A"],)
+    board = FakeChunkBoard([], errors={code: "MemoryError\r\n"})
+    repl = connect(board)
+
+    with pytest.raises(CaptureError, match="MemoryError"):
+        prepare_board(repl, ["A"])
+
+
+def test_prepare_board_rejects_a_reply_that_is_not_a_number():
+    board = FakeChunkBoard([], replies={_CLEANUP % (["A"],): "no idea\r\n"})
+    repl = connect(board)
+
+    with pytest.raises(CaptureError, match="gc.mem_free"):
+        prepare_board(repl, ["A"])
+
+
+def test_refuses_to_run_when_the_board_has_too_little_heap():
+    # The script may not even compile there, and on tt07 that failure was
+    # twice a `FATAL: uncaught exception` that needed a power cycle.
+    profile = RP2040_TT06
+    board = FakeChunkBoard(sample_run(profile, [1, 2]), mem_free=MIN_FREE_BYTES - 1)
+    repl = connect(board)
+    out = io.BytesIO()
+
+    with pytest.raises(CaptureError, match="Reset the board"):
+        run_capture(repl, request(profile), out)
+
+    # Nothing was sent and no header-only file was left behind.
+    assert not any(c.startswith("CFG = ") for c in board.commands)
+    assert out.getvalue() == b""
+
+
 def test_a_lost_framing_ends_the_run_instead_of_escaping():
     # A bad tag means nothing further can be read by length. The script is
     # still running on the board, so it has to be interrupted -- otherwise
@@ -457,11 +527,14 @@ def test_a_lost_framing_ends_the_run_instead_of_escaping():
     assert [item[1] for item in items if item[0] == "run"] == [1, 2]
 
 
-def test_frames_to_max_bytes_covers_the_requested_frames_plus_one():
-    # 640x480@60 is 800 x 525 = 420_000 clocks per frame, and one extra
-    # frame of margin because a capture starts mid-frame.
-    assert frames_to_max_bytes(RP2040_TT06, 3) == 4 * (420_000 * 4 // 2)
-    assert frames_to_max_bytes(RP2350_DBV3, 3) == 4 * (420_000 * 4 // 4)
+def test_frames_to_max_bytes_covers_the_requested_frames_plus_two():
+    # 640x480@60 is 800 x 525 = 420_000 clocks per frame, and *two* extra
+    # frame periods of margin: a capture starts mid-frame, so the tail of
+    # that frame is unusable and the next boundary only locates the frames.
+    # Measured on tt07: one extra frame gave 837,632 samples and
+    # `vgacap-frames` rendered nothing at all.
+    assert frames_to_max_bytes(RP2040_TT06, 3) == 4 * (420_000 * 5 // 2)
+    assert frames_to_max_bytes(RP2350_DBV3, 3) == 4 * (420_000 * 5 // 4)
     # More frames is more bytes, and the RP2350 packs twice as densely.
     assert frames_to_max_bytes(RP2040_TT06, 9) > frames_to_max_bytes(RP2040_TT06, 3)
     assert frames_to_max_bytes(RP2040_TT06, 3) == 2 * frames_to_max_bytes(RP2350_DBV3, 3)

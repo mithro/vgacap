@@ -59,6 +59,28 @@ MODE_EXTCLK = 0
 #: needs `--max-bytes` worked out by hand.
 CLOCKS_PER_FRAME_640X480 = 800 * 525
 
+#: Free heap the board needs before a capture script is worth sending.
+#:
+#: The stock RP2040 firmware leaves ~80 KB and the minified script still
+#: needs room to compile, so anything much below half of that is a run that
+#: will fail -- and its failure mode is not always a clean `MemoryError`:
+#: twice on tt07 the board printed `FATAL: uncaught exception` and halted,
+#: needing a power cycle. Refusing early is strictly kinder.
+MIN_FREE_BYTES = 40_000
+
+#: Deletes the names a previous run left in the board's REPL globals, then
+#: collects and reports the free heap. `globals()` in the raw REPL *is* that
+#: namespace, and `pop(name, None)` tolerates a first run where none of them
+#: exist yet.
+_CLEANUP = (
+    "import gc\n"
+    "for _n in %r:\n"
+    "    globals().pop(_n, None)\n"
+    "globals().pop('_n', None)\n"
+    "gc.collect()\n"
+    "print(gc.mem_free())\n"
+)
+
 #: Per-read timeout while a capture is streaming. Generous, because the gap
 #: between chunks is a whole DMA buffer of project clocks: at 100 kHz with
 #: buf_words=4096 that is ~82 ms, but a slower clock stretches it linearly.
@@ -133,17 +155,20 @@ def capture_cfg(
 def frames_to_max_bytes(profile: BoardProfile, frames: int) -> int:
     """Bytes the board must emit to be sure of `frames` complete frames.
 
-    Assumes 640x480@60 timing (`CLOCKS_PER_FRAME_640X480`), and asks for one
-    frame more than requested: a capture starts mid-frame, so the first
-    boundary plus one whole frame are needed before the first picture can be
-    reconstructed at all (see the README).
+    Assumes 640x480@60 timing (`CLOCKS_PER_FRAME_640X480`), and asks for
+    **two** frame periods more than requested. A capture starts mid-frame,
+    so the tail of that frame is unusable and the next boundary only tells
+    the reconstruction where frames begin; one whole frame after it is the
+    first that can be rendered. Measured: a `--frames 1` capture sized with
+    a single extra frame gave 837,632 samples on tt07 and `vgacap-frames`
+    produced **zero** frames from it.
 
     Only the packed sample words are counted. Chunk headers add 8 bytes per
-    ~16 KB buffer, which the margin frame covers many times over.
+    ~16 KB buffer, which the margin covers many times over.
     """
     if frames <= 0:
         raise ValueError(f"frames must be positive, got {frames}")
-    samples = CLOCKS_PER_FRAME_640X480 * (frames + 1)
+    samples = CLOCKS_PER_FRAME_640X480 * (frames + 2)
     words = -(-samples // profile.samples_per_word)
     return 4 * words
 
@@ -237,6 +262,9 @@ class CaptureStats:
     #: that went quiet). Empty when the board finished on its own terms.
     #: Whatever was written before it is still a valid stream.
     error: str = ""
+    #: `gc.mem_free()` the board reported after the pre-run cleanup. Worth
+    #: watching: below `MIN_FREE_BYTES` the script may not compile at all.
+    mem_free_before: int = 0
 
     @property
     def clean(self) -> bool:
@@ -264,6 +292,8 @@ class CaptureStats:
         )
         if self.seconds > 0:
             line += " samples_per_s=%.0f" % (self.samples / self.seconds)
+        if self.mem_free_before:
+            line += " mem_free=%d" % self.mem_free_before
         if self.timed_out:
             line += " timed_out=yes"
         if self.error:
@@ -315,6 +345,25 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
     _exec_checked(repl, f"tt.clock_project_PWM({int(req.clock_hz)})")
     _exec_checked(repl, "tt.reset_project(False)")
     return did
+
+
+def prepare_board(repl: RawRepl, names: list[str], timeout: float = 10.0) -> int:
+    """Clear a previous run's leftovers and return the free heap in bytes.
+
+    Deletes every module-level name the script is about to define, collects,
+    and reads `gc.mem_free()`. On tt07 that recovered about 5 KB (79,296 ->
+    84,208 free), which was the difference between a capture script that
+    compiled and one that did not.
+    """
+    stdout, stderr = repl.exec(_CLEANUP % (names,), timeout=timeout)
+    if stderr.strip():
+        raise CaptureError(f"board rejected the cleanup:\n{stderr.strip()}")
+    try:
+        return int(stdout.strip())
+    except ValueError:
+        raise CaptureError(
+            f"board did not report gc.mem_free(), said {stdout.strip()!r}"
+        ) from None
 
 
 def stop_clock(repl: RawRepl) -> None:
@@ -396,8 +445,23 @@ def run_capture(
 
     The clock is left running: stopping it is `stop_clock()`, so a caller
     can take several captures of one design without restarting it.
+
+    Nothing is written to `out` until the board has been cleaned up and has
+    enough free heap to compile the script, so a refused run leaves no
+    header-only file behind.
     """
     profile = req.profile
+    script = mp.with_cfg(mp.minify(mp.load("capture_rp2.py")), req.cfg())
+
+    mem_free = prepare_board(repl, mp.module_level_names(script))
+    if mem_free < MIN_FREE_BYTES:
+        raise CaptureError(
+            "board has only %d bytes of free heap after a collect, need %d; "
+            "compiling the capture script there can fail without a clean "
+            "error (tt07 printed 'FATAL: uncaught exception' and halted). "
+            "Reset the board and try again." % (mem_free, MIN_FREE_BYTES)
+        )
+
     Writer(
         out,
         Header(
@@ -411,8 +475,6 @@ def run_capture(
             desc=_describe(req),
         ),
     )
-
-    script = mp.with_cfg(mp.load("capture_rp2.py"), req.cfg())
 
     total_bytes = 0
     samples = 0
@@ -485,4 +547,5 @@ def run_capture(
         timed_out=timed_out,
         dropped=dropped,
         error=error,
+        mem_free_before=mem_free,
     )
