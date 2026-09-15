@@ -293,6 +293,31 @@ def run_demo_process(argv: list[str], timeout: int = TIMEOUT) -> subprocess.Comp
                           timeout=timeout)
 
 
+def alive(pid: int) -> bool:
+    """Is `pid` still a live process?
+
+    An orphan is reparented to init and reaped there, so it disappears
+    outright rather than lingering as a zombie -- `ProcessLookupError` is a
+    reliable "gone".
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # pragma: no cover - alive, and not ours
+        return True
+    return True
+
+
+def wait_for(predicate, timeout: float = 30.0, step: float = 0.1) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(step)
+    return False
+
+
 def video_duration_ns(path: pathlib.Path) -> int:
     """The video's duration according to `gst-discoverer-1.0`.
 
@@ -482,6 +507,49 @@ def _read_two_parts(stream, limit: int = 8 << 20) -> bytes:
 
 
 @needs_gstreamer
+@pytest.mark.parametrize(
+    "signum", [signal.SIGTERM, signal.SIGHUP], ids=["SIGTERM", "SIGHUP"]
+)
+def test_a_demo_killed_by_anything_does_not_leave_the_board_captured(tmp_path, signum):
+    """The worst failure this command had: a capture nobody can stop.
+
+    The pipeline runs in a session of its own so it hears only what this
+    process forwards -- which used to be SIGINT and nothing else, so a
+    `kill`, a closed terminal or an OOM kill left `ttcap` holding a shared
+    bench board with no terminal left to own it.
+
+    `--no-png` on purpose: with the PNG branch, `multifilesink
+    post-messages=true` makes the child write a bus line per frame, so it
+    takes SIGPIPE the moment the demo dies. That is luck, not a shutdown
+    path, and it hid this.
+    """
+    pid_file = tmp_path / "ttcap.pid"
+    child = subprocess.Popen(
+        demo_argv(
+            tmp_path / "out", "--no-png",
+            fake=("--frames", "0", "--chunk-delay", "0.02",
+                  "--pid-file", str(pid_file)),
+        ),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=gst_env(),
+    )
+    try:
+        assert wait_for(pid_file.exists), "the fake ttcap never started"
+        capture_pid = int(pid_file.read_text())
+        assert wait_for(lambda: alive(capture_pid), timeout=10)
+
+        child.send_signal(signum)
+        child.communicate(timeout=90)
+        assert wait_for(lambda: not alive(capture_pid)), (
+            "the capture outlived the demo: pid %d is still holding the board"
+            % capture_pid
+        )
+    finally:
+        if child.poll() is None:  # pragma: no cover - only on a failure
+            child.kill()
+            child.communicate(timeout=30)
+
+
+@needs_gstreamer
 def test_an_interrupted_run_leaves_a_playable_video(tmp_path):
     outdir = tmp_path / "out"
     argv = demo_argv(
@@ -499,7 +567,7 @@ def test_an_interrupted_run_leaves_a_playable_video(tmp_path):
     child.send_signal(signal.SIGINT)
     out, err = child.communicate(timeout=90)
     assert child.returncode == 0, out + err
-    assert "interrupted" in err
+    assert "SIGINT: asking the pipeline to end the stream" in err
     # The point of the test: a Matroska file whose muxer never finished has
     # no readable duration, and `gst-launch -e` is what turns the interrupt
     # into an end-of-stream that reaches it.

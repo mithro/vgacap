@@ -38,7 +38,9 @@ an element property, which only whoever builds the pipeline can do.
 from __future__ import annotations
 
 import argparse
+import atexit
 import contextlib
+import functools
 import os
 import pathlib
 import re
@@ -656,6 +658,55 @@ def _summarise(plan: DemoPlan, progress: Progress, returncode: int,
                      % (server.broadcaster.parts, plan.serve_port))
 
 
+#: The signals that mean "this run is over": Ctrl-C, `kill`, and the
+#: terminal going away. All three are forwarded to the pipeline as SIGINT,
+#: which is the only one `gst-launch -e` turns into an end-of-stream, so a
+#: `kill` winds the board down and finalises the video exactly as Ctrl-C
+#: does. Handling only SIGINT is what used to leave a capture running on a
+#: shared bench board with no terminal left to stop it.
+STOP_SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP")
+
+#: How long the last-resort teardown gives each rung of the ladder.
+TEARDOWN_GRACE = 10.0
+
+
+def stop_child_group(child: subprocess.Popen, grace: float = TEARDOWN_GRACE,
+                     say=None) -> None:
+    """Make sure `child` and everything it started are gone.
+
+    The pipeline is its own session, so `ttcap` and whatever `uv run` put
+    between them are all in one process group that `killpg` reaches -- which
+    is the point of the session, and the reason signalling `child.pid` alone
+    is not enough.
+
+    Three rungs, because the first two are how the board gets to wind down:
+    SIGINT is `gst-launch -e`'s end-of-stream, SIGTERM is its blunter cousin,
+    and SIGKILL is what is left. A run that ended normally takes none of
+    them.
+
+    This is the backstop, not the normal path: it runs from `run_demo`'s
+    `finally` and again from an `atexit` hook, so an exception, a `kill`, or
+    a `sys.exit` from anywhere still tears the capture down. Nothing can
+    cover a SIGKILL of this process itself.
+    """
+    if child.poll() is not None:
+        return
+    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(os.getpgid(child.pid), number)
+        except (ProcessLookupError, PermissionError, OSError):
+            return  # already gone, or never ours to signal
+        if say is not None and number is not signal.SIGINT:
+            say("stopping the pipeline with %s" % signal.Signals(number).name)
+        try:
+            child.wait(timeout=grace)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+    with contextlib.suppress(Exception):  # pragma: no cover - after SIGKILL
+        child.wait(timeout=grace)
+
+
 def run_demo(
     plan: DemoPlan,
     *,
@@ -663,13 +714,20 @@ def run_demo(
     progress: Progress | None = None,
     server: MjpegServer | None = None,
 ) -> int:
-    """Run the pipeline, report as it goes, and stop it cleanly on SIGINT.
+    """Run the pipeline, report as it goes, and always stop it cleanly.
 
-    The pipeline runs in a session of its own, so the only interrupt it gets
-    is the one forwarded here. That matters: `gst-launch` treats a *second*
+    The pipeline runs in a session of its own, so the only signal it gets is
+    the one forwarded here. That matters: `gst-launch` treats a *second*
     interrupt as "stop now", which truncates the Matroska file, and a Ctrl-C
     typed at a terminal reaches every process in the foreground group at
     once. One signal in, one signal out.
+
+    The cost of that session is that the child hears nothing this process
+    does not tell it, so every way this run can end has to end the child too:
+    `STOP_SIGNALS` are forwarded, and `stop_child_group` runs from a
+    `finally` and from an `atexit` hook. Without those a `kill`, a closed
+    terminal or an OOM kill left `ttcap` holding a shared bench board with
+    nothing left to signal it.
     """
     progress = progress or Progress()
     pass_fds = () if plan.mjpeg_fd is None else (plan.mjpeg_fd,)
@@ -686,36 +744,64 @@ def run_demo(
     if plan.mjpeg_fd is not None:
         os.close(plan.mjpeg_fd)  # the child holds the only writing end now
 
+    at_exit = functools.partial(stop_child_group, child)
+    atexit.register(at_exit)
     interrupts = {"count": 0}
 
-    def on_interrupt(signum, frame):  # noqa: ARG001
-        interrupts["count"] += 1
-        if interrupts["count"] == 1:
-            progress.say(
-                "\ninterrupted: asking the pipeline to end the stream. The board "
-                "needs one DMA buffer to wind down, so give it a moment."
-            )
-        else:
-            progress.say("\ninterrupted again: stopping now")
-        try:
-            child.send_signal(signal.SIGINT)
-        except ProcessLookupError:  # pragma: no cover - it already finished
-            pass
+    def on_stop_signal(signum, frame):  # noqa: ARG001
+        """Forward the stop, escalating if it is repeated.
 
-    previous = None
-    try:
-        previous = signal.signal(signal.SIGINT, on_interrupt)
-    except ValueError:  # pragma: no cover - not the main thread
-        pass
+        The first two go to `gst-launch` as SIGINT: one is its end-of-stream,
+        and its own handling of a second still finalises the Matroska file.
+        Only a third and a fourth escalate, and they go to the *group*, so a
+        wedged pipeline cannot keep the board. A caller that has asked three
+        times is not asking for the video any more.
+        """
+        interrupts["count"] += 1
+        count = interrupts["count"]
+        name = signal.Signals(signum).name
+        try:
+            if count == 1:
+                progress.say(
+                    "\n%s: asking the pipeline to end the stream. The board "
+                    "needs one DMA buffer to wind down, so give it a moment."
+                    % name
+                )
+                child.send_signal(signal.SIGINT)
+            elif count == 2:
+                progress.say("\n%s again: stopping now" % name)
+                child.send_signal(signal.SIGINT)
+            elif count == 3:
+                progress.say("\n%s again: terminating the pipeline" % name)
+                os.killpg(os.getpgid(child.pid), signal.SIGTERM)
+            else:
+                progress.say("\n%s again: killing the pipeline" % name)
+                os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # it already finished, or is no longer ours to signal
+
+    previous: dict[int, object] = {}
+    for name in STOP_SIGNALS:
+        number = getattr(signal, name, None)
+        if number is None:  # pragma: no cover - SIGHUP is POSIX-only
+            continue
+        try:
+            previous[number] = signal.signal(number, on_stop_signal)
+        except (ValueError, OSError):  # pragma: no cover - not the main thread
+            pass
     try:
         assert child.stdout is not None
         for line in child.stdout:
             progress.line(line.rstrip("\n"))
         returncode = child.wait()
     finally:
-        if previous is not None:
-            with contextlib.suppress(ValueError, OSError):
-                signal.signal(signal.SIGINT, previous)
+        # The child first: restoring a handler before the thing it guards is
+        # gone would leave a window with neither.
+        stop_child_group(child, say=progress.say)
+        atexit.unregister(at_exit)
+        for number, handler in previous.items():
+            with contextlib.suppress(ValueError, OSError, TypeError):
+                signal.signal(number, handler)
         if server is not None:
             server.close()
     _summarise(plan, progress, returncode, server)

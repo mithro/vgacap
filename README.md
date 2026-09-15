@@ -223,11 +223,15 @@ in-process, because the GStreamer Python bindings (`python3-gi`) are an OS
 package and `ttcap` runs under `uv`; the pipeline text is the same either
 way, and `ttcap.demo.use_gst_python()` is the check.
 
-Ctrl-C ends the run cleanly: the interrupt is forwarded once to
+Ctrl-C ends the run cleanly: the signal is forwarded once to
 `gst-launch -e`, which turns it into an end-of-stream, so the board winds
 down through `vgacapttsrc`'s cooperative stop and the Matroska file is
 finalised rather than truncated. Allow one DMA buffer for that -- 2.2 s at a
-60 kHz project clock.
+60 kHz project clock. `SIGTERM` and `SIGHUP` do the same, and however the
+demo ends -- an exception, a `kill`, a closed terminal -- it tears the
+pipeline's whole process group down on the way out, so a capture is never
+left holding a shared bench board. A third signal terminates the pipeline
+and a fourth kills it, at the cost of the video.
 
 ### Reaching a Welland board
 
