@@ -260,14 +260,20 @@ def system_python_path() -> str | None:
     return None
 
 
-def test_stopping_mid_stream_is_prompt_and_reaps_the_child(tmp_path):
+@pytest.mark.parametrize("chunk_delay", ["0.05", "0"])
+def test_stopping_mid_stream_is_prompt_and_reaps_the_child(tmp_path, chunk_delay):
+    # Both pacings matter. The paced child is the ordinary case; the unpaced
+    # one writes faster than the pipeline drinks, so its 64 KiB pipe is full
+    # the moment the streaming thread stops reading -- and a child blocked in
+    # write() never reaches the code that emits its trailer. That is what the
+    # draining half of the stop sequence is for, and this is what tests it.
     system_python = system_python_path()
     if system_python is None:
         pytest.skip("no system python3 to run the gst-python stop probe with")
     pid_file = tmp_path / "child.pid"
     copy = tmp_path / "sent.vgacap"
     stop_timeout = 10.0
-    command = fake_command("--chunk-delay", "0.05", "--stop-latency", "0.5",
+    command = fake_command("--chunk-delay", chunk_delay, "--stop-latency", "0.5",
                            "--pid-file", str(pid_file), "--copy-to", str(copy))
 
     proc = run([system_python, STOP_PROBE, "--ttcap-command", command,

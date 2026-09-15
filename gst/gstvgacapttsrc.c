@@ -345,9 +345,9 @@ static gboolean try_reap(GstVgaCapTtSrc *self, gint *status)
  * it blocks in poll() for at most @timeout_ms. */
 static void drain_stdout(GstVgaCapTtSrc *self, gint timeout_ms)
 {
-    gchar scratch[4096];
+    gchar scratch[16384];
     struct pollfd pfd;
-    gssize got;
+    gint wait_ms = timeout_ms;
 
     if (self->out_fd < 0 || self->out_eof) {
         g_usleep((gulong)timeout_ms * 1000);
@@ -355,16 +355,25 @@ static void drain_stdout(GstVgaCapTtSrc *self, gint timeout_ms)
     }
     pfd.fd = self->out_fd;
     pfd.events = POLLIN;
-    pfd.revents = 0;
-    if (poll(&pfd, 1, timeout_ms) <= 0)
-        return;
-    do {
-        got = read(self->out_fd, scratch, sizeof scratch);
-    } while (got < 0 && errno == EINTR);
-    if (got == 0)
-        self->out_eof = TRUE;
-    else if (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
-        self->out_eof = TRUE;
+    for (;;) {
+        gssize got;
+        pfd.revents = 0;
+        if (poll(&pfd, 1, wait_ms) <= 0)
+            return;
+        /* The first poll is the wait; every sweep after it is a zero-timeout
+         * check for more, so a whole DMA buffer's worth is taken in one call
+         * rather than 16 KiB per STOP_POLL_MS. A capture at 750 kHz outruns
+         * the slower rate, and a child blocked on a full pipe is a child that
+         * never writes its trailer. */
+        wait_ms = 0;
+        do {
+            got = read(self->out_fd, scratch, sizeof scratch);
+        } while (got < 0 && errno == EINTR);
+        if (got <= 0) {
+            self->out_eof = TRUE;
+            return;
+        }
+    }
 }
 
 /* Wait up to @timeout_s for the child, draining its stdout meanwhile. */
