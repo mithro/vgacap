@@ -58,8 +58,10 @@ previous frame, and `glitches_total=N` for the whole stream.
 
 ## GStreamer plugin
 
-`gst/` builds `libgstvgacap.so`, whose `vgadecode` element turns a capture
-stream (`application/x-vgacap`) into `video/x-raw` RGB frames. The plugin is
+`gst/` builds `libgstvgacap.so`, with three elements: `vgadecode` turns a
+capture stream (`application/x-vgacap`) into `video/x-raw` RGB frames,
+`vgacapttsrc` produces such a stream live from a board, and `vgacapbin`
+picks a source from a URI and puts `vgadecode` behind it. The plugin is
 optional: CMake skips it when the GStreamer development files are missing,
 and the plugin tests skip with it.
 
@@ -68,6 +70,11 @@ export GST_PLUGIN_PATH=$PWD/build
 gst-inspect-1.0 vgadecode
 gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! \
     pngenc ! multifilesink location=frame-%04d.png
+
+# ...or straight off a board, through either link:
+gst-launch-1.0 vgacapbin \
+    uri="tt-ws://welland:8765/serial?project=tt_um_rejunity_vga&clock-hz=60000" ! \
+    videoconvert ! autovideosink
 ```
 
 | property | default | |
@@ -93,6 +100,57 @@ the PTS, if you need something that only ever goes up.
 
 The detected timing is posted on the bus as an element message named
 `vgacap-timing`, once when it is first known and again whenever it changes.
+
+### `vgacapttsrc`: capturing from a board
+
+`vgacapttsrc` runs `ttcap capture --out -` as a child process and pushes its
+stdout as 64 KiB `application/x-vgacap` buffers, so the board protocol stays
+in Python and the same element works over serial or over the bridge.
+
+| property | default | |
+|---|---|---|
+| `link` | `""` | `serial:/dev/ttyACM0`, or `ws://host:8765/serial`; required |
+| `clock-hz` | 0 | project clock to program; required |
+| `project`, `design` | `""` | `tt.shuttle` macro / FPGA bitstream to enable |
+| `profile` | `auto` | board profile, or ask the board for its `GPIOMap` |
+| `pio`, `buf-words` | -1 | board tuning; -1 leaves `ttcap`'s own defaults |
+| `seconds` | 0 | capture duration; 0 captures until the element is stopped |
+| `ttcap-command` | `uv run --no-sync ttcap` | split with shell quoting rules, so an absolute path or another interpreter works |
+| `stop-timeout` | 15 | how long a cooperative stop may take |
+
+`ttcap-command` is run with the pipeline's own working directory, which is
+what `uv run` needs to find the project; give an absolute `ttcap` (or an
+absolute interpreter and script) when the pipeline runs from elsewhere.
+
+**Stopping matters.** The board samples into a DMA double buffer and can only
+stop at a buffer boundary -- about 82 ms at 750 kHz, but 2.2 s at the
+RP2040's 60 kHz project-clock ceiling -- and `ttcap` turns its first `SIGINT`
+into a cooperative stop that finishes the chunk, writes its closing `TIME`
+chunk (the only overrun and RXSTALL report there is) and exits 0. So the
+element signals the child's process group and then waits *while draining its
+stdout*, because a child blocked writing into a full pipe never reaches the
+code that emits its trailer. Only when `stop-timeout` runs out does it close
+the read end (`ttcap` reads the `EPIPE` as a clean end and still exits 0, but
+the trailer then has nowhere to go), and only after that does it `SIGKILL`.
+Every path reaps the child.
+
+A child that exits non-zero raises a pipeline `ERROR` quoting the last lines
+of its stderr, so a capture that fails on the board is an error and not a
+silent end of stream; the rest of its stderr is logged at `INFO` under the
+`vgacapttsrc` debug category.
+
+### `vgacapbin`: a URI in, video out
+
+```
+vgacapbin uri=tt-serial:///dev/ttyACM0?project=tt_um_x&clock-hz=60000
+vgacapbin uri=tt-ws://welland:8765/serial?clock-hz=60000      # or tt-wss://
+vgacapbin uri=file:///captures/tt08.vgacap
+```
+
+The query string sets the source's properties by name, and the source's
+properties are mirrored on the bin, so `?seconds=10` and `seconds=10` do the
+same thing (the query wins if both are given). `tt-ws://host:8765` with no
+path means the bridge's `/serial` endpoint.
 
 ## Running on a Raspberry Pi
 
