@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Board-side PIO + DMA sample capture for the Tiny Tapeout demo board.
 
-MicroPython, run by the host via `RawRepl.exec_stream()` with a `CFG` dict
+MicroPython, run by the host via `RawRepl.exec_chunks()` with a `CFG` dict
 prepended by `ttcap.mp.with_cfg()`. Keys:
 
     clk_gpio     absolute GPIO carrying the project clock (rp_projclk)
