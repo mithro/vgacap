@@ -36,6 +36,10 @@ typedef struct vgaframe_timing {
     uint32_t vsync_lines;        // lines
     uint8_t  hsync_positive, vsync_positive;
     uint8_t  locked;             // 1 once two consecutive frames agree
+    // Spurious hsync pulses ignored so far (see the glitch filter below).
+    // Real silicon emits them: a few 2 to 30 clock pulses per capture is
+    // normal, and each one used to start a bogus line.
+    uint32_t glitches;
     const vgaframe_mode_t *mode; // matched entry or NULL
 } vgaframe_timing_t;
 
@@ -43,8 +47,22 @@ typedef struct vgaframe_timing {
 typedef struct vgaframe_timing_learner {
     vgaframe_timing_t t;
     uint8_t  prev_h, prev_v, have_prev;
-    uint32_t clk_in_line;        // clocks since the last hsync leading edge (rising or falling, whichever came first)
+    uint32_t clk_in_line;        // clocks since the accepted line start (the leading edge of the last accepted hsync pulse)
     uint32_t h_high, h_low;      // duration of the current/previous hsync phases
+    // A line start is only reported at the *trailing* edge of its hsync
+    // pulse, when the pulse's width is finally known and the glitch filter
+    // can judge it. pulse_open marks that a leading edge into the pulse
+    // level has been seen and pulse_start_clk holds the clk_in_line it
+    // happened at, so an accepted pulse still dates its line from the
+    // leading edge: the learner sets clk_in_line to the pulse width and the
+    // caller's x position follows clk_in_line (see vgaframe_push).
+    uint8_t  pulse_open;
+    uint32_t pulse_start_clk;
+    // Clock offset, within the line just started, of the sample that carried
+    // the report: the pulse's width, since the report comes at its trailing
+    // edge. The caller starts the new line's pixels there (vgaframe_push),
+    // which puts every pixel at its true position in the line.
+    uint32_t report_x;
     uint32_t line_in_frame;
     uint32_t v_high_lines, v_low_lines;
     uint32_t last_cpl, last_lpf; // previous measurements for the lock check
@@ -52,7 +70,25 @@ typedef struct vgaframe_timing_learner {
 } vgaframe_timing_learner_t;
 
 void vgaframe_timing_init(vgaframe_timing_learner_t *l);
-// feed one sample's sync levels for `run` clocks; returns 1 when a new line started, 2 when a new frame started, else 0
+// Feeds one sample's sync levels for `run` clocks; returns 1 when a new line
+// started, 2 when a new frame started, else 0.
+//
+// Glitch tolerance: real silicon (seen on tt08's tt_um_rejunity_vga_logo)
+// emits spurious hsync pulses of 2 to 30 clocks a few times per capture, and
+// taking each one for a line start leaves every frame short of lines, so no
+// frame ever matches a mode and nothing is ever emitted. Once hsync_width
+// and clocks_per_line are known - the first full measurement, before which
+// nothing is filtered because there is nothing to filter against - a pulse
+// only starts a line if it is within 25% of the learned width AND its
+// leading edge is at least half a line after the last accepted one. Both
+// tests are needed: a 30-clock pulse in the middle of the active area passes
+// the distance test, and a full-width pulse just after a line start passes
+// the width test. An ignored pulse does not start a line, does not restart
+// clk_in_line (so the pixels around it keep their true position in the line,
+// and the blanking phase it interrupted still measures a whole line), and
+// increments vgaframe_timing_t.glitches. Because a pulse's width is only
+// known at its trailing edge, that is where a line start is reported - see
+// report_x, which keeps the caller's pixel positions exact regardless.
 int  vgaframe_timing_push(vgaframe_timing_learner_t *l, uint8_t hsync, uint8_t vsync, uint32_t run);
 
 // ---- frame reconstruction ------------------------------------------------

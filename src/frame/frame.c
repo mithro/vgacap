@@ -156,8 +156,14 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
     uint8_t h = bit(f->cfg.signal_map, sample, VGACAP_SIG_HSYNC);
     uint8_t v = bit(f->cfg.signal_map, sample, VGACAP_SIG_VSYNC);
     int r = vgaframe_timing_push(&f->learner, h, v, run);
+    // x is the clock offset within the line, which the learner tracks as
+    // clk_in_line: a line start is reported at the *trailing* edge of its
+    // hsync pulse (that is when the glitch filter can judge the pulse), so
+    // clk_in_line is the pulse's width there, not zero, and copying it keeps
+    // every pixel at its true position in the line. It also keeps the
+    // ignored clocks of a glitch in place instead of restarting the line.
     if (f->fram_active) {
-        if (r == 1) { f->x = 0; f->y++; }
+        if (r == 1) { f->x = f->learner.report_x; f->y++; }
         // r == 2 (learner-detected frame boundary) is ignored: inside a FRAM
         // chunk the window metadata (vgaframe_frame_begin), not the
         // free-running learner, defines line/frame layout.
@@ -174,9 +180,9 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
         // strong enough evidence on its own. `locked` remains the stronger
         // signal and is unaffected by this - see vgaframe_timing_t.
         if (f->in_frame && (f->learner.t.locked || f->learner.t.mode || f->cfg.force_mode)) emit(f, f->y + 1, 0, 0);
-        f->y = 0; f->x = 0; f->in_frame = 1;
+        f->y = 0; f->x = f->learner.report_x; f->in_frame = 1;
     } else if (r == 1) {
-        f->x = 0;
+        f->x = f->learner.report_x;
         if (f->in_frame) f->y++;
     }
     if (!f->in_frame && !f->fram_active) return;
@@ -239,6 +245,9 @@ void vgaframe_frame_begin(vgaframe_t *f, uint32_t frame_counter, uint16_t first_
     // sample of this window as a fresh start, exactly like stream start.
     f->learner.clk_in_line = 0;
     f->learner.have_prev = 0;
+    f->learner.pulse_open = 0;
+    f->learner.pulse_start_clk = 0;
+    f->learner.report_x = 0;
     f->learner.h_high = 0;
     f->learner.h_low = 0;
     f->learner.v_high_lines = 0;

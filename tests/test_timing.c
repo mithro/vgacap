@@ -14,6 +14,31 @@ static void learn(const vgaframe_mode_t *m, vgaframe_timing_learner_t *l, int fr
         for (size_t i = 0; i < n; i++) vgaframe_timing_push(l, (uint8_t)((buf[i] >> 7) & 1), (uint8_t)((buf[i] >> 3) & 1), 1);
 }
 
+// Overwrites `width` clocks of hsync, starting `clk` clocks into `line`, with
+// the mode's pulse level: a spurious pulse of exactly the shape real hardware
+// produces (see the tt08 Tiny Logo capture). Only bit 7 (hsync) is touched,
+// so the injected pulse cannot change a single pixel's colour.
+static void inject_hsync_glitch(uint32_t *b, const vgaframe_mode_t *m,
+                                uint32_t line, uint32_t clk, uint32_t width) {
+    uint32_t cpl = (uint32_t)m->h_active + m->h_front + m->h_sync + m->h_back;
+    for (uint32_t i = 0; i < width; i++) {
+        size_t k = (size_t)line * cpl + clk + i;
+        if (m->h_sync_positive) b[k] |= 0x80u; else b[k] &= ~0x80u;
+    }
+}
+
+// The three glitches the hardware evidence calls for: two inside the active
+// area (one shorter and one longer than a sync pulse, both far enough from
+// the line start to pass the distance test on their own) and one inside the
+// blanking. Returns how many were injected.
+static int inject_glitch_set(uint32_t *b, const vgaframe_mode_t *m) {
+    uint32_t cpl = (uint32_t)m->h_active + m->h_front + m->h_sync + m->h_back;
+    inject_hsync_glitch(b, m, 100, cpl / 2 + 60, 2);
+    inject_hsync_glitch(b, m, 200, cpl / 2 + 140, 30);
+    inject_hsync_glitch(b, m, 300, cpl - 10, 6);   // front porch: blanking
+    return 3;
+}
+
 TEST(learns_640x480_negative_syncs) {
     vgaframe_timing_learner_t l; learn(vgaframe_mode_match(800, 525), &l, 3);
     ASSERT_EQ_U(l.t.clocks_per_line, 800); ASSERT_EQ_U(l.t.lines_per_frame, 525);
@@ -71,11 +96,66 @@ TEST(locks_from_a_stream_that_starts_mid_frame) {
     ASSERT_TRUE(l.t.mode != NULL); ASSERT_TRUE(strcmp(l.t.mode->name, "640x480@60") == 0);
 }
 
+// Feeds one clean frame (so hsync_width and clocks_per_line are learned),
+// then `frames` copies of the same frame with glitches injected. Real silicon
+// (tt08's tt_um_rejunity_vga_logo) emits hsync pulses of 2 to 30 clocks a few
+// times per capture; before the filter they each counted as a line start and
+// no frame ever measured the right number of lines.
+static void glitchy(const vgaframe_mode_t *m, vgaframe_timing_learner_t *l, int frames, int *injected) {
+    size_t n = synth_frame(m, black, NULL, buf, sizeof buf / sizeof buf[0]);
+    ASSERT_TRUE(n > 0);
+    vgaframe_timing_init(l);
+    for (size_t i = 0; i < n; i++) vgaframe_timing_push(l, (uint8_t)((buf[i] >> 7) & 1), (uint8_t)((buf[i] >> 3) & 1), 1);
+    *injected = inject_glitch_set(buf, m) * frames;
+    for (int f = 0; f < frames; f++)
+        for (size_t i = 0; i < n; i++) vgaframe_timing_push(l, (uint8_t)((buf[i] >> 7) & 1), (uint8_t)((buf[i] >> 3) & 1), 1);
+}
+
+TEST(ignores_hsync_glitches_640x480) {
+    vgaframe_timing_learner_t l; int injected = 0;
+    glitchy(vgaframe_mode_match(800, 525), &l, 2, &injected);
+    ASSERT_EQ_U(l.t.glitches, (unsigned)injected);
+    ASSERT_EQ_U(l.t.clocks_per_line, 800); ASSERT_EQ_U(l.t.lines_per_frame, 525);
+    ASSERT_EQ_U(l.t.hsync_width, 96); ASSERT_EQ_U(l.t.locked, 1);
+    ASSERT_TRUE(l.t.mode != NULL);
+}
+
+TEST(ignores_hsync_glitches_800x600) {
+    vgaframe_timing_learner_t l; int injected = 0;
+    glitchy(vgaframe_mode_match(1056, 628), &l, 2, &injected);
+    ASSERT_EQ_U(l.t.glitches, (unsigned)injected);
+    ASSERT_EQ_U(l.t.clocks_per_line, 1056); ASSERT_EQ_U(l.t.lines_per_frame, 628);
+    ASSERT_EQ_U(l.t.hsync_width, 128); ASSERT_EQ_U(l.t.locked, 1);
+    ASSERT_TRUE(l.t.mode != NULL);
+}
+
+TEST(a_pulse_of_the_right_shape_is_never_filtered) {
+    // The filter must reject only pulses that fail one of its two tests: a
+    // run of otherwise normal lines must still produce one line start each
+    // and no glitch at all, whatever the phase the stream started in.
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, black, NULL, buf, sizeof buf / sizeof buf[0]);
+    for (size_t off = 0; off < 4; off++) {
+        vgaframe_timing_learner_t l; vgaframe_timing_init(&l); int lines = 0;
+        size_t start = off * 197u;   // arbitrary phases within a line
+        for (size_t k = 0; k < 3u * n; k++) {
+            size_t i = (start + k) % n;
+            if (vgaframe_timing_push(&l, (uint8_t)((buf[i] >> 7) & 1), (uint8_t)((buf[i] >> 3) & 1), 1)) lines++;
+        }
+        ASSERT_EQ_U(l.t.glitches, 0);
+        ASSERT_EQ_U(l.t.clocks_per_line, 800); ASSERT_EQ_U(l.t.locked, 1);
+        ASSERT_TRUE(lines >= 3 * 525 - 2);
+    }
+}
+
 int main(void) {
     RUN(learns_640x480_negative_syncs);
     RUN(learns_800x600_positive_syncs);
     RUN(runs_are_equivalent_to_samples);
     RUN(reports_line_and_frame_starts);
     RUN(locks_from_a_stream_that_starts_mid_frame);
+    RUN(ignores_hsync_glitches_640x480);
+    RUN(ignores_hsync_glitches_800x600);
+    RUN(a_pulse_of_the_right_shape_is_never_filtered);
     RUN_TESTS_END();
 }

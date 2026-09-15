@@ -57,6 +57,24 @@ static void vsync_sample(vgaframe_timing_learner_t *l, uint8_t v, int *ret) {
     l->prev_v = v;
 }
 
+// Is the glitch filter armed? Only once a full measurement exists to judge a
+// candidate pulse against; before that every pulse is taken at face value,
+// which is what lets the learner bootstrap at all.
+static int filter_armed(const vgaframe_timing_learner_t *l) {
+    return l->t.hsync_width > 0 && l->t.clocks_per_line > 0;
+}
+
+// A candidate line start, judged at the trailing edge of its pulse: the pulse
+// must be within 25% of the learned width, and its leading edge at least half
+// a line after the last accepted one. Spurious pulses on real silicon are 2
+// to 30 clocks long and can land anywhere in the line, so both tests are
+// needed - a 30-clock pulse in mid-active-area passes the distance test.
+static int pulse_is_a_line_start(const vgaframe_timing_learner_t *l, uint32_t width) {
+    uint32_t w = l->t.hsync_width, slack = w / 4;
+    if (width + slack < w || width > w + slack) return 0;
+    return l->pulse_start_clk >= l->t.clocks_per_line / 2;
+}
+
 int vgaframe_timing_push(vgaframe_timing_learner_t *l, uint8_t h, uint8_t v, uint32_t run) {
     int ret = 0;
     if (!l->have_prev) {
@@ -67,24 +85,58 @@ int vgaframe_timing_push(vgaframe_timing_learner_t *l, uint8_t h, uint8_t v, uin
     }
     if (h != l->prev_h) {
         l->h_edge_count++;
-        uint32_t completed = l->prev_h ? l->h_high : l->h_low;
-        uint32_t other      = l->prev_h ? l->h_low : l->h_high;
-        if (other > 0) {
-            uint8_t  pulse_level;
+        uint32_t completed = l->prev_h ? l->h_high : l->h_low;  // the phase that just ended
+        uint32_t other      = l->prev_h ? l->h_low : l->h_high; // the phase before that
+        uint8_t  pulse_level = 0;
+        int      know_pulse = 0, ignored = 0;
+        if (filter_armed(l)) {
+            // Polarity is settled; re-deriving it from a glitch's own
+            // (short) phases is exactly what must not happen here.
+            pulse_level = l->t.hsync_positive;
+            know_pulse = 1;
+        } else if (other > 0) {
             uint32_t pulse_width;
             if (completed < other) { pulse_level = l->prev_h; pulse_width = completed; }
             else                   { pulse_level = h;         pulse_width = other; }
             l->t.hsync_positive = pulse_level;
             l->t.hsync_width = pulse_width;
-            if (h == pulse_level) {
-                l->t.clocks_per_line = l->clk_in_line;
-                l->clk_in_line = 0;
+            know_pulse = 1;
+        }
+        if (know_pulse && h == pulse_level) {
+            // Leading edge: remember where it fell, and let the pulse's own
+            // width accumulate from zero (below) so the trailing edge can
+            // measure it.
+            l->pulse_open = 1;
+            l->pulse_start_clk = l->clk_in_line;
+        } else if (know_pulse && l->pulse_open) {
+            // Trailing edge of a pulse whose leading edge was seen, so
+            // `completed` is its full width and the line it would start
+            // began `completed` clocks ago.
+            l->pulse_open = 0;
+            if (!filter_armed(l) || pulse_is_a_line_start(l, completed)) {
+                l->t.hsync_positive = pulse_level;
+                l->t.hsync_width = completed;
+                if (l->pulse_start_clk) l->t.clocks_per_line = l->pulse_start_clk;
+                l->clk_in_line = completed;
+                l->report_x = completed;
                 l->line_in_frame++;
                 ret = 1;
                 vsync_sample(l, v, &ret);
+            } else {
+                l->t.glitches++;
+                ignored = 1;
             }
         }
-        if (h) l->h_high = 0; else l->h_low = 0;
+        if (ignored) {
+            // The pulse never happened: give its clocks back to the phase it
+            // interrupted, which is the one being resumed now, so the next
+            // real pulse still measures a whole line's worth of blanking.
+            // clk_in_line is untouched throughout, so the pixels around the
+            // glitch keep their true positions in the line.
+            if (h) l->h_high += completed; else l->h_low += completed;
+        } else {
+            if (h) l->h_high = 0; else l->h_low = 0;
+        }
         l->prev_h = h;
     }
     if (h) l->h_high += run; else l->h_low += run;
