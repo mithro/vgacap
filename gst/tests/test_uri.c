@@ -142,10 +142,10 @@ TEST(percent_escapes_are_decoded_once)
     /* The path is decoded; so is the query, and only once - the %2526 in the
      * value has to survive as %26, not collapse into an ampersand that would
      * split the parameter in two. */
-    ASSERT_TRUE(parse_ok("file:///cap%20tures/a.vgacap?ttcap-command=a%2526b", &uri));
+    ASSERT_TRUE(parse_ok("file:///cap%20tures/a.vgacap?project=a%2526b", &uri));
     ASSERT_STR(uri.value, "/cap tures/a.vgacap");
     ASSERT_EQ_U(g_hash_table_size(uri.params), 1);
-    ASSERT_STR(param(&uri, "ttcap-command"), "a%26b");
+    ASSERT_STR(param(&uri, "project"), "a%26b");
     vgacap_uri_clear(&uri);
 }
 

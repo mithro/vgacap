@@ -77,6 +77,39 @@ static const gchar *forwarded_name(guint prop_id)
     }
 }
 
+/* ------------------------------------------------------- what a URI may set */
+
+/* The only properties a URI's query string is allowed to set.
+ *
+ * Not "whatever property the source happens to have", which is what this used
+ * to be: `ttcap-command` names a program to run, so a query able to set it is
+ * arbitrary command execution by anyone who can choose the URI. That is
+ * harmless while the URI comes from the operator's own shell and is not
+ * harmless at all once one can arrive from a form field, a saved playlist or
+ * a shared link - which is exactly what a browser view makes possible.
+ *
+ * So a query may carry capture parameters, which describe a board and nothing
+ * else. Anything naming a program or a path (`ttcap-command`), and anything
+ * that would move the capture away from the place the URI itself names
+ * (`link`, `location`), stays settable only as an element property, by
+ * whoever built the pipeline. A property added later is refused by default,
+ * which is the right way round.
+ */
+static const gchar *const URI_SETTABLE[] = {
+    "project", "design", "clock-hz", "profile", "pio", "buf-words", "seconds",
+    "stop-timeout", NULL
+};
+
+static gboolean uri_may_set(const gchar *name)
+{
+    guint i;
+
+    for (i = 0; URI_SETTABLE[i] != NULL; i++)
+        if (g_strcmp0(URI_SETTABLE[i], name) == 0)
+            return TRUE;
+    return FALSE;
+}
+
 /* ------------------------------------------------------------ the children */
 
 static gboolean set_from_string(GstVgaCapBin *self, GstElement *target, const gchar *name,
@@ -178,6 +211,20 @@ static gboolean build_source(GstVgaCapBin *self)
     apply_wanted(self, source);
     g_hash_table_iter_init(&iter, parsed.params);
     while (g_hash_table_iter_next(&iter, &key, &value)) {
+        if (!uri_may_set(key)) {
+            gchar *allowed = g_strjoinv(", ", (gchar **)(gpointer)URI_SETTABLE);
+            GST_ELEMENT_ERROR(self, LIBRARY, SETTINGS,
+                              ("the uri's query string sets '%s', which a uri may not "
+                               "set; a query may only carry capture parameters (%s). "
+                               "Anything naming a program or a location is an element "
+                               "property, set by whoever builds the pipeline.",
+                               (const gchar *)key, allowed),
+                              (NULL));
+            g_free(allowed);
+            gst_object_unref(source);
+            vgacap_uri_clear(&parsed);
+            return FALSE;
+        }
         if (!set_from_string(self, source, key, value, "the uri's query string")) {
             gst_object_unref(source);
             vgacap_uri_clear(&parsed);

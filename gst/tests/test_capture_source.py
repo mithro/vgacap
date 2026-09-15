@@ -429,7 +429,7 @@ def test_the_uri_query_beats_a_property_set_on_the_bin(tmp_path):
     ("http://example.com/x", "unknown scheme"),
     ("tt-serial://", "names no serial device"),
     ("/dev/ttyACM0", "no scheme"),
-    ("tt-serial:///dev/ttboard?nonesuch=1", "no such property"),
+    ("tt-serial:///dev/ttboard?nonesuch=1", "a uri may not set"),
     ("tt-serial:///dev/ttboard?clock-hz=sixty", "not a guint"),
 ])
 def test_a_bad_uri_is_a_pipeline_error(uri, expected):
@@ -437,3 +437,40 @@ def test_a_bad_uri_is_a_pipeline_error(uri, expected):
     text = proc.stdout + proc.stderr
     assert proc.returncode != 0, text
     assert expected in text, text
+
+
+@pytest.mark.parametrize("key", ["ttcap-command", "link", "location"])
+def test_a_uri_cannot_name_the_program_to_run(tmp_path, key):
+    # A URI can arrive from somewhere that is not a trusted shell, and
+    # ttcap-command names a program; a query that could set it would be
+    # arbitrary command execution by whoever chose the URI. The same goes for
+    # anything that would move the capture away from the link the URI names.
+    sentinel = tmp_path / "executed"
+    payload = f"/bin/sh -c touch\\ {sentinel}"
+    proc = run(["gst-launch-1.0", "vgacapbin",
+                f"uri=tt-serial:///dev/ttboard?clock-hz=60000&{key}={payload}",
+                "!", "fakesink", "sync=false"])
+    text = proc.stdout + proc.stderr
+    # First, because it is the thing that matters: the URI's command never ran.
+    assert not sentinel.exists(), f"the uri's command ran\n{text}"
+    assert proc.returncode != 0, text
+    assert "a uri may not set" in text and key in text, text
+
+
+def test_the_allowed_query_keys_all_still_work(tmp_path):
+    argv_file = tmp_path / "argv.json"
+    command = fake_command("--frames", "1", "--argv-file", str(argv_file))
+    query = ("project=tt_um_z&design=bits&clock-hz=25175000&profile=rp2350"
+             "&pio=0&buf-words=8192&seconds=3&stop-timeout=9")
+    proc = run(["gst-launch-1.0", "vgacapbin",
+                f"uri=tt-serial:///dev/ttboard?{query}",
+                f"ttcap-command={command}", "!", "fakesink", "sync=false"])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    argv = json.loads(argv_file.read_text())
+    for flag, want in (("--project", "tt_um_z"), ("--design", "bits"),
+                       ("--clock-hz", "25175000"), ("--profile", "rp2350"),
+                       ("--pio", "0"), ("--buf-words", "8192"), ("--seconds", "3")):
+        assert argv[argv.index(flag) + 1] == want, argv
+    # stop-timeout is the element's own, so it never reaches the child; the
+    # capture running at all is the evidence it was accepted.
+    assert "--stop-timeout" not in argv
