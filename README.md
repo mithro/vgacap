@@ -48,6 +48,19 @@ A frame is emitted at the next frame boundary once the timing is known, so
 a capture that starts mid-frame needs one boundary plus one full frame
 before the first picture: capture at least three frame periods.
 
+## Running on a Raspberry Pi
+
+The board tools (`ttcap`) need only pyserial and websockets. On a Pi, keep
+the dev group (pytest, numpy, Pillow) out of the environment, otherwise `uv`
+will try to build numpy and Pillow from source and can hang a Pi 3:
+
+```sh
+git clone https://github.com/mithro/vgacap.git && cd vgacap
+export UV_NO_DEV=1
+uv sync
+uv run --no-sync ttcap probe ws://127.0.0.1:8765/serial
+```
+
 ## License
 
 Apache-2.0, see [LICENSE](LICENSE).
