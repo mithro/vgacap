@@ -12,6 +12,7 @@ over either link, without using raw-paste mode.
 from __future__ import annotations
 
 import base64
+import threading
 import time
 from contextlib import ExitStack
 from typing import Iterator, Protocol, runtime_checkable
@@ -129,15 +130,35 @@ class WebSocketLink:
 
 
 class RawRepl:
-    """Drives MicroPython's raw REPL over a `ReplLink`."""
+    """Drives MicroPython's raw REPL over a `ReplLink`.
+
+    One thread drives a command from end to end. The exception is the
+    cooperative stop -- `request_stop()`, `interrupt()`, `recover()` -- which
+    a *second* thread may send while the first is blocked reading a chunk,
+    because that is how a long-running capture is ended by its consumer.
+    Every write therefore goes through `_write()` and its lock: neither
+    pyserial nor `websockets.sync` is safe for concurrent writes, and a stop
+    byte spliced into the middle of an uploaded script would desynchronise
+    the framing in a way no reader could recover from.
+
+    The lock covers the write only, never the read that follows it. Holding
+    it across a read would deadlock exactly the case it exists for: a stop
+    byte cannot wait for the 30-second chunk read it is meant to cut short.
+    """
 
     def __init__(self, link: ReplLink) -> None:
         self._link = link
         self._buf = b""
+        self._write_lock = threading.RLock()
         #: stderr text captured by the most recent `exec_stream()` or
         #: `exec_chunks()` call (empty string if that command produced no
         #: stderr, or if neither has been called yet).
         self.last_stderr: str = ""
+
+    def _write(self, data: bytes) -> None:
+        """Put `data` on the link as one indivisible write."""
+        with self._write_lock:
+            self._link.write(data)
 
     def reset(self) -> None:
         """Discard any bytes buffered from a previous, unfinished command.
@@ -197,12 +218,12 @@ class RawRepl:
 
     def enter(self, timeout: float = 5.0) -> None:
         # Two Ctrl-C first, to interrupt anything already running.
-        self._link.write(CTRL_C + CTRL_C)
-        self._link.write(CTRL_A)
+        self._write(CTRL_C + CTRL_C)
+        self._write(CTRL_A)
         self._read_until(RAW_REPL_BANNER, timeout)
 
     def exit(self) -> None:
-        self._link.write(CTRL_B)
+        self._write(CTRL_B)
 
     def interrupt(self) -> None:
         """Send a single Ctrl-C.
@@ -215,7 +236,7 @@ class RawRepl:
         run and emit its trailer, so the caller must keep draining the
         iterator afterwards.
         """
-        self._link.write(CTRL_C)
+        self._write(CTRL_C)
 
     def request_stop(self) -> None:
         """Ask a cooperative script to stop at its next safe point.
@@ -226,7 +247,7 @@ class RawRepl:
         exotic so that it still works as a real Ctrl-C on a script that
         never disabled the keyboard interrupt.
         """
-        self._link.write(CTRL_C)
+        self._write(CTRL_C)
 
     def recover(self, timeout: float = 5.0) -> str:
         """Interrupt a running script and resynchronise to the next prompt.
@@ -240,7 +261,7 @@ class RawRepl:
         Sets and returns `last_stderr`, which for an interrupted script is
         its traceback.
         """
-        self._link.write(CTRL_C)
+        self._write(CTRL_C)
         try:
             tail = self._read_until(CTRL_D + b">", timeout)
         except TimeoutError:
@@ -255,7 +276,7 @@ class RawRepl:
         return self.last_stderr
 
     def exec(self, code: str, timeout: float = 10.0) -> tuple[str, str]:
-        self._link.write(code.encode("utf-8") + CTRL_D)
+        self._write(code.encode("utf-8") + CTRL_D)
         self._read_until(b"OK", timeout)
         stdout_and_marker = self._read_until(CTRL_D, timeout)
         stderr_and_marker = self._read_until(CTRL_D, timeout)
@@ -275,7 +296,7 @@ class RawRepl:
         Once the generator is exhausted, `self.last_stderr` holds the
         board's stderr text for this command (empty string if none).
         """
-        self._link.write(code.encode("utf-8") + CTRL_D)
+        self._write(code.encode("utf-8") + CTRL_D)
         self._read_until(b"OK", ok_timeout)
         while CTRL_D not in self._buf:
             if self._buf:
@@ -321,7 +342,7 @@ class RawRepl:
         may legitimately stream for minutes, but a gap longer than
         `timeout` between bytes is treated as a dead board.
         """
-        self._link.write(code.encode("utf-8") + CTRL_D)
+        self._write(code.encode("utf-8") + CTRL_D)
         self._read_until(b"OK", timeout)
         yield from self._chunk_stream(timeout)
 
