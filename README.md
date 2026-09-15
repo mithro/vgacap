@@ -223,6 +223,17 @@ in-process, because the GStreamer Python bindings (`python3-gi`) are an OS
 package and `ttcap` runs under `uv`; the pipeline text is the same either
 way, and `ttcap.demo.use_gst_python()` is the check.
 
+Every numeric argument is range-checked before the board is contacted, and a
+bad one is refused with the range it takes. GObject answers an out-of-range
+property with a `CRITICAL` on stderr and then *ignores* it, so `--seconds -5`
+used to leave `seconds` at its default of 0 — which means "capture until
+stopped", so a typo started an unbounded capture on a shared board.
+`--seconds 0` still means exactly that when it is asked for. A `--clock-hz`
+above what the board has been measured to keep up with (60 kHz on the RP2040
+demo board, 750 kHz on the RP2350) is a **warning**, not an error: watching
+the board overrun is a legitimate thing to want, and the closing `TIME` chunk
+reports it.
+
 `--outdir` is one run's alone. A directory that already holds a
 `frame-*.png` or a `capture.mkv` is **refused**, because a shorter capture
 would overwrite the first frames and leave the rest — two runs mixed

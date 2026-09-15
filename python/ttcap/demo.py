@@ -310,6 +310,31 @@ def resolve_link(
     )
 
 
+#: The project-clock rates each demo board has been measured to keep up
+#: with cleanly: `docs/research/2026-09-15-micropython-capture-rate.md`, and
+#: the same two numbers the stop-latency notes quote throughout.
+#:
+#: Keyed on the board *profile*, unlike `board_takes_a_design` above -- and
+#: for the opposite reason. This is a property of the demo board's link and
+#: PIO, which is exactly what the profile describes; ASIC-versus-FPGA is a
+#: property of what is plugged into it, which the profile only appears to
+#: know.
+CLOCK_CEILINGS = {"rp2040-tt06map": 60_000, "rp2350-dbv3": 750_000}
+
+
+def clock_ceiling(board: str | None) -> int | None:
+    """The clean project-clock ceiling for `board`, if it is known.
+
+    Only `--board` can answer this: behind a `--link` there is no telling
+    which demo board is on the other end, and a warning about the wrong
+    ceiling is worse than none.
+    """
+    if board is None or board not in WELLAND:
+        return None
+    _, profile = WELLAND[board]
+    return CLOCK_CEILINGS.get(profile.name)
+
+
 #: Welland slugs that carry an FPGA rather than a shuttle ASIC.
 #:
 #: Keyed on the slug, not on `WELLAND[board]`'s profile. The profile says
@@ -363,6 +388,75 @@ def check_board_wants(board: str | None, project: str | None, design: str | None
             "--project is for the ASIC shuttles (%s); %s is an FPGA board, so "
             "name the bitstream with --design instead" % (asic_slugs(), board)
         )
+
+
+# ------------------------------------------------------------- the numbers
+
+
+#: What each numeric flag will take: (low, high, what it is).
+#:
+#: The bounds are `vgacapttsrc`'s own property ranges, because a value
+#: outside them is refused by GObject with a `CRITICAL` on stderr and then
+#: *ignored* -- which for `--seconds -5` meant the property kept its default
+#: of 0, and 0 means "capture until stopped". A typo therefore started an
+#: unbounded capture on a shared bench board, which is the worst way for a
+#: number to be wrong.
+#:
+#: `-1` is the element's "use ttcap's default" sentinel for `buf-words`;
+#: this command says that by leaving the flag out, so the sentinel is not in
+#: the range a person may type.
+NUMBER_RANGES = {
+    "seconds": (0.0, 86400.0, "a duration in seconds", "0 captures until stopped"),
+    "clock_hz": (1, 200_000_000, "a project clock in Hz", ""),
+    "buf_words": (1, 1 << 24, "words per DMA buffer", "omit it for ttcap's default"),
+    "serve": (1, 65535, "a TCP port", ""),
+}
+
+
+def _flag(name: str) -> str:
+    return "--" + name.replace("_", "-")
+
+
+def check_numbers(args: argparse.Namespace) -> list[str]:
+    """Refuse a numeric argument the pipeline would silently ignore.
+
+    Returns the warnings worth printing -- things that are legal and
+    probably not meant, which is a different thing from an error and is
+    treated as one. Raises `CaptureError` for the values that are simply
+    wrong.
+    """
+    for name, (low, high, what, note) in NUMBER_RANGES.items():
+        value = getattr(args, name, None)
+        if value is None:
+            continue
+        if not low <= value <= high:
+            raise CaptureError(
+                "%s %s is out of range: %s takes %s between %s and %s%s"
+                % (_flag(name), _number(value), _flag(name), what,
+                   _number(low), _number(high),
+                   " (%s)" % note if note else "")
+            )
+
+    # `--fps` validates itself, but it has to happen *here*, with the other
+    # numbers, rather than where the pipeline is built: that is past the
+    # GStreamer check, and a mistyped frame rate should not need a plugin
+    # installed before anyone will say so.
+    if getattr(args, "fps", None) is not None:
+        parse_fps(args.fps)
+
+    warnings = []
+    ceiling = clock_ceiling(args.board)
+    if ceiling is not None and args.clock_hz > ceiling:
+        # A warning and not an error on purpose: watching the board overrun
+        # is a legitimate thing to want, and it is how the ceilings were
+        # measured in the first place.
+        warnings.append(
+            "--clock-hz %d is above the %d Hz a %s board has been measured to "
+            "keep up with cleanly; expect overruns and dropped samples. That "
+            "is allowed -- the closing TIME chunk reports them."
+            % (args.clock_hz, ceiling, args.board)
+        )
+    return warnings
 
 
 # ------------------------------------------------------------- the outdir
@@ -474,8 +568,16 @@ def source_properties(
 
 def _number(value: float) -> str:
     """`5` rather than `5.0`, so the printed pipeline reads like one a person
-    would have typed."""
-    return "%g" % value
+    would have typed -- and `1234567`, never `1.23457e+06`.
+
+    `%g` gave the scientific form above six significant figures, which is
+    both lossy and not a number `gst-launch` would read back the same way:
+    the printed pipeline has to be the pipeline. Whole values print as
+    integers and the rest keep `repr`'s round-trip guarantee.
+    """
+    if isinstance(value, int) or float(value).is_integer():
+        return "%d" % int(value)
+    return repr(float(value))
 
 
 def parse_fps(text: str) -> str:
@@ -1058,6 +1160,10 @@ def plan_demo(
     # person can fix without installing anything.
     link = resolve_link(args.board, args.link)
     check_board_wants(args.board, args.project, args.design)
+    # Before the GStreamer check: a mistyped number is the person's to fix
+    # and should not wait on anything being installed.
+    for warning in check_numbers(args):
+        print("warning: %s" % warning, file=sys.stderr)
     check_gstreamer(required=not dry_run)
     outdir = pathlib.Path(args.outdir)
 
@@ -1094,7 +1200,10 @@ def plan_demo(
             video_encoder=args.video_encoder,
             window=args.window,
             mjpeg_fd=mjpeg_fd,
-            fps=parse_fps(args.fps) if args.fps else None,
+            # `is not None`, not truthiness: `--fps ''` used to be silently
+            # dropped, which is the same "ignored rather than refused" that
+            # made a bad --seconds dangerous.
+            fps=parse_fps(args.fps) if args.fps is not None else None,
         )
     except BaseException:
         close_the_pipe()

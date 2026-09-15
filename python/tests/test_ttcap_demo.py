@@ -13,6 +13,7 @@ them.
 
 from __future__ import annotations
 
+import argparse
 import os
 import pathlib
 import re
@@ -154,6 +155,110 @@ def test_nothing_is_assumed_about_a_board_reached_by_link():
     # a good run would be worse than letting the board say so.
     demo_mod.check_board_wants(None, "tt_um_x", None)
     demo_mod.check_board_wants(None, None, "bitstream")
+
+
+# ------------------------------------------------------------- the numbers
+
+
+def numbers(**overrides) -> argparse.Namespace:
+    values = dict(board=None, seconds=10.0, clock_hz=60000, buf_words=None,
+                  serve=None)
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("seconds", -5.0), ("seconds", -0.001), ("seconds", 86400.5),
+        ("clock_hz", 0), ("clock_hz", -1), ("clock_hz", 200_000_001),
+        ("buf_words", 0), ("buf_words", -1), ("buf_words", (1 << 24) + 1),
+        ("serve", 0), ("serve", -1), ("serve", 65536), ("serve", 70000),
+    ],
+)
+def test_a_number_the_pipeline_would_ignore_is_refused(field, value):
+    """The defect: GObject refuses an out-of-range property with a CRITICAL
+    on stderr and then *ignores* it, so `--seconds -5` left `seconds` at its
+    default of 0 -- and 0 means "capture until stopped". A typo started an
+    unbounded capture on a shared bench board."""
+    with pytest.raises(CaptureError) as exc:
+        demo_mod.check_numbers(numbers(**{field: value}))
+    message = str(exc.value)
+    flag = "--" + field.replace("_", "-")
+    assert flag in message
+    low, high = demo_mod.NUMBER_RANGES[field][:2]
+    # The accepted range, in full, in figures a person can retype.
+    assert demo_mod._number(low) in message
+    assert demo_mod._number(high) in message
+    assert "e+" not in message
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("seconds", 0.0), ("seconds", 0.125), ("seconds", 86400.0),
+        ("clock_hz", 1), ("clock_hz", 200_000_000),
+        ("buf_words", 1), ("buf_words", 4096), ("buf_words", 1 << 24),
+        ("serve", 1), ("serve", 8080), ("serve", 65535),
+    ],
+)
+def test_the_edges_of_each_range_are_accepted(field, value):
+    assert demo_mod.check_numbers(numbers(**{field: value})) == []
+
+
+def test_seconds_zero_still_means_until_stopped():
+    # The one value that is both suspicious-looking and documented: it is
+    # what `--serve`/Ctrl-C runs use, and it must survive the range check
+    # and reach the element unchanged.
+    assert demo_mod.check_numbers(numbers(seconds=0.0)) == []
+    argv, _ = demo_mod.build_pipeline(
+        "serial:/dev/null", pathlib.Path("/out"), clock_hz=60000, seconds=0.0,
+        png=False, video=False, window=True,
+    )
+    assert "seconds=0" in argv
+
+
+@pytest.mark.parametrize(
+    "value, printed",
+    [(0.0, "0"), (10.0, "10"), (2.5, "2.5"), (0.125, "0.125"),
+     (86400.0, "86400"), (1234567.0, "1234567")],
+)
+def test_a_duration_prints_as_a_number_a_person_would_type(value, printed):
+    # `%g` turned anything above six significant figures into `1.23457e+06`,
+    # which is lossy and is not what the pipeline would read back.
+    assert demo_mod._number(value) == printed
+
+
+def test_a_clock_above_the_boards_measured_ceiling_warns_but_is_allowed():
+    # Watching the board overrun is a legitimate thing to want -- it is how
+    # the ceilings were measured -- so this is a warning, not an error.
+    warnings = demo_mod.check_numbers(numbers(board="tt07", clock_hz=1_000_000))
+    assert len(warnings) == 1
+    assert "--clock-hz 1000000" in warnings[0]
+    assert "60000" in warnings[0]  # the RP2040 ceiling
+
+
+def test_each_board_family_is_warned_at_its_own_ceiling():
+    assert demo_mod.clock_ceiling("tt07") == 60_000      # RP2040 demo board
+    assert demo_mod.clock_ceiling("fpga-1") == 750_000   # RP2350
+    # 700 kHz is over one ceiling and under the other.
+    assert demo_mod.check_numbers(numbers(board="tt07", clock_hz=700_000))
+    assert demo_mod.check_numbers(numbers(board="fpga-1", clock_hz=700_000)) == []
+
+
+def test_no_ceiling_is_guessed_for_a_board_reached_by_link():
+    # Behind a --link there is no telling which demo board is there, and a
+    # warning about the wrong ceiling is worse than none.
+    assert demo_mod.clock_ceiling(None) is None
+    assert demo_mod.check_numbers(numbers(board=None, clock_hz=200_000_000)) == []
+
+
+def test_an_empty_fps_is_refused_rather_than_ignored():
+    # `--fps ''` used to be dropped by a truthiness test -- the same
+    # "ignored rather than refused" that made a bad --seconds dangerous.
+    with pytest.raises(CaptureError) as exc:
+        demo_mod.parse_fps("")
+    assert "--fps" in str(exc.value)
 
 
 # ------------------------------------------------------------- the pipeline
@@ -773,6 +878,24 @@ def test_a_privileged_serve_port_says_why(tmp_path):
     assert proc.returncode != 0
     assert "--serve 80" in proc.stderr
     assert "below 1024" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "flag, value",
+    [("--seconds", "-5"), ("--clock-hz", "0"), ("--buf-words", "0"),
+     ("--serve", "70000"), ("--fps", "")],
+)
+def test_a_bad_number_stops_the_run_before_the_board(tmp_path, capsys, flag, value):
+    """No board, no outdir, no GStreamer needed: the number is wrong and
+    that is answerable on its own."""
+    outdir = tmp_path / "never-made"
+    argv = ["demo", "--board", "tt07", "--clock-hz", "60000",
+            "--outdir", str(outdir), "--dry-run", flag, value]
+    assert main(argv) == 1
+    captured = capsys.readouterr()
+    assert flag in captured.err
+    assert not outdir.exists()
+    assert "gst-launch" not in captured.out  # no pipeline was printed
 
 
 @needs_gstreamer
