@@ -52,6 +52,39 @@ TEST(windows_reassemble_without_force_mode) {
         uint8_t g = grid(NULL, x, y); const uint8_t *q = last_rgb + (y * 640 + x) * 3;
         ASSERT_EQ_U(q[0], ((g >> 4) & 3) * 85); ASSERT_EQ_U(q[2], (g & 3) * 85);
     }
+    // Regression: emit()'s clocks-per-line table match (used above for the
+    // crop) must also be reported through out->timing, not just used
+    // internally - the free-running learner alone can never complete this
+    // measurement from windows that never span a vsync transition on both
+    // sides, so out->timing used to come back with mode==NULL,
+    // lines_per_frame==0, and vsync_positive stuck at its zero default.
+    ASSERT_TRUE(last.timing->mode != NULL);
+    ASSERT_TRUE(strcmp(last.timing->mode->name, "640x480@60") == 0);
+    ASSERT_EQ_U(last.timing->lines_per_frame, 525);
+    ASSERT_EQ_U(last.timing->vsync_positive, 0);
+}
+
+TEST(fram_no_force_reports_resolved_800x600) {
+    // Same regression as windows_reassemble_without_force_mode, but for a
+    // mode with positive-polarity syncs: the resolved match must supply the
+    // true hsync/vsync polarity, not the learner's un-computed zero default
+    // (which happens to print as "neg" even when the real polarity is pos).
+    const vgaframe_mode_t *m = vgaframe_mode_match(1056, 628);
+    size_t n = synth_frame(m, grid, NULL, buf, sizeof buf / sizeof buf[0]); ASSERT_TRUE(n == 1056u * 628u);
+    vgaframe_config_t c; memset(&c, 0, sizeof c); c.max_clocks_per_line = 1400; c.max_lines = 900;
+    static const uint8_t map[8] = { 7, 3, 0, 4, 1, 5, 2, 6 }; memcpy(c.signal_map, map, 8);
+    c.force_mode = NULL; c.on_frame = on_frame;
+    vgaframe_t f; nframes = npartial = 0; ASSERT_EQ_U(vgaframe_init(&f, &c, raw, rgb, cover), 0);
+    for (uint16_t first = 0; first < 628; first = (uint16_t)(first + 25)) {
+        uint16_t count = (uint16_t)(628 - first < 25 ? 628 - first : 25);
+        vgaframe_frame_begin(&f, 9, first, count, 1056, (uint32_t)count * 1056);
+        for (uint32_t i = 0; i < (uint32_t)count * 1056u; i++) vgaframe_push(&f, buf[(uint32_t)first * 1056u + i], 1);
+    }
+    ASSERT_EQ_U(nframes, 1); ASSERT_EQ_U(last.frame_counter, 9);
+    ASSERT_TRUE(last.timing->mode != NULL);
+    ASSERT_TRUE(strcmp(last.timing->mode->name, "800x600@60") == 0);
+    ASSERT_EQ_U(last.timing->hsync_positive, 1);
+    ASSERT_EQ_U(last.timing->vsync_positive, 1);
 }
 
 TEST(fram_flush_clears_stale_rows) {
@@ -88,6 +121,7 @@ TEST(new_counter_flushes_partial) {
 int main(void) {
     RUN(windows_reassemble_into_one_frame);
     RUN(windows_reassemble_without_force_mode);
+    RUN(fram_no_force_reports_resolved_800x600);
     RUN(fram_flush_clears_stale_rows);
     RUN(new_counter_flushes_partial);
     RUN_TESTS_END();
