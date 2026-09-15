@@ -351,6 +351,61 @@ def _number(value: float) -> str:
     return "%g" % value
 
 
+def parse_fps(text: str) -> str:
+    """`--fps` as the `output-fps` fraction `vgadecode` takes.
+
+    `30`, `30/1` and `7.5` all mean the same thing to a person, and none of
+    them is what a `GstFraction` is spelled as except the middle one. A
+    decimal is turned into a fraction by its decimal places rather than by
+    `Fraction.limit_denominator`, so `29.97` stays exactly 2997/100 and not a
+    near miss.
+    """
+    text = text.strip()
+    try:
+        if "/" in text:
+            numerator_text, denominator_text = text.split("/", 1)
+            numerator, denominator = int(numerator_text), int(denominator_text)
+        elif "." in text:
+            whole, places = text.split(".", 1)
+            denominator = 10 ** len(places)
+            numerator = int((whole or "0") + places)
+            if whole.startswith("-"):
+                numerator = -abs(numerator)
+        else:
+            numerator, denominator = int(text), 1
+    except ValueError:
+        raise CaptureError(
+            "--fps %r is not a frame rate: write 30, 30/1 or 29.97" % text
+        ) from None
+    if denominator <= 0 or numerator <= 0:
+        raise CaptureError("--fps %s must be positive" % text)
+    # vgadecode's own range; refused here so it is a sentence rather than a
+    # GObject warning from inside the pipeline.
+    if not (denominator <= numerator * 1000 and numerator <= denominator * 1000):
+        raise CaptureError(
+            "--fps %s is outside vgadecode's 1/1000 to 1000/1 range" % text
+        )
+    return "%d/%d" % (numerator, denominator)
+
+
+def decode_properties(fps: str | None) -> list[str]:
+    """`vgadecode`'s settings, as `name=value` tokens.
+
+    Without `--fps` the element times frames from the project clock, which is
+    the honest picture: at the RP2040's 60 kHz floor a 640x480 frame is
+    800x525 clocks, so seven seconds each, and the video is a slideshow of
+    what the board really did.
+
+    With it, `repeat-last-frame` re-pushes the last frame to fill the gaps
+    and the video plays at wall-clock speed -- the same frames, at a rate a
+    player and a browser can show. Nothing is invented: a repeated frame is
+    the frame that was on the screen.
+    """
+    if fps is None:
+        return []
+    return ["repeat-last-frame=true", "output-fps=%s" % fps]
+
+
 def build_pipeline(
     link: str,
     outdir: pathlib.Path,
@@ -367,6 +422,7 @@ def build_pipeline(
     video_encoder: str = "auto",
     window: bool = False,
     mjpeg_fd: int | None = None,
+    fps: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """The `gst-launch-1.0` argument vector, and what it writes.
 
@@ -435,6 +491,7 @@ def build_pipeline(
         "!",
         "vgadecode",
         "name=dec",
+        *decode_properties(fps),
         "!",
         "tee",
         "name=t",
@@ -738,6 +795,7 @@ def plan_demo(
             video_encoder=args.video_encoder,
             window=args.window,
             mjpeg_fd=mjpeg_fd,
+            fps=parse_fps(args.fps) if args.fps else None,
         )
     except BaseException:
         if not dry_run:
@@ -871,6 +929,13 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
         type=int,
         metavar="PORT",
         help="also publish an MJPEG stream at http://localhost:PORT/",
+    )
+    parser.add_argument(
+        "--fps",
+        metavar="RATE",
+        help="re-time the video to RATE (30, 30/1 or 29.97), repeating the "
+        "last frame to fill the gaps. Without it frames keep project time, "
+        "which at a 60 kHz project clock is one frame every 7 seconds",
     )
     parser.add_argument(
         "--no-png",

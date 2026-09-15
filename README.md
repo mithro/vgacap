@@ -207,6 +207,14 @@ an index page with an `<img src="/stream.mjpg">` in it, which is all a
 browser needs. It is standard library only, and a viewer that falls behind
 loses frames rather than slowing the capture down.
 
+At a 60 kHz project clock a 640x480 frame is 800x525 clocks, so **seven
+seconds long** -- honest timing, and a slideshow rather than a video.
+`--fps 30` (or `30/1`, or `29.97`) sets `vgadecode`'s `repeat-last-frame` and
+`output-fps`, which re-pushes the last frame to fill the gaps so the video
+plays at wall-clock speed. Nothing is invented: a repeated frame is the frame
+that was on the screen. It is set on the decoder, so every output shares the
+one cadence.
+
 `--dry-run` prints the `gst-launch-1.0` command and exits without touching
 the board, the outdir or the port -- the same command a real run prints
 before it starts, so it can be copied, edited and run by hand. The demo

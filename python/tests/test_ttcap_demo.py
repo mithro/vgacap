@@ -172,6 +172,42 @@ def test_an_encoder_that_is_not_installed_is_named():
     assert missing[0] in str(exc.value)
 
 
+@needs_gstreamer
+def test_without_fps_the_frames_keep_project_time():
+    argv, _, _ = build()
+    # No re-timing asked for, so vgadecode is left at its defaults and a
+    # 60 kHz capture really is one frame every seven seconds.
+    assert not any(token.startswith("output-fps") for token in argv)
+    assert "repeat-last-frame=true" not in argv
+
+
+@needs_gstreamer
+def test_fps_re_times_the_video_through_vgadecode():
+    argv, _, _ = build(fps="30/1")
+    assert "repeat-last-frame=true" in argv
+    assert "output-fps=30/1" in argv
+    # On the decoder, so every output shares one cadence -- not on the
+    # encoder branch, which would leave the PNGs and the browser view on a
+    # different clock from the video.
+    assert argv.index("output-fps=30/1") < argv.index("tee")
+
+
+@pytest.mark.parametrize(
+    "given, expected",
+    [("30", "30/1"), ("30/1", "30/1"), ("25", "25/1"), (" 60 ", "60/1"),
+     ("29.97", "2997/100"), ("7.5", "75/10"), ("1/2", "1/2")],
+)
+def test_a_frame_rate_can_be_written_any_of_the_usual_ways(given, expected):
+    assert demo_mod.parse_fps(given) == expected
+
+
+@pytest.mark.parametrize("given", ["nonsense", "30/", "", "-30", "0", "30/0", "1/2000"])
+def test_a_frame_rate_that_is_not_one_says_so(given):
+    with pytest.raises(CaptureError) as exc:
+        demo_mod.parse_fps(given)
+    assert "--fps" in str(exc.value)
+
+
 def test_the_printed_pipeline_keeps_the_command_in_one_piece():
     # `ttcap-command` is several words; a printed pipeline that loses the
     # quoting round it is not one anybody can paste back.
@@ -276,6 +312,16 @@ def video_duration_ns(path: pathlib.Path) -> int:
     )
 
 
+def video_framerate(path: pathlib.Path) -> str:
+    """The video's frame rate as `gst-discoverer-1.0` reports it, e.g. `10/1`."""
+    proc = subprocess.run(["gst-discoverer-1.0", str(path)], capture_output=True,
+                          text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    match = re.search(r"Frame rate: (\d+/\d+)", proc.stdout)
+    assert match, "no frame rate in:\n" + proc.stdout
+    return match.group(1)
+
+
 def reference_frame_count(stream: pathlib.Path, work: pathlib.Path) -> int:
     """How many frames the reference renderer finds in the same bytes."""
     work.mkdir(parents=True, exist_ok=True)
@@ -350,6 +396,25 @@ def test_no_png_leaves_only_the_video(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert not list(outdir.glob("frame-*.png"))
     assert video_duration_ns(outdir / "capture.mkv") > 0
+
+
+@needs_gstreamer
+def test_fps_turns_the_slideshow_into_a_video(tmp_path):
+    # At the RP2040's 60 kHz floor a 640x480 frame is 800x525 clocks, so
+    # seven seconds each: the honest timing, and unwatchable. --fps repeats
+    # the last frame to fill the gaps.
+    slideshow, retimed = tmp_path / "slideshow", tmp_path / "retimed"
+    assert run_demo_process(
+        demo_argv(slideshow, "--no-png", fake=("--frames", "5"), clock_hz=60_000)
+    ).returncode == 0
+    assert video_framerate(slideshow / "capture.mkv") == "1/7"
+
+    assert run_demo_process(
+        demo_argv(retimed, "--no-png", "--fps", "10",
+                  fake=("--frames", "5"), clock_hz=60_000)
+    ).returncode == 0
+    assert video_framerate(retimed / "capture.mkv") == "10/1"
+    assert video_duration_ns(retimed / "capture.mkv") > 0
 
 
 @needs_gstreamer
