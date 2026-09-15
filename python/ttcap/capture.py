@@ -7,6 +7,14 @@
 the capture needs, and `run_capture()` writes the `VGCH` header the board
 never sees and then splices the board's own chunks after it, verbatim.
 
+The capture itself is a *stream*, not a file writer: `iter_capture()` yields
+the header and then every board chunk as bytes, `CaptureSession` wraps that
+iterator with the stats, the out-of-band stop and the teardown a
+long-running consumer (M5's GStreamer source, `ttcap capture --out -`)
+needs, and `run_capture()` is the thin wrapper that pours the same bytes
+into a file. There is one implementation of the board protocol and one
+implementation of the recovery path; everything else chooses a sink.
+
 The split of responsibility is deliberate: the board knows the sample data
 and its own overruns, the host knows the signal map, the mode and the
 project clock it just programmed, so only the host can write a correct
@@ -17,15 +25,18 @@ the host's re-serialisation.
 
 from __future__ import annotations
 
+import io
 import struct
+import threading
 import time
 from dataclasses import dataclass, field
+from typing import Callable, Iterator
 
 from vgacap.stream import Header, Writer
 
 from . import mp
 from .boards import BoardProfile
-from .repl import RawRepl, ReplFramingError
+from .repl import CHUNK_HEADER_LEN, RawRepl, ReplFramingError
 
 EDGES = ("falling", "rising")
 
@@ -253,6 +264,19 @@ class CaptureRequest:
     desc: str = ""
     pio: int = DEFAULT_PIO
     sm: int = 0
+    #: Consulted between chunks: True ends the capture at the next safe
+    #: point, exactly as `seconds`/`max_bytes` do. It is the third way a
+    #: capture can be bounded, and the only one a *consumer* controls -- a
+    #: GStreamer pipeline saying EOS, a SIGINT handler -- so a request that
+    #: supplies it may leave `seconds` and `max_bytes` both 0 and run until
+    #: something outside says stop.
+    #:
+    #: Called from the thread driving the iterator, never from another, and
+    #: never while a chunk is half read. Stop latency is therefore one DMA
+    #: buffer: ~82 ms at 750 kHz with `buf_words=4096`, but 2.2 s at the
+    #: RP2040's 60 kHz ceiling. A consumer that cannot wait that long wants
+    #: `CaptureSession.request_stop()` instead, which is thread-safe.
+    stop: Callable[[], bool] | None = None
 
     def __post_init__(self) -> None:
         if self.project and self.design:
@@ -265,9 +289,10 @@ class CaptureRequest:
             raise ValueError(f"clock_hz must be positive, got {self.clock_hz}")
         if self.seconds < 0:
             raise ValueError(f"seconds must not be negative, got {self.seconds}")
-        if self.seconds == 0 and self.max_bytes == 0:
+        if self.seconds == 0 and self.max_bytes == 0 and self.stop is None:
             raise ValueError(
-                "seconds and max_bytes are both 0: the capture would never stop"
+                "seconds and max_bytes are both 0 and no stop callable was "
+                "given: the capture would never stop"
             )
 
     @property
@@ -508,10 +533,357 @@ def _abandon_stream(repl: RawRepl, stream, timeout: float | None = None) -> None
 
 
 def _should_stop(req: CaptureRequest, start: float, total_bytes: int) -> bool:
-    """True once the run has reached whichever limit the request set."""
+    """True once the run has reached whichever limit the request set.
+
+    Evaluated *between* chunks, never during one, so all three limits
+    overshoot by at most the chunk in flight -- which is the point: a chunk
+    cut short would not survive the reader.
+    """
+    if req.stop is not None and req.stop():
+        return True
     if req.seconds and time.monotonic() - start >= req.seconds:
         return True
     return bool(req.max_bytes) and total_bytes >= req.max_bytes
+
+
+#: Offset of the `sample_count` field in a `FRAM` chunk payload, which opens
+#: `<I frame_counter, H first_line, H line_count, I clocks_per_line,
+#: I sample_count>` (`vgacap.stream.Writer.frame`, mirroring
+#: `vgacap_frame_chunk` in include/vgacap/stream.h). `RAW ` puts its count
+#: first, so the two tags need different offsets but are otherwise counted
+#: the same way.
+FRAM_SAMPLE_COUNT_OFFSET = 12
+
+#: Where each sample-bearing tag keeps its `sample_count`. A tag that is not
+#: in here contributes bytes and a chunk to the stats but no samples.
+_SAMPLE_COUNT_OFFSETS = {b"RAW ": 0, b"FRAM": FRAM_SAMPLE_COUNT_OFFSET}
+
+
+def stream_header_bytes(req: CaptureRequest) -> bytes:
+    """The `VGCH` header chunk for `req`, as bytes.
+
+    The board never sees this: it knows the sample data and its own
+    overruns, while the signal map, the mode and the project clock are
+    things only the host that just programmed them can know. Splitting it
+    out of the write means a consumer that is not a file -- a pipe, a
+    GStreamer buffer -- gets the identical bytes without a file object to
+    write them into.
+    """
+    buf = io.BytesIO()
+    profile = req.profile
+    Writer(
+        buf,
+        Header(
+            version=1,
+            sample_bits=profile.sample_bits,
+            mode=MODE_EXTCLK,
+            clock_hz=req.clock_hz,
+            signal_map=profile.signal_map,
+            samples_per_word=profile.samples_per_word,
+            flags=profile.flags,
+            desc=_describe(req),
+        ),
+    )
+    return buf.getvalue()
+
+
+class CaptureSession:
+    """One capture, as a stream of bytes plus the stats it accumulated.
+
+    `chunks()` is the iterator: the `VGCH` header first, then every chunk
+    the board wrote, byte for byte. `stats()` is the `CaptureStats` snapshot
+    -- final once the iterator has ended or `close()` has run, and a live
+    reading before that. `request_stop()` ends the capture from another
+    thread, and `close()` abandons it and puts the board back at a prompt.
+
+    A session runs once: `chunks()` returns the same generator every time,
+    and a closed session cannot be restarted.
+
+    **Threading.** Exactly one thread may drive the iterator. `request_stop()`
+    is the only method another thread may call, and it is safe because every
+    write to the link goes through `RawRepl`'s write lock -- pyserial and
+    `websockets.sync` are not safe for concurrent writes, and a stop byte
+    interleaved into a command would desynchronise the framing. `close()`
+    belongs to the driving thread, because closing a generator another
+    thread is suspended inside is not something CPython allows.
+    """
+
+    def __init__(
+        self,
+        repl: RawRepl,
+        req: CaptureRequest,
+        chunk_timeout: float = DEFAULT_CHUNK_TIMEOUT,
+    ) -> None:
+        self._repl = repl
+        self._req = req
+        self._chunk_timeout = chunk_timeout
+        self._gen: Iterator[bytes] | None = None
+        self._closed = False
+        self._finished = False
+        #: Guards `_streaming`/`_stop_sent` against `request_stop()` racing
+        #: the iterator thread. It is *not* held across any link I/O.
+        self._lock = threading.Lock()
+        self._stop_requested = threading.Event()
+        self._stop_sent = False
+        self._streaming = False
+        self._start: float | None = None
+        self._elapsed = 0.0
+        self._stats: CaptureStats | None = None
+        self._stderr = ""
+        # -- accumulated per chunk ----------------------------------------
+        self._total_bytes = 0
+        self._samples = 0
+        self._chunks = 0
+        self._overrun_reports = 0
+        self._summary_overruns: int | None = None
+        self._rxstall = 0
+        self._dropped = 0
+        self._messages: list[str] = []
+        self._timed_out = False
+        self._error = ""
+        self._mem_free = 0
+
+    # -- public API -------------------------------------------------------
+
+    @property
+    def header_bytes(self) -> bytes:
+        """The `VGCH` chunk this session will yield first."""
+        return stream_header_bytes(self._req)
+
+    def chunks(self) -> Iterator[bytes]:
+        """The stream: the header, then each board chunk verbatim."""
+        if self._gen is None:
+            self._gen = self._iter()
+        return self._gen
+
+    def stats(self) -> CaptureStats:
+        """What the capture produced.
+
+        Final once the iterator has ended or `close()` has run. Before that
+        it is a live snapshot -- useful for a long-running consumer that
+        wants to watch `overruns`/`dropped` climb, but `stderr` and the
+        board's closing summary only arrive with the trailer.
+        """
+        if self._stats is not None:
+            return self._stats
+        return self._snapshot()
+
+    def request_stop(self) -> None:
+        """Ask the board to stop at its next safe point. Thread-safe.
+
+        Sends the same cooperative stop byte a `seconds`/`max_bytes` limit
+        sends, so the script finishes the chunk it is writing and then emits
+        its closing `TIME` chunk -- the iterator keeps yielding until that
+        trailer has been read, and the stream ends with a whole chunk.
+
+        Idempotent, and safe before the capture has started: the request is
+        remembered and the byte goes out as soon as the script is running.
+        """
+        self._stop_requested.set()
+        self._send_stop()
+
+    def close(self) -> None:
+        """Abandon the capture and leave the board at a prompt. Idempotent.
+
+        Closing the generator only stops *this* side reading; the script is
+        still executing up there. So this runs the same recovery the failure
+        paths run -- cooperative stop, drain to the terminator, a real Ctrl-C
+        if the board will not come back -- because a session that leaves a
+        script streaming corrupts the *next* thing its `RawRepl` does, not
+        just this capture.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        if self._gen is not None:
+            # Raises GeneratorExit inside `_iter`, whose handler does the
+            # teardown; a generator that never started, or already ended,
+            # takes this as a no-op.
+            self._gen.close()
+        self._finalise()
+
+    # -- internals --------------------------------------------------------
+
+    def _send_stop(self) -> None:
+        """Write the stop byte at most once, and only while a script runs."""
+        with self._lock:
+            if self._stop_sent or not self._streaming:
+                return
+            self._stop_sent = True
+        self._repl.request_stop()
+
+    def _account(self, tag: bytes, payload: bytes) -> None:
+        """Fold one chunk into the running totals."""
+        self._total_bytes += CHUNK_HEADER_LEN + len(payload)
+        self._chunks += 1
+        offset = _SAMPLE_COUNT_OFFSETS.get(tag)
+        if offset is not None:
+            # `FRAM` is counted exactly like `RAW `: a whole-frame capture
+            # that reported samples=0 would make the CLI exit 3 ("the
+            # sampler never saw a clock edge") on a perfectly good stream.
+            self._samples += struct.unpack_from("<I", payload, offset)[0]
+        elif tag == b"TIME":
+            # `dropped_samples` is a running total, so the newest chunk
+            # simply replaces the old value -- never `+=`.
+            self._dropped, msg = _time_fields(payload)
+            self._messages.append(msg)
+            # Exactly "overrun": the closing summary starts "overruns="
+            # and would otherwise be counted as one more overrun report.
+            if msg == "overrun":
+                self._overrun_reports += 1
+            value = _keyed_int(msg, "overruns")
+            if value is not None:
+                self._summary_overruns = value
+            value = _keyed_int(msg, "rxstall")
+            if value is not None:
+                self._rxstall = value
+
+    def _snapshot(self) -> CaptureStats:
+        if self._finished:
+            elapsed = self._elapsed
+        elif self._start is not None:
+            elapsed = time.monotonic() - self._start
+        else:
+            elapsed = 0.0
+        return CaptureStats(
+            bytes=self._total_bytes,
+            samples=self._samples,
+            chunks=self._chunks,
+            # The closing summary carries the board's own running total, so
+            # it wins; the interim "overrun" chunks are increments and are
+            # only a fallback for a run whose trailer never arrived.
+            overruns=(
+                self._summary_overruns
+                if self._summary_overruns is not None
+                else self._overrun_reports
+            ),
+            seconds=elapsed,
+            rxstall=self._rxstall,
+            stderr=self._stderr if self._finished else self._repl.last_stderr,
+            messages=tuple(self._messages),
+            timed_out=self._timed_out,
+            dropped=self._dropped,
+            error=self._error,
+            mem_free_before=self._mem_free,
+        )
+
+    def _finalise(self) -> None:
+        """Freeze the stats. Idempotent, and must never raise."""
+        if self._finished:
+            return
+        if self._start is not None:
+            self._elapsed = time.monotonic() - self._start
+        self._stderr = self._repl.last_stderr
+        self._finished = True
+        self._stats = self._snapshot()
+
+    def _iter(self) -> Iterator[bytes]:
+        """The stream itself. See `run_capture` for what the protocol is."""
+        try:
+            req, repl = self._req, self._repl
+            script = mp.with_cfg(mp.minify(mp.load("capture_rp2.py")), req.cfg())
+
+            needed = min_free_bytes(req.buf_words)
+            self._mem_free = prepare_board(repl, mp.module_level_names(script))
+            if self._mem_free < needed:
+                raise CaptureError(
+                    "board has only %d bytes of free heap after a collect, "
+                    "need %d (2 x %d bytes of DMA buffer for --buf-words %d, "
+                    "plus %d to compile the script); compiling it there can "
+                    "fail without a clean error (tt07 printed 'FATAL: "
+                    "uncaught exception' and halted). Reset the board, or "
+                    "ask for fewer buffer words, and try again."
+                    % (
+                        self._mem_free,
+                        needed,
+                        4 * req.buf_words,
+                        req.buf_words,
+                        COMPILE_HEADROOM_BYTES,
+                    )
+                )
+
+            # Nothing reaches the consumer until the board has been cleaned
+            # up and has the heap to compile the script, so a refused run
+            # leaves no header-only file (and no header-only pipe) behind.
+            yield stream_header_bytes(req)
+
+            self._start = time.monotonic()
+            stream = repl.exec_chunks(script, timeout=self._chunk_timeout)
+            try:
+                for tag, payload in stream:
+                    self._account(tag, payload)
+                    if not self._streaming:
+                        # The first chunk is the proof that the script is
+                        # running, and only from here can a stop byte reach
+                        # it. `exec_chunks()` is a generator, so it has not
+                        # written a byte until this first `next()`: a stop
+                        # sent before now would either be swallowed by the
+                        # idle raw-REPL prompt or race the script upload.
+                        with self._lock:
+                            self._streaming = True
+                        # A stop that arrived before the script was running
+                        # was only remembered; now it can be delivered.
+                        if self._stop_requested.is_set():
+                            self._send_stop()
+                    yield tag + struct.pack("<I", len(payload)) + payload
+                    if not self._stop_sent and (
+                        self._stop_requested.is_set()
+                        or _should_stop(req, self._start, self._total_bytes)
+                    ):
+                        self._send_stop()
+            except TimeoutError as exc:
+                # The board went quiet mid-stream -- typically the state
+                # machine is stuck in its `wait` because the project clock
+                # is not running, or the cooperative stop byte never
+                # arrived. The script is still executing up there, so
+                # interrupt it for real and take its traceback: leaving it
+                # would make every later command read its output.
+                self._timed_out = True
+                self._error = "board went quiet: %s" % exc
+                stream.close()
+                repl.recover()
+            except ReplFramingError as exc:
+                # The stream desynchronised, so nothing further can be read
+                # by length. Same teardown: the alternative is a script that
+                # keeps writing into the next command's output.
+                self._error = "framing lost: %s" % exc
+                stream.close()
+                repl.recover()
+            except BaseException:
+                # Everything else this loop can raise: a `CaptureError` from
+                # a short TIME payload, a `struct.error` from a short RAW
+                # one, an operator's `KeyboardInterrupt` -- and, the reason
+                # this has to be `BaseException` rather than `Exception`,
+                # the `GeneratorExit` a consumer causes by closing the
+                # iterator early. A GStreamer element stops consuming at
+                # arbitrary moments, and every one of them must still leave
+                # the board at a prompt. The exception is the caller's to
+                # see, so it is re-raised once the board is quiet.
+                _abandon_stream(repl, stream)
+                raise
+            finally:
+                with self._lock:
+                    self._streaming = False
+        finally:
+            self._finalise()
+
+
+def iter_capture(
+    repl: RawRepl,
+    req: CaptureRequest,
+    chunk_timeout: float = DEFAULT_CHUNK_TIMEOUT,
+) -> Iterator[bytes]:
+    """Stream one capture: the `VGCH` header, then each chunk verbatim.
+
+    The spelling for a consumer that wants the bytes and nothing else. Hold
+    a `CaptureSession` instead when the stats, an out-of-band stop or an
+    explicit teardown matter -- this is that class with the handle dropped.
+
+    Closing the iterator early is supported and is the normal way a
+    pipeline ends a capture: the board is stopped cooperatively and drained
+    to its prompt before `close()` returns.
+    """
+    return CaptureSession(repl, req, chunk_timeout=chunk_timeout).chunks()
 
 
 def run_capture(
@@ -549,127 +921,18 @@ def run_capture(
     Nothing is written to `out` until the board has been cleaned up and has
     enough free heap to compile the script, so a refused run leaves no
     header-only file behind.
+
+    All of that lives in `CaptureSession`; this is the file sink for it, and
+    the only thing it adds is `out.write()`. A write that fails -- a full
+    disk, or M5's pipeline going away -- is the caller's to handle, and
+    `session.close()` stops the board before it is re-raised, exactly as a
+    failure inside the loop would.
     """
-    profile = req.profile
-    script = mp.with_cfg(mp.minify(mp.load("capture_rp2.py")), req.cfg())
-
-    needed = min_free_bytes(req.buf_words)
-    mem_free = prepare_board(repl, mp.module_level_names(script))
-    if mem_free < needed:
-        raise CaptureError(
-            "board has only %d bytes of free heap after a collect, need %d "
-            "(2 x %d bytes of DMA buffer for --buf-words %d, plus %d to "
-            "compile the script); compiling it there can fail without a "
-            "clean error (tt07 printed 'FATAL: uncaught exception' and "
-            "halted). Reset the board, or ask for fewer buffer words, and "
-            "try again."
-            % (
-                mem_free,
-                needed,
-                4 * req.buf_words,
-                req.buf_words,
-                COMPILE_HEADROOM_BYTES,
-            )
-        )
-
-    Writer(
-        out,
-        Header(
-            version=1,
-            sample_bits=profile.sample_bits,
-            mode=MODE_EXTCLK,
-            clock_hz=req.clock_hz,
-            signal_map=profile.signal_map,
-            samples_per_word=profile.samples_per_word,
-            flags=profile.flags,
-            desc=_describe(req),
-        ),
-    )
-
-    total_bytes = 0
-    samples = 0
-    chunks = 0
-    overrun_reports = 0
-    summary_overruns: int | None = None
-    rxstall = 0
-    dropped = 0
-    messages: list[str] = []
-    interrupted = False
-    timed_out = False
-    error = ""
-
-    start = time.monotonic()
-    stream = repl.exec_chunks(script, timeout=chunk_timeout)
+    session = CaptureSession(repl, req, chunk_timeout=chunk_timeout)
     try:
-        for tag, payload in stream:
-            out.write(tag + struct.pack("<I", len(payload)) + payload)
-            total_bytes += 8 + len(payload)
-            chunks += 1
-            if tag == b"RAW ":
-                samples += struct.unpack_from("<I", payload, 0)[0]
-            elif tag == b"TIME":
-                # `dropped_samples` is a running total, so the newest chunk
-                # simply replaces the old value -- never `+=`.
-                dropped, msg = _time_fields(payload)
-                messages.append(msg)
-                # Exactly "overrun": the closing summary starts "overruns="
-                # and would otherwise be counted as one more overrun report.
-                if msg == "overrun":
-                    overrun_reports += 1
-                value = _keyed_int(msg, "overruns")
-                if value is not None:
-                    summary_overruns = value
-                value = _keyed_int(msg, "rxstall")
-                if value is not None:
-                    rxstall = value
-            if not interrupted and _should_stop(req, start, total_bytes):
-                repl.request_stop()
-                interrupted = True
-    except TimeoutError as exc:
-        # The board went quiet mid-stream -- typically the state machine is
-        # stuck in its `wait` because the project clock is not running, or
-        # the cooperative stop byte never arrived. The script is still
-        # executing up there, so interrupt it for real and take its
-        # traceback: leaving it would make every later command read its
-        # output instead of its own.
-        timed_out = True
-        error = "board went quiet: %s" % exc
-        stream.close()
-        repl.recover()
-    except ReplFramingError as exc:
-        # The stream desynchronised, so nothing further can be read by
-        # length. Same teardown: the alternative is a script that keeps
-        # writing into the next command's output.
-        error = "framing lost: %s" % exc
-        stream.close()
-        repl.recover()
+        for block in session.chunks():
+            out.write(block)
     except BaseException:
-        # Everything else the loop can raise: a `CaptureError` from a short
-        # TIME payload, a `struct.error` from a short RAW one, an `OSError`
-        # from `out.write()` (a full disk, or M5's pipeline going away), or
-        # a `KeyboardInterrupt` from the operator. None of them are the
-        # board's fault, and all of them used to drop the generator with
-        # the script still streaming -- after which the next command read
-        # its chunks instead of its own output. The exception is the
-        # caller's to see, so it is re-raised once the board is quiet.
-        _abandon_stream(repl, stream)
+        session.close()
         raise
-    elapsed = time.monotonic() - start
-
-    return CaptureStats(
-        bytes=total_bytes,
-        samples=samples,
-        chunks=chunks,
-        # The closing summary carries the board's own running total, so it
-        # wins; the interim "overrun" chunks are increments and are only a
-        # fallback for a run whose trailer never arrived.
-        overruns=summary_overruns if summary_overruns is not None else overrun_reports,
-        seconds=elapsed,
-        rxstall=rxstall,
-        stderr=repl.last_stderr,
-        messages=tuple(messages),
-        timed_out=timed_out,
-        dropped=dropped,
-        error=error,
-        mem_free_before=mem_free,
-    )
+    return session.stats()
