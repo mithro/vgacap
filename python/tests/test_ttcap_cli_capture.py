@@ -17,7 +17,7 @@ from fake_repl import FakeChunkBoard
 
 from ttcap import cli
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
-from ttcap.capture import CaptureError, frames_to_max_bytes
+from ttcap.capture import CaptureError, CaptureStats, frames_to_max_bytes
 from vgacap.stream import Header, Writer, read_stream
 
 
@@ -331,6 +331,54 @@ def test_capture_rejects_naming_both_a_project_and_a_design(monkeypatch, capsys,
 
     assert code == 1
     assert "only one" in capsys.readouterr().err
+
+
+def _stats(messages) -> CaptureStats:
+    return CaptureStats(
+        bytes=0, samples=0, chunks=0, overruns=len(messages), seconds=1.0, rxstall=0,
+        messages=tuple(messages),
+    )
+
+
+def test_report_coalesces_consecutive_identical_board_messages(capsys, tmp_path):
+    # A high sample rate can overrun once per TIME chunk for a while (e.g.
+    # 320 chunks at 1.5 MHz); one "board: overrun" line per chunk would
+    # flood the terminal, so consecutive repeats collapse into one line
+    # with a count.
+    messages = ["overrun"] * 320 + ["overruns=320 rxstall=0 sysclk_hz=125000000"]
+
+    cli._report(_stats(messages), str(tmp_path / "s.vgacap"))
+
+    printed = capsys.readouterr().out.splitlines()
+    assert "  board: overrun (x320)" in printed
+    assert printed.count("  board: overrun (x320)") == 1
+    assert "  board: overrun" not in [line for line in printed if "(x320)" not in line]
+    # The final summary line is never repeated, so it is unchanged.
+    assert "  board: overruns=320 rxstall=0 sysclk_hz=125000000" in printed
+
+
+def test_report_does_not_add_a_count_to_a_lone_message(capsys, tmp_path):
+    messages = ["overrun", "overruns=1 rxstall=0 sysclk_hz=125000000"]
+
+    cli._report(_stats(messages), str(tmp_path / "s.vgacap"))
+
+    printed = capsys.readouterr().out
+    assert "  board: overrun\n" in printed
+    assert "(x1)" not in printed
+
+
+def test_report_does_not_coalesce_non_consecutive_repeats(capsys, tmp_path):
+    # Two separate runs of "overrun" split by a different message must stay
+    # two lines, not merge into one count -- groupby is intentionally
+    # order-sensitive here, not a global tally.
+    messages = ["overrun", "overrun", "rxstall", "overrun"]
+
+    cli._report(_stats(messages), str(tmp_path / "s.vgacap"))
+
+    printed = capsys.readouterr().out.splitlines()
+    assert printed.count("  board: overrun (x2)") == 1
+    assert printed.count("  board: overrun") == 1  # the lone trailing one
+    assert "  board: rxstall" in printed
 
 
 # -- ttcap png ------------------------------------------------------------

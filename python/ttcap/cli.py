@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import itertools
 import os
 import pathlib
 import shutil
@@ -194,8 +195,17 @@ def capture(
 
 def _report(stats: CaptureStats, out_path: str) -> None:
     print(stats.format())
-    for message in stats.messages:
-        print("  board: %s" % message)
+    # A high-rate capture can log hundreds of consecutive identical
+    # "overrun" TIME chunks (e.g. 320 at 1.5 MHz); coalesce runs of the same
+    # message into one line with a count instead of flooding the terminal.
+    # The final summary line is always its own group of one, since it
+    # carries the cumulative totals and is never repeated.
+    for message, group in itertools.groupby(stats.messages):
+        count = sum(1 for _ in group)
+        if count > 1:
+            print("  board: %s (x%d)" % (message, count))
+        else:
+            print("  board: %s" % message)
     print("wrote %s" % out_path)
 
 
