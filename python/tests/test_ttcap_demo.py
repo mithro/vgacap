@@ -239,11 +239,32 @@ def test_a_clock_above_the_boards_measured_ceiling_warns_but_is_allowed():
 
 
 def test_each_board_family_is_warned_at_its_own_ceiling():
-    assert demo_mod.clock_ceiling("tt07") == 60_000      # RP2040 demo board
-    assert demo_mod.clock_ceiling("fpga-1") == 750_000   # RP2350
+    assert demo_mod.clock_ceiling("tt07")[0] == 60_000      # RP2040 demo board
+    assert demo_mod.clock_ceiling("fpga-1")[0] == 750_000   # RP2350
     # 700 kHz is over one ceiling and under the other.
     assert demo_mod.check_numbers(numbers(board="tt07", clock_hz=700_000))
     assert demo_mod.check_numbers(numbers(board="fpga-1", clock_hz=700_000)) == []
+
+
+@pytest.mark.parametrize("slug", sorted(WELLAND))
+def test_every_board_has_a_ceiling_to_warn_about(slug):
+    # `CLOCK_CEILINGS.get()` fails open, so a profile added to WELLAND later
+    # would silently get no warning at all. This is what notices.
+    measured = demo_mod.clock_ceiling(slug)
+    assert measured is not None, "no measured ceiling for %s" % slug
+    ceiling, board_name = measured
+    assert ceiling > 0 and board_name
+
+
+def test_the_ceiling_warning_names_the_demo_board_not_the_slug():
+    # Only tt07 and fpga-1 were on the bench; the rest inherit the number by
+    # sharing a profile. "a tt03p5 board has been measured" claimed an
+    # experiment that never happened.
+    warning = demo_mod.check_numbers(numbers(board="tt03p5", clock_hz=25_000_000))[0]
+    assert "an RP2040 demo board" in warning
+    assert "tt03p5 board has been measured" not in warning
+    # And the ceiling is not a hard limit: --buf-words moves it.
+    assert "default buffer size" in warning and "--buf-words" in warning
 
 
 def test_no_ceiling_is_guessed_for_a_board_reached_by_link():
@@ -662,9 +683,20 @@ def _read_two_parts(stream, limit: int = 8 << 20) -> bytes:
     return body
 
 
+def test_every_signal_a_person_can_send_on_purpose_is_handled():
+    # SIGQUIT (Ctrl-\) was missing, and it is default-fatal like the rest, so
+    # it orphaned the capture exactly as SIGTERM used to. SIGKILL is the only
+    # one that cannot be caught.
+    assert set(demo_mod.STOP_SIGNALS) == {"SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"}
+    for name in demo_mod.STOP_SIGNALS:
+        assert hasattr(signal, name)
+
+
 @needs_gstreamer
 @pytest.mark.parametrize(
-    "signum", [signal.SIGTERM, signal.SIGHUP], ids=["SIGTERM", "SIGHUP"]
+    "signum",
+    [signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT],
+    ids=["SIGTERM", "SIGHUP", "SIGQUIT"],
 )
 def test_a_demo_killed_by_anything_does_not_leave_the_board_captured(tmp_path, signum):
     """The worst failure this command had: a capture nobody can stop.
@@ -773,6 +805,44 @@ def test_an_outdir_that_is_a_file_says_so(tmp_path):
     assert "--outdir" in str(exc.value)
 
 
+def test_an_outdir_that_is_a_broken_symlink_says_so(tmp_path):
+    # `exists()` follows the link and answers False, so this reached `mkdir`
+    # and came back out as a raw FileExistsError -- the class of message
+    # this function exists to replace.
+    path = tmp_path / "dangling"
+    path.symlink_to(tmp_path / "nowhere")
+    with pytest.raises(CaptureError) as exc:
+        demo_mod.prepare_outdir(path)
+    assert "--outdir" in str(exc.value) and "not a directory" in str(exc.value)
+
+
+def test_a_directory_where_a_frame_would_go_says_so(tmp_path):
+    # `unlink` on a directory raises IsADirectoryError. It is contrived, and
+    # it is still not a raw errno that reaches the user.
+    outdir = tmp_path / "out"
+    (outdir / "frame-0000.png").mkdir(parents=True)
+    with pytest.raises(CaptureError) as exc:
+        demo_mod.prepare_outdir(outdir, force=True)
+    message = str(exc.value)
+    assert "frame-0000.png" in message and "directory" in message
+    assert "IsADirectoryError" not in message
+    assert (outdir / "frame-0000.png").is_dir()  # and it is still there
+
+
+def test_an_unwritable_outdir_is_a_sentence(tmp_path):
+    if os.geteuid() == 0:  # pragma: no cover - root ignores the mode
+        pytest.skip("running as root, so an unwritable directory is not")
+    parent = tmp_path / "ro"
+    parent.mkdir(mode=0o500)
+    try:
+        with pytest.raises(CaptureError) as exc:
+            demo_mod.prepare_outdir(parent / "sub")
+        assert "--outdir" in str(exc.value)
+        assert "PermissionError" not in str(exc.value)
+    finally:
+        parent.chmod(0o700)
+
+
 @needs_gstreamer
 def test_a_second_run_into_the_same_outdir_refuses_rather_than_blending(tmp_path):
     """The lie this used to tell.
@@ -815,6 +885,77 @@ def test_a_run_that_captures_nothing_does_not_report_success(tmp_path):
     assert not list(outdir.glob("frame-*.png"))
     assert proc.returncode == demo_mod.EXIT_NOTHING_CAPTURED
     assert "nothing was captured" in proc.stderr
+
+
+# ----------------------------------------------------------- the verdict
+
+
+def test_an_output_that_exists_settles_it():
+    assert not demo_mod.Outcome(made=True, conclusive=True).nothing_captured
+    assert not demo_mod.Outcome(made=True, conclusive=False).nothing_captured
+
+
+def test_an_empty_file_output_is_conclusive():
+    # PNGs and the video are countable and complete: if one was asked for
+    # and nothing came out, nothing was captured, whatever the bus said.
+    assert demo_mod.Outcome(conclusive=True, saw_frames=True).nothing_captured
+    assert demo_mod.Outcome(conclusive=True, saw_frames=False).nothing_captured
+
+
+def test_a_run_with_nothing_countable_is_judged_on_the_bus():
+    """`--window` has no counter at all, and `--serve`'s count is one part
+    behind by construction. Reading either zero as "nothing was captured"
+    made a working window-only run exit 3 every single time."""
+    assert not demo_mod.Outcome(conclusive=False, saw_frames=True).nothing_captured
+    assert demo_mod.Outcome(conclusive=False, saw_frames=False).nothing_captured
+
+
+@needs_gstreamer
+@pytest.mark.parametrize(
+    "extra, frames",
+    [
+        (("--no-png", "--no-video", "--window"), "8"),
+        (("--no-png", "--no-video", "--serve", "0"), "2"),
+        (("--no-png", "--no-video", "--serve", "0"), "8"),
+    ],
+    ids=["window-only", "serve-only-short", "serve-only-long"],
+)
+def test_a_run_with_no_file_output_does_not_claim_it_captured_nothing(
+    tmp_path, extra, frames
+):
+    """Exit 3 is reserved for "the sampler never saw a clock edge". A window
+    that worked, or a capture too short to close an MJPEG part, is not that
+    -- and both used to land on it."""
+    argv = demo_argv(tmp_path / "out", *extra, fake=("--frames", frames))
+    if "--serve" in extra:  # a real port, chosen late so it is still free
+        argv[argv.index("0", argv.index("--serve"))] = str(free_port())
+    proc = run_demo_process(argv)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nothing was captured" not in proc.stderr
+
+
+@needs_gstreamer
+def test_a_window_only_run_still_says_what_it_did(tmp_path):
+    proc = run_demo_process(
+        demo_argv(tmp_path / "out", "--no-png", "--no-video", "--window",
+                  fake=("--frames", "8"))
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a window (autovideosink)" in proc.stderr
+    assert "640x480@60" in proc.stderr
+
+
+@needs_gstreamer
+def test_sync_without_a_closed_frame_says_which_of_the_two_it_was(tmp_path):
+    # Two frames of samples is enough to learn the timing and not enough to
+    # close a frame, so the diagnosis is "capture for longer", not "check
+    # the Pmod". Both are exit 3; they send you to different places.
+    proc = run_demo_process(
+        demo_argv(tmp_path / "out", "--no-video", fake=("--frames", "2"))
+    )
+    assert proc.returncode == demo_mod.EXIT_NOTHING_CAPTURED
+    assert "sync was detected but no complete frame closed" in proc.stderr
+    assert "three frame periods" in proc.stderr
 
 
 # ------------------------------------------------- the plugin and the port

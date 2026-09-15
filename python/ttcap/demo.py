@@ -310,20 +310,27 @@ def resolve_link(
     )
 
 
-#: The project-clock rates each demo board has been measured to keep up
-#: with cleanly: `docs/research/2026-09-15-micropython-capture-rate.md`, and
-#: the same two numbers the stop-latency notes quote throughout.
+#: The project-clock rate each demo board has been measured to keep up with
+#: cleanly, and what to call that board in a sentence:
+#: `docs/research/2026-09-15-micropython-capture-rate.md`, the same two
+#: numbers the stop-latency notes quote throughout. The sweep measured tt07
+#: and fpga-1; every other slug inherits its number by sharing a profile,
+#: which is why the warning names the *demo board* and not the slug -- only
+#: one slug per family was actually on the bench.
 #:
 #: Keyed on the board *profile*, unlike `board_takes_a_design` above -- and
-#: for the opposite reason. This is a property of the demo board's link and
-#: PIO, which is exactly what the profile describes; ASIC-versus-FPGA is a
-#: property of what is plugged into it, which the profile only appears to
-#: know.
-CLOCK_CEILINGS = {"rp2040-tt06map": 60_000, "rp2350-dbv3": 750_000}
+#: for the opposite reason. What was measured is the MicroPython host loop
+#: and the USB path of the demo board's own MCU, which is exactly what the
+#: profile describes; ASIC-versus-FPGA is a property of what is plugged into
+#: it, which the profile only appears to know.
+CLOCK_CEILINGS = {
+    "rp2040-tt06map": (60_000, "an RP2040 demo board"),
+    "rp2350-dbv3": (750_000, "an RP2350 demo board"),
+}
 
 
-def clock_ceiling(board: str | None) -> int | None:
-    """The clean project-clock ceiling for `board`, if it is known.
+def clock_ceiling(board: str | None) -> tuple[int, str] | None:
+    """The clean project-clock ceiling for `board`, and what to call it.
 
     Only `--board` can answer this: behind a `--link` there is no telling
     which demo board is on the other end, and a warning about the wrong
@@ -445,16 +452,18 @@ def check_numbers(args: argparse.Namespace) -> list[str]:
         parse_fps(args.fps)
 
     warnings = []
-    ceiling = clock_ceiling(args.board)
-    if ceiling is not None and args.clock_hz > ceiling:
+    measured = clock_ceiling(args.board)
+    if measured is not None and args.clock_hz > measured[0]:
         # A warning and not an error on purpose: watching the board overrun
         # is a legitimate thing to want, and it is how the ceilings were
         # measured in the first place.
+        ceiling, board_name = measured
         warnings.append(
-            "--clock-hz %d is above the %d Hz a %s board has been measured to "
-            "keep up with cleanly; expect overruns and dropped samples. That "
-            "is allowed -- the closing TIME chunk reports them."
-            % (args.clock_hz, ceiling, args.board)
+            "--clock-hz %d is above the %d Hz %s has been measured to keep up "
+            "with cleanly at the default buffer size; expect overruns and "
+            "dropped samples. That is allowed -- the closing TIME chunk "
+            "reports them -- and a larger --buf-words moves the ceiling."
+            % (args.clock_hz, ceiling, board_name)
         )
     return warnings
 
@@ -490,7 +499,10 @@ def prepare_outdir(outdir: pathlib.Path, force: bool = False) -> None:
     clears them first rather than blending into them. Anything else in the
     directory is left alone -- it is not ours to delete.
     """
-    if outdir.exists() and not outdir.is_dir():
+    # `lexists`, not `exists`: a symlink pointing nowhere is not a directory
+    # and never will be, but `exists()` follows it and answers False, which
+    # sent it to `mkdir` and back out as a raw FileExistsError.
+    if os.path.lexists(outdir) and not outdir.is_dir():
         raise CaptureError(
             "--outdir %s is not a directory; pass a directory to write the "
             "frames and the video into" % outdir
@@ -509,9 +521,24 @@ def prepare_outdir(outdir: pathlib.Path, force: bool = False) -> None:
                 ", ..." if len(stale) > 3 else "",
             )
         )
-    outdir.mkdir(parents=True, exist_ok=True)
-    for path in stale:
-        path.unlink()
+    try:
+        outdir.mkdir(parents=True, exist_ok=True)
+        for path in stale:
+            # A *directory* named frame-0000.png is not something this made
+            # and not something it will remove; `unlink` on one raises
+            # IsADirectoryError, which is the class of message this whole
+            # function exists to replace.
+            if path.is_dir():
+                raise CaptureError(
+                    "--outdir %s holds a directory called %s, which is where a "
+                    "frame would go; move it aside, or use a different --outdir"
+                    % (outdir, path.name)
+                )
+            path.unlink()
+    except OSError as exc:
+        raise CaptureError(
+            "--outdir %s could not be prepared: %s" % (outdir, exc.strerror or exc)
+        ) from None
 
 
 # ----------------------------------------------------------- the pipeline
@@ -865,9 +892,45 @@ def line_buffered(argv: list[str]) -> list[str]:
 EXIT_NOTHING_CAPTURED = 3
 
 
+@dataclass
+class Outcome:
+    """What the evidence says the run actually did.
+
+    Three separate questions, which used to be one boolean and were wrong in
+    both directions because of it:
+
+    * `made` -- an output exists that somebody can open. Any one is proof.
+    * `conclusive` -- a *file* output was asked for. Only then does emptiness
+      settle the matter: `--window` has nothing to count at all, and
+      `--serve`'s count is one part behind by construction, since a part is
+      not published until the next boundary arrives. Reading either zero as
+      "nothing was captured" is how a working window-only run came to exit 3.
+    * `saw_frames` -- the decoder reported a detected mode or a written
+      frame on the bus. That is evidence the capture worked even when
+      nothing reached the disk, and it is what a run with nothing countable
+      is judged on.
+    """
+
+    made: bool = False
+    conclusive: bool = False
+    saw_frames: bool = False
+
+    @property
+    def nothing_captured(self) -> bool:
+        """True only for a run that genuinely produced no frames.
+
+        `EXIT_NOTHING_CAPTURED` means "the sampler never saw a clock edge",
+        and it must not be reachable by a run that captured perfectly well
+        into an output this function cannot count.
+        """
+        if self.conclusive:
+            return not self.made
+        return not (self.made or self.saw_frames)
+
+
 def _summarise(plan: DemoPlan, progress: Progress, returncode: int,
-               server: MjpegServer | None = None) -> bool:
-    """Say what the run produced; return True if it produced anything.
+               server: MjpegServer | None = None) -> Outcome:
+    """Say what the run produced, and judge whether it produced anything.
 
     The outputs are counted from the files themselves, so a sink that
     stopped writing halfway through cannot be summarised as a success --
@@ -876,7 +939,10 @@ def _summarise(plan: DemoPlan, progress: Progress, returncode: int,
     previous run's frames as this one's was how a run that wrote nothing at
     all came to report "6 png(s)" and exit 0.
     """
-    produced = False
+    outcome = Outcome(
+        conclusive=bool(plan.png or plan.video),
+        saw_frames=progress.timing is not None or progress.frames > 0,
+    )
     progress.say("")
     progress.say("capture %s after %.1fs (gst-launch exit %d)"
                  % ("finished" if returncode == 0 else "failed",
@@ -885,7 +951,7 @@ def _summarise(plan: DemoPlan, progress: Progress, returncode: int,
         progress.say("  " + describe_timing(progress.timing))
     if plan.png:
         pngs = sorted(plan.outdir.glob("frame-*.png"))
-        produced = produced or bool(pngs)
+        outcome.made = outcome.made or bool(pngs)
         progress.say("  %d png(s) in %s" % (len(pngs), plan.outdir))
         # The bus said one thing, the directory another: a sink that failed
         # part way, or something else writing into the same names.
@@ -897,26 +963,35 @@ def _summarise(plan: DemoPlan, progress: Progress, returncode: int,
     if plan.video and plan.video_path is not None:
         size = plan.video_path.stat().st_size if plan.video_path.exists() else 0
         if size > 0:
-            produced = True
+            outcome.made = True
             progress.say("  %s, %.1f KiB" % (plan.video_path, size / 1024))
         elif plan.video_path.exists():
             progress.say("  %s is empty" % plan.video_path)
         else:
             progress.say("  %s was not written" % plan.video_path)
+    if plan.window:
+        # Nothing to count: the frames went to a screen. Whether they
+        # arrived is the bus's story, not this function's.
+        progress.say("  a window (autovideosink)")
     if server is not None:
         parts = server.broadcaster.parts
-        produced = produced or bool(parts)
+        outcome.made = outcome.made or bool(parts)
         progress.say("  %d frame(s) published on port %s" % (parts, plan.serve_port))
-    return produced
+    return outcome
 
 
-#: The signals that mean "this run is over": Ctrl-C, `kill`, and the
-#: terminal going away. All three are forwarded to the pipeline as SIGINT,
+#: The signals that mean "this run is over": Ctrl-C, Ctrl-\, `kill`, and the
+#: terminal going away. All of them are forwarded to the pipeline as SIGINT,
 #: which is the only one `gst-launch -e` turns into an end-of-stream, so a
 #: `kill` winds the board down and finalises the video exactly as Ctrl-C
 #: does. Handling only SIGINT is what used to leave a capture running on a
 #: shared bench board with no terminal left to stop it.
-STOP_SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP")
+#:
+#: Every default-fatal signal a person or a supervisor sends on purpose is
+#: here. SIGKILL is the one that cannot be: nothing in this process runs
+#: after it, which is why the teardown also has to be something the board
+#: can survive on its own.
+STOP_SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT")
 
 #: How long the last-resort teardown gives each rung of the ladder.
 TEARDOWN_GRACE = 10.0
@@ -1056,16 +1131,22 @@ def run_demo(
                 signal.signal(number, handler)
         if server is not None:
             server.close()
-    produced = _summarise(plan, progress, returncode, server)
+    outcome = _summarise(plan, progress, returncode, server)
     if returncode != 0 and plan.link.through_bridge:
         progress.say("")
         progress.say(tunnel_hint_for(plan.link))
-    if returncode == 0 and not produced:
-        # Exit 0 on a run that wrote nothing is the one lie this command
+    if returncode == 0 and outcome.nothing_captured:
+        # Exit 0 on a run that captured nothing is the one lie this command
         # must not tell: the pipeline ran, so gst-launch is content, but
-        # there is no capture.
+        # there is no capture. The diagnosis differs by how far it got --
+        # a detected mode means the samples arrived and only the frames did
+        # not, which is a different thing to go and check.
         progress.say("")
         progress.say(
+            "nothing was captured: the board's sync was detected but no "
+            "complete frame closed. A frame is only emitted at the boundary "
+            "that closes it, so capture at least three frame periods."
+            if outcome.saw_frames else
             "nothing was captured: the pipeline ran but produced no frames. "
             "Check that the design is driving the Tiny VGA Pmod, and that "
             "--clock-hz is a rate the link can keep up with."
@@ -1356,8 +1437,12 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="clear a previous run's frames and video out of --outdir first; "
-        "without it, an --outdir that already holds them is refused",
+        help=for_help(
+            "delete every %s and %s in --outdir first; without it, an "
+            "--outdir that already holds one is refused (and names them, so "
+            "nothing goes unseen)" % (PNG_PATTERN.replace("%04d", "*"),
+                                      VIDEO_FILENAME)
+        ),
     )
     parser.add_argument(
         "--window", action="store_true", help="also show the capture in a window"

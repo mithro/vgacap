@@ -229,28 +229,39 @@ property with a `CRITICAL` on stderr and then *ignores* it, so `--seconds -5`
 used to leave `seconds` at its default of 0 — which means "capture until
 stopped", so a typo started an unbounded capture on a shared board.
 `--seconds 0` still means exactly that when it is asked for. A `--clock-hz`
-above what the board has been measured to keep up with (60 kHz on the RP2040
-demo board, 750 kHz on the RP2350) is a **warning**, not an error: watching
-the board overrun is a legitimate thing to want, and the closing `TIME` chunk
-reports it.
+above what the demo board has been measured to keep up with *at the default
+buffer size* (60 kHz on an RP2040 demo board, 750 kHz on an RP2350) is a
+**warning**, not an error: watching the board overrun is a legitimate thing
+to want, the closing `TIME` chunk reports it, and a larger `--buf-words`
+moves the ceiling.
 
 `--outdir` is one run's alone. A directory that already holds a
 `frame-*.png` or a `capture.mkv` is **refused**, because a shorter capture
 would overwrite the first frames and leave the rest — two runs mixed
 together, which is the worst thing to find in `docs/results/` later.
-`--force` clears the previous run's outputs first and leaves everything else
-in the directory alone. A run that finishes without producing any frames
-exits **3**, the same code `ttcap capture` uses for "no samples at all".
+`--force` deletes every `frame-*.png` and `capture.mkv` in it first (the
+refusal names them, so nothing goes unseen) and leaves everything else
+alone. A run that finishes without producing any frames exits **3**, the
+same code `ttcap capture` uses for "no samples at all" — judged on the
+files when `--no-png`/`--no-video` did not switch them off, and on the
+decoder's own bus messages when the only output is a window or a stream,
+neither of which can be counted.
 
 Ctrl-C ends the run cleanly: the signal is forwarded once to
 `gst-launch -e`, which turns it into an end-of-stream, so the board winds
 down through `vgacapttsrc`'s cooperative stop and the Matroska file is
 finalised rather than truncated. Allow one DMA buffer for that -- 2.2 s at a
-60 kHz project clock. `SIGTERM` and `SIGHUP` do the same, and however the
-demo ends -- an exception, a `kill`, a closed terminal -- it tears the
-pipeline's whole process group down on the way out, so a capture is never
-left holding a shared bench board. A third signal terminates the pipeline
-and a fourth kills it, at the cost of the video.
+60 kHz project clock. `SIGTERM`, `SIGHUP` and `SIGQUIT` do the same, and
+however the demo ends -- an exception, a `kill`, a closed terminal -- it
+tears the pipeline's whole process group down on the way out, so a capture
+is never left holding a shared bench board. A third signal terminates the
+pipeline and a fourth kills it, at the cost of the video. Only `SIGKILL` is
+uncoverable, since nothing in the process runs after it.
+
+Because every one of those is a *graceful* stop, the demo then exits with
+the pipeline's own status: a `kill` on a run that captured successfully
+exits **0**, not 143. A supervisor reading exit status should treat that as
+the success it is.
 
 ### Reaching a Welland board
 
