@@ -100,8 +100,23 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint) {
             o[1] = (uint8_t)(((p >> 2) & 3) * 85);
             o[2] = (uint8_t)((p & 3) * 85);
         }
+    // Report the timing actually used for this crop: the learner's own
+    // measurement, unless resolved_mode() picked a different mode (a
+    // force_mode, or - in FRAM mode - a clocks-per-line table match the
+    // free-running learner alone could never derive). locked is left as the
+    // learner reported it either way.
+    f->out_timing = f->learner.t;
+    if (m && m != f->learner.t.mode) {
+        f->out_timing.mode = m;
+        f->out_timing.clocks_per_line = (uint32_t)m->h_active + m->h_front + m->h_sync + m->h_back;
+        f->out_timing.lines_per_frame = (uint32_t)m->v_active + m->v_front + m->v_sync + m->v_back;
+        f->out_timing.hsync_positive = m->h_sync_positive;
+        f->out_timing.vsync_positive = m->v_sync_positive;
+        f->out_timing.hsync_width = m->h_sync;
+        f->out_timing.vsync_lines = m->v_sync;
+    }
     vgaframe_output_t out;
-    out.rgb24 = f->rgb; out.width = (uint16_t)w; out.height = (uint16_t)h; out.timing = &f->learner.t;
+    out.rgb24 = f->rgb; out.width = (uint16_t)w; out.height = (uint16_t)h; out.timing = &f->out_timing;
     out.active_x0 = (uint16_t)x0; out.active_y0 = (uint16_t)y0; out.partial = partial;
     out.frame_counter = f->fram_mode ? f->fram_counter : f->frames_seen;
     f->frames_seen++;

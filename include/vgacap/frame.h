@@ -87,6 +87,11 @@ typedef struct vgaframe {
     // FRAM mode state
     int fram_mode; uint32_t fram_counter; uint16_t fram_first_line, fram_line_count; uint32_t fram_cpl; uint32_t fram_remaining;
     uint32_t fram_max_line;
+    // Timing actually used for the most recently emitted frame: the
+    // learner's own measurement, unless emit() resolved a different mode
+    // (force_mode, or a FRAM clocks-per-line table match) - see emit() in
+    // frame.c. vgaframe_output_t.timing always points here.
+    vgaframe_timing_t out_timing;
 } vgaframe_t;
 
 int  vgaframe_init(vgaframe_t *f, const vgaframe_config_t *cfg, uint8_t *raw, uint8_t *rgb, uint8_t *cover);
