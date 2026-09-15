@@ -14,6 +14,7 @@ import contextlib
 import io
 import os
 import threading
+import time
 import traceback
 import types
 
@@ -28,12 +29,18 @@ class FakeRawRepl:
     Keeps a single persistent globals dict across `exec()` calls, matching
     real MicroPython raw REPL sessions, and a tiny `ubinascii` shim so
     `RawRepl.upload()`'s generated code runs unmodified.
+
+    Set `reply_chunk_size` (and optionally `reply_delay`) before driving the
+    board to force replies to be written in several small `os.write()`
+    calls, exercising the client's split-read reassembly.
     """
 
     def __init__(self) -> None:
         self.master_fd, self.slave_fd = os.openpty()
         self.slave_name = os.ttyname(self.slave_fd)
         self._stop = threading.Event()
+        self.reply_chunk_size: int | None = None
+        self.reply_delay: float = 0.0
         ubinascii = types.SimpleNamespace(a2b_base64=base64.b64decode)
         self._globals = {"__builtins__": __builtins__, "ubinascii": ubinascii}
         self._thread = threading.Thread(target=self._serve, daemon=True)
@@ -44,6 +51,15 @@ class FakeRawRepl:
         with contextlib.suppress(OSError):
             os.close(self.master_fd)
         self._thread.join(timeout=2.0)
+
+    def _write(self, data: bytes) -> None:
+        if not self.reply_chunk_size:
+            os.write(self.master_fd, data)
+            return
+        for offset in range(0, len(data), self.reply_chunk_size):
+            os.write(self.master_fd, data[offset : offset + self.reply_chunk_size])
+            if self.reply_delay:
+                time.sleep(self.reply_delay)
 
     def _serve(self) -> None:
         buf = b""
@@ -60,13 +76,16 @@ class FakeRawRepl:
             progressed = True
             while progressed:
                 progressed = False
-                if not in_raw_mode:
-                    if CTRL_A in buf:
-                        buf = buf.split(CTRL_A, 1)[1]
-                        in_raw_mode = True
-                        os.write(self.master_fd, b"raw REPL; CTRL-B to exit\r\n>")
-                        progressed = True
-                    elif buf:
+                if CTRL_A in buf:
+                    # Real MicroPython boards (re)print the raw-REPL banner
+                    # on Ctrl-A idempotently, whether or not a raw-REPL
+                    # session is already active.
+                    buf = buf.split(CTRL_A, 1)[1]
+                    in_raw_mode = True
+                    self._write(b"raw REPL; CTRL-B to exit\r\n>")
+                    progressed = True
+                elif not in_raw_mode:
+                    if buf:
                         buf = b""
                 else:
                     if CTRL_B in buf:
@@ -76,8 +95,7 @@ class FakeRawRepl:
                     elif CTRL_D in buf:
                         code, buf = buf.split(CTRL_D, 1)
                         out, err = self._run(code.decode("utf-8"))
-                        os.write(
-                            self.master_fd,
+                        self._write(
                             b"OK" + out.encode("utf-8") + CTRL_D + err.encode("utf-8") + CTRL_D + b">",
                         )
                         progressed = True
@@ -177,6 +195,26 @@ def test_read_until_discards_buffer_on_timeout():
         link.close()
     finally:
         os.close(master_fd)
+
+
+def test_exec_reassembles_split_replies(fake_board):
+    fake_board.reply_chunk_size = 3
+    fake_board.reply_delay = 0.005
+    link = SerialLink(fake_board.slave_name)
+    r = RawRepl(link)
+    r.enter()  # banner itself is delivered in 3-byte chunks
+    try:
+        assert r.exec("print('hello world')") == ("hello world\r\n", "")
+    finally:
+        r.exit()
+        link.close()
+
+
+def test_enter_twice_reprints_banner(repl):
+    # `repl` already called enter() once via the fixture; a second call
+    # exercises the board re-emitting the raw-REPL banner idempotently.
+    repl.enter()
+    assert repl.exec("print(1)") == ("1\r\n", "")
 
 
 def _ws_echo_handler(websocket):
