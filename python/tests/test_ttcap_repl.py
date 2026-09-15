@@ -164,3 +164,17 @@ def test_exec_stream_no_stderr_leaves_last_stderr_empty(repl):
     list(repl.exec_stream("print('ok')"))
     assert repl.last_stderr == ""
 
+
+def test_read_until_discards_buffer_on_timeout():
+    master_fd, slave_fd = os.openpty()
+    try:
+        link = SerialLink(os.ttyname(slave_fd))
+        repl = RawRepl(link)
+        os.write(master_fd, b"partial-bytes-that-never-match")
+        with pytest.raises(TimeoutError):
+            repl._read_until(b"NEVER-SEEN", timeout=0.2)
+        assert repl._buf == b""
+        link.close()
+    finally:
+        os.close(master_fd)
+

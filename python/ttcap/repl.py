@@ -99,13 +99,31 @@ class RawRepl:
         #: `exec_stream()` has not been called yet).
         self.last_stderr: str = ""
 
+    def reset(self) -> None:
+        """Discard any bytes buffered from a previous, unfinished command.
+
+        `_read_until` already does this automatically when it times out, so
+        this is mainly for a caller that wants to force a clean slate (e.g.
+        after handling a `TimeoutError` itself, or before reusing a `RawRepl`
+        whose link may have delivered stray bytes).
+        """
+        self._buf = b""
+
     def _read_until(self, marker: bytes, timeout: float) -> bytes:
+        """Accumulate bytes from the link until `marker` appears, or raise.
+
+        On `TimeoutError`, the internal buffer is discarded (any partially
+        received framing bytes are thrown away) so a timed-out command can't
+        leak stale bytes into the next command's framing.
+        """
         deadline = time.monotonic() + timeout
         while marker not in self._buf:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                buffered = self._buf
+                self._buf = b""
                 raise TimeoutError(
-                    f"timed out waiting for {marker!r}; buffered so far: {self._buf!r}"
+                    f"timed out waiting for {marker!r}; buffered so far: {buffered!r}"
                 )
             chunk = self._link.read(min(remaining, 0.5))
             if chunk:
