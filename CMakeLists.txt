@@ -11,6 +11,7 @@ enable_testing()
 
 # Libraries. Each section is owned by one component; add sources in place.
 # --- stream: chunked capture stream encoder/decoder (src/stream) ---
+add_library(vgacap_stream STATIC src/stream/writer.c src/stream/reader.c)
 # --- frame: VGA picture reconstruction (src/frame) ---
 # --- tools: command-line utilities (src/tools) ---
 
@@ -27,3 +28,4 @@ endfunction()
 
 # Tests.
 vgacap_add_test(test_harness_smoke)
+vgacap_add_test(test_stream_header)
