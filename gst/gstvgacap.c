@@ -25,7 +25,11 @@ static gboolean plugin_init(GstPlugin *plugin)
     return TRUE;
 }
 
+/* The licence token has to come from the set GStreamer enumerates in
+ * gstplugin.c - anything else makes it log `unknown license` on every plugin
+ * load - and "Apache 2.0" (with a space) is the entry that matches this
+ * code's actual licence, Apache-2.0, as the SPDX headers state. */
 GST_PLUGIN_DEFINE(GST_VERSION_MAJOR, GST_VERSION_MINOR, vgacap,
                   "Tiny Tapeout VGA capture: stream decoding and capture sources",
-                  plugin_init, VGACAP_VERSION, "Apache-2.0", PACKAGE,
+                  plugin_init, VGACAP_VERSION, "Apache 2.0", PACKAGE,
                   "https://github.com/mithro/vgacap")

@@ -15,11 +15,19 @@
  *
  * A partial frame (not every line covered) is flagged
  * %GST_BUFFER_FLAG_CORRUPTED and the frame counter is carried in
- * %GST_BUFFER_OFFSET (with `offset_end = offset + 1`). This is deliberately
- * the cheap option: a custom #GstMeta would need a registered GType, an API
+ * %GST_BUFFER_OFFSET (with `offset_end = offset + 1`), which is what
+ * #GstBuffer documents `offset` to mean for video. This is deliberately the
+ * cheap option: a custom #GstMeta would need a registered GType, an API
  * header for downstream users and a per-buffer meta allocation in the hot
  * path, and a bus message per frame would be far too noisy, whereas a flag
  * and an offset are two stores into a buffer the element already owns.
+ *
+ * The offset is the *source's* frame number - the FRAM counter, or the
+ * capture's own running count - not an output index. It therefore skips the
+ * frames the `partial` property filters out, and it restarts at zero when the
+ * stream restarts (a second VGCH header, or a flushing seek). Number output
+ * frames downstream, or time them from the PTS, rather than assuming this
+ * value increases by one for ever.
  *
  * ## Timing
  *
@@ -85,13 +93,25 @@ struct _GstVgaDecode {
     vgacap_reader_t reader;
     vgaframe_t frame;
     gboolean frame_ready;
+    vgacap_header_t cached_header;   /* the last VGCH seen, replayed after a flush */
+    gboolean have_cached_header;
     guint32 clock_hz;
     guint64 clock_pos;   /* clocks consumed by the stream so far */
     guint64 frame_clk;   /* clock_pos as the frame being emitted was closed */
-    gboolean have_first_clk;
-    guint64 first_clk;
     guint64 frames_out;
     guint64 next_slot;   /* next free output-fps slot (repeat-last-frame) */
+
+    /* Timeline origin. The elapsed time is *frozen* into pts_base_ns whenever
+     * the clock rate changes, and each frame's PTS is measured forward from
+     * there. Rescaling the whole accumulator by the new rate instead - which
+     * is what an earlier version did - moves every previous frame, so a
+     * device reporting a measured clock in a TIME chunk could send PTS
+     * backwards and stall matroskamux and every synchronising sink. */
+    gboolean have_base;
+    guint64 pts_base_ns;   /* elapsed time at the base point */
+    guint64 clk_base;      /* clock_pos at the base point */
+    guint64 frames_base;   /* frames_out at the base point (no-clock streams) */
+    guint64 last_pts_ns, last_dur_ns;
 
     /* negotiation and output */
     GstCaps *out_caps;
@@ -261,27 +281,58 @@ static GstClockTime slot_time(const GstVgaDecode *self, guint64 slot)
                                  (guint64)self->out_fps_n);
 }
 
-/* PTS/duration in project time: clocks since the first emitted frame divided
- * by the stream's nominal clock. With no clock_hz there is nothing to derive
+/* Adopt a new project clock rate without disturbing the frames already sent:
+ * the time elapsed under the old rate is banked into pts_base_ns and the
+ * clock counter re-based, so the timeline only ever moves forward. Called for
+ * the header's rate, for a TIME chunk's, and for a second header's. */
+static void set_clock_rate(GstVgaDecode *self, guint32 hz)
+{
+    if (hz == self->clock_hz)
+        return;
+    if (!self->have_base) {
+        /* Nothing emitted yet; the first frame sets the origin. */
+    } else if (self->clock_hz != 0) {
+        self->pts_base_ns += gst_util_uint64_scale(self->clock_pos - self->clk_base,
+                                                   GST_SECOND, self->clock_hz);
+    } else {
+        /* Frames so far were counted on the output-fps grid, which cannot be
+         * converted into clocks; carry on from the end of the last one. */
+        self->pts_base_ns = self->last_pts_ns + self->last_dur_ns;
+    }
+    GST_INFO_OBJECT(self, "project clock %u -> %u Hz at %" G_GUINT64_FORMAT " ns",
+                    self->clock_hz, hz, self->pts_base_ns);
+    self->clk_base = self->clock_pos;
+    self->frames_base = self->frames_out;
+    self->clock_hz = hz;
+}
+
+/* PTS/duration in project time: clocks since the timeline base divided by the
+ * rate in force since that base. With no clock_hz there is nothing to derive
  * from, so frames are laid out on the output-fps grid instead. */
 static void frame_times(GstVgaDecode *self, const vgaframe_output_t *out,
                         GstClockTime *pts, GstClockTime *dur)
 {
     guint64 cpf = (guint64)out->timing->clocks_per_line * (guint64)out->timing->lines_per_frame;
 
+    if (!self->have_base) {
+        self->have_base = TRUE;
+        self->pts_base_ns = 0;
+        self->clk_base = self->frame_clk;
+        self->frames_base = self->frames_out;
+    }
     if (self->clock_hz != 0) {
-        if (!self->have_first_clk) {
-            self->have_first_clk = TRUE;
-            self->first_clk = self->frame_clk;
-        }
-        *pts = gst_util_uint64_scale(self->frame_clk - self->first_clk, GST_SECOND,
-                                     self->clock_hz);
+        /* A frame flushed at EOS dates from the last run, which can predate a
+         * rate change that arrived after it. */
+        guint64 clocks = self->frame_clk > self->clk_base ? self->frame_clk - self->clk_base : 0;
+        *pts = self->pts_base_ns + gst_util_uint64_scale(clocks, GST_SECOND, self->clock_hz);
         *dur = cpf ? gst_util_uint64_scale(cpf, GST_SECOND, self->clock_hz)
                    : slot_time(self, 1);
     } else {
-        *pts = slot_time(self, self->frames_out);
+        *pts = self->pts_base_ns + slot_time(self, self->frames_out - self->frames_base);
         *dur = slot_time(self, 1);
     }
+    self->last_pts_ns = *pts;
+    self->last_dur_ns = *dur;
 }
 
 static void push_repeats_upto(GstVgaDecode *self, guint64 slot)
@@ -399,7 +450,9 @@ static void on_event(void *user, const vgacap_event_t *ev)
             return;
         }
         self->frame_ready = TRUE;
-        self->clock_hz = ev->u.header->clock_hz;
+        self->cached_header = *ev->u.header;   /* replayed after a flushing seek */
+        self->have_cached_header = TRUE;
+        set_clock_rate(self, ev->u.header->clock_hz);
         GST_INFO_OBJECT(self, "stream header: %u sample bits, clock %u Hz, desc '%s'",
                         (guint)ev->u.header->sample_bits, (guint)ev->u.header->clock_hz,
                         ev->u.header->desc);
@@ -421,7 +474,7 @@ static void on_event(void *user, const vgacap_event_t *ev)
         break;
     case VGACAP_EV_TIME:
         if (ev->u.time.clock_hz)
-            self->clock_hz = ev->u.time.clock_hz;
+            set_clock_rate(self, ev->u.time.clock_hz);
         break;
     case VGACAP_EV_RESYNC:
         /* Not fatal: the frame layer re-derives timing from the sync bits, so
@@ -450,8 +503,12 @@ static void reset_stream_state(GstVgaDecode *self)
     self->clock_hz = 0;
     self->clock_pos = 0;
     self->frame_clk = 0;
-    self->have_first_clk = FALSE;
-    self->first_clk = 0;
+    self->have_base = FALSE;
+    self->pts_base_ns = 0;
+    self->clk_base = 0;
+    self->frames_base = 0;
+    self->last_pts_ns = 0;
+    self->last_dur_ns = 0;
     self->frames_out = 0;
     self->next_slot = 0;
     self->have_timing = FALSE;
@@ -465,6 +522,43 @@ static void reset_stream_state(GstVgaDecode *self)
         gst_object_unref(self->pool);
         self->pool = NULL;
     }
+}
+
+typedef struct { guint8 buf[8 + 20 + VGACAP_DESC_MAX + 1]; gsize len; } header_bytes_t;
+
+static int collect_header_bytes(void *user, const uint8_t *buf, size_t len)
+{
+    header_bytes_t *hb = (header_bytes_t *)user;
+
+    if (hb->len + len > sizeof hb->buf)
+        return -1;
+    memcpy(hb->buf + hb->len, buf, len);
+    hb->len += len;
+    return 0;
+}
+
+/* After a flushing seek the reader starts again from nothing, and a seek
+ * lands mid-file far away from the VGCH chunk that says how the samples are
+ * packed - so without this the element would resync, find only chunks it
+ * cannot interpret, and go quietly mute for the rest of the stream. Re-encode
+ * the header seen before the flush and feed it back in: the reader delivers a
+ * HEADER event exactly as if it had just read one, which re-initialises the
+ * frame layer and the clock, and the resync machinery then picks the stream
+ * up at the next chunk boundary. */
+static void replay_cached_header(GstVgaDecode *self)
+{
+    header_bytes_t hb;
+    vgacap_writer_t writer;
+
+    if (!self->have_cached_header)
+        return;
+    hb.len = 0;
+    if (vgacap_writer_init(&writer, collect_header_bytes, &hb, &self->cached_header) != 0) {
+        GST_WARNING_OBJECT(self, "cannot replay the stream header after a flush");
+        return;
+    }
+    GST_DEBUG_OBJECT(self, "replaying the %" G_GSIZE_FORMAT "-byte stream header", hb.len);
+    (void)vgacap_reader_feed(&self->reader, hb.buf, hb.len);
 }
 
 static gboolean gst_vgadecode_start(GstVgaDecode *self)
@@ -493,7 +587,11 @@ static gboolean gst_vgadecode_start(GstVgaDecode *self)
     }
     g_free(name);
 
-    /* Every buffer the hot path needs is allocated here, once. */
+    /* Every buffer the hot path needs is allocated here, once. A previous
+     * start() that failed part way through left some of them behind. */
+    g_clear_pointer(&self->raw, g_free);
+    g_clear_pointer(&self->rgb, g_free);
+    g_clear_pointer(&self->cover, g_free);
     memset(&cfg, 0, sizeof cfg);
     cfg.max_clocks_per_line = (guint16)self->alloc_width;
     cfg.max_lines = (guint16)self->alloc_height;
@@ -506,12 +604,14 @@ static gboolean gst_vgadecode_start(GstVgaDecode *self)
                            self->alloc_width, self->alloc_height), (NULL));
         return FALSE;
     }
+    self->have_cached_header = FALSE;
     reset_stream_state(self);
     return TRUE;
 }
 
 static void gst_vgadecode_stop(GstVgaDecode *self)
 {
+    self->have_cached_header = FALSE;
     reset_stream_state(self);
     g_clear_pointer(&self->raw, g_free);
     g_clear_pointer(&self->rgb, g_free);
@@ -574,6 +674,7 @@ static gboolean gst_vgadecode_sink_event(GstPad *pad, GstObject *parent, GstEven
         return gst_pad_event_default(pad, parent, event);
     case GST_EVENT_FLUSH_STOP:
         reset_stream_state(self);
+        replay_cached_header(self);
         return gst_pad_event_default(pad, parent, event);
     default:
         return gst_pad_event_default(pad, parent, event);
