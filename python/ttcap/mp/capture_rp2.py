@@ -85,8 +85,10 @@ IRQ state" block below.
 There is therefore at most one buffer of latency. If a handler
 finds its buffer still marked full, the main loop did not consume it in
 time: the DMA is now overwriting data the host never saw. That is counted
-as an overrun and reported in a `TIME` chunk with
-`dropped_samples = overruns * buf_words * samples_per_word`. `FDEBUG`'s
+as an overrun and reported in a `TIME` chunk whose `dropped_samples` is the
+CUMULATIVE total so far, `overruns * buf_words * samples_per_word` -- every
+`TIME` chunk here carries a running total, never an increment, so a reader
+takes the last value instead of summing. `FDEBUG`'s
 RXSTALL bit is cleared at the start and read back at the end -- if it is
 set, the RX FIFO overflowed and samples were lost regardless.
 
@@ -118,28 +120,25 @@ PIO_NUM = CFG["pio"]  # noqa: F821
 SM_NUM = CFG["sm"]  # noqa: F821
 SYSCLK_HZ = CFG["sysclk_hz"]  # noqa: F821 - informational
 
-# The two pin numbers this program needs use *different* conventions.
-# Both were measured on fpga-1 (RP2350, MicroPython 1.29-preview
-# b006887db6, ttboard 3.1.0) with the PIO block's window at gpio_base 16,
-# by running small programs on PIO1 and reading the RX FIFO by hand:
+# Every pin number this program hands to MicroPython is the ABSOLUTE GPIO.
+# Measured on fpga-1 (RP2350, MicroPython 1.29-preview b006887db6, ttboard
+# 3.1.0) with PIO1's window genuinely at base 16 -- confirmed by reading the
+# test pattern's bar values 0x88..0xff back off uo_out, not by trusting
+# `gpio_base()`, which reported 16 while the hardware base was still 0 (see
+# `set_gpio_base()` below):
 #
-#   `wait(1, gpio, n)` takes the ABSOLUTE GPIO number. `wait(1, gpio, 16)`
-#   proceeds and samples; `wait(1, gpio, 0)` -- the same pad counted from
-#   the window's base -- stalls forever. The pin-relative form is no way
-#   out either: it does not wrap within the window, and with in_base 17,
-#   `wait(1, pin, 15)` stalled.
+#   `StateMachine(in_base=...)` takes the absolute pin: `Pin(33)` gives
+#   PINCTRL.IN_BASE 17, because MicroPython subtracts the block's base
+#   itself. `Pin(17)` reads GPIO 17 -- ui_in, a constant 0x01.
 #
-#   `StateMachine(in_base=...)` takes a pin RELATIVE to the window. With
-#   `Pin(17)` the sampler reads GPIO 33..40 and the FIFO fills; with
-#   `Pin(33)` PINCTRL.IN_BASE stays 0 and the state machine never runs its
-#   program at all -- pico-sdk's `sm_config_set_in_pins()` wants a number
-#   below 32.
+#   `wait(1, gpio, n)` takes the absolute GPIO too, but for the opposite
+#   reason: the loader relocates the index, so a literal 0 was stored as 16
+#   and stalled, and a literal 16 wrapped to 0 and worked.
 #
-# On RP2040 GPIO_BASE is 0 and the two conventions coincide. Pad setup
-# (`init_input_pins`) is absolute in both cases: it goes through
-# `machine.Pin`, not through the PIO.
+# So both are just the profile's own numbers, and on RP2040 (base 0) this
+# was never in question. Pad setup (`init_input_pins`) is absolute as well:
+# it goes through `machine.Pin`, which knows nothing about PIO windows.
 CLK_WAIT_GPIO = CLK_GPIO
-IN_PIO_INDEX = IN_BASE - GPIO_BASE
 
 SAMPLES_PER_WORD = PUSH_THRESH // IN_COUNT
 BUF_BYTES = 4 * BUF_WORDS
@@ -189,6 +188,11 @@ def write_raw_chunk(out, buf, sample_count):
 
 def write_time_chunk(out, dropped_samples, msg):
     """Emit one `TIME` chunk and return the number of bytes written.
+
+    `dropped_samples` is CUMULATIVE: every `TIME` chunk in a stream carries
+    the total dropped so far, so the values are monotonic and a reader takes
+    the last one rather than summing them. (Per-chunk increments would have
+    been ambiguous the moment a stream was truncated or spliced.)
 
     `host_time_ns` and `clock_hz` are zero: the board has no host clock and
     the host already recorded the project clock in the stream header.
@@ -330,7 +334,7 @@ def on_b(_channel):
 
 
 def gpio_base_is(pio, want):
-    """True when PIO block `pio` already has its 32-pin window at `want`.
+    """True when PIO block `pio` reports its 32-pin window at `want`.
 
     `PIO.gpio_base()` with no argument returns a *Pin*, not an int
     (micropython ports/rp2/rp2_pio.c: `return pio_get_gpio_base(self->pio)
@@ -343,46 +347,59 @@ def gpio_base_is(pio, want):
     return str(pio.gpio_base()).startswith("Pin(GPIO" + str(want) + ",")
 
 
+def set_gpio_base(pio, want):
+    """Move PIO block `pio`'s 32-pin window to `want`; True if it is there.
+
+    RP2350 only, and it must happen before any state machine is created:
+    the window shifts the whole block's view of the pins.
+
+    pico-sdk's `pio_set_gpio_base_unsafe()` returns PICO_ERROR_INVALID_STATE
+    -- an OSError EINVAL here -- while the block holds any program, and on
+    the stock firmware every block does. `remove_program()` with no argument
+    drops every MicroPython-managed program from the block, after which the
+    move succeeds; that sequence was verified on fpga-1 by reading the test
+    pattern's bar values back off uo_out.
+
+    Do not trust `gpio_base()` alone to decide whether a move is needed: on
+    that board it reported GPIO16 while the hardware base was still 0 (a
+    power cycle made it report GPIO0 again). It is checked before and after
+    all the same, because a block that is genuinely in place must not have
+    its programs removed for nothing.
+    """
+    if gpio_base_is(pio, want):
+        return True
+    try:
+        pio.remove_program()
+    except Exception:
+        pass
+    try:
+        pio.gpio_base(want)
+    except Exception:
+        pass
+    return gpio_base_is(pio, want)
+
+
 def main(out):
     """Run the sampler, streaming RAW chunks to `out` until told to stop."""
     if GPIO_BASE:
-        # RP2350 only, and it must happen before the state machine exists:
-        # it shifts the whole PIO block's 32-pin window up to GPIO 16..47.
-        #
-        # Only when it is not already there: pico-sdk's
-        # `pio_set_gpio_base_unsafe()` returns PICO_ERROR_INVALID_STATE (an
-        # OSError EINVAL here) whenever the block's instruction memory is in
-        # use, and on the stock firmware every block is -- PIO0 holds the
-        # FPGA loader, and PIO1/PIO2 hold programs of their own but already
-        # sit at base 16, so for them the move is a no-op that only needs
-        # skipping. Measured on fpga-1, firmware 3.1.0.
-        block = rp2.PIO(PIO_NUM)
-        if not gpio_base_is(block, GPIO_BASE):
-            try:
-                block.gpio_base(GPIO_BASE)
-            except Exception:
-                pass
-            if not gpio_base_is(block, GPIO_BASE):
-                write_time_chunk(
-                    out,
-                    0,
-                    (
-                        "error=PIO"
-                        + str(PIO_NUM)
-                        + " gpio_base is not "
-                        + str(GPIO_BASE)
-                        + " and cannot be moved (instruction memory in use);"
-                        + " try another pio block"
-                    ).encode(),
-                )
-                return
+        if not set_gpio_base(rp2.PIO(PIO_NUM), GPIO_BASE):
+            write_time_chunk(
+                out,
+                0,
+                (
+                    "error=PIO"
+                    + str(PIO_NUM)
+                    + " gpio_base is not "
+                    + str(GPIO_BASE)
+                    + " and could not be moved; try another pio block"
+                ).encode(),
+            )
+            return
 
     init_input_pins(machine.Pin, IN_BASE, IN_COUNT)
 
     sampler = make_sampler(CLK_WAIT_GPIO, IN_COUNT, PUSH_THRESH, EDGE == "rising")
-    sm = rp2.StateMachine(
-        PIO_NUM * 4 + SM_NUM, sampler, in_base=machine.Pin(IN_PIO_INDEX)
-    )
+    sm = rp2.StateMachine(PIO_NUM * 4 + SM_NUM, sampler, in_base=machine.Pin(IN_BASE))
 
     global WR_A, WR_B, TC_A, TC_B, ADDR_A, ADDR_B
 
@@ -454,8 +471,10 @@ def main(out):
             in_flight[0] = False
             FULL[index] = False
             if OVERRUNS[0] > reported:
-                dropped = (OVERRUNS[0] - reported) * SAMPLES_PER_CHUNK
-                sent += write_time_chunk(out, dropped, b"overrun")
+                # Cumulative, not an increment: see write_time_chunk().
+                sent += write_time_chunk(
+                    out, OVERRUNS[0] * SAMPLES_PER_CHUNK, b"overrun"
+                )
                 reported = OVERRUNS[0]
             index = 1 - index
             if MAX_BYTES and sent >= MAX_BYTES:

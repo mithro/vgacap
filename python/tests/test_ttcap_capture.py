@@ -242,7 +242,27 @@ def test_counts_overruns_and_rxstall_from_the_board_summary():
     # interim increments, and it wins.
     assert stats.overruns == 2
     assert stats.rxstall == 1
+    # `dropped_samples` is cumulative in every TIME chunk, so the stats
+    # carry the last value -- 16384, not 8192 + 16384.
+    assert stats.dropped == 16384
     assert not stats.clean
+
+
+def test_dropped_samples_are_taken_from_the_last_time_chunk_not_summed():
+    profile = RP2040_TT06
+    board = FakeChunkBoard(
+        [
+            time_chunk(profile, 100, "overrun"),
+            time_chunk(profile, 200, "overrun"),
+            time_chunk(profile, 300, "overruns=3 rxstall=0"),
+        ]
+    )
+    repl = connect(board)
+
+    stats = run_capture(repl, request(profile), io.BytesIO())
+
+    assert stats.dropped == 300
+    assert "dropped=300" in stats.format()
 
 
 def test_falls_back_to_counting_interim_overrun_reports():

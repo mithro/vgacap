@@ -174,60 +174,101 @@ def test_sampler_operands_are_closures_not_globals(source):
 def test_rp2350_sets_the_pio_gpio_base_before_the_state_machine(source):
     # gpio_base shifts the whole PIO block's pin window; it must be set
     # before the state machine is created.
-    assert ".gpio_base(GPIO_BASE)" in source
-    assert source.index(".gpio_base(GPIO_BASE)") < source.index("rp2.StateMachine(")
+    main_src = ast.unparse(_main_node(source))
+    assert main_src.index("set_gpio_base(") < main_src.index("rp2.StateMachine(")
 
 
 class _StubPioBlock:
-    """A PIO block whose window may or may not be movable, like the real one."""
+    """A PIO block that refuses to move its window while it holds programs.
 
-    def __init__(self, base: int, movable: bool) -> None:
+    Models what fpga-1 does: `gpio_base(n)` raises EINVAL (pico-sdk
+    `pio_set_gpio_base_unsafe()` -> PICO_ERROR_INVALID_STATE) until
+    `remove_program()` has emptied the block's instruction memory.
+    """
+
+    def __init__(self, base: int, loaded: bool = True) -> None:
         self.base = base
-        self.movable = movable
+        self.loaded = loaded
         self.moves = 0
+        self.removals = 0
 
     def gpio_base(self, want=None):
         if want is None:
             # Matches ports/rp2/rp2_pio.c, which returns a Pin, not an int.
             return "Pin(GPIO%d, mode=IN)" % self.base
         self.moves += 1
-        if not self.movable:
-            # pico-sdk pio_set_gpio_base_unsafe() -> PICO_ERROR_INVALID_STATE
-            # whenever the block's instruction memory is already in use.
+        if self.loaded:
             raise OSError(22, "EINVAL")
         self.base = want
 
+    def remove_program(self, program=None):
+        assert program is None, "no argument means: remove every program"
+        self.removals += 1
+        self.loaded = False
+
+
+def _gpio_base_helpers(source: str) -> dict:
+    return _exec_functions(source, ["gpio_base_is", "set_gpio_base"])
+
 
 def test_gpio_base_is_reads_the_pin_the_board_returns(source):
-    check = _exec_functions(source, ["gpio_base_is"])["gpio_base_is"]
+    check = _gpio_base_helpers(source)["gpio_base_is"]
 
-    assert check(_StubPioBlock(16, True), 16)
-    assert not check(_StubPioBlock(0, True), 16)
+    assert check(_StubPioBlock(16), 16)
+    assert not check(_StubPioBlock(0), 16)
     # Not a prefix match on the number: GPIO16 must not satisfy a want of 1.
-    assert not check(_StubPioBlock(16, True), 1)
+    assert not check(_StubPioBlock(16), 1)
 
 
-def test_main_only_moves_the_gpio_base_when_it_is_wrong(source):
+def test_set_gpio_base_removes_the_block_programs_first(source):
+    # `gpio_base(16)` alone raises EINVAL while the block holds programs;
+    # `remove_program()` with no argument drops all of them and then the
+    # move succeeds. Verified on fpga-1.
+    set_gpio_base = _gpio_base_helpers(source)["set_gpio_base"]
+    block = _StubPioBlock(0)
+
+    assert set_gpio_base(block, 16)
+    assert (block.base, block.removals) == (16, 1)
+
+
+def test_set_gpio_base_leaves_a_block_already_in_place_alone(source):
+    # Removing programs is destructive, so it must not happen for nothing.
+    set_gpio_base = _gpio_base_helpers(source)["set_gpio_base"]
+    block = _StubPioBlock(16)
+
+    assert set_gpio_base(block, 16)
+    assert (block.removals, block.moves) == (0, 0)
+
+
+def test_set_gpio_base_reports_failure_instead_of_raising(source):
+    set_gpio_base = _gpio_base_helpers(source)["set_gpio_base"]
+
+    class _Stuck(_StubPioBlock):
+        def remove_program(self, program=None):
+            raise OSError(22, "EINVAL")
+
+    block = _Stuck(0)
+    assert set_gpio_base(block, 16) is False
+    assert block.base == 0
+
+
+def test_time_chunks_report_a_cumulative_dropped_count(source):
+    # Every TIME chunk carries the running total, so a reader takes the last
+    # value rather than summing; an increment would stop meaning anything
+    # the moment a stream was truncated.
     main_src = ast.unparse(_main_node(source))
 
-    # Guard before the move, and a re-check after it, so a refusal is
-    # reported rather than leaving the sampler pointed at the wrong pins.
-    assert main_src.count("gpio_base_is(block, GPIO_BASE)") == 2
-    assert main_src.index("gpio_base_is(block, GPIO_BASE)") < main_src.index(
-        "block.gpio_base(GPIO_BASE)"
-    )
+    assert "OVERRUNS[0] * SAMPLES_PER_CHUNK" in main_src
+    assert "overrun_total * SAMPLES_PER_CHUNK" in main_src
+    assert "OVERRUNS[0] - reported" not in main_src
+
+
+def test_main_reports_a_refused_gpio_base_move(source):
+    main_src = ast.unparse(_main_node(source))
+
+    assert "set_gpio_base(rp2.PIO(PIO_NUM), GPIO_BASE)" in main_src
     assert "gpio_base is not " in main_src
     assert "write_time_chunk" in main_src
-
-
-def test_gpio_base_is_lets_a_block_already_at_the_right_base_be_left_alone(source):
-    # PIO1 and PIO2 on the stock RP2350 firmware are already at base 16 and
-    # would refuse to be moved; the capture must not ask them to.
-    check = _exec_functions(source, ["gpio_base_is"])["gpio_base_is"]
-    block = _StubPioBlock(16, movable=False)
-
-    assert check(block, 16)
-    assert block.moves == 0
 
 
 # -- (c) RX FIFO address, DREQ and DMA register arithmetic ----------------
@@ -258,22 +299,19 @@ def test_script_inlines_the_same_address_and_dreq_arithmetic(source):
 
 
 @pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
-def test_the_two_pin_conventions_are_applied_the_right_way_round(source, profile):
-    # `wait ... gpio` takes the absolute GPIO; `StateMachine(in_base=...)`
-    # takes a pin relative to the block's 32-pin window. Verified on fpga-1
-    # (RP2350, MicroPython 1.29-preview): swapping either one gives a state
-    # machine that never produces a sample.
+def test_every_pin_number_handed_to_micropython_is_absolute(source, profile):
+    # Verified on fpga-1 with PIO1's window genuinely at base 16 (checked by
+    # reading the test pattern's bars back off uo_out): `Pin(33)` gives
+    # PINCTRL.IN_BASE 17 because MicroPython subtracts the base itself, and
+    # `wait(1, gpio, 16)` works because the loader relocates the index.
     namespace = _exec_constant_block(source, capture_cfg(profile))
 
     assert namespace["CLK_WAIT_GPIO"] == profile.clk_gpio
-    assert namespace["IN_PIO_INDEX"] == profile.in_base - profile.pio_gpio_base
-    assert 0 <= namespace["IN_PIO_INDEX"]
-    assert namespace["IN_PIO_INDEX"] + profile.in_count <= 32
+    assert "IN_PIO_INDEX" not in namespace
 
 
-def test_state_machine_gets_the_window_relative_in_base(source):
-    assert "in_base=machine.Pin(IN_PIO_INDEX)" in source
-    # ... while the pads are still brought up by their absolute numbers.
+def test_state_machine_and_pads_both_get_the_absolute_in_base(source):
+    assert "in_base=machine.Pin(IN_BASE)" in source
     assert "init_input_pins(machine.Pin, IN_BASE, IN_COUNT)" in source
 
 

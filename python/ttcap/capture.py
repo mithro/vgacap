@@ -81,11 +81,12 @@ def capture_cfg(
     `pio`/`sm` pick the state machine -- see `DEFAULT_PIO` for why that is
     not block 0.
 
-    `clk_gpio` and `in_base` go out as *absolute* GPIO numbers; the board
-    script converts `in_base` to the PIO-window-relative form that
-    `StateMachine(in_base=...)` needs and leaves `clk_gpio` absolute, which
-    is what `wait ... gpio` needs. The sampled window must fit inside the
-    PIO's 32 pins, which is what the check below enforces.
+    `clk_gpio` and `in_base` go out as *absolute* GPIO numbers, which is
+    what MicroPython wants for both `StateMachine(in_base=...)` (it
+    subtracts the block's base itself) and `wait ... gpio` (the loader
+    relocates the index). The sampled pins must still land inside the PIO's
+    32-pin window, which is what the check below enforces -- getting that
+    wrong produced no error at all on the board, just constant samples.
     """
     if edge not in EDGES:
         raise ValueError(f"edge must be one of {EDGES}, got {edge!r}")
@@ -200,19 +201,28 @@ class CaptureStats:
     #: interrupt it. Whatever was captured before that is still valid, but
     #: the run did not end the way it was asked to.
     timed_out: bool = False
+    #: Samples the board dropped, taken from the *last* `TIME` chunk. Those
+    #: counts are cumulative by convention (see `vgacap.stream.Writer.time`),
+    #: so this is the total -- summing the chunks would double-count.
+    dropped: int = 0
 
     @property
     def clean(self) -> bool:
         return not (self.overruns or self.rxstall or self.stderr or self.timed_out)
 
     def format(self) -> str:
-        line = "bytes=%d samples=%d chunks=%d seconds=%.3f overruns=%d rxstall=%d" % (
-            self.bytes,
-            self.samples,
-            self.chunks,
-            self.seconds,
-            self.overruns,
-            self.rxstall,
+        line = (
+            "bytes=%d samples=%d chunks=%d seconds=%.3f "
+            "overruns=%d dropped=%d rxstall=%d"
+            % (
+                self.bytes,
+                self.samples,
+                self.chunks,
+                self.seconds,
+                self.overruns,
+                self.dropped,
+                self.rxstall,
+            )
         )
         if self.seconds > 0:
             line += " samples_per_s=%.0f" % (self.samples / self.seconds)
@@ -351,6 +361,7 @@ def run_capture(
     overrun_reports = 0
     summary_overruns: int | None = None
     rxstall = 0
+    dropped = 0
     messages: list[str] = []
     interrupted = False
     timed_out = False
@@ -364,7 +375,9 @@ def run_capture(
             if tag == b"RAW ":
                 samples += struct.unpack_from("<I", payload, 0)[0]
             elif tag == b"TIME":
-                _dropped, msg = _time_fields(payload)
+                # `dropped_samples` is a running total, so the newest chunk
+                # simply replaces the old value -- never `+=`.
+                dropped, msg = _time_fields(payload)
                 messages.append(msg)
                 if msg.startswith("overrun"):
                     overrun_reports += 1
@@ -401,4 +414,5 @@ def run_capture(
         stderr=repl.last_stderr,
         messages=tuple(messages),
         timed_out=timed_out,
+        dropped=dropped,
     )

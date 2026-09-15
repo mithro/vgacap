@@ -81,6 +81,16 @@ class Writer:
         self.fp.write(_chunk(b"EVNT", struct.pack("<I", len(events)) + b"".join(struct.pack("<QI", c, v) for c, v in events)))
 
     def time(self, host_time_ns: int, clock_hz: int, dropped: int, msg: str) -> None:
+        """Write a `TIME` chunk.
+
+        `dropped` is the CUMULATIVE dropped-sample count for the stream so
+        far, not an increment since the previous `TIME` chunk: the values a
+        stream carries are monotonic, and a reader takes the last one rather
+        than summing them. (Increments would stop meaning anything the
+        moment a stream was truncated or two were spliced.) The C header
+        does not say so -- this is the convention every writer here follows,
+        and `ttcap.capture.run_capture()` reads it back that way.
+        """
         m = msg.encode()[:255]
         self.fp.write(_chunk(b"TIME", struct.pack("<QIIH", host_time_ns, clock_hz, dropped, len(m)) + m))
 
