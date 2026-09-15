@@ -101,6 +101,69 @@ TEST(force_mode_wider_than_buffer_emits_nothing) {
     ASSERT_EQ_U(nframes, 0);
 }
 
+TEST(converges_from_a_mid_frame_start) {
+    // A capture has no reason to start aligned to a frame boundary. Feed
+    // three full frames' worth of samples, but starting mid-frame (300
+    // lines + 100 clocks in, wrapping around) with no force_mode: the
+    // pulse that begins the first (conceptual) frame in this data can
+    // never be recognised as a frame start (its own duration has not been
+    // measured yet when it begins - see the timing.c fix), so capture and
+    // measurement only really begin at the *second* pulse entry, needing a
+    // third to complete and confirm a capture. Two full frames' worth of
+    // data - the naive reading of "no reason to start aligned" - is
+    // provably not enough for *any* implementation of this design to
+    // produce a captured, complete frame, since capturing cannot start
+    // before the first recognisable entry and a full subsequent period is
+    // needed after that to complete one; confirmed empirically (a variant
+    // of this test with `2u * n` fails: nframes stays 0).
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+    vgaframe_t f; setup(&f, NULL);
+    size_t offset = 300u * 800u + 100u;
+    for (size_t k = 0; k < 3u * n; k++) vgaframe_push(&f, buf[(offset + k) % n], 1);
+    ASSERT_TRUE(nframes >= 1);
+    ASSERT_EQ_U(last.width, 640); ASSERT_EQ_U(last.height, 480); ASSERT_EQ_U(last.partial, 0);
+    ASSERT_TRUE(last.timing->mode != NULL);
+    for (uint16_t y = 0; y < 480; y++) for (uint16_t x = 0; x < 640; x++) {
+        uint8_t c = bars(NULL, x, y); const uint8_t *q = last_rgb + (y * 640 + x) * 3;
+        ASSERT_EQ_U(q[0], ((c >> 4) & 3) * 85); ASSERT_EQ_U(q[1], ((c >> 2) & 3) * 85); ASSERT_EQ_U(q[2], (c & 3) * 85);
+    }
+}
+
+TEST(mode_match_trusted_over_disagreeing_measurement) {
+    // The scenario the emit-gate relaxation actually changes: a first
+    // measurement that disagrees with the next one (so `locked` can never
+    // become true from them) must not block emission forever once a
+    // *later* measurement exactly matches a known table mode. One period
+    // of an off-by-one timing (cpl=801, matches no table entry) followed
+    // by two periods of the real 640x480@60 timing: the boundary between
+    // the two real periods measures (800, 525) with `last_cpl/last_lpf`
+    // still holding the bad (801, 525) from before, so `locked` stays
+    // false there - but `vgaframe_mode_match(800, 525)` succeeds, which
+    // must be enough to emit on its own.
+    vgaframe_mode_t jittered = *vgaframe_mode_match(800, 525);
+    jittered.h_front = (uint16_t)(jittered.h_front + 1); jittered.name = "jittered"; // cpl=801: no table match
+    size_t nj = synth_frame(&jittered, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+    ASSERT_TRUE(nj > 0);
+    static uint32_t buf_j[801 * 525];
+    memcpy(buf_j, buf, nj * sizeof buf[0]); // copy out before `buf` is reused below
+
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+
+    vgaframe_t f; setup(&f, NULL);
+    for (size_t i = 0; i < nj; i++) vgaframe_push(&f, buf_j[i], 1);
+    for (int fr = 0; fr < 2; fr++) for (size_t i = 0; i < n; i++) vgaframe_push(&f, buf[i], 1);
+    ASSERT_TRUE(nframes >= 1);
+    ASSERT_EQ_U(last.width, 640); ASSERT_EQ_U(last.height, 480); ASSERT_EQ_U(last.partial, 0);
+    ASSERT_TRUE(last.timing->mode != NULL);
+    ASSERT_EQ_U(last.timing->locked, 0); // the bad first measurement means never "locked" (yet)
+    for (uint16_t y = 0; y < 480; y++) for (uint16_t x = 0; x < 640; x++) {
+        uint8_t c = bars(NULL, x, y); const uint8_t *q = last_rgb + (y * 640 + x) * 3;
+        ASSERT_EQ_U(q[0], ((c >> 4) & 3) * 85); ASSERT_EQ_U(q[1], ((c >> 2) & 3) * 85); ASSERT_EQ_U(q[2], (c & 3) * 85);
+    }
+}
+
 TEST(flush_emits_partial) {
     const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
     size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
@@ -118,6 +181,8 @@ int main(void) {
     RUN(table_match_wins_over_odd_porches);
     RUN(oversized_run_does_not_overflow);
     RUN(force_mode_wider_than_buffer_emits_nothing);
+    RUN(converges_from_a_mid_frame_start);
+    RUN(mode_match_trusted_over_disagreeing_measurement);
     RUN(flush_emits_partial);
     RUN_TESTS_END();
 }

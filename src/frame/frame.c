@@ -126,7 +126,13 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
         // the window metadata (vgaframe_frame_begin), not the free-running
         // learner, defines line/frame layout.
     } else if (r == 2) {
-        if (f->in_frame && (f->learner.t.locked || f->cfg.force_mode)) emit(f, f->y + 1, 0);
+        // Trust an exact (clocks_per_line, lines_per_frame) match against
+        // the built-in table on the very first fully measured frame, not
+        // only a `locked` (two independently agreeing measurements) one:
+        // a random signal matching both dimensions of a real VESA mode is
+        // strong enough evidence on its own. `locked` remains the stronger
+        // signal and is unaffected by this - see vgaframe_timing_t.
+        if (f->in_frame && (f->learner.t.locked || f->learner.t.mode || f->cfg.force_mode)) emit(f, f->y + 1, 0);
         f->y = 0; f->x = 0; f->in_frame = 1;
     } else if (r == 1) {
         f->x = 0;
