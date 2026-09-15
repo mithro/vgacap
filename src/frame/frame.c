@@ -19,13 +19,22 @@ uint8_t vgaframe_colour(const uint8_t *m, uint32_t s) {
                      (bit(m, s, VGACAP_SIG_B1) << 1) | bit(m, s, VGACAP_SIG_B0));
 }
 
+void vgaframe_reset(vgaframe_t *f) {
+    vgaframe_timing_init(&f->learner);
+    memset(&f->out_timing, 0, sizeof f->out_timing);
+    f->x = 0; f->y = 0; f->in_frame = 0; f->frames_seen = 0;
+    f->fram_active = 0; f->fram_pending = 0; f->fram_counter = 0;
+    f->fram_first_line = 0; f->fram_line_count = 0; f->fram_cpl = 0;
+    f->fram_remaining = 0; f->fram_max_line = 0;
+    memset(f->raw, 0, vgaframe_raw_size(&f->cfg));
+    memset(f->cover, 0, f->cfg.max_lines);
+}
+
 int vgaframe_init(vgaframe_t *f, const vgaframe_config_t *cfg, uint8_t *raw, uint8_t *rgb, uint8_t *cover) {
     if (!cfg->max_clocks_per_line || !cfg->max_lines || !raw || !rgb || !cover) return -1;
     memset(f, 0, sizeof *f);
     f->cfg = *cfg; f->raw = raw; f->rgb = rgb; f->cover = cover;
-    vgaframe_timing_init(&f->learner);
-    memset(raw, 0, vgaframe_raw_size(cfg));
-    memset(cover, 0, cfg->max_lines);
+    vgaframe_reset(f);
     return 0;
 }
 
@@ -127,6 +136,7 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
     }
     vgaframe_output_t out;
     out.rgb24 = f->rgb; out.width = (uint16_t)w; out.height = (uint16_t)h; out.timing = &f->out_timing;
+    out.stride = w * 3;   // rows are packed; emit() writes them that way above
     out.active_x0 = (uint16_t)x0; out.active_y0 = (uint16_t)y0; out.partial = partial;
     out.frame_counter = is_fram ? f->fram_counter : f->frames_seen;
     f->frames_seen++;

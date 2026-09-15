@@ -27,12 +27,17 @@ typedef struct {
     int failed;
 } app_t;
 
-static int write_ppm(const char *path, const uint8_t *rgb24, uint16_t width, uint16_t height) {
+// PPM rows are packed at exactly width * 3, so copy row by row from the
+// vgaframe's stride rather than assuming the two agree.
+static int write_ppm(const char *path, const uint8_t *rgb24, uint16_t width, uint16_t height,
+                     uint32_t stride) {
     FILE *fp = fopen(path, "wb");
     if (!fp) return -1;
     if (fprintf(fp, "P6\n%u %u\n255\n", (unsigned)width, (unsigned)height) < 0) { fclose(fp); return -1; }
-    size_t n = (size_t)width * height * 3;
-    int ok = fwrite(rgb24, 1, n, fp) == n;
+    size_t row = (size_t)width * 3;
+    int ok = 1;
+    for (uint16_t y = 0; y < height && ok; y++)
+        ok = fwrite(rgb24 + (size_t)y * stride, 1, row, fp) == row;
     if (fclose(fp) != 0) ok = 0;
     return ok ? 0 : -1;
 }
@@ -47,7 +52,7 @@ static void on_frame(void *user, const vgaframe_output_t *out) {
 
     char path[4096];
     snprintf(path, sizeof path, "%s-%04u.ppm", app->out_prefix, (unsigned)app->frames_written);
-    if (write_ppm(path, out->rgb24, out->width, out->height) != 0) {
+    if (write_ppm(path, out->rgb24, out->width, out->height, out->stride) != 0) {
         fprintf(stderr, "vgacap-frames: failed to write %s\n", path);
         app->failed = 1;
         return;
