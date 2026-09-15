@@ -40,6 +40,34 @@
  *    trailer has nowhere to go, so the stream ends a chunk short of tidy.
  * 4. Still alive: %SIGKILL the group, and reap. The child is reaped in every
  *    path, so the element never leaves a zombie behind.
+ * 5. The process we spawned can be gone while its *group* is not: the shipped
+ *    default is `uv run --no-sync ttcap`, so `ttcap` is a grandchild, and if
+ *    the wrapper exits first the grandchild is left holding the board and
+ *    both pipes. The sign of it is a pipe that still has a writer, and the
+ *    answer is a %SIGKILL to the group even though the leader has been
+ *    reaped: a process group id stays reserved while the group has members,
+ *    so it cannot have been recycled while anything of ours is left.
+ *
+ * Nothing in that sequence may wait without a deadline, because it all runs
+ * inside a state change: a `stop()` that never returns is a pipeline that can
+ * never be shut down. That includes the wait for the stderr reader thread,
+ * which is abandoned rather than joined if it will not finish (see
+ * VgaCapErrReader).
+ *
+ * ## A live capture cannot be paused
+ *
+ * Only stopped. The board is sampling in real time and the element's pipe is
+ * the only buffer between it and the pipeline: with the pipeline PAUSED, the
+ * streaming thread stops reading and the child gets exactly one pipe buffer
+ * of grace - **measured at 65548 bytes**, which is about 90 ms of capture at
+ * 750 kHz and about 1.1 s at 60 kHz. After that the board's DMA buffers
+ * overrun and samples are lost.
+ *
+ * It is worse than it sounds, because the overrun count lives in the closing
+ * `TIME` chunk, which `stop()` drains and discards - so a capture that was
+ * paused and then stopped is silently short of samples with nothing on the
+ * bus to say so. Go straight to PLAYING and stop when finished; if a pipeline
+ * must pause, treat what comes after as a different capture.
  *
  * ## Failures
  *
@@ -131,7 +159,6 @@ struct _GstVgaCapTtSrc {
     gboolean reaped;
     gint exit_status; /* the reaped child's wait status, kept for later asks */
     gint out_fd;
-    gint err_fd;
     gboolean out_eof;
     gboolean stopping; /* our own stop() is under way: an EOF is expected */
     gboolean reported; /* the child's exit has already been reported */
@@ -141,10 +168,7 @@ struct _GstVgaCapTtSrc {
     gint wake_fds[2];
 
     GThread *err_thread;
-    GMutex err_lock;
-    gchar err_lines[ERR_TAIL_LINES][ERR_LINE_MAX];
-    guint err_head;  /* next slot to write */
-    guint err_count; /* lines ever written */
+    struct _VgaCapErrReader *err_reader; /* one ref; the thread holds another */
 
     GstBufferPool *pool;
     guint blocksize;
@@ -156,32 +180,171 @@ G_DEFINE_TYPE(GstVgaCapTtSrc, gst_vgacapttsrc, GST_TYPE_PUSH_SRC)
 static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE(
     "src", GST_PAD_SRC, GST_PAD_ALWAYS, GST_STATIC_CAPS("application/x-vgacap"));
 
-/* ------------------------------------------------------------- stderr tail */
+/* --------------------------------------------------------- small fd things */
 
-static void remember_err_line(GstVgaCapTtSrc *self, const gchar *line)
+static void close_fd(gint *fd)
 {
-    g_mutex_lock(&self->err_lock);
-    g_strlcpy(self->err_lines[self->err_head], line, ERR_LINE_MAX);
-    self->err_head = (self->err_head + 1) % ERR_TAIL_LINES;
-    self->err_count++;
-    g_mutex_unlock(&self->err_lock);
+    if (*fd >= 0) {
+        close(*fd);
+        *fd = -1;
+    }
+}
+
+/* A pipe used only to cut a poll() short. Close-on-exec so no child ever
+ * inherits it, non-blocking so draining it cannot block the thread doing so. */
+static gboolean make_self_pipe(gint fds[2])
+{
+    int i;
+
+    if (pipe(fds) != 0) {
+        fds[0] = fds[1] = -1;
+        return FALSE;
+    }
+    for (i = 0; i < 2; i++) {
+        (void)fcntl(fds[i], F_SETFD, FD_CLOEXEC);
+        (void)fcntl(fds[i], F_SETFL, fcntl(fds[i], F_GETFL, 0) | O_NONBLOCK);
+    }
+    return TRUE;
+}
+
+/* TRUE while anything still holds the write end of @fd. POLLHUP on a pipe's
+ * read end means every writer has closed, and it is reported whether or not
+ * data is still buffered, so this stays true until the last holder lets go. */
+static gboolean pipe_has_writer(gint fd)
+{
+    struct pollfd pfd;
+
+    if (fd < 0)
+        return FALSE;
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if (poll(&pfd, 1, 0) < 0)
+        return FALSE;
+    return (pfd.revents & POLLHUP) == 0;
+}
+
+/* ----------------------------------------------------------- stderr reader */
+
+/* The stderr reader owns everything its thread touches, and is reference
+ * counted, because the element has to be able to give up on that thread.
+ *
+ * The thread waits on a pipe whose write end can be held by *any* descendant
+ * of the capture, not only the process we spawned, so there is no bound on
+ * how long an EOF may take - and a teardown that waits for one for ever is a
+ * pipeline that never reaches NULL. When the wait times out the element
+ * abandons the thread instead, and an abandoned thread must not be able to
+ * touch a GstElement that is about to be finalized. So it touches this
+ * instead, and whichever of the two lets go last frees it.
+ */
+typedef struct _VgaCapErrReader {
+    gint refs; /* atomic */
+    gchar *owner; /* the element's name, for log lines: the object is not ours */
+    gint fd;      /* the child's stderr, read end */
+    gint wake[2]; /* self-pipe, so the read can be cut short */
+
+    GMutex lock;
+    GCond cond;
+    gboolean finished;
+
+    gchar lines[ERR_TAIL_LINES][ERR_LINE_MAX];
+    guint head;  /* next slot to write */
+    guint count; /* lines ever written */
+} VgaCapErrReader;
+
+static VgaCapErrReader *err_reader_ref(VgaCapErrReader *reader)
+{
+    g_atomic_int_inc(&reader->refs);
+    return reader;
+}
+
+static void err_reader_unref(VgaCapErrReader *reader)
+{
+    if (!g_atomic_int_dec_and_test(&reader->refs))
+        return;
+    close_fd(&reader->fd);
+    close_fd(&reader->wake[0]);
+    close_fd(&reader->wake[1]);
+    g_mutex_clear(&reader->lock);
+    g_cond_clear(&reader->cond);
+    g_free(reader->owner);
+    g_free(reader);
+}
+
+static VgaCapErrReader *err_reader_new(const gchar *owner, gint fd)
+{
+    VgaCapErrReader *reader = g_new0(VgaCapErrReader, 1);
+
+    reader->refs = 1;
+    reader->owner = g_strdup(owner);
+    reader->fd = fd;
+    reader->wake[0] = reader->wake[1] = -1;
+    if (!make_self_pipe(reader->wake))
+        GST_WARNING("%s: no wake pipe for the stderr reader; a stop will have to "
+                    "wait for the pipe to close", owner);
+    g_mutex_init(&reader->lock);
+    g_cond_init(&reader->cond);
+    return reader;
+}
+
+/* The stderr pipe, or -1: read only, and valid while the caller holds a ref. */
+static gint err_reader_fd(VgaCapErrReader *reader)
+{
+    return reader ? reader->fd : -1;
+}
+
+/* Ask the thread to finish now, whether or not the pipe has closed. */
+static void err_reader_wake(VgaCapErrReader *reader)
+{
+    const guint8 one = 1;
+    gssize written;
+
+    if (reader->wake[1] >= 0) {
+        written = write(reader->wake[1], &one, 1);
+        (void)written; /* a full wake pipe is already a pending wake-up */
+    }
+}
+
+/* TRUE once the thread has finished; FALSE if @timeout_s passed first. */
+static gboolean err_reader_wait(VgaCapErrReader *reader, gdouble timeout_s)
+{
+    gint64 deadline = g_get_monotonic_time() + (gint64)(timeout_s * G_TIME_SPAN_SECOND);
+    gboolean finished;
+
+    g_mutex_lock(&reader->lock);
+    while (!reader->finished)
+        if (!g_cond_wait_until(&reader->cond, &reader->lock, deadline))
+            break;
+    finished = reader->finished;
+    g_mutex_unlock(&reader->lock);
+    return finished;
+}
+
+static void remember_err_line(VgaCapErrReader *reader, const gchar *line)
+{
+    g_mutex_lock(&reader->lock);
+    g_strlcpy(reader->lines[reader->head], line, ERR_LINE_MAX);
+    reader->head = (reader->head + 1) % ERR_TAIL_LINES;
+    reader->count++;
+    g_mutex_unlock(&reader->lock);
 }
 
 /* The kept lines, oldest first, as one newline-separated string. Only called
  * when something has already gone wrong, so allocating here is free. */
-static gchar *err_tail(GstVgaCapTtSrc *self)
+static gchar *err_tail(VgaCapErrReader *reader)
 {
     GString *out = g_string_new(NULL);
     guint kept, i;
 
-    g_mutex_lock(&self->err_lock);
-    kept = MIN(self->err_count, ERR_TAIL_LINES);
-    for (i = 0; i < kept; i++) {
-        guint idx = (self->err_head + ERR_TAIL_LINES - kept + i) % ERR_TAIL_LINES;
-        g_string_append_printf(out, "%s%s", i ? "\n" : "", self->err_lines[idx]);
+    if (reader) {
+        g_mutex_lock(&reader->lock);
+        kept = MIN(reader->count, ERR_TAIL_LINES);
+        for (i = 0; i < kept; i++) {
+            guint idx = (reader->head + ERR_TAIL_LINES - kept + i) % ERR_TAIL_LINES;
+            g_string_append_printf(out, "%s%s", i ? "\n" : "", reader->lines[idx]);
+        }
+        g_mutex_unlock(&reader->lock);
     }
-    g_mutex_unlock(&self->err_lock);
-
     if (out->len == 0)
         g_string_append(out, "(the child wrote nothing to stderr)");
     return g_string_free(out, FALSE);
@@ -189,16 +352,37 @@ static gchar *err_tail(GstVgaCapTtSrc *self)
 
 static gpointer err_thread_func(gpointer data)
 {
-    GstVgaCapTtSrc *self = (GstVgaCapTtSrc *)data;
+    VgaCapErrReader *reader = (VgaCapErrReader *)data;
     gchar line[ERR_LINE_MAX];
     gchar chunk[512];
     gsize len = 0;
     gssize i;
 
     for (;;) {
-        gssize got = read(self->err_fd, chunk, sizeof chunk);
-        if (got < 0 && errno == EINTR)
+        struct pollfd pfd[2];
+        gssize got;
+
+        pfd[0].fd = reader->wake[0];
+        pfd[0].events = POLLIN;
+        pfd[0].revents = 0;
+        pfd[1].fd = reader->fd;
+        pfd[1].events = POLLIN;
+        pfd[1].revents = 0;
+        if (poll(pfd, 2, -1) < 0) {
+            if (errno == EINTR)
+                continue;
+            break;
+        }
+        /* The wake wins over pending data: by the time it is sent the child
+         * is gone and anything still in the pipe is a line nobody is waiting
+         * for, whereas the teardown very much is. */
+        if (pfd[0].revents)
+            break;
+        if (!pfd[1].revents)
             continue;
+        do {
+            got = read(reader->fd, chunk, sizeof chunk);
+        } while (got < 0 && errno == EINTR);
         if (got <= 0)
             break;
         for (i = 0; i < got; i++) {
@@ -210,8 +394,8 @@ static gpointer err_thread_func(gpointer data)
             }
             if (len > 0) {
                 line[len] = '\0';
-                GST_INFO_OBJECT(self, "ttcap: %s", line);
-                remember_err_line(self, line);
+                GST_INFO("%s: ttcap: %s", reader->owner, line);
+                remember_err_line(reader, line);
                 len = 0;
             }
             /* An overlong line is split, not dropped: keep the character
@@ -222,9 +406,15 @@ static gpointer err_thread_func(gpointer data)
     }
     if (len > 0) {
         line[len] = '\0';
-        GST_INFO_OBJECT(self, "ttcap: %s", line);
-        remember_err_line(self, line);
+        GST_INFO("%s: ttcap: %s", reader->owner, line);
+        remember_err_line(reader, line);
     }
+
+    g_mutex_lock(&reader->lock);
+    reader->finished = TRUE;
+    g_cond_broadcast(&reader->cond);
+    g_mutex_unlock(&reader->lock);
+    err_reader_unref(reader);
     return NULL;
 }
 
@@ -405,14 +595,26 @@ static gboolean wait_for_child(GstVgaCapTtSrc *self, gdouble timeout_s, gint *st
     }
 }
 
-static void signal_child(GstVgaCapTtSrc *self, int sig)
+/* Signal the capture's process group.
+ *
+ * The negative pid is the group made in child_setup(): `uv run` and the
+ * `ttcap` it execs are both in it, and a signal to only the former would
+ * leave the latter holding the board.
+ *
+ * This deliberately still fires after the leader has been reaped, because
+ * that is exactly when it is needed: `uv run` exiting first leaves a
+ * grandchild holding the board and the pipes, and refusing to signal then was
+ * a teardown that hung for ever. It is safe because a process group id stays
+ * reserved while the group has any member, so while anything of ours is left
+ * the id cannot have been recycled; an empty group answers ESRCH. The bare
+ * `kill(pid)` fallback, on the other hand, is only used *before* reaping -
+ * after that the pid alone carries no such guarantee.
+ */
+static void signal_group(GstVgaCapTtSrc *self, int sig)
 {
-    if (!self->have_child || self->reaped)
+    if (!self->have_child)
         return;
-    /* The negative pid is the process group made in child_setup(): `uv run`
-     * and the `ttcap` it execs are both in it, and a signal to only the
-     * former would leave the latter holding the board. */
-    if (kill(-self->pid, sig) < 0 && errno == ESRCH)
+    if (kill(-self->pid, sig) < 0 && errno == ESRCH && !self->reaped)
         (void)kill(self->pid, sig);
 }
 
@@ -448,7 +650,7 @@ static void stop_child(GstVgaCapTtSrc *self)
 
     /* 1. Ask. 2. Wait, draining, so the board's last chunk and its trailer
      *    have somewhere to go. */
-    signal_child(self, SIGINT);
+    signal_group(self, SIGINT);
     gone = wait_for_child(self, self->active_stop_timeout, &status, TRUE);
 
     /* 3. Shut the pipe. ttcap reads EPIPE as "the consumer has gone" and
@@ -469,11 +671,25 @@ static void stop_child(GstVgaCapTtSrc *self)
     if (!gone) {
         GST_WARNING_OBJECT(self, "killing the capture process group");
         killed = TRUE;
-        signal_child(self, SIGKILL);
+        signal_group(self, SIGKILL);
         gone = wait_for_child(self, ESCALATION_GRACE_S, &status, FALSE);
         if (!gone)
             GST_ERROR_OBJECT(self, "the capture process %d will not die",
                              (int)self->pid);
+    }
+
+    /* 5. The process we spawned is gone, but something in its group may not
+     *    be: `uv run` can exit before the `ttcap` under it, and then a
+     *    grandchild is left holding the board and both pipes. The only sign
+     *    of it here is that the pipes still have a writer - our child gets no
+     *    other descriptors, so whoever holds one is a descendant of it - and
+     *    without this the stderr reader would wait on an EOF that never
+     *    comes. */
+    if (self->reaped && (pipe_has_writer(err_reader_fd(self->err_reader)) ||
+                         pipe_has_writer(self->out_fd))) {
+        GST_WARNING_OBJECT(self, "something in the capture's process group outlived "
+                                 "it and still holds the pipes; killing the group");
+        signal_group(self, SIGKILL);
     }
 
     if (gone) {
@@ -485,7 +701,7 @@ static void stop_child(GstVgaCapTtSrc *self)
          * down and an error message would arrive after the bus has stopped
          * being watched. The live path is create(), below. */
         if (!status_is_clean(status) && !killed && !self->reported) {
-            gchar *tail = err_tail(self);
+            gchar *tail = err_tail(self->err_reader);
             GST_ELEMENT_WARNING(self, RESOURCE, READ,
                                 ("the capture ended badly (%s): %s", how, tail), (NULL));
             g_free(tail);
@@ -502,35 +718,6 @@ static void stop_child(GstVgaCapTtSrc *self)
 
 static gboolean gst_vgacapttsrc_stop(GstBaseSrc *bsrc);
 
-static void close_fd(gint *fd)
-{
-    if (*fd >= 0) {
-        close(*fd);
-        *fd = -1;
-    }
-}
-
-static gboolean make_wake_pipe(GstVgaCapTtSrc *self)
-{
-    int i;
-
-    if (pipe(self->wake_fds) != 0) {
-        GST_ELEMENT_ERROR(self, RESOURCE, OPEN_READ_WRITE,
-                          ("cannot create the wake-up pipe: %s", g_strerror(errno)),
-                          (NULL));
-        self->wake_fds[0] = self->wake_fds[1] = -1;
-        return FALSE;
-    }
-    /* Close-on-exec so the child never inherits it, and non-blocking so
-     * draining it in unlock_stop() cannot hang the streaming thread. */
-    for (i = 0; i < 2; i++) {
-        (void)fcntl(self->wake_fds[i], F_SETFD, FD_CLOEXEC);
-        (void)fcntl(self->wake_fds[i], F_SETFL,
-                    fcntl(self->wake_fds[i], F_GETFL, 0) | O_NONBLOCK);
-    }
-    return TRUE;
-}
-
 static gboolean gst_vgacapttsrc_start(GstBaseSrc *bsrc)
 {
     GstVgaCapTtSrc *self = GST_VGACAPTTSRC(bsrc);
@@ -538,6 +725,7 @@ static gboolean gst_vgacapttsrc_start(GstBaseSrc *bsrc)
     gchar **argv;
     GstCaps *caps;
     GstStructure *config;
+    gint err_fd = -1;
 
     GST_OBJECT_LOCK(self);
     self->active_stop_timeout = self->stop_timeout;
@@ -551,8 +739,6 @@ static gboolean gst_vgacapttsrc_start(GstBaseSrc *bsrc)
     self->reported = FALSE;
     self->reaped = FALSE;
     self->exit_status = 0;
-    self->err_head = 0;
-    self->err_count = 0;
 
     argv = build_argv(self, &error);
     if (!argv) {
@@ -563,7 +749,10 @@ static gboolean gst_vgacapttsrc_start(GstBaseSrc *bsrc)
     g_free(self->cmdline);
     self->cmdline = g_strjoinv(" ", argv);
 
-    if (!make_wake_pipe(self)) {
+    if (!make_self_pipe(self->wake_fds)) {
+        GST_ELEMENT_ERROR(self, RESOURCE, OPEN_READ_WRITE,
+                          ("cannot create the wake-up pipe: %s", g_strerror(errno)),
+                          (NULL));
         g_strfreev(argv);
         return FALSE;
     }
@@ -578,7 +767,7 @@ static gboolean gst_vgacapttsrc_start(GstBaseSrc *bsrc)
     if (!g_spawn_async_with_pipes(NULL, argv, NULL,
                                   G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_SEARCH_PATH,
                                   child_setup, NULL, &self->pid, NULL, &self->out_fd,
-                                  &self->err_fd, &error)) {
+                                  &err_fd, &error)) {
         GST_ELEMENT_ERROR(self, RESOURCE, NOT_FOUND,
                           ("cannot run the capture command: %s", error->message),
                           ("argv: %s", self->cmdline));
@@ -591,7 +780,11 @@ static gboolean gst_vgacapttsrc_start(GstBaseSrc *bsrc)
     g_strfreev(argv);
     self->have_child = TRUE;
 
-    self->err_thread = g_thread_new("vgacapttsrc-stderr", err_thread_func, self);
+    /* The reader owns the stderr pipe from here, and keeps its own reference,
+     * so it survives being abandoned in stop() - see VgaCapErrReader. */
+    self->err_reader = err_reader_new(GST_OBJECT_NAME(self), err_fd);
+    self->err_thread = g_thread_new("vgacapttsrc-stderr", err_thread_func,
+                                    err_reader_ref(self->err_reader));
 
     /* One pool of blocksize buffers, so the streaming path allocates nothing
      * per buffer: acquire, read into it, resize to what arrived, push. */
@@ -620,14 +813,30 @@ static gboolean gst_vgacapttsrc_stop(GstBaseSrc *bsrc)
 
     stop_child(self);
 
-    /* Joined only once the child is gone, so the write end of the pipe is
-     * shut and the thread's read() has returned 0 of its own accord. */
+    /* The child is gone and anything of its that outlived it has been killed,
+     * so the stderr pipe should be at EOF and the thread on its way out. Wake
+     * it anyway, and give up on it if it does not go: no wait here may be
+     * unbounded, because this runs inside a state change and a state change
+     * that never returns is a pipeline nobody can shut down. An abandoned
+     * thread holds a reference to the reader and touches nothing else, so it
+     * cannot outlive this element into a use-after-free. */
     if (self->err_thread) {
-        g_thread_join(self->err_thread);
+        err_reader_wake(self->err_reader);
+        if (err_reader_wait(self->err_reader, ESCALATION_GRACE_S)) {
+            g_thread_join(self->err_thread);
+        } else {
+            GST_ERROR_OBJECT(self, "the stderr reader will not finish; abandoning it. "
+                                   "Something outside the capture's process group is "
+                                   "holding its stderr open.");
+            g_thread_unref(self->err_thread); /* detach: it frees itself */
+        }
         self->err_thread = NULL;
     }
+    if (self->err_reader) {
+        err_reader_unref(self->err_reader);
+        self->err_reader = NULL;
+    }
     close_fd(&self->out_fd);
-    close_fd(&self->err_fd);
     close_fd(&self->wake_fds[0]);
     close_fd(&self->wake_fds[1]);
 
@@ -688,7 +897,7 @@ static GstFlowReturn child_finished(GstVgaCapTtSrc *self)
     }
 
     how = describe_status(status);
-    tail = err_tail(self);
+    tail = err_tail(self->err_reader);
     GST_ELEMENT_ERROR(self, RESOURCE, READ,
                       ("the capture failed (%s): %s", how, tail),
                       ("argv: %s; %" G_GUINT64_FORMAT " bytes were captured",
@@ -880,7 +1089,10 @@ static void gst_vgacapttsrc_finalize(GObject *object)
     g_clear_pointer(&self->profile, g_free);
     g_clear_pointer(&self->ttcap_command, g_free);
     g_clear_pointer(&self->cmdline, g_free);
-    g_mutex_clear(&self->err_lock);
+    if (self->err_reader) {
+        err_reader_unref(self->err_reader);
+        self->err_reader = NULL;
+    }
     G_OBJECT_CLASS(gst_vgacapttsrc_parent_class)->finalize(object);
 }
 
@@ -974,10 +1186,8 @@ static void gst_vgacapttsrc_init(GstVgaCapTtSrc *self)
 
     self->pid = 0;
     self->out_fd = -1;
-    self->err_fd = -1;
     self->wake_fds[0] = self->wake_fds[1] = -1;
     self->blocksize = DEFAULT_BLOCKSIZE;
-    g_mutex_init(&self->err_lock);
 
     gst_base_src_set_blocksize(GST_BASE_SRC(self), DEFAULT_BLOCKSIZE);
     gst_base_src_set_format(GST_BASE_SRC(self), GST_FORMAT_BYTES);

@@ -122,6 +122,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--flood", action="store_true",
                         help="repeat one pre-packed chunk in a tight loop, fast "
                              "enough to keep a reader permanently busy")
+    parser.add_argument("--orphan", action="store_true",
+                        help="fork and let the parent exit at once, so the capture "
+                             "is carried on by a process the element never spawned "
+                             "and cannot wait for -- what `uv run` exiting before "
+                             "the ttcap under it would leave behind")
 
     # ...and, from here down, exactly what `ttcap capture` takes.
     parser.add_argument("command", choices=["capture"])
@@ -214,6 +219,13 @@ def emit_stream(sink: Tee, args: argparse.Namespace) -> int:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    if args.orphan and os.fork() > 0:
+        # The process the element spawned walks away immediately, leaving the
+        # fork holding both pipes and the (pretend) board. The element reaps
+        # the one it knows about, sees no EOF, and has to notice that the
+        # group is not empty. Before any of the pid or argv files are written,
+        # so they describe the process that is actually capturing.
+        os._exit(0)
     if args.argv_file:
         with open(args.argv_file, "w") as fp:
             json.dump(argv, fp)

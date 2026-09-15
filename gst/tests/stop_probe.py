@@ -45,6 +45,10 @@ def main() -> int:
     parser.add_argument("--stop-timeout", type=float, default=10.0)
     parser.add_argument("--min-buffers", type=int, default=8)
     parser.add_argument("--wait", type=float, default=30.0)
+    parser.add_argument("--child-grace", type=float, default=3.0,
+                        help="how long to let a signalled child actually die before "
+                             "reporting what state it is in; the element delivers "
+                             "the signal, the kernel and init do the rest")
     args = parser.parse_args()
 
     Gst.init(None)
@@ -83,8 +87,19 @@ def main() -> int:
     pipeline.get_state(Gst.CLOCK_TIME_NONE)
     took = time.monotonic() - began
 
-    result = {"buffers": counted[0], "stop_seconds": took, "child": child_state(pid),
-              "parent": os.getpid()}
+    # `child` is the state after a grace period, because the element's job is
+    # to deliver the signal, not to outrun the scheduler; `child_at_once` is
+    # what it was the instant teardown returned, which is what tells a prompt
+    # exit apart from one that needed the kill.
+    at_once = child_state(pid)
+    state = at_once
+    give_up = time.monotonic() + args.child_grace
+    while state not in ("gone", "Z") and time.monotonic() < give_up:
+        time.sleep(0.02)
+        state = child_state(pid)
+
+    result = {"buffers": counted[0], "stop_seconds": took, "child": state,
+              "child_at_once": at_once, "parent": os.getpid()}
     print(json.dumps(result))
     return 0
 

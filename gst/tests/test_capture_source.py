@@ -301,16 +301,23 @@ def test_stopping_mid_stream_is_prompt_and_reaps_the_child(tmp_path, chunk_delay
 
 
 def run_stop_probe(tmp_path, fake_flags: list[str], stop_timeout: float,
-                   chunk_delay: str = "0.05") -> dict:
+                   chunk_delay: str = "0.05", timeout: int = 90) -> dict:
     system_python = system_python_path()
     if system_python is None:
         pytest.skip("no system python3 to run the gst-python stop probe with")
     pid_file = tmp_path / "child.pid"
     command = fake_command("--chunk-delay", chunk_delay, "--pid-file", str(pid_file),
                            *fake_flags)
-    proc = run([system_python, STOP_PROBE, "--ttcap-command", command,
-                "--pid-file", str(pid_file), "--stop-timeout", str(stop_timeout),
-                "--min-buffers", "10"], timeout=90)
+    argv = [system_python, STOP_PROBE, "--ttcap-command", command,
+            "--pid-file", str(pid_file), "--stop-timeout", str(stop_timeout),
+            "--min-buffers", "10"]
+    try:
+        proc = run(argv, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # A teardown that never returns looks exactly like this, so say so
+        # rather than leaving a bare TimeoutExpired to be puzzled over.
+        pytest.fail(f"the probe did not finish in {timeout}s: the pipeline is stuck "
+                    f"in its state change ({' '.join(str(a) for a in argv)})")
     if proc.returncode != 0 and "No module named 'gi'" in proc.stderr:
         pytest.skip("gst-python (gi) is not importable by the system python3")
     assert proc.returncode == 0, proc.stderr
@@ -343,6 +350,23 @@ def test_a_child_that_ignores_everything_is_killed_and_reaped(tmp_path, flags):
     result = run_stop_probe(tmp_path, flags, stop_timeout=1.0, chunk_delay="0")
     assert result["child"] == "gone", result
     assert 3.0 <= result["stop_seconds"] < 8.0, result
+
+
+def test_a_capture_carried_on_by_an_orphan_still_tears_down(tmp_path):
+    # The shape `uv run --no-sync ttcap` can take when the wrapper dies first:
+    # the process the element spawned exits at once and a fork of it carries
+    # the capture on, holding both pipes. The element reaps the one it knows
+    # about within milliseconds, so no escalation is triggered and no EOF ever
+    # arrives on stderr -- which, before this was fixed, left stop() blocked in
+    # an unbounded join for ever, with the board still held.
+    #
+    # --deaf so nothing but SIGKILL to the *group* can end the orphan.
+    result = run_stop_probe(tmp_path, ["--orphan", "--deaf"], stop_timeout=8.0,
+                            timeout=60)
+    assert result["child"] == "gone", result
+    # No rung of the ladder applies to a leader that is already reaped, so this
+    # is the group sweep and the bounded join, and both are prompt.
+    assert result["stop_seconds"] < 5.0, result
 
 
 # ----------------------------------------------------------------- vgacapbin
