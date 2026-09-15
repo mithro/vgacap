@@ -12,6 +12,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+#: `VGACAP_FLAG_FIRST_SAMPLE_MSB` from include/vgacap/stream.h (mirrored as
+#: `vgacap.stream.FLAG_FIRST_SAMPLE_MSB`): sample 0 occupies the most
+#: significant slot of each packed word. Both profiles set it -- see
+#: `BoardProfile.flags`.
+FLAG_FIRST_SAMPLE_MSB = 1
+
 
 @dataclass(frozen=True)
 class BoardProfile:
@@ -23,24 +29,52 @@ class BoardProfile:
     in_count: int  # bits per `in pins`
     sample_bits: int
     samples_per_word: int
+    #: Always `FLAG_FIRST_SAMPLE_MSB`: the sampler shifts the ISR left, so
+    #: the first sample of a word ends up in its most significant slot.
     flags: int
     signal_map: tuple[int, ...]
 
     @property
     def push_thresh(self) -> int:
-        """PIO autopush threshold in bits: one full 32-bit FIFO word of samples.
+        """PIO autopush threshold in bits: the sample bits in one FIFO word.
 
-        24 for the RP2040's 12-bit x2 layout (bits 24..31 of the word stay
-        zero) and 32 for the RP2350's 8-bit x4 layout.
+        24 for the RP2040's 12-bit x2 layout, 32 for the RP2350's 8-bit x4.
+
+        The PIO always pushes all 32 ISR bits; only the *shift counter* is
+        compared against the threshold. With `in_shiftdir=SHIFT_LEFT` data
+        enters at the LSB end and earlier samples move up, so after
+        `samples_per_word` samples the word is right-aligned with sample 0 in
+        the top occupied slot -- which is exactly
+        `flags=FLAG_FIRST_SAMPLE_MSB`, whatever the threshold is. (With
+        SHIFT_RIGHT the pair would be left-justified in the word whenever the
+        threshold is below 32, which no `flags` value can express.)
         """
         return self.sample_bits * self.samples_per_word
 
 
 RP2040_TT06 = BoardProfile(
-    "rp2040-tt06map", 0, (5, 6, 7, 8, 13, 14, 15, 16), 0, 5, 12, 12, 2, 0, (11, 3, 0, 8, 1, 9, 2, 10)
+    "rp2040-tt06map",
+    0,
+    (5, 6, 7, 8, 13, 14, 15, 16),
+    0,
+    5,
+    12,
+    12,
+    2,
+    FLAG_FIRST_SAMPLE_MSB,
+    (11, 3, 0, 8, 1, 9, 2, 10),
 )
 RP2350_DBV3 = BoardProfile(
-    "rp2350-dbv3", 16, tuple(range(33, 41)), 16, 33, 8, 8, 4, 0, (7, 3, 0, 4, 1, 5, 2, 6)
+    "rp2350-dbv3",
+    16,
+    tuple(range(33, 41)),
+    16,
+    33,
+    8,
+    8,
+    4,
+    FLAG_FIRST_SAMPLE_MSB,
+    (7, 3, 0, 4, 1, 5, 2, 6),
 )
 
 

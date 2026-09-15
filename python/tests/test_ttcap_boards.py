@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
+from vgacap import stream
+from vgacap.stream import Header, unpack_words
+
 from ttcap.boards import (
+    FLAG_FIRST_SAMPLE_MSB,
     RP2040_TT06,
     RP2350_DBV3,
     WELLAND,
@@ -152,3 +156,73 @@ def test_rx_dreq_is_four_above_the_tx_dreq_of_the_same_block():
 def test_fdebug_addr():
     assert fdebug_addr(0) == 0x50200008
     assert fdebug_addr(1) == 0x50300008
+
+
+def _isr_shift_left(samples, sample_bits, push_thresh):
+    """Simulate the PIO ISR with `in_shiftdir=SHIFT_LEFT` and autopush.
+
+    RP2040 datasheet 3.4.4 (IN) / 3.5.4 (autopush): data enters at the LSB
+    end and the bits already in the ISR move toward the MSB. The push is
+    always the full 32-bit ISR; only the shift counter is compared with the
+    threshold, and the ISR is zeroed afterwards.
+    """
+    isr = 0
+    count = 0
+    words = []
+    for sample in samples:
+        isr = ((isr << sample_bits) | (sample & ((1 << sample_bits) - 1))) & 0xFFFFFFFF
+        count += sample_bits
+        if count >= push_thresh:
+            words.append(isr)
+            isr = 0
+            count = 0
+    return words
+
+
+@pytest.mark.parametrize(
+    "profile,samples",
+    [
+        (RP2040_TT06, [0xABC, 0x123]),
+        (RP2350_DBV3, [0xDE, 0xAD, 0xBE, 0xEF]),
+    ],
+    ids=lambda v: getattr(v, "name", "samples"),
+)
+def test_shift_left_layout_round_trips_through_unpack_words(profile, samples):
+    words = _isr_shift_left(samples, profile.sample_bits, profile.push_thresh)
+    assert len(words) == 1
+
+    header = Header(
+        sample_bits=profile.sample_bits,
+        samples_per_word=profile.samples_per_word,
+        flags=profile.flags,
+    )
+    assert unpack_words(header, words, len(samples)) == samples
+
+
+def test_rp2040_shift_left_word_is_right_aligned():
+    # sample 0 in bits 23:12, sample 1 in bits 11:0, bits 31:24 zero.
+    assert _isr_shift_left([0xABC, 0x123], 12, 24) == [0x00ABC123]
+
+
+def test_rp2350_shift_left_word_fills_all_32_bits():
+    assert _isr_shift_left([0xDE, 0xAD, 0xBE, 0xEF], 8, 32) == [0xDEADBEEF]
+
+
+def test_shift_right_would_left_justify_the_rp2040_pair():
+    # Regression guard for the layout that was first shipped and rejected:
+    # with SHIFT_RIGHT and push_thresh 24 the 24 valid bits sit in 31:8, so
+    # unpack_words() cannot decode them with any flags value.
+    isr = 0
+    for sample in (0xABC, 0x123):
+        isr = ((isr >> 12) | (sample << 20)) & 0xFFFFFFFF
+    assert isr == 0x123ABC00
+    assert unpack_words(Header(sample_bits=12, samples_per_word=2, flags=0), [isr], 2) != [
+        0xABC,
+        0x123,
+    ]
+
+
+def test_both_profiles_flag_first_sample_msb():
+    assert RP2040_TT06.flags == FLAG_FIRST_SAMPLE_MSB == 1
+    assert RP2350_DBV3.flags == FLAG_FIRST_SAMPLE_MSB
+    assert FLAG_FIRST_SAMPLE_MSB == stream.FLAG_FIRST_SAMPLE_MSB
