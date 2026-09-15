@@ -101,8 +101,59 @@ def test_no_board_and_no_link_is_a_sentence_not_a_traceback():
 
 def test_the_tunnel_hint_is_the_command_to_type():
     hint = demo_mod.tunnel_hint("tt07")
-    assert "ssh -N -L 7:10.21.2.7:8765 tweed.welland.mithis.com" in hint
-    assert "ws://127.0.0.1:7/serial" in hint
+    assert "ssh -N -L 18007:10.21.2.7:8765 tweed.welland.mithis.com" in hint
+    assert "ws://127.0.0.1:18007/serial" in hint
+
+
+@pytest.mark.parametrize("slug", sorted(WELLAND))
+def test_no_tunnel_hint_asks_for_a_privileged_port(slug):
+    # Every Welland octet is 3-8 or 33-36, so using it as the local port made
+    # every board's headline command one ssh refuses without root
+    # ("Privileged ports can only be forwarded by root").
+    port = demo_mod.tunnel_port(slug)
+    assert port > 1024
+    hint = demo_mod.tunnel_hint(slug)
+    assert "-L %d:" % port in hint
+    assert "127.0.0.1:%d/serial" % port in hint
+
+
+def test_every_board_gets_its_own_tunnel_port():
+    # Two boards tunnelled at once must not want the same local port.
+    ports = [demo_mod.tunnel_port(slug) for slug in WELLAND]
+    assert len(set(ports)) == len(ports)
+
+
+# --------------------------------------------------- what a board can take
+
+
+def test_a_design_on_an_asic_shuttle_is_refused():
+    with pytest.raises(CaptureError) as exc:
+        demo_mod.check_board_wants("tt07", None, "some_bitstream")
+    message = str(exc.value)
+    assert "--design" in message and "--project" in message
+    assert "tt07" in message and "fpga-1" in message
+
+
+def test_a_project_on_an_fpga_board_is_refused():
+    with pytest.raises(CaptureError) as exc:
+        demo_mod.check_board_wants("fpga-1", "tt_um_x", None)
+    message = str(exc.value)
+    assert "--project" in message and "--design" in message
+    assert "fpga-1" in message and "tt07" in message
+
+
+@pytest.mark.parametrize("slug", sorted(WELLAND))
+def test_each_board_accepts_exactly_one_of_them(slug):
+    fpga = slug.startswith("fpga-")
+    demo_mod.check_board_wants(slug, None, "d" if fpga else None)
+    demo_mod.check_board_wants(slug, None if fpga else "p", None)
+
+
+def test_nothing_is_assumed_about_a_board_reached_by_link():
+    # With --link there is no telling what is on the other end, and refusing
+    # a good run would be worse than letting the board say so.
+    demo_mod.check_board_wants(None, "tt_um_x", None)
+    demo_mod.check_board_wants(None, None, "bitstream")
 
 
 # ------------------------------------------------------------- the pipeline
@@ -572,6 +623,8 @@ def test_an_interrupted_run_leaves_a_playable_video(tmp_path):
     # no readable duration, and `gst-launch -e` is what turns the interrupt
     # into an end-of-stream that reaches it.
     assert video_duration_ns(video) > 0
+
+
 # --------------------------------------------------------------- the outdir
 
 
@@ -657,3 +710,75 @@ def test_a_run_that_captures_nothing_does_not_report_success(tmp_path):
     assert not list(outdir.glob("frame-*.png"))
     assert proc.returncode == demo_mod.EXIT_NOTHING_CAPTURED
     assert "nothing was captured" in proc.stderr
+
+
+# ------------------------------------------------- the plugin and the port
+
+
+def test_a_missing_plugin_is_named_with_what_to_do_about_it(monkeypatch):
+    monkeypatch.setattr(demo_mod, "have_element", lambda name: False)
+    monkeypatch.setattr(demo_mod.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setenv("GST_PLUGIN_PATH", "/somewhere/else")
+    with pytest.raises(CaptureError) as exc:
+        demo_mod.check_gstreamer()
+    message = str(exc.value)
+    # All of: which element, what it is, how to build it, how to be found,
+    # and where it looked.
+    assert "vgacapttsrc" in message
+    assert "libgstvgacap.so" in message
+    assert "cmake --build build" in message
+    assert "GST_PLUGIN_PATH" in message
+    assert "/somewhere/else" in message
+
+
+def test_a_dry_run_warns_about_a_missing_plugin_but_still_prints(monkeypatch, capsys):
+    # Printing a pipeline to run on the Pi, from a workstation with no
+    # plugin, is a fair thing to ask for -- a dry run cannot fail on a
+    # missing element because it runs nothing.
+    monkeypatch.setattr(demo_mod, "have_element", lambda name: False)
+    monkeypatch.setattr(demo_mod.shutil, "which", lambda name: "/usr/bin/" + name)
+    demo_mod.check_gstreamer(required=False)
+    assert "warning:" in capsys.readouterr().err
+
+
+def test_a_missing_gst_launch_is_named(monkeypatch):
+    monkeypatch.setattr(demo_mod.shutil, "which", lambda name: None)
+    with pytest.raises(CaptureError) as exc:
+        demo_mod.check_gstreamer()
+    assert "gst-launch-1.0" in str(exc.value)
+
+
+@needs_gstreamer
+def test_a_taken_serve_port_names_the_flag_and_the_port(tmp_path):
+    with socket.socket() as held:
+        held.bind(("127.0.0.1", 0))
+        held.listen(1)
+        port = held.getsockname()[1]
+        proc = run_demo_process(
+            demo_argv(tmp_path / "out", "--serve", str(port), fake=("--frames", "1"))
+        )
+    assert proc.returncode != 0
+    assert "--serve %d" % port in proc.stderr
+    assert "in use" in proc.stderr.lower()
+    assert "OSError" not in proc.stderr
+
+
+@needs_gstreamer
+def test_a_privileged_serve_port_says_why(tmp_path):
+    if os.geteuid() == 0:  # pragma: no cover - root can bind port 80
+        pytest.skip("running as root, so a privileged port is not refused")
+    proc = run_demo_process(
+        demo_argv(tmp_path / "out", "--serve", "80", fake=("--frames", "1"))
+    )
+    assert proc.returncode != 0
+    assert "--serve 80" in proc.stderr
+    assert "below 1024" in proc.stderr
+
+
+@needs_gstreamer
+def test_project_and_design_together_is_a_usage_error(tmp_path):
+    proc = run_demo_process(
+        demo_argv(tmp_path / "out", "--project", "p", "--design", "d", "--dry-run")
+    )
+    assert proc.returncode == 2  # argparse's own
+    assert "not allowed with argument --project" in proc.stderr

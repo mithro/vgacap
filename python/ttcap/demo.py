@@ -207,6 +207,22 @@ def _address_is_local(address: str) -> bool:
     return True
 
 
+#: Where a tunnel's near end is put, per board: `TUNNEL_PORT_BASE + octet`.
+#:
+#: Not the octet on its own, which is what this used to suggest. Every
+#: Welland slug has an octet of 3-8 or 33-36, so every board's headline
+#: command was `ssh -N -L 7:...` -- a privileged local port, which ssh
+#: refuses for an ordinary user with "Privileged ports can only be forwarded
+#: by root." A hint whose first command cannot be run is worse than none.
+#: The base keeps one port per board, so two boards can be tunnelled at once.
+TUNNEL_PORT_BASE = 18000
+
+
+def tunnel_port(board: str) -> int:
+    """The local port `tunnel_hint` suggests for `board`."""
+    return TUNNEL_PORT_BASE + int(welland_octet(board))
+
+
 def tunnel_hint(board: str) -> str:
     """How to reach `board`'s bridge from a workstation, in full.
 
@@ -215,27 +231,26 @@ def tunnel_hint(board: str) -> str:
     when a capture over a bridge link fails, because "connection refused" on
     its own sends people to the board.
     """
-    octet = welland_octet(board)
+    port = tunnel_port(board)
     return (
         "%s is on the Welland bench network, which a workstation reaches only\n"
         "through an SSH tunnel:\n"
         "\n"
-        "    ssh -N -L %s:%s:8765 %s\n"
+        "    ssh -N -L %d:%s:8765 %s\n"
         "\n"
         "then run the demo again against the near end of it:\n"
         "\n"
-        "    ttcap demo --link ws://127.0.0.1:%s/serial ...\n"
+        "    ttcap demo --link ws://127.0.0.1:%d/serial ...\n"
         "\n"
-        "(a local port below 1024 needs root, so any free port does as well:\n"
-        " ssh -N -L 18765:%s:8765 %s, then --link ws://127.0.0.1:18765/serial)"
+        "(any free local port works; %d is just this board's. A port below\n"
+        " 1024 is not free -- ssh refuses to forward one without root.)"
         % (
             bridge_ws_url(board),
-            octet,
+            port,
             bridge_host(board),
             WELLAND_GATEWAY,
-            octet,
-            bridge_host(board),
-            WELLAND_GATEWAY,
+            port,
+            port,
         )
     )
 
@@ -295,6 +310,61 @@ def resolve_link(
     )
 
 
+#: Welland slugs that carry an FPGA rather than a shuttle ASIC.
+#:
+#: Keyed on the slug, not on `WELLAND[board]`'s profile. The profile says
+#: which *demo board* is underneath (RP2040 or RP2350), which happens to
+#: line up today but is not the same question: a future ASIC shuttle on an
+#: RP2350 demo board would make the profile say "FPGA" about a chip.
+FPGA_SLUG_PREFIX = "fpga-"
+
+
+def board_takes_a_design(board: str) -> bool:
+    """True when `board` is one of the bench's FPGA boards.
+
+    An FPGA board is loaded with a bitstream (`--design`); an ASIC shuttle
+    carries fixed macros and is asked for one by name (`--project`). Both go
+    through the same `tt.shuttle`, which is why the wrong one is accepted all
+    the way to the board before anything complains.
+    """
+    return board.startswith(FPGA_SLUG_PREFIX)
+
+
+def fpga_slugs() -> str:
+    return ", ".join(sorted(s for s in WELLAND if s.startswith(FPGA_SLUG_PREFIX)))
+
+
+def asic_slugs() -> str:
+    return ", ".join(sorted(s for s in WELLAND if not s.startswith(FPGA_SLUG_PREFIX)))
+
+
+def check_board_wants(board: str | None, project: str | None, design: str | None) -> None:
+    """Refuse `--project` on an FPGA board, and `--design` on an ASIC.
+
+    Both reach `tt.shuttle` and both fail there -- as a MicroPython traceback
+    out of `select_project`, several GStreamer ERROR blocks deep, after the
+    board has been opened and a capture set up. The table already knows which
+    kind of board a slug is, so the answer is available before anything is
+    contacted.
+
+    Only when `--board` names a bench slug: with `--link` alone there is no
+    way to know what is on the other end, and guessing would refuse a
+    perfectly good run.
+    """
+    if board is None or board not in WELLAND:
+        return
+    if design and not board_takes_a_design(board):
+        raise CaptureError(
+            "--design is for the FPGA boards (%s); %s is an ASIC shuttle, so "
+            "name the macro with --project instead" % (fpga_slugs(), board)
+        )
+    if project and board_takes_a_design(board):
+        raise CaptureError(
+            "--project is for the ASIC shuttles (%s); %s is an FPGA board, so "
+            "name the bitstream with --design instead" % (asic_slugs(), board)
+        )
+
+
 # ------------------------------------------------------------- the outdir
 
 
@@ -317,8 +387,8 @@ def prepare_outdir(outdir: pathlib.Path, force: bool = False) -> None:
     """Make `--outdir`, and make sure it is this run's alone.
 
     A capture writes `frame-0000.png` upwards, so a short run into a
-    directory holding a long one overwrites the first frames and leaves the
-    rest: a silently mixed set, some of them a different design, which is
+    directory holding a long one overwrites the first few frames and leaves
+    the rest: a silently mixed set, some of them a different design, which is
     the worst possible thing to find in `docs/results/` later. It used to
     happen without a word.
 
@@ -924,6 +994,56 @@ def tunnel_hint_for(link: Link) -> str:
 #: a process normally has.
 DRY_RUN_MJPEG_FD = 3
 
+#: The plugin's own elements. Checked by name before the pipeline is built,
+#: because `gst-launch` says only `erroneous pipeline: no element
+#: "vgacapttsrc"` and then exits 1 through the ordinary "capture finished"
+#: path -- the likeliest setup mistake with the least useful message.
+PLUGIN_ELEMENTS = ("vgacapttsrc", "vgadecode")
+
+
+def check_gstreamer(required: bool = True) -> None:
+    """Refuse early when GStreamer or this plugin is not installed.
+
+    `required=False` downgrades it to a warning, which is what `--dry-run`
+    wants: printing a pipeline to run on the Pi from a workstation that has
+    no plugin is a perfectly good reason to ask, and a dry run cannot fail
+    on a missing element because it does not run anything. The warning is
+    still worth having, since the far more common reason is that the plugin
+    was never built.
+    """
+    try:
+        _require_gstreamer()
+    except CaptureError:
+        if required:
+            raise
+        print("warning: %s" % sys.exc_info()[1], file=sys.stderr)
+
+
+def _require_gstreamer() -> None:
+    if shutil.which("gst-launch-1.0") is None:
+        raise CaptureError(
+            "cannot find gst-launch-1.0, which is what runs the pipeline: "
+            "install GStreamer's tools (gstreamer1.0-tools on Debian and "
+            "Raspbian) along with gstreamer1.0-plugins-good, and make sure "
+            "GST_PLUGIN_PATH names the directory holding libgstvgacap.so"
+        )
+    missing = [name for name in PLUGIN_ELEMENTS if not have_element(name)]
+    if missing:
+        raise CaptureError(
+            "GStreamer has no %s element: that is this repository's own "
+            "plugin, libgstvgacap.so, and GStreamer cannot see it. Build it "
+            "(cmake -S . -B build && cmake --build build) and point "
+            "GST_PLUGIN_PATH at the directory holding it "
+            "(export GST_PLUGIN_PATH=$PWD/build), or install it alongside "
+            "GStreamer's own plugins. GST_PLUGIN_PATH is currently %s."
+            % (
+                " or ".join(missing),
+                repr(os.environ["GST_PLUGIN_PATH"])
+                if os.environ.get("GST_PLUGIN_PATH")
+                else "unset",
+            )
+        )
+
 
 def plan_demo(
     args: argparse.Namespace, *, dry_run: bool = False
@@ -937,13 +1057,8 @@ def plan_demo(
     # The board first, because a slug that is not on the bench is a typo the
     # person can fix without installing anything.
     link = resolve_link(args.board, args.link)
-    if shutil.which("gst-launch-1.0") is None:
-        raise CaptureError(
-            "cannot find gst-launch-1.0, which is what runs the pipeline: "
-            "install GStreamer's tools (gstreamer1.0-tools on Debian and "
-            "Raspbian) along with gstreamer1.0-plugins-good, and make sure "
-            "GST_PLUGIN_PATH names the directory holding libgstvgacap.so"
-        )
+    check_board_wants(args.board, args.project, args.design)
+    check_gstreamer(required=not dry_run)
     outdir = pathlib.Path(args.outdir)
 
     server: MjpegServer | None = None
@@ -955,6 +1070,13 @@ def plan_demo(
         else:
             read_fd, mjpeg_fd = os.pipe()
             os.set_inheritable(mjpeg_fd, True)
+
+    def close_the_pipe() -> None:
+        if dry_run:
+            return
+        for fd in (read_fd, mjpeg_fd):
+            if fd is not None:
+                os.close(fd)
 
     try:
         argv, outputs = build_pipeline(
@@ -975,10 +1097,7 @@ def plan_demo(
             fps=parse_fps(args.fps) if args.fps else None,
         )
     except BaseException:
-        if not dry_run:
-            for fd in (read_fd, mjpeg_fd):
-                if fd is not None:
-                    os.close(fd)
+        close_the_pipe()
         raise
 
     plan = DemoPlan(
@@ -996,7 +1115,25 @@ def plan_demo(
     if args.serve is not None and not dry_run:
         assert read_fd is not None
         broadcaster = FrameBroadcaster()
-        server = MjpegServer(args.serve, broadcaster)
+        try:
+            server = MjpegServer(args.serve, broadcaster)
+        except OSError as exc:
+            # The one message in this command that used to arrive as a bare
+            # errno: "Address already in use" on a line that also carries an
+            # --outdir and a --link gives three candidates for which of them
+            # was refused. Also the one place the careful pipe cleanup above
+            # did not reach, since the bind happens after it.
+            close_the_pipe()
+            raise CaptureError(
+                "--serve %d: %s. %s"
+                % (
+                    args.serve,
+                    exc.strerror or exc,
+                    "Ports below 1024 need root; pick one above that."
+                    if args.serve < 1024
+                    else "Pick another port, or stop whatever is using this one.",
+                )
+            ) from None
         threading.Thread(
             target=pump, args=(read_fd, broadcaster), name="vgacap-mjpeg-pump",
             daemon=True,
@@ -1084,10 +1221,15 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
         help="reach the board this way instead: serial:/dev/ttyACM0, or "
         "ws://host:8765/serial (the near end of an SSH tunnel, usually)",
     )
-    parser.add_argument(
-        "--project", help="tt.shuttle macro to enable, e.g. tt_um_rejunity_vga"
+    # Exclusive, because `tt.shuttle` takes one or the other and says so from
+    # the board, several GStreamer ERROR blocks deep, once the capture is
+    # already set up. argparse can say it before anything is contacted.
+    what = parser.add_mutually_exclusive_group()
+    what.add_argument(
+        "--project",
+        help="ASIC shuttles: tt.shuttle macro to enable, e.g. tt_um_rejunity_vga",
     )
-    parser.add_argument(
+    what.add_argument(
         "--design", help="FPGA boards: bitstream to enable, via the same tt.shuttle"
     )
     parser.add_argument(

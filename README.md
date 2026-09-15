@@ -253,9 +253,13 @@ and a fourth kills it, at the cost of the video.
   is on the bench network. From a workstation that means an SSH tunnel:
 
 ```sh
-ssh -N -L 7:10.21.2.7:8765 tweed.welland.mithis.com      # tt07; any free port does
-uv run ttcap demo --link ws://127.0.0.1:7/serial --clock-hz 60000 --outdir out
+ssh -N -L 18007:10.21.2.7:8765 tweed.welland.mithis.com   # tt07; 18000 + the octet
+uv run ttcap demo --link ws://127.0.0.1:18007/serial --clock-hz 60000 --outdir out
 ```
+
+Any free local port works; one per board keeps two tunnels from colliding.
+Not the octet on its own (`-L 7:…`): every Welland slug's octet is below
+1024, which ssh refuses to forward without root.
 
 `--link` overrides the board entirely, and a run over the bridge that fails
 to connect prints that tunnel command before it exits.
