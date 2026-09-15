@@ -1,13 +1,14 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* vgacap GStreamer plugin entry point.
  *
- * Registers the elements of the vgacap plugin. Only `vgadecode` exists so
- * far; `vgacapttsrc` (a GstPushSrc running `ttcap capture --out -`) and
- * `vgacapbin` (source-by-URI plus vgadecode) arrive with M5 Task 4 and
- * register here alongside it - see the hook in plugin_init().
+ * Registers the elements of the vgacap plugin: `vgadecode` turns a capture
+ * stream into video, and `vgacapttsrc` produces one from a board by running
+ * `ttcap capture --out -`. `vgacapbin` (source-by-URI plus vgadecode) joins
+ * them next - see the hook in plugin_init().
  */
 #include <gst/gst.h>
 
+#include "gstvgacapttsrc.h"
 #include "gstvgadecode.h"
 
 #ifndef PACKAGE
@@ -21,7 +22,9 @@ static gboolean plugin_init(GstPlugin *plugin)
 {
     if (!gst_element_register(plugin, "vgadecode", GST_RANK_NONE, GST_TYPE_VGADECODE))
         return FALSE;
-    /* Task 4 hook: register "vgacapttsrc" and "vgacapbin" here. */
+    if (!gst_element_register(plugin, "vgacapttsrc", GST_RANK_NONE, GST_TYPE_VGACAPTTSRC))
+        return FALSE;
+    /* Task 4 hook: register "vgacapbin" here. */
     return TRUE;
 }
 

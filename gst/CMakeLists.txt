@@ -24,7 +24,8 @@ get_directory_property(VGACAP_GST_OPTS COMPILE_OPTIONS)
 list(REMOVE_ITEM VGACAP_GST_OPTS -Wconversion)
 set_directory_properties(PROPERTIES COMPILE_OPTIONS "${VGACAP_GST_OPTS}")
 
-add_library(gstvgacap MODULE gstvgacap.c gstvgadecode.c gstvgacapuri.c)
+add_library(gstvgacap MODULE
+  gstvgacap.c gstvgadecode.c gstvgacapttsrc.c gstvgacapuri.c)
 set_target_properties(gstvgacap PROPERTIES
   PREFIX "lib"                       # GStreamer expects libgst<name>.so
   OUTPUT_NAME gstvgacap
@@ -43,7 +44,7 @@ set_property(TARGET vgacap_stream PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET vgacap_frame PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 # gst-inspect-1.0 finds it with GST_PLUGIN_PATH=<build dir>.
-foreach(element vgadecode)
+foreach(element vgadecode vgacapttsrc)
   add_test(NAME gst_plugin_inspect_${element}
     COMMAND ${CMAKE_COMMAND} -E env GST_PLUGIN_PATH=${CMAKE_BINARY_DIR}
             gst-inspect-1.0 ${element})
