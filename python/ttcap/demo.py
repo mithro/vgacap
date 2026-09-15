@@ -572,7 +572,13 @@ def line_buffered(argv: list[str]) -> list[str]:
     return [stdbuf, "-oL", *argv] if stdbuf else list(argv)
 
 
-def _summarise(plan: DemoPlan, progress: Progress, returncode: int) -> None:
+def _summarise(plan: DemoPlan, progress: Progress, returncode: int,
+               server: MjpegServer | None = None) -> None:
+    """What the run produced, counted from the files themselves.
+
+    The PNGs are counted on disk rather than from the bus, so a sink that
+    stopped writing halfway through cannot be summarised as a success.
+    """
     progress.say("")
     progress.say("capture finished after %.1fs (gst-launch exit %d)"
                  % (progress.elapsed, returncode))
@@ -588,6 +594,9 @@ def _summarise(plan: DemoPlan, progress: Progress, returncode: int) -> None:
             )
         else:
             progress.say("  %s was not written" % plan.video_path)
+    if server is not None:
+        progress.say("  %d frame(s) published on port %s"
+                     % (server.broadcaster.parts, plan.serve_port))
 
 
 def run_demo(
@@ -652,7 +661,7 @@ def run_demo(
                 signal.signal(signal.SIGINT, previous)
         if server is not None:
             server.close()
-    _summarise(plan, progress, returncode)
+    _summarise(plan, progress, returncode, server)
     if returncode != 0 and plan.link.through_bridge:
         progress.say("")
         progress.say(tunnel_hint_for(plan.link))

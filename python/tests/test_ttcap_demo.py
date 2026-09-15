@@ -379,7 +379,9 @@ def test_serve_answers_the_index_and_streams_jpegs(tmp_path):
         assert body.count(b"\xff\xd8\xff") >= 2  # two JPEG SOIs
     finally:
         child.send_signal(signal.SIGINT)
-        child.communicate(timeout=60)
+        _, err = child.communicate(timeout=60)
+    # The run says how much it published, not just that it was serving.
+    assert re.search(r"[1-9]\d* frame\(s\) published on port %d" % port, err), err
 
 
 def _get_when_ready(url: str, timeout: float = 30.0) -> bytes:
