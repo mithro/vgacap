@@ -424,8 +424,8 @@ def gpio_base_is(pio, want):
     return str(pio.gpio_base()).startswith("Pin(GPIO" + str(want) + ",")
 
 
-def set_gpio_base(pio, want):
-    """Move PIO block `pio`'s 32-pin window to `want`; True if it is there.
+def set_gpio_base(pio, num, want):
+    """Move PIO block `num`'s 32-pin window to `want`; True if it is there.
 
     RP2350 only, and it must happen before any state machine is created:
     the window shifts the whole block's view of the pins.
@@ -437,6 +437,14 @@ def set_gpio_base(pio, want):
     move succeeds; that sequence was verified on fpga-1 by reading the test
     pattern's bar values back off uo_out.
 
+    Block 0 is the exception and gets no move at all: PIO0 holds the stock
+    firmware's own program (the FPGA bitstream loader on the FPGA boards),
+    and `remove_program()` there would wipe it -- recoverable only by a
+    power cycle. A block 0 that is not already at `want` is reported as a
+    failure instead, which main() turns into its `error=` TIME chunk. Same
+    rule as the pre-add removal in main(); it is stated in both places
+    because both call sites are destructive.
+
     Do not trust `gpio_base()` alone to decide whether a move is needed: on
     that board it reported GPIO16 while the hardware base was still 0 (a
     power cycle made it report GPIO0 again). It is checked before and after
@@ -445,6 +453,8 @@ def set_gpio_base(pio, want):
     """
     if gpio_base_is(pio, want):
         return True
+    if num == 0:
+        return False
     try:
         pio.remove_program()
     except Exception:
@@ -459,7 +469,7 @@ def set_gpio_base(pio, want):
 def main(out):
     """Run the sampler, streaming RAW chunks to `out` until told to stop."""
     if GPIO_BASE:
-        if not set_gpio_base(rp2.PIO(PIO_NUM), GPIO_BASE):
+        if not set_gpio_base(rp2.PIO(PIO_NUM), PIO_NUM, GPIO_BASE):
             write_time_chunk(
                 out,
                 0,

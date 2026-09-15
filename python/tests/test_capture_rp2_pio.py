@@ -227,7 +227,7 @@ def test_set_gpio_base_removes_the_block_programs_first(source):
     set_gpio_base = _gpio_base_helpers(source)["set_gpio_base"]
     block = _StubPioBlock(0)
 
-    assert set_gpio_base(block, 16)
+    assert set_gpio_base(block, 1, 16)
     assert (block.base, block.removals) == (16, 1)
 
 
@@ -236,8 +236,29 @@ def test_set_gpio_base_leaves_a_block_already_in_place_alone(source):
     set_gpio_base = _gpio_base_helpers(source)["set_gpio_base"]
     block = _StubPioBlock(16)
 
-    assert set_gpio_base(block, 16)
+    assert set_gpio_base(block, 1, 16)
     assert (block.removals, block.moves) == (0, 0)
+
+
+def test_set_gpio_base_never_removes_pio0s_programs(source):
+    # PIO0 holds the stock firmware's own program (the FPGA bitstream
+    # loader). Wiping it costs a power cycle, which is the one recovery the
+    # Global Constraints ration, so block 0 is refused rather than moved.
+    set_gpio_base = _gpio_base_helpers(source)["set_gpio_base"]
+    block = _StubPioBlock(0)
+
+    assert set_gpio_base(block, 0, 16) is False
+    assert (block.removals, block.moves, block.base) == (0, 0, 0)
+    assert block.loaded, "PIO0's programs must still be there"
+
+
+def test_set_gpio_base_accepts_a_pio0_that_is_already_in_place(source):
+    # Nothing destructive is needed, so there is no reason to refuse.
+    set_gpio_base = _gpio_base_helpers(source)["set_gpio_base"]
+    block = _StubPioBlock(16)
+
+    assert set_gpio_base(block, 0, 16)
+    assert block.removals == 0
 
 
 def test_set_gpio_base_reports_failure_instead_of_raising(source):
@@ -248,7 +269,7 @@ def test_set_gpio_base_reports_failure_instead_of_raising(source):
             raise OSError(22, "EINVAL")
 
     block = _Stuck(0)
-    assert set_gpio_base(block, 16) is False
+    assert set_gpio_base(block, 1, 16) is False
     assert block.base == 0
 
 
@@ -266,7 +287,7 @@ def test_time_chunks_report_a_cumulative_dropped_count(source):
 def test_main_reports_a_refused_gpio_base_move(source):
     main_src = ast.unparse(_main_node(source))
 
-    assert "set_gpio_base(rp2.PIO(PIO_NUM), GPIO_BASE)" in main_src
+    assert "set_gpio_base(rp2.PIO(PIO_NUM), PIO_NUM, GPIO_BASE)" in main_src
     assert "gpio_base is not " in main_src
     assert "write_time_chunk" in main_src
 
@@ -610,6 +631,20 @@ def test_capture_cfg_for_rp2350():
 def test_capture_cfg_takes_pio_and_sm():
     cfg = capture_cfg(RP2040_TT06, pio=1, sm=3)
     assert (cfg["pio"], cfg["sm"]) == (1, 3)
+
+
+def test_capture_cfg_allows_pio0_on_a_board_whose_window_never_moves():
+    # RP2040's uo_out is inside PIO0's fixed window, so nothing destructive
+    # is implied and the block stays a legitimate (if unusual) choice.
+    assert capture_cfg(RP2040_TT06, pio=0)["pio"] == 0
+
+
+def test_capture_cfg_rejects_pio0_when_the_window_would_have_to_move():
+    # RP2350: reaching uo_out at GPIO 33+ means moving PIO0's 32-pin window,
+    # and a block only moves once its instruction memory has been emptied --
+    # which on PIO0 means wiping the FPGA bitstream loader.
+    with pytest.raises(ValueError, match="pio 0"):
+        capture_cfg(RP2350_DBV3, pio=0)
 
 
 @pytest.mark.parametrize("kwargs", [{"edge": "both"}, {"buf_words": 0}, {"max_bytes": -1}, {"pio": -1}, {"sm": 4}])

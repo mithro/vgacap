@@ -131,6 +131,19 @@ def capture_cfg(
         raise ValueError(f"max_bytes must not be negative, got {max_bytes}")
     if not 0 <= pio <= 2:
         raise ValueError(f"pio must be 0..2 (RP2040 has 0..1), got {pio}")
+    if pio == 0 and profile.pio_gpio_base != 0:
+        # Reaching the uo_out pins on this board means moving the block's
+        # 32-pin window, and a block only moves once its instruction memory
+        # is empty -- so a capture on PIO0 could only work by wiping the
+        # stock firmware's own program (the FPGA bitstream loader), which
+        # costs a power cycle to put back. The board script refuses too;
+        # this is the half that never lets the request leave the host.
+        raise ValueError(
+            f"{profile.name}: pio 0 would have to move its pin window to "
+            f"GPIO {profile.pio_gpio_base} to reach uo_out, and that means "
+            "erasing PIO0's programs -- the stock firmware keeps the FPGA "
+            "bitstream loader there. Use --pio 1 or --pio 2."
+        )
     if not 0 <= sm <= 3:
         raise ValueError(f"sm must be 0..3, got {sm}")
     in_index = profile.in_base - profile.pio_gpio_base
