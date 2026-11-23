@@ -21,6 +21,8 @@ tested:
     probe-fails   `probe` exits 1 with a message, as an unreachable board does
     probe-hangs   `probe` never answers, so hil.py's timeout has to fire
     overruns      `capture` reports overruns=3, as a board that cannot keep up
+    demo-fails    `demo` exits 1 at once, before touching its outdir, as a
+                  demo that dies on its arguments does
 """
 from __future__ import annotations
 
@@ -118,6 +120,9 @@ def demo(argv: list[str]) -> int:
     will take it, and a `--seconds 0` run would spend its whole life in the
     encoder rather than waiting to be stopped.
     """
+    if mode() == "demo-fails":
+        print("stub ttcap: demo failed before starting", file=sys.stderr)
+        return 1
     sys.path.insert(0, str(ROOT / "python"))
     from ttcap.cli import main as ttcap_main
 

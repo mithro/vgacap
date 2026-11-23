@@ -25,7 +25,8 @@ Safety on a shared bench:
 
 * one run at a time per board, enforced with a `flock`ed lock file;
 * every board command runs in its own session, and whatever is left of that
-  session is killed on the way out, however this script ends;
+  session is killed on the way out, however this script ends short of SIGKILL (SIGTERM, SIGHUP and
+  SIGQUIT are caught and turned into an orderly stop);
 * `--stop-bridge` is the only thing that touches `fpgas-tt`, and it always
   starts it again.
 
@@ -95,6 +96,26 @@ ALL_CHECKS = ("probe", "capture", "reconstruct", "reference", "demo-frames",
 
 #: The checks that need a GStreamer pipeline, and so the plugin.
 PIPELINE_CHECKS = ("demo-frames", "video", "serve", "stop")
+
+
+class Interrupted(BaseException):
+    """A stop signal arrived. BaseException, like KeyboardInterrupt, so no
+    check's own `except Exception` can swallow it."""
+
+
+def _on_stop_signal(signum, _frame):
+    # Ignore any further stop signal: the cleanup it would interrupt is the
+    # thing that releases the board.
+    for sig in STOP_SIGNALS:
+        signal.signal(sig, signal.SIG_IGN)
+    raise Interrupted(signal.Signals(signum).name)
+
+
+#: Signals that end a run. Without handlers SIGTERM and SIGHUP (a dropped
+#: ssh, `timeout`, a cancelled job) kill this process with no `finally`, and
+#: every board command -- each in its own session -- would keep running and
+#: keep holding a shared board.
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
 
 
 class Fatal(Exception):
@@ -227,7 +248,7 @@ class Hil:
     def spawn(self, argv: list[str]) -> subprocess.Popen:
         proc = subprocess.Popen(
             [str(a) for a in argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, start_new_session=True, env=self.env())
+            text=True, start_new_session=True, env=self.env(), cwd=ROOT)
         self.sessions.append(proc.pid)
         return proc
 
@@ -375,6 +396,17 @@ class Hil:
                                       _tail(proc.stdout, 1) or "no output"),
                     shlex.join(argv), _tail(proc.stdout), _tail(proc.stderr))
 
+    @staticmethod
+    def fresh_outdir(outdir: pathlib.Path) -> None:
+        """Remove what an earlier run left, so nothing on disk can answer for
+        this one. `ttcap demo --force` clears it too, but only once it has got
+        that far; a demo that dies first would otherwise be judged on old
+        frames and an old video."""
+        outdir.mkdir(parents=True, exist_ok=True)
+        for old in [*outdir.glob("frame-*.png"), outdir / "capture.mkv"]:
+            with contextlib.suppress(FileNotFoundError):
+                old.unlink()
+
     def demo_argv(self, outdir: pathlib.Path, seconds: float,
                   serve: int | None = None) -> list[str]:
         argv = self.board_argv("demo", "--link", self.args.link,
@@ -392,6 +424,7 @@ class Hil:
         outdir = self.workdir / "demo"
         port = self.args.serve_port
         argv = self.demo_argv(outdir, self.args.seconds, serve=port)
+        self.fresh_outdir(outdir)
         reader = MjpegReader(port, self.args.seconds + self.args.timeout)
         reader.start()
         try:
@@ -414,7 +447,10 @@ class Hil:
                     *evidence)
 
         # Video: a file a player can open, at the rate that was asked for.
-        if not video.exists():
+        if ran.returncode != 0:
+            self.record("video", False, "the demo exited %d, so its video "
+                        "proves nothing" % ran.returncode, *evidence)
+        elif not video.exists():
             self.record("video", False, "no %s was written" % video, *evidence)
         else:
             duration, rate = video_duration_and_rate(video)
@@ -445,6 +481,7 @@ class Hil:
         """
         outdir = self.workdir / "stop"
         argv = self.demo_argv(outdir, 0)
+        self.fresh_outdir(outdir)
         proc = self.spawn(argv)
         # Wait until it is really capturing, so the stop lands mid-flight
         # rather than during setup.
@@ -505,22 +542,29 @@ class Hil:
         if not active:
             self.notes.append("fpgas-tt was already stopped; left alone.")
             return
-        subprocess.run(["sudo", "systemctl", "stop", "fpgas-tt"], check=True,
-                       timeout=120)
+        # Marked before the attempt: a stop that takes effect and then times
+        # out must still be undone.
         self.bridge_stopped = True
+        subprocess.run(["sudo", "-n", "systemctl", "stop", "fpgas-tt"],
+                       check=True, timeout=120)
         self.notes.append("fpgas-tt stopped for this run, and started again after.")
 
     def restore_bridge(self) -> None:
         if not self.bridge_stopped:
             return
-        result = subprocess.run(["sudo", "systemctl", "start", "fpgas-tt"],
-                                check=False, timeout=120)
         self.bridge_stopped = False
-        if result.returncode != 0:
+        try:
+            code = subprocess.run(["sudo", "-n", "systemctl", "start", "fpgas-tt"],
+                                  check=False, timeout=120).returncode
+        except (OSError, subprocess.SubprocessError) as exc:
+            code, why = -1, str(exc)
+        else:
+            why = "exit %d" % code
+        if code != 0:
             self.notes.append(
-                "WARNING: `sudo systemctl start fpgas-tt` exited %d -- the "
+                "WARNING: `sudo systemctl start fpgas-tt` failed (%s) -- the "
                 "bridge is still down and the next user of this board will "
-                "find it so." % result.returncode)
+                "find it so." % why)
 
     # ------------------------------------------------------------------ main
 
@@ -732,9 +776,11 @@ def only_one(key: str, lock_dir: str | None):
     """Refuse to run twice against the same board.
 
     Two captures on one board produce two wrong answers, and the second one
-    can leave the first's DMA channels claimed. The lock is machine-wide
-    rather than per-checkout, which is the scope that matters: the board is
-    the shared thing, not the working copy. `--board` gives the key, so two
+    can leave the first's DMA channels claimed. The lock is per user per
+    machine (in `$XDG_RUNTIME_DIR` by default) rather than per checkout: the
+    board is the shared thing, not the working copy. It cannot see another
+    user or another machine; pass a shared `--lock-dir` for the first, and
+    for the second check the board's status page for other clients first. `--board` gives the key, so two
     runs naming the same board collide even from different checkouts; two
     runs naming only a `--link` collide only if they spell it the same way.
     """
@@ -892,6 +938,8 @@ def main(argv: list[str] | None = None) -> int:
         print("hil: %s" % exc, file=sys.stderr)
         return 2
     key = re.sub(r"[^A-Za-z0-9_.-]", "_", args.board or args.link)[:80]
+    for sig in STOP_SIGNALS:
+        signal.signal(sig, _on_stop_signal)
     hil = Hil(args)
     failures = 0
     try:
@@ -905,6 +953,12 @@ def main(argv: list[str] | None = None) -> int:
                 hil.record("board", False, str(exc).splitlines()[0])
                 hil.fill_skips("the run was cut short")
                 hil.notes.append("Run cut short: %s" % exc)
+            except (Interrupted, KeyboardInterrupt) as exc:
+                why = str(exc) or "SIGINT"
+                hil.record("board", False, "interrupted by %s" % why)
+                hil.fill_skips("the run was interrupted by %s" % why)
+                hil.notes.append("Run interrupted by %s; everything it "
+                                 "started was stopped." % why)
             finally:
                 hil.cleanup()
     except Fatal as exc:

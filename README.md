@@ -66,8 +66,10 @@ measured. Exit status is 0 if all passed, 1 if any failed, 2 if it could not
 start (lock held, missing tool, bad arguments).
 
 The Welland boards are shared and public. One run per board at a time is
-enforced with a lock file, every board command has a timeout, and whatever a
-run started is killed on the way out. Before running against a bench board,
+enforced with a lock file (per user per machine; `--lock-dir` makes it
+shared), every board command has a timeout, and whatever a run started is
+killed on the way out, including when the run itself gets SIGINT, SIGTERM,
+SIGHUP or SIGQUIT (it still writes its report). Before running against a bench board,
 check its page on tinytapeout.fpgas.online (`/board/<slug>/status.json`) for
 other clients, and confirm the board's USB serial: boards move between
 ports.

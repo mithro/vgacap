@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -312,3 +313,68 @@ def test_fps_is_understood_the_way_gstreamer_spells_it(text, value, canonical):
     import hil
 
     assert hil.parse_fps(text) == (pytest.approx(value), canonical)
+
+
+# ------------------------------------------------------- stop signals, stale files
+
+
+def _processes_marked(mark: str) -> list[int]:
+    """PIDs whose environment carries `mark`: every board command hil.py
+    started inherits it, whatever session or group it moved to."""
+    found = []
+    needle = ("HIL_TEST_MARK=%s" % mark).encode()
+    for entry in pathlib.Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if needle in (entry / "environ").read_bytes().split(b"\0"):
+                found.append(int(entry.name))
+        except OSError:
+            continue
+    return found
+
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGHUP])
+def test_a_stop_signal_cleans_up_and_still_reports(workspace, sig):
+    """A dropped ssh or a `kill` used to end hil.py with no cleanup at all,
+    leaving its board commands running against a shared board."""
+    mark = "sig-%d-%d" % (sig, os.getpid())
+    env = dict(os.environ, HIL_STUB="probe-hangs", HIL_TEST_MARK=mark)
+    proc = subprocess.Popen(
+        [sys.executable, str(HIL), "--ttcap", "%s %s" % (sys.executable, STUB),
+         "--no-demo", "--timeout", "120", *workspace["common"],
+         str(workspace["report"])],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    # Wait until the hung probe is really running, so the signal lands with
+    # a board command outstanding.
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline and len(_processes_marked(mark)) < 2:
+        time.sleep(0.1)
+    assert len(_processes_marked(mark)) >= 2, "the probe never started"
+    proc.send_signal(sig)
+    out, err = proc.communicate(timeout=60)
+    assert proc.returncode == 1, out + err
+    assert "interrupted by %s" % signal.Signals(sig).name in out, out + err
+    assert workspace["report"].exists()
+    # Nothing it started outlives it.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and _processes_marked(mark):
+        time.sleep(0.1)
+    assert _processes_marked(mark) == []
+
+
+@needs_gstreamer
+@needs_frames_tool
+def test_frames_left_by_an_earlier_run_do_not_count(workspace):
+    """A demo that dies before clearing its outdir must not be judged on the
+    frames and video an earlier run left there."""
+    first = run_hil(*workspace["common"], str(workspace["report"]), timeout=TIMEOUT)
+    assert first.returncode == 0, first.stdout + first.stderr
+    demo = workspace["tmp_path"] / "work" / "demo"
+    assert any(demo.glob("frame-*.png")) and (demo / "capture.mkv").exists()
+    # Second run: a demo that fails before it reaches its outdir.
+    second = run_hil(*workspace["common"], str(workspace["report"]),
+                     stub="demo-fails", timeout=TIMEOUT)
+    result = statuses(second.stdout)
+    assert result["demo-frames"] == "FAIL", second.stdout
+    assert result["video"] == "FAIL", second.stdout
