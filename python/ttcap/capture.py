@@ -418,8 +418,29 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
             _exec_checked(repl, f"tt.shuttle[{name!r}].enable()")
             did["enable"] = "index"
         except CaptureError:
-            _exec_checked(repl, f"getattr(tt.shuttle, {name!r}).enable()")
-            did["enable"] = "getattr"
+            try:
+                _exec_checked(repl, f"getattr(tt.shuttle, {name!r}).enable()")
+                did["enable"] = "getattr"
+            except CaptureError as exc:
+                # A bitstream uploaded through the fpgas.online daemon
+                # (`POST /bitstream`, then `/designs/<name>/enable`) is loaded
+                # on the FPGA but is not one of the SDK's named shuttle
+                # entries, so neither spelling finds it. Seen on fpga-4,
+                # 2026-11-23: `tt.shuttle.enabled` was
+                # `<FPGA BitStream tt_um_vgacal_bars>` while `has()` said
+                # False. Already enabled is what was asked for.
+                out = _exec_checked(
+                    repl,
+                    "print(getattr(getattr(tt.shuttle, 'enabled', None), "
+                    f"'name', None) == {name!r})")
+                if out.strip().endswith("True"):
+                    did["enable"] = "already enabled"
+                else:
+                    raise CaptureError(
+                        f"{exc}\n{name!r} is not a shuttle entry on this board "
+                        "and is not the enabled design either; an uploaded FPGA "
+                        "bitstream has to be enabled through the board's daemon "
+                        "first") from None
     _exec_checked(repl, "tt.clock_project_stop()")
     _exec_checked(repl, "tt.reset_project(True)")
     # `clock_project_PWM(freqHz, duty_u16=0xffff/2, quiet=False,
