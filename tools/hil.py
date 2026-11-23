@@ -586,10 +586,12 @@ class MjpegReader(threading.Thread):
         self.budget = budget
         self.parts = 0
         self.note = ""
-        self._stop = threading.Event()
+        # Not `_stop`: threading.Thread has its own `_stop()` method, which
+        # join() calls, and an Event under that name makes join() raise.
+        self._halt = threading.Event()
 
     def stop(self) -> None:
-        self._stop.set()
+        self._halt.set()
         self.join(timeout=10)
 
     #: The boundary `multipartmux` and `ttcap.mjpeg` agree on.
@@ -600,7 +602,7 @@ class MjpegReader(threading.Thread):
         conn, response = None, None
         # The server does not exist until the demo has built its pipeline, so
         # connecting is a retry loop, not a single attempt.
-        while not self._stop.is_set() and time.monotonic() < deadline:
+        while not self._halt.is_set() and time.monotonic() < deadline:
             conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
             try:
                 conn.request("GET", "/stream.mjpg")
@@ -619,7 +621,7 @@ class MjpegReader(threading.Thread):
         if response is None or conn is None:
             return
         tail = b""
-        while not self._stop.is_set() and time.monotonic() < deadline:
+        while not self._halt.is_set() and time.monotonic() < deadline:
             try:
                 block = response.read(4096)
             except OSError as exc:
