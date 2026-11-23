@@ -73,6 +73,8 @@ jobs:
             gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            xvfb \
             gir1.2-gstreamer-1.0 \
             python3-gi \
             strace
@@ -90,6 +92,12 @@ jobs:
       #   plugins-ugly                  x264enc, the demo's first-choice
       #                                 encoder; without it only the vp8
       #                                 fallback would ever be exercised
+      #   libav                         an H.264 decoder: gst-discoverer-1.0
+      #                                 reports no duration for a file it
+      #                                 cannot decode, and the video tests
+      #                                 read the duration from it
+      #   xvfb                          a display for the --window tests;
+      #                                 autovideosink with none segfaults
       #   python3-gi, gir1.2-gstreamer-1.0
       #       gst-python, for the seek and stop probes that drive the element
       #       from a real pipeline instead of gst-launch
@@ -107,6 +115,6 @@ jobs:
       - name: pytest
         run: |
           set -o pipefail
-          uv run pytest -q -rs 2>&1 | tee pytest.log
+          xvfb-run -a uv run pytest -q -rs 2>&1 | tee pytest.log
       - name: nothing GStreamer-dependent was skipped
         run: "! grep -E '^SKIPPED .*(gst/tests/|test_hil.py)' pytest.log"
