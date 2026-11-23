@@ -39,6 +39,13 @@ needs_frames_tool = pytest.mark.skipif(
     not FRAMES_TOOL.exists(),
     reason="needs build/vgacap-frames (cmake -S . -B build && cmake --build build)")
 
+#: The no-plugin case is only reachable on a host that has gst-launch-1.0:
+#: without it hil.py reports the missing launcher first, which is right but
+#: is not what that test is about.
+needs_gst_launch = pytest.mark.skipif(
+    shutil.which("gst-launch-1.0") is None,
+    reason="needs gst-launch-1.0 (the plugin-missing message comes after it)")
+
 needs_gstreamer = pytest.mark.skipif(
     shutil.which("gst-launch-1.0") is None or not PLUGIN.exists(),
     reason="needs gst-launch-1.0 and a built build/libgstvgacap.so")
@@ -258,6 +265,7 @@ def test_the_report_says_a_calibration_design_was_not_available(workspace,
 
 
 @needs_frames_tool
+@needs_gst_launch
 def test_a_host_without_the_plugin_skips_the_pipeline_checks(workspace, tmp_path):
     """A Pi with `ttcap` but no plugin is a supported setup: the board checks
     are the point of it, and the pipeline ones must say why they did not run
