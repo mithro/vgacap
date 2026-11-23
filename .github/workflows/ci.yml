@@ -74,6 +74,7 @@ jobs:
             gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly \
             gstreamer1.0-libav \
+            gstreamer1.0-x \
             xvfb \
             gir1.2-gstreamer-1.0 \
             python3-gi \
@@ -96,8 +97,12 @@ jobs:
       #                                 reports no duration for a file it
       #                                 cannot decode, and the video tests
       #                                 read the duration from it
-      #   xvfb                          a display for the --window tests;
-      #                                 autovideosink with none segfaults
+      #   xvfb, gstreamer1.0-x          a display for the --window tests,
+      #                                 and ximagesink to draw on it.
+      #                                 autovideosink otherwise segfaults:
+      #                                 with no display, and under xvfb by
+      #                                 picking the GL sink, which has no GL
+      #                                 there (hence the rank override below)
       #   python3-gi, gir1.2-gstreamer-1.0
       #       gst-python, for the seek and stop probes that drive the element
       #       from a real pipeline instead of gst-launch
@@ -113,6 +118,8 @@ jobs:
       # that failed to load -- would go unnoticed; -rs lists every skip and
       # the next step refuses any in those suites.
       - name: pytest
+        env:
+          GST_PLUGIN_FEATURE_RANK: ximagesink:MAX
         run: |
           set -o pipefail
           xvfb-run -a uv run pytest -q -rs 2>&1 | tee pytest.log
