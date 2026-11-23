@@ -23,6 +23,55 @@ ctest --test-dir build --output-on-failure
 uv run pytest -q
 ```
 
+### Continuous integration
+
+`.github/workflows/ci.yml` runs three jobs on every push and pull request,
+on a pinned `ubuntu-24.04` image:
+
+| job | what it proves |
+|---|---|
+| `c` | the C libraries and tools build and pass `ctest` on a machine with **no GStreamer** (`PKG_CONFIG_LIBDIR` is emptied), and the plugin is *skipped* there rather than failing the build |
+| `python` | the Python suite passes without GStreamer; plugin tests skip, `build/vgacap-frames` is built first because several tests compare against it |
+| `gstreamer` | with GStreamer installed (the apt list in the workflow says what each package is for), the plugin is built, and its `ctest` and both pytest suites (`python/tests`, `gst/tests`) run for real |
+
+The plugin is optional by design, so both configurations are tested. A
+change in what CI covers is a change to that file.
+
+### Hardware-in-the-loop check
+
+CI cannot see a board. `tools/hil.py` runs the checks only a real board can
+settle and writes a dated Markdown report: `probe` (profile auto-detection),
+`capture` (overruns and `rxstall` from the closing `TIME` chunk), `reconstruct`
+(frame count against the project clock), `reference` (pixel-exact against a
+`tt-vga-testpatterns` calibration render), `demo-frames`, `video`, `serve`,
+`stop` (cooperative stop latency, no orphaned processes) and `board-usable`
+(the board still answers afterwards). `tools/hil.py` lists why each one needs
+hardware.
+
+```sh
+# from a workstation: a tunnel to the board's bridge (18000 + the Pi's port)
+ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com
+# upload and enable the calibration bitstream (tt-vga-testpatterns/tools/upload.py), then
+tools/hil.sh --board fpga-1 --design tt_um_vgacal_bars --clock-hz 500000 \
+    --link ws://127.0.0.1:18034/serial docs/results/
+```
+
+`tools/hil.sh` only runs `hil.py` in this checkout's uv environment;
+`tools/hil.py --help` gives every option. Useful ones: `--no-demo` for a host
+without GStreamer (the pipeline checks then SKIP with the reason), `--ui-in`
+for `tt_um_vgacal_modes`, `--stop-bridge` when running on the board's own Pi
+with `serial:/dev/ttboard` (it stops `fpgas-tt`, which holds the device, and
+always restarts it). Every check prints PASS, FAIL or SKIP with what it
+measured. Exit status is 0 if all passed, 1 if any failed, 2 if it could not
+start (lock held, missing tool, bad arguments).
+
+The Welland boards are shared and public. One run per board at a time is
+enforced with a lock file, every board command has a timeout, and whatever a
+run started is killed on the way out. Before running against a bench board,
+check its page on tinytapeout.fpgas.online (`/board/<slug>/status.json`) for
+other clients, and confirm the board's USB serial: boards move between
+ports.
+
 ## Layout
 
 | | |
