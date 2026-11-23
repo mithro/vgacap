@@ -1,15 +1,127 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Three jobs, because the GStreamer plugin is optional by design and both
+# configurations have to keep working:
+#
+#   c, python     -- no GStreamer at all. The core libraries, the tools and the
+#                    Python suite must build and pass, and the plugin must be
+#                    *skipped* rather than failed.
+#   gstreamer     -- the full set installed: the plugin is built and its
+#                    ctest and pytest suites run for real.
+#
+# The runner image is pinned (ubuntu-24.04, not ubuntu-latest) and so are the
+# apt package names, so a change in what CI covers is a change to this file.
 name: ci
 on: [push, pull_request]
+
 jobs:
   c:
-    runs-on: ubuntu-latest
+    name: C libraries, no GStreamer
+    runs-on: ubuntu-24.04
+    env:
+      # The runner image may or may not carry GStreamer's pkg-config files,
+      # and this job's whole point is the configuration that has none. An
+      # empty PKG_CONFIG_LIBDIR is what a machine without GStreamer presents
+      # to CMake; nothing else in the build uses pkg-config.
+      PKG_CONFIG_LIBDIR: /var/empty
     steps:
       - uses: actions/checkout@v4
-      - run: cmake -S . -B build && cmake --build build -j && ctest --test-dir build --output-on-failure
+      - name: configure
+        # pipefail because the default shell has none, and `tee` would
+        # otherwise hide a failing cmake.
+        run: |
+          set -o pipefail
+          cmake -S . -B build 2>&1 | tee configure.log
+      - run: cmake --build build -j
+      - run: ctest --test-dir build --output-on-failure
+      - name: the plugin is optional, so this build must have skipped it
+        run: |
+          grep -q 'skipping the plugin' configure.log
+          test ! -e build/libgstvgacap.so
+          ! ctest --test-dir build -N | grep -q gst_plugin_inspect
+
   python:
-    runs-on: ubuntu-latest
+    name: Python suite, no GStreamer
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      # build/vgacap-frames is the reference renderer several Python tests
+      # compare against; the plugin tests skip without a plugin to load.
       - run: cmake -S . -B build && cmake --build build -j
+      - name: this job is the no-GStreamer configuration
+        run: |
+          ! command -v gst-launch-1.0
+          test ! -e build/libgstvgacap.so
       - run: uv run pytest -q
+
+  gstreamer:
+    name: GStreamer plugin
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: install GStreamer
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-tools \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-base-apps \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            gstreamer1.0-x \
+            xvfb \
+            gir1.2-gstreamer-1.0 \
+            python3-gi \
+            strace
+      # What each package is for, so a future trim can be reasoned about:
+      #   libgstreamer1.0-dev, libgstreamer-plugins-base1.0-dev
+      #       the headers and .pc files gst/CMakeLists.txt looks for
+      #       (gstreamer-1.0, gstreamer-base-1.0, gstreamer-video-1.0)
+      #   gstreamer1.0-tools            gst-inspect-1.0, gst-launch-1.0
+      #   gstreamer1.0-plugins-base-apps gst-discoverer-1.0, which the demo
+      #                                  tests ask for the video's duration
+      #   plugins-base                  videoconvert, videorate, filesrc
+      #   plugins-good                  pngenc, jpegenc, multipartmux,
+      #                                 multifilesink, matroskamux, vp8enc
+      #   plugins-bad                   the muxers the plan's HLS view wants
+      #   plugins-ugly                  x264enc, the demo's first-choice
+      #                                 encoder; without it only the vp8
+      #                                 fallback would ever be exercised
+      #   libav                         an H.264 decoder: gst-discoverer-1.0
+      #                                 reports no duration for a file it
+      #                                 cannot decode, and the video tests
+      #                                 read the duration from it
+      #   xvfb, gstreamer1.0-x          a display for the --window tests,
+      #                                 and ximagesink to draw on it.
+      #                                 autovideosink otherwise segfaults:
+      #                                 with no display, and under xvfb by
+      #                                 picking the GL sink, which has no GL
+      #                                 there (hence the rank override below)
+      #   python3-gi, gir1.2-gstreamer-1.0
+      #       gst-python, for the seek and stop probes that drive the element
+      #       from a real pipeline instead of gst-launch
+      #   strace                        the test that proves no signal is sent
+      #                                 to a reaped process group
+      - run: cmake -S . -B build && cmake --build build -j
+      - name: the plugin must have been built here
+        run: test -e build/libgstvgacap.so
+      - run: ctest --test-dir build --output-on-failure
+      # pyproject's testpaths covers python/tests and gst/tests, so one run
+      # is both suites. A skip is a pass to pytest, so the plugin and
+      # hardware-check tests skipping here -- a missing package, a plugin
+      # that failed to load -- would go unnoticed; -rs lists every skip and
+      # the next step refuses any in those suites.
+      - name: pytest
+        env:
+          GST_PLUGIN_FEATURE_RANK: ximagesink:MAX
+        run: |
+          set -o pipefail
+          xvfb-run -a uv run pytest -q -rs 2>&1 | tee pytest.log
+      - name: nothing GStreamer-dependent was skipped
+        run: "! grep -E '^SKIPPED .*(gst/tests/|test_hil.py)' pytest.log"

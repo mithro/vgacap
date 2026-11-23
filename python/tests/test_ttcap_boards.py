@@ -120,7 +120,7 @@ def test_welland_tt07():
 
 
 def test_welland_fpga1():
-    assert WELLAND["fpga-1"] == ("pi-sw2-p33", RP2350_DBV3)
+    assert WELLAND["fpga-1"] == ("pi-sw2-p34", RP2350_DBV3)
 
 
 def test_daemon_url():
@@ -128,7 +128,7 @@ def test_daemon_url():
 
 
 def test_bridge_ws_url():
-    assert bridge_ws_url("fpga-1") == "ws://10.21.2.33:8765/serial"
+    assert bridge_ws_url("fpga-1") == "ws://10.21.2.34:8765/serial"
 
 
 def test_push_thresh_is_a_full_fifo_word_of_samples():

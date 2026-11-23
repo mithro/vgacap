@@ -148,6 +148,15 @@ def profile_from_gpio_map(m: dict[str, int]) -> BoardProfile:
 
 
 # slug -> (fpgas.online power-switch pin name, expected BoardProfile)
+#
+# Boards move between switch ports. The FPGA entries were checked on
+# 2026-11-23 against each board's page on tinytapeout.fpgas.online
+# (`/board/<slug>/`, which names its Pi) and `status.json` (USB serial):
+# fpga-1 is 4df39a7a6856f86f on p34, fpga-4 a2961e5cac65b25f on p35, fpga-3
+# 8c46329b33590ecb on p36. p33, fpga-1's old port, now carries a different
+# board (tt-fd1a167bd863a198). fpga-2 is omitted: it is unreachable and its
+# page names no Pi, so any port given here would be a guess. The RP2040
+# entries date from 2026-09-15 and those Pis were unpowered on 2026-11-21.
 WELLAND: dict[str, tuple[str, BoardProfile]] = {
     "tt03p5": ("pi-sw2-p3", RP2040_TT06),
     "tt04": ("pi-sw2-p4", RP2040_TT06),
@@ -155,10 +164,9 @@ WELLAND: dict[str, tuple[str, BoardProfile]] = {
     "tt06": ("pi-sw2-p6", RP2040_TT06),
     "tt07": ("pi-sw2-p7", RP2040_TT06),
     "tt08": ("pi-sw2-p8", RP2040_TT06),
-    "fpga-1": ("pi-sw2-p33", RP2350_DBV3),
-    "fpga-2": ("pi-sw2-p34", RP2350_DBV3),
-    "fpga-3": ("pi-sw2-p35", RP2350_DBV3),
-    "fpga-4": ("pi-sw2-p36", RP2350_DBV3),
+    "fpga-1": ("pi-sw2-p34", RP2350_DBV3),
+    "fpga-3": ("pi-sw2-p36", RP2350_DBV3),
+    "fpga-4": ("pi-sw2-p35", RP2350_DBV3),
 }
 
 

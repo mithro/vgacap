@@ -184,6 +184,46 @@ def test_both_failing_shuttle_spellings_raise():
         select_project(repl, request(project="nope"))
 
 
+def test_a_design_the_daemon_already_enabled_is_accepted():
+    # fpga-4, 2026-11-23: a bitstream uploaded through fpgas-tt is loaded
+    # (tt.shuttle.enabled names it) but is no shuttle entry, so both
+    # enable spellings fail. That is the state that was asked for.
+    check = ("print(getattr(getattr(tt.shuttle, 'enabled', None), "
+             "'name', None) == 'tt_um_vgacal_bars')")
+    board = FakeChunkBoard(
+        [],
+        errors={
+            "tt.shuttle['tt_um_vgacal_bars'].enable()": "KeyError\r\n",
+            "getattr(tt.shuttle, 'tt_um_vgacal_bars').enable()":
+                "AttributeError: What is 'tt_um_vgacal_bars'?\r\n",
+        },
+        replies={check: "True\r\n"},
+    )
+    repl = connect(board)
+
+    did = select_project(repl, request(profile=RP2350_DBV3, design="tt_um_vgacal_bars"))
+
+    assert did["enable"] == "already enabled"
+    assert board.commands[2] == check
+    # And the clock is still set up and reset released.
+    assert "tt.reset_project(False)" in board.commands
+
+
+def test_an_unknown_design_that_is_not_enabled_says_how_to_load_it():
+    board = FakeChunkBoard(
+        [],
+        errors={
+            "tt.shuttle['x'].enable()": "KeyError\r\n",
+            "getattr(tt.shuttle, 'x').enable()": "AttributeError: What is 'x'?\r\n",
+        },
+    )
+    repl = connect(board)
+
+    with pytest.raises(CaptureError, match="enabled through the board's daemon"):
+        select_project(repl, request(design="x"))
+    assert "tt.reset_project(False)" not in board.commands
+
+
 def test_stop_clock_sends_one_command():
     board = FakeChunkBoard([])
     repl = connect(board)
