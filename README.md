@@ -266,7 +266,8 @@ the success it is.
 ### Reaching a Welland board
 
 `--board` takes a slug from the `WELLAND` table (`tt03p5`, `tt04`..`tt08`,
-`fpga-1`..`fpga-4`) and resolves it to a link:
+`fpga-1`, `fpga-3`, `fpga-4`; ports move, see the comment on `WELLAND`)
+and resolves it to a link:
 
 * **on the board's own Pi**, `serial:/dev/ttboard` -- stop the fpgas.online
   bridge first (`sudo systemctl stop fpgas-tt`), since it holds the device

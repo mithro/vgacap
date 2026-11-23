@@ -35,7 +35,7 @@ hang: every command has a timeout.
 Run it as `tools/hil.sh REPORT [options]`, or directly under uv:
 
     uv run tools/hil.py --board fpga-1 --design tt_um_vgacal_bars \\
-        --clock-hz 500000 --link ws://127.0.0.1:18733/serial \\
+        --clock-hz 500000 --link ws://127.0.0.1:18034/serial \\
         docs/results/
 
 Exit status: 0 every check passed, 1 at least one failed, 2 it could not
