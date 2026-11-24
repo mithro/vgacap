@@ -33,6 +33,10 @@ add_subdirectory(gst)
 option(VGACAP_HOST_EXTRAS "Build the vendored host-only libraries" ON)
 if(VGACAP_HOST_EXTRAS)
   add_subdirectory(third_party)
+  # --- trace: the simulation trace writer (src/trace), host only ---
+  find_package(Threads REQUIRED)
+  add_library(vgacap_trace STATIC src/trace/trace_write.c src/trace/blocks.c)
+  target_link_libraries(vgacap_trace PUBLIC vgacap_stream vgacap_zstd Threads::Threads)
 endif()
 
 function(vgacap_add_test name)
@@ -61,6 +65,15 @@ vgacap_add_test(test_stream_v2)
 if(VGACAP_HOST_EXTRAS)
   vgacap_add_test(test_third_party)
   target_link_libraries(test_third_party PRIVATE vgacap_zstd vgacap_zlib vgacap_fst vgacap_sha256)
+  # The trace writer: a zstd seekable file of VGCH v2 blocks (src/trace).
+  vgacap_add_test(test_trace_write)
+  target_link_libraries(test_trace_write PRIVATE vgacap_trace)
+  set_tests_properties(test_trace_write PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+  # Timing, meaningful only on big-storage: labelled perf, kept out of CI
+  # (ctest -LE perf) and run by hand.
+  add_test(NAME test_trace_push_speed COMMAND test_trace_write --speed)
+  set_tests_properties(test_trace_push_speed PROPERTIES
+    LABELS perf WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()
 
 # --- firmware: the pico-sdk capture firmware's portable core (firmware/core),

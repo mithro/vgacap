@@ -33,7 +33,7 @@ jobs:
           set -o pipefail
           cmake -S . -B build 2>&1 | tee configure.log
       - run: cmake --build build -j
-      - run: ctest --test-dir build --output-on-failure
+      - run: ctest --test-dir build --output-on-failure -LE perf
       - name: the plugin is optional, so this build must have skipped it
         run: |
           grep -q 'skipping the plugin' configure.log
@@ -185,7 +185,7 @@ jobs:
       - run: cmake -S . -B build && cmake --build build -j
       - name: the plugin must have been built here
         run: test -e build/libgstvgacap.so
-      - run: ctest --test-dir build --output-on-failure
+      - run: ctest --test-dir build --output-on-failure -LE perf
       # pyproject's testpaths covers python/tests and gst/tests, so one run
       # is both suites. A skip is a pass to pytest, so the plugin and
       # hardware-check tests skipping here -- a missing package, a plugin
