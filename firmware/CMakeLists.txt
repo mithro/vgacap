@@ -47,7 +47,7 @@ target_include_directories(vgacap_fw PRIVATE
 target_link_libraries(vgacap_fw PRIVATE
   pico_stdlib pico_unique_id pico_bootrom
   hardware_pio hardware_dma hardware_pwm hardware_clocks hardware_watchdog
-  tinyusb_device tinyusb_board)
+  tinyusb_device)
 # Our sources only: the SDK's are compiled into the same target and are
 # not ours to hold to -Werror.
 set_source_files_properties(${FW_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror")

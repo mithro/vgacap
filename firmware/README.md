@@ -85,6 +85,10 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   stock firmware picks for that clock (a whole multiple of it whenever one
   exists: 100 MHz for 25 MHz), which frame capture's phase-locked sampler
   needs.
+* Project clocks above 66.5 MHz raise the system clock to twice the
+  project clock (up to 250 MHz), as the stock firmware does; like
+  MicroPython's `machine.freq` (checked at b006887db6), nothing raises the
+  core voltage for that. Only 100 MHz has been used on the boards so far.
 * The capture buffer is a 440 KB static array: a whole 640x480@60 picture
   region (481 lines of 800 samples) is one capture; 800x600 takes two
   windows per picture.

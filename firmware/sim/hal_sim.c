@@ -211,6 +211,7 @@ int hal_write(const uint8_t *buf, size_t len) {
 }
 
 void hal_flush(void) {}
+int hal_host_gone(void) { return 0; }
 
 // ---- the board ------------------------------------------------------------------
 

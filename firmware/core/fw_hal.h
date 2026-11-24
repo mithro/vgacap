@@ -31,6 +31,9 @@ void hal_wait_input(void);
 int hal_write(const uint8_t *buf, size_t len);
 // Push anything buffered towards the host.
 void hal_flush(void);
+// True when the host has gone away (closed the port, was unplugged): a
+// capture waiting for a window that never comes must still notice that.
+int hal_host_gone(void);
 
 // ---- the board -------------------------------------------------------------
 

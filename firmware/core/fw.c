@@ -99,8 +99,12 @@ static void out_done(out_t *o) {
 
 // One byte per call, as prelude.py's stop_requested() reads one: a stop
 // byte ends the capture, anything else is dropped. Never blocks.
-static int stop_requested(const out_t *o) {
+static int stop_requested(out_t *o) {
     if (o->lost) return 1;
+    if (hal_host_gone()) {
+        o->lost = 1;
+        return 1;
+    }
     int c = hal_read_byte();
     return c == FW_STOP_BYTE || c == FW_STOP_BYTE_HUMAN;
 }

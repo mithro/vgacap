@@ -56,6 +56,11 @@ int hal_write(const uint8_t *buf, size_t len) {
     return 0;
 }
 
+int hal_host_gone(void) {
+    tud_task();
+    return !tud_cdc_connected();
+}
+
 void hal_flush(void) {
     tud_cdc_write_flush();
     tud_task();
@@ -144,6 +149,8 @@ static uint32_t rxstall_bit(void) { return 1u << (PIO_FDEBUG_RXSTALL_LSB + P.sm)
 // Load `prog` and configure the state machine, inputs from uo_out[0].
 // pico-sdk relocates each `wait gpio` for the window at 16, exactly as
 // MicroPython's loader does (pio.c add_program_at_offset).
+static void unload(void);
+
 static int load(const fw_pio_program_t *prog, unsigned pio, unsigned sm, const char **why) {
     P.pio = pio_block(pio);
     P.sm = sm;
@@ -169,7 +176,11 @@ static int load(const fw_pio_program_t *prog, unsigned pio, unsigned sm, const c
     sm_config_set_wrap(&c, (uint)P.offset + prog->wrap_target, (uint)P.offset + prog->wrap);
     c.shiftctrl = prog->shiftctrl;  // asm_pio's packing (fw_pio.h)
     pio_sm_set_enabled(P.pio, P.sm, false);
-    pio_sm_init(P.pio, P.sm, (uint)P.offset, &c);
+    if (pio_sm_init(P.pio, P.sm, (uint)P.offset, &c) != PICO_OK) {
+        unload();
+        *why = "the state machine configuration does not fit the PIO's GPIO window";
+        return -1;
+    }
     return 0;
 }
 
