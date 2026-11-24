@@ -97,6 +97,19 @@ size_t vgacap_leb128_put(uint8_t *p, uint64_t v);
 // One RUNS pair: `vbytes` = (sample_bits + 7) / 8 little-endian value bytes,
 // then the LEB128 run. Returns the bytes written (vbytes + 1..10).
 size_t vgacap_run_pair_put(uint8_t *p, uint64_t value, unsigned vbytes, uint64_t run);
+// The same two encoders inline, for a caller whose loop is the hot path (the
+// trace writer, a pair per run). vgacap_leb128_put and vgacap_run_pair_put
+// are these; there is one implementation.
+static inline size_t vgacap_leb128_put_inline(uint8_t *p, uint64_t v) {
+    size_t n = 0;
+    while (v >= 0x80u) { p[n++] = (uint8_t)(v | 0x80u); v >>= 7; }
+    p[n++] = (uint8_t)v;
+    return n;
+}
+static inline size_t vgacap_run_pair_put_inline(uint8_t *p, uint64_t value, unsigned vbytes, uint64_t run) {
+    for (unsigned i = 0; i < vbytes; i++) p[i] = (uint8_t)(value >> (8u * i));
+    return vbytes + vgacap_leb128_put_inline(p + vbytes, run);
+}
 
 // Pack n samples into 32-bit words per the header's packing; words must hold
 // ceil(n / samples_per_word) entries. Returns the number of words written.
