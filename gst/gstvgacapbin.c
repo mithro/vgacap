@@ -42,7 +42,10 @@ enum {
     PROP_BUF_WORDS,
     PROP_SECONDS,
     PROP_TTCAP_COMMAND,
-    PROP_STOP_TIMEOUT
+    PROP_STOP_TIMEOUT,
+    PROP_CAPTURE_MODE,
+    PROP_VGA_MODE,
+    PROP_WINDOW_LINES
 };
 
 struct _GstVgaCapBin {
@@ -79,6 +82,9 @@ static const gchar *forwarded_name(guint prop_id)
     case PROP_SECONDS: return "seconds";
     case PROP_TTCAP_COMMAND: return "ttcap-command";
     case PROP_STOP_TIMEOUT: return "stop-timeout";
+    case PROP_CAPTURE_MODE: return "capture-mode";
+    case PROP_VGA_MODE: return "vga-mode";
+    case PROP_WINDOW_LINES: return "window-lines";
     default: return NULL;
     }
 }
@@ -103,7 +109,7 @@ static const gchar *forwarded_name(guint prop_id)
  */
 static const gchar *const URI_SETTABLE[] = {
     "project", "design", "clock-hz", "profile", "pio", "buf-words", "seconds",
-    "stop-timeout", NULL
+    "stop-timeout", "capture-mode", "vga-mode", "window-lines", NULL
 };
 
 static gboolean uri_may_set(const gchar *name)
@@ -421,6 +427,21 @@ static void gst_vgacapbin_class_init(GstVgaCapBinClass *klass)
                             "closed and, failing that, the child is killed. Allow at "
                             "least one DMA buffer for the board to wind down",
                             0.0, 600.0, 15.0, rw));
+    g_object_class_install_property(gobject_class, PROP_CAPTURE_MODE,
+        g_param_spec_string("capture-mode", "Capture mode",
+                            "ttcap capture --mode: stream (every clock, at a rate the "
+                            "link carries), frame (whole frames at the design's real "
+                            "clock) or window (frames swept in window-lines windows)",
+                            "stream", rw));
+    g_object_class_install_property(gobject_class, PROP_VGA_MODE,
+        g_param_spec_string("vga-mode", "VGA mode",
+                            "frame/window modes: the VGA timing to expect, e.g. "
+                            "800x600@60; empty leaves ttcap's default (640x480@60)",
+                            "", rw));
+    g_object_class_install_property(gobject_class, PROP_WINDOW_LINES,
+        g_param_spec_int("window-lines", "Window lines",
+                         "frame/window modes: most lines per captured frame; 0 "
+                         "leaves ttcap's default", 0, 4096, 0, rw));
 
     element_class->change_state = GST_DEBUG_FUNCPTR(gst_vgacapbin_change_state);
 
