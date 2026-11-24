@@ -63,6 +63,7 @@ from .capture import (
 )
 from .firmware import FIRMWARES, FirmwareLink, FirmwareSession
 from . import firmware as fwproto
+from . import module as mpmodule
 from .demo import add_parser as add_demo_parser, demo
 from .repl import LinkClosed, RawRepl, ReplFramingError, ReplLink, SerialLink, WebSocketLink
 from .throughput import DEFAULT_BLOCK, DEFAULT_TOTAL, ThroughputResult, measure_throughput
@@ -477,6 +478,29 @@ class _MicroPythonBoard:
         self.repl.exit()
 
 
+class _ModuleBoard(_MicroPythonBoard):
+    """The stock firmware built with the vgacap module (`ttcap.module`).
+
+    The MicroPython path in every respect but the capture itself, which is
+    one call into the module instead of a shipped script; a firmware without
+    the module is refused before anything is set up.
+    """
+
+    def __init__(self, link: ReplLink) -> None:
+        super().__init__(link)
+        try:
+            mpmodule.probe(self.repl)
+        except BaseException:
+            self.repl.exit()
+            raise
+
+    def session(self, request: CaptureRequest) -> CaptureSession:
+        return mpmodule.ModuleSession(self.repl, request)
+
+    def run_to_file(self, request: CaptureRequest, fp) -> CaptureStats:
+        return run_session(self.session(request), fp)
+
+
 class _FirmwareBoard:
     """The pico-sdk capture firmware (`firmware/`, `ttcap.firmware`)."""
 
@@ -563,7 +587,8 @@ def capture(
         raise ValueError(f"firmware must be one of {FIRMWARES}, got {firmware!r}")
     link = link_from_url(url)
     try:
-        driver = _FirmwareBoard(link) if firmware == "picosdk" else _MicroPythonBoard(link)
+        drivers = {"picosdk": _FirmwareBoard, mpmodule.FIRMWARE: _ModuleBoard}
+        driver = drivers.get(firmware, _MicroPythonBoard)(link)
         try:
             board = driver.profile(profile)
             if mode not in CAPTURE_MODES:
@@ -814,9 +839,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=FIRMWARES,
         default="micropython",
         help="what runs on the board: micropython, the stock firmware driven "
-        "through its raw REPL (default), or picosdk, the vgacap capture "
-        "firmware (firmware/README.md), which keeps whatever design is "
-        "loaded and cannot take --project/--design",
+        "through its raw REPL (default); mpy-module, a demo-board firmware "
+        "built with the vgacap MicroPython module (mpy/README.md), driven "
+        "the same way but capturing through the module; or picosdk, the "
+        "vgacap capture firmware (firmware/README.md), which keeps whatever "
+        "design is loaded and cannot take --project/--design",
     )
     capture_parser.add_argument(
         "--profile",
