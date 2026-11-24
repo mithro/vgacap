@@ -80,6 +80,40 @@ jobs:
       - run: cmake --build firmware/build
       - run: test -s firmware/build/vgacap_fw.uf2
 
+  # The vgacap MicroPython module (mpy/): built into MicroPython's unix port
+  # on the simulated board (mpy/build-unix.sh, at the MicroPython the boards
+  # run) and driven by python/tests/test_mpy_module.py, which must not skip
+  # here; and built into the rp2 port for the demo board, with -Werror on
+  # its own sources (micropython.cmake), as the firmware fork's release
+  # build does.
+  mpy-module:
+    name: MicroPython module (unix sim + rp2)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: install the ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
+      - run: cmake -S . -B build && cmake --build build -j
+      - run: mpy/build-unix.sh
+      - name: the module's tests
+        env:
+          VGACAP_REQUIRE_MPY_UNIX: "1"
+        run: uv run pytest -q python/tests/test_mpy_module.py
+      - name: rp2 port, Tiny Tapeout demo board v3
+        env:
+          BOARD_COMMIT: 596f456  # psychogenic/tinytapeout_rp2350b
+        run: |
+          git clone -q https://github.com/psychogenic/tinytapeout_rp2350b.git build/tt_rp2350_board
+          git -C build/tt_rp2350_board checkout -q "$BOARD_COMMIT"
+          cp -r build/tt_rp2350_board build/micropython/ports/rp2/boards/tt_rp2350_board
+          make -C build/micropython/ports/rp2 BOARD=tt_rp2350_board submodules
+          make -C build/micropython/ports/rp2 -j"$(nproc)" BOARD=tt_rp2350_board \
+            USER_C_MODULES="$PWD/mpy/micropython.cmake"
+
   python:
     name: Python suite, no GStreamer
     runs-on: ubuntu-24.04
