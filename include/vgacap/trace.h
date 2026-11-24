@@ -68,6 +68,57 @@ int vgacap_trace_finish(vgacap_trace_writer_t *t, const char *close_meta, char *
 // Frees `t` without a closing chunk or seek table (what a kill leaves, for tests).
 void vgacap_trace_abandon(vgacap_trace_writer_t *t);
 
+// ---- reader -----------------------------------------------------------------
+//
+// Reads a trace (zstd magic 28 b5 2f fd) or a plain VGCH stream (magic
+// "VGCH", version 1 or 2: one pseudo-block, decoded from the start for any
+// range). The file is mmap'ed read-only.
+//
+// A trace's blocks come from its seek table. If the table is missing or does
+// not match the frames (a trace cut short by a kill), the reader walks the
+// frames instead and keeps every complete one up to the first that is
+// incomplete or, for the last, fails its checksum; then table_rebuilt is 1.
+// Each block's first sample is its BLKH, read by decompressing only the
+// start of its frame; the last block is decompressed whole, for its sample
+// count and META(close). The other frames' checksums are checked when a
+// read decompresses them.
+
+typedef struct vgacap_trace_info {
+    vgacap_header_t header;
+    const char *open_meta;    // text of META(open) or NULL
+    const char *close_meta;   // NULL when the trace was cut short
+    uint64_t samples;         // samples in the complete blocks
+    uint32_t blocks;
+    uint8_t  compressed;      // 0 for a plain VGCH file
+    uint8_t  table_rebuilt;   // 1 if the seek table was missing or bad
+} vgacap_trace_info_t;
+
+typedef struct vgacap_trace_reader vgacap_trace_reader_t;
+// value: the run's 64-bit value with the clock bit of its first sample;
+// return nonzero to stop.
+typedef int (*vgacap_trace_run_fn)(void *user, uint64_t first_sample, uint64_t value, uint64_t run);
+
+// Returns NULL with `err` set if the file cannot be read or is neither a
+// trace nor a VGCH stream, or if a trace's first block has no VGCH, META(open)
+// and BLKH(0).
+vgacap_trace_reader_t *vgacap_trace_open(const char *path, char *err, size_t errlen);
+const vgacap_trace_info_t *vgacap_trace_info(const vgacap_trace_reader_t *r);
+// Delivers every run overlapping [from, to), clipped to it, in order: a run
+// cut at `from` starts there, its clock bit adjusted to that sample. Runs
+// end at block boundaries (the writer splits them there), so two
+// consecutive runs may have the same value. Returns 0 (also when `fn`
+// stopped it), or -1 with `err` set: a frame that fails to decompress or
+// its checksum, or a block whose chunks the stream reader reports as
+// damaged. A plain stream's resynchronisations are not errors (vgacap-dump
+// reports them; the samples after one keep their running numbers).
+int vgacap_trace_read(vgacap_trace_reader_t *r, uint64_t from, uint64_t to,
+                      vgacap_trace_run_fn fn, void *user, char *err, size_t errlen);
+// Block `i`'s uncompressed bytes (for a plain stream, block 0 is the whole
+// file), valid until the next call on `r`. Returns 0, or -1 with `err` set.
+int vgacap_trace_block_data(vgacap_trace_reader_t *r, uint32_t i, const uint8_t **data, size_t *len,
+                            char *err, size_t errlen);
+void vgacap_trace_close(vgacap_trace_reader_t *r);
+
 #ifdef __cplusplus
 }
 #endif
