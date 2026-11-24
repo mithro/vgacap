@@ -74,6 +74,10 @@ typedef struct samp {
     uint32_t *ht; size_t ht_cap;        // open addressing: distinct index + 1, 0 empty
     vgaout_frame_t *frames; size_t nf, capf;
     uint16_t w, h;
+    // The last frame's pixels and distinct index: a frame with the same
+    // pixels has the same SHA-256, so it is that distinct frame again
+    // without hashing (still and repeating pictures are the common case).
+    uint8_t *last; int64_t last_d;
 } samp_t;
 
 struct tool {
@@ -187,6 +191,17 @@ static void ht_put(samp_t *s, size_t idx) {
     s->ht[i] = (uint32_t)(idx + 1);
 }
 
+// Frame f->number is distinct frame d (gaps before it are -1).
+static void frame_record(samp_t *s, const vgasample_frame_t *f, int64_t d) {
+    s->frames = grow(s->frames, &s->capf, (size_t)f->number + 1, sizeof *s->frames);
+    while (s->nf < f->number) {
+        vgaout_frame_t gap = { -1, 0, 0 };
+        s->frames[s->nf++] = gap;
+    }
+    vgaout_frame_t rec = { d, f->start_clock, f->missing };
+    s->frames[s->nf++] = rec;
+}
+
 static void on_frame(void *user, const vgasample_frame_t *f) {
     samp_t *s = user;
     tool_t *t = s->tool;
@@ -200,6 +215,10 @@ static void on_frame(void *user, const vgasample_frame_t *f) {
     }
     if (f->number < s->nf) {
         fail(t, "%s: frame %" PRIu64 " after frame %zu", SAMPLER_NAMES[s->kind], f->number, s->nf - 1);
+        return;
+    }
+    if (s->last && !memcmp(s->last, f->rgb6, n)) {
+        frame_record(s, f, s->last_d);
         return;
     }
     uint8_t sha[32];
@@ -231,13 +250,10 @@ static void on_frame(void *user, const vgasample_frame_t *f) {
         sha256_update(&s->store_sha, f->rgb6, n);
         s->store_len += n;
     }
-    s->frames = grow(s->frames, &s->capf, (size_t)f->number + 1, sizeof *s->frames);
-    while (s->nf < f->number) {
-        vgaout_frame_t gap = { -1, 0, 0 };
-        s->frames[s->nf++] = gap;
-    }
-    vgaout_frame_t rec = { d, f->start_clock, f->missing };
-    s->frames[s->nf++] = rec;
+    if (!s->last && !(s->last = malloc(n))) { fprintf(stderr, PROG ": out of memory\n"); exit(1); }
+    memcpy(s->last, f->rgb6, n);
+    s->last_d = d;
+    frame_record(s, f, d);
 }
 
 // ---- the pass ----------------------------------------------------------------
@@ -558,7 +574,7 @@ int main(int argc, char **argv) {
     }
     for (int k = 0; k < S_N; k++) {
         samp_t *s = &t->s[k];
-        ZSTD_freeCCtx(s->cctx); free(s->zout); free(s->sha); free(s->fnv); free(s->ht); free(s->frames);
+        ZSTD_freeCCtx(s->cctx); free(s->zout); free(s->sha); free(s->fnv); free(s->ht); free(s->frames); free(s->last);
     }
     if (t->tb) tbv1_free(t->tb);
     if (t->cs) centrev1_free(t->cs);
