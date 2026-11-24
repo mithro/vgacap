@@ -11,6 +11,7 @@
 #include "vgacap/sample.h"
 #include "vgacap/time.h"
 #include <math.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -233,6 +234,8 @@ TEST(centre_cpp_rule) {
 TEST(centre_pixel_exact) {
     static const struct { uint64_t num, den; const char *cpp; int whole; } cases[] = {
         { 1, 1, "1", 1 }, { 2, 1, "2", 1 }, { 61, 32, "1.90625", 0 },
+        // b = a + width * cpp is not a half clock at these, unlike 1.90625.
+        { 19, 10, "1.9", 0 }, { 23, 10, "2.3", 0 },
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         gen_t g = frame_gen(&mode640, cases[i].num, cases[i].den, diag);
@@ -396,14 +399,30 @@ TEST(centre_glitch_gap) {
     run_free(&a); run_free(&b);
 }
 
-// Frames before capture_after_clock are in the trace but not the run's: none
-// is numbered, and every frame's numbered end is a counted one.
+// Frames before capture_after_clock are in the trace but not the run's. The
+// frame straddling it, f, starts (row 0, at the design's vpos 489, hpos 656)
+// before capture and has its vsync end (row 2's leading edge) before capture
+// too, but libvgaframe hands it over at frame f + 1's start, after
+// centrev1_calibrated: it must not take a number, so the first frame
+// numbered (0) is f + 1, attached to the frame clock's first end.
 TEST(centre_ignores_frames_before_capture) {
     gen_t g = frame_gen(&mode640, 1, 1, diag);
     run_t r;
     feed(&g, frames_clocks(&mode640, 1, 1, 9), 1.0, 0, 0, &r);
-    ASSERT_TRUE(r.cal.capture_after_clock > 3 * 420000ull);   // three frames before capture
+    const uint64_t P = 420000, row0 = 489 * 800 + 656;
+    const uint64_t cap = r.cal.capture_after_clock;
+    ASSERT_TRUE(cap > 3 * P);                                  // three frames before capture
+    const uint64_t f = (cap - RESET - row0) / P;               // S_f <= cap < S_{f+1}
+    const uint64_t s_f = RESET + f * P + row0, s_next = s_f + P;
+    fprintf(stderr, "  capture %llu straddled by the frame from %llu to %llu\n",
+            (unsigned long long)cap, (unsigned long long)s_f, (unsigned long long)s_next);
+    ASSERT_TRUE(s_f < cap && cap < s_next);
+    ASSERT_TRUE(s_f + 2 * 800 + 96 < cap);                     // its row v ended before capture
     ASSERT_TRUE(r.got.n >= 2);
+    ASSERT_EQ_U(r.got.start[0], s_next);
+    ASSERT_EQ_U(r.got.number[0], 0);
+    ASSERT_EQ_U(r.fc.ends[0], s_next + 2 * 800);
+    for (size_t i = 0; i < r.got.n; i++) ASSERT_TRUE(r.got.start[i] != s_f);
     for (size_t i = 0; i < r.got.n; i++) {
         ASSERT_TRUE(r.got.number[i] < r.fc.n);
         ASSERT_TRUE(r.fc.ends[r.got.number[i]] > r.cal.capture_after_clock);
@@ -474,6 +493,58 @@ TEST(centre_bad_timing) {
     run_free(&r);
 }
 
+// The spec's bounds, for the window the timing gives: 720-clock lines with a
+// 96-clock hsync and 525 lines match 640x480@60 (cpp_l 0.9), step 2 gives
+// cpp 1, so B = 720 - 96 - 640 = -16 and hback' = -12: the window would start
+// inside the hsync pulse. Bad timing, with the mode and cpp.
+TEST(centre_bounds_bad_timing) {
+    static const vgaframe_mode_t m720 = { "m720", 600, 8, 96, 16, 480, 10, 2, 33, 0, 0, 0 };
+    gen_t g = frame_gen(&m720, 1, 1, diag);
+    run_t r;
+    feed(&g, frames_clocks(&m720, 1, 1, 6), 1.0, 0, 0, &r);
+    ASSERT_EQ_U(r.L, 720); ASSERT_EQ_U(r.cal.hs.pulse, 96); ASSERT_EQ_U(r.lines, 525);
+    ASSERT_EQ_U(r.geo.ok, 0);
+    ASSERT_TRUE(!strcmp(r.geo.status, "bad-timing"));
+    ASSERT_TRUE(!strcmp(r.geo.mode, "640x480@60"));
+    ASSERT_TRUE(cpp_is(&r.geo, "1"));
+    ASSERT_EQ_U(r.geo.width, 0); ASSERT_EQ_U(r.geo.height, 0);
+    ASSERT_EQ_U(r.got.n, 0);
+    run_free(&r);
+}
+
+// An override past each edge (640x480@60 at cpp 1: hback' 48, vback' 33,
+// 800 clocks, 525 lines, a 2-line pulse) is "bad-window"; one exactly at each
+// edge is ok; INT_MAX / INT_MIN neither overflow nor pass.
+TEST(centre_bad_window) {
+    static const struct { int dx, dy; int ok; } cases[] = {
+        { -49, 0, 0 }, { -48, 0, 1 },      // left: hback' + dx >= 0
+        { 17, 0, 0 }, { 16, 0, 1 },        // right: 96 + 48 + dx + 640 <= 800
+        { 0, -34, 0 }, { 0, -33, 1 },      // top: vback' + dy >= 0
+        { 0, 11, 0 }, { 0, 10, 1 },        // bottom: 2 + 33 + dy + 480 <= 525
+        { INT_MAX, INT_MAX, 0 }, { INT_MIN, INT_MIN, 0 },
+    };
+    gen_t g = frame_gen(&mode640, 1, 1, diag);
+    uint64_t clocks = frames_clocks(&mode640, 1, 1, 6);
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        run_t r;
+        feed(&g, clocks, 1.0, cases[i].dx, cases[i].dy, &r);
+        fprintf(stderr, "  dx %d dy %d: %s\n", cases[i].dx, cases[i].dy, r.geo.status);
+        ASSERT_EQ_U(r.geo.ok, cases[i].ok);
+        ASSERT_TRUE(!strcmp(r.geo.status, cases[i].ok ? "ok" : "bad-window"));
+        ASSERT_TRUE(!strcmp(r.geo.mode, "640x480@60"));
+        ASSERT_TRUE(cpp_is(&r.geo, "1"));
+        if (cases[i].ok) {
+            ASSERT_EQ_U(r.geo.hback, 48 + cases[i].dx); ASSERT_EQ_U(r.geo.vback, 33 + cases[i].dy);
+            ASSERT_TRUE(r.got.n >= 1);
+            ASSERT_EQ_U(r.got.missing[0], 0);
+        } else {
+            ASSERT_EQ_U(r.geo.width, 0); ASSERT_EQ_U(r.geo.height, 0);
+            ASSERT_EQ_U(r.got.n, 0);
+        }
+        run_free(&r);
+    }
+}
+
 int main(void) {
     size_t count;
     const vgaframe_mode_t *modes = vgaframe_modes(&count);
@@ -493,6 +564,8 @@ int main(void) {
     RUN(centre_drops_cut_last_frame);
     RUN(centre_no_sync);
     RUN(centre_bad_timing);
+    RUN(centre_bounds_bad_timing);
+    RUN(centre_bad_window);
     free(frame_buf);
     RUN_TESTS_END();
 }

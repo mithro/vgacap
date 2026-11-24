@@ -282,7 +282,10 @@ def run_centre(tmp_path, uo, rst_n, *, dx: int = 0, dy: int = 0, name: str = "c"
     assert float(g["cpp"]) == geo.cpp
     assert (int(g["width"]), int(g["height"]), int(g["hback"]), int(g["vback"])) == \
         (geo.width, geo.height, geo.hback, geo.vback)
-    assert (c["L"], c["lines"]) == (geo.line_clocks, geo.lines)
+    if geo.ok:
+        assert (c["L"], c["lines"]) == (geo.line_clocks, geo.lines)
+    else:
+        assert c["frames"] == []
     rgb, raw = rgb_path.read_bytes(), raw_path.read_bytes()
     size, rsize = geo.width * geo.height, geo.line_clocks * geo.lines
     assert len(rgb) == size * len(c["frames"]) and len(raw) == rsize * len(c["frames"])
@@ -343,6 +346,23 @@ def test_centre_below_one(centre_case):
         got = np.frombuffer(rgb6, dtype=np.uint8).reshape(480, 640)
         assert np.array_equal(got, want)
         assert not np.array_equal(got, diag(xx, yy))
+
+
+def test_centre_bounds(tmp_path):
+    """The spec's bounds, in C and centre.py alike (run_centre compares the
+    geometry): 720-clock lines with a 96-clock hsync give hback' = -12, bad
+    timing; an override past each edge of 640x480@60 at cpp 1 is bad-window,
+    and one exactly at it is ok."""
+    m720 = Mode("m720", 600, 8, 96, 16, 480, 10, 2, 33, False, False)
+    uo, rst = synthtrace.build(m720, R + 6 * m720.cpl * m720.lpf, pixel=diag)
+    geo, _, _ = run_centre(tmp_path, uo, rst, name="m720")
+    assert (geo.ok, geo.status, geo.mode, geo.cpp) == (False, "bad-timing", "640x480@60", 1.0)
+    uo, rst = synthtrace.build(M640, R + 6 * M640.cpl * M640.lpf, pixel=diag)
+    for dx, dy, status in ((-49, 0, "bad-window"), (17, 0, "bad-window"), (0, -34, "bad-window"),
+                           (0, 11, "bad-window"), (-48, -33, "ok"), (16, 10, "ok")):
+        geo, frames, _ = run_centre(tmp_path, uo, rst, dx=dx, dy=dy, name=f"w{dx}_{dy}")
+        assert geo.status == status and geo.mode == "640x480@60"
+        assert bool(frames) == (status == "ok")
 
 
 def test_centre_playground_phase(tmp_path):

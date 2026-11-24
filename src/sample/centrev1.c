@@ -54,14 +54,29 @@ static void *xcalloc(size_t n, size_t size) {
     return p;
 }
 
-// The diagnostics' boundary before pixel p of a window with back porch hb:
-// the clock edge nearest (hsync + hb + p) * cpp, floor(that + 0.5). At whole
-// cpp the product is a whole number of clocks and this is it exactly; at
-// fractional cpp the design's own boundaries are quantised to clocks too, by
-// up to one clock either way, and the nearest edge keeps a window's last
-// pixel inside it (1.90625: pixel 639 of 640x480@60 ends at 1494.5 clocks).
-static int64_t window_clock(const centrev1_t *s, int hb, int64_t p) {
-    return (int64_t)floor((s->hsync + (double)hb + (double)p) * s->cpp + 0.5);
+// The window's clocks: on the pick's clock axis the window spans
+// [a, b), a = (hsync + hb) * cpp and b = a + width * cpp, and its clocks are
+// those overlapping that span, [floor(a), ceil(b)). At whole cpp a and b are
+// whole and this is exactly the window; at fractional cpp it takes in the
+// clocks the design's pixels, quantised to clocks, can occupy at either end.
+// Used for the bounds check, outside, suggest and the colour changes.
+typedef struct span { int64_t lo, hi; } span_t;
+static span_t window_span(double hsync, double cpp, int64_t hb, int64_t width) {
+    const double a = (hsync + (double)hb) * cpp;
+    const double b = a + (double)width * cpp;
+    span_t sp = { (int64_t)floor(a), (int64_t)ceil(b) };
+    return sp;
+}
+
+// The spec's bounds: the window never starts inside the hsync or vsync
+// pulse and never extends past the line or the frame.
+static int window_fits(double hsync, double cpp, int64_t hb, int64_t vb, int64_t width, int64_t height,
+                       uint64_t L, uint64_t lines, uint64_t vpl) {
+    if (hb < 0 || vb < 0) return 0;
+    // Far beyond any line: also keeps the doubles below exact.
+    if (hb > (int64_t)L || vb > (int64_t)lines) return 0;
+    if (window_span(hsync, cpp, hb, width).hi > (int64_t)L) return 0;
+    return (int64_t)vpl + vb + height <= (int64_t)lines;
 }
 
 static void on_raw(void *user, const vgaframe_raw_t *r);
@@ -174,9 +189,14 @@ static void decide(centrev1_t *s, const vgacal_t *cal) {
         g->status = "bad-timing";
         return;
     }
+    // The bounds, first for the window the timing gives, then with the
+    // override (in int64: dx and dy may be anything an int holds).
+    if (!window_fits(hsync, cpp, hb, vb, width, height, L, lines, vpl)) { g->status = "bad-timing"; return; }
+    const int64_t hbd = (int64_t)hb + s->dx, vbd = (int64_t)vb + s->dy;
+    if (!window_fits(hsync, cpp, hbd, vbd, width, height, L, lines, vpl)) { g->status = "bad-window"; return; }
     g->ok = 1; g->status = "ok";
     g->width = (uint16_t)width; g->height = (uint16_t)height;
-    g->hback = hb + s->dx; g->vback = vb + s->dy;
+    g->hback = (int)hbd; g->vback = (int)vbd;
     s->L = L; s->lines = lines; s->vpl = vpl;
     s->cpp = cpp; s->hsync = hsync;
     s->hb0 = hb; s->vb0 = vb;
@@ -185,6 +205,11 @@ static void decide(centrev1_t *s, const vgacal_t *cal) {
 void centrev1_calibrated(centrev1_t *s, const vgacal_t *cal, const vgafc_t *fc) {
     if (cal->state != VGACAL_DONE || s->calibrated) {
         fprintf(stderr, "centrev1_calibrated: calibration not finished, or called twice\n");
+        abort();
+    }
+    if (s->next > cal->capture_after_clock) {
+        fprintf(stderr, "centrev1_calibrated: clocks up to %llu pushed, past capture_after_clock %llu\n",
+                (unsigned long long)s->next, (unsigned long long)cal->capture_after_clock);
         abort();
     }
     s->calibrated = 1;
@@ -279,7 +304,8 @@ static void on_raw(void *user, const vgaframe_raw_t *r) {
     // Colour changes inside the window, and those off the pixel grid.
     const int whole = s->cpp == floor(s->cpp);
     const int64_t icpp = (int64_t)s->cpp;
-    const int64_t xlo = window_clock(s, g->hback, 0), xhi = window_clock(s, g->hback, g->width);
+    const span_t sp = window_span(s->hsync, s->cpp, g->hback, g->width);
+    const int64_t xlo = sp.lo, xhi = sp.hi;
     const int64_t c0 = xlo > 1 ? xlo : 1, c1 = xhi < (int64_t)s->L ? xhi : (int64_t)s->L;
     for (uint32_t y = 0; y < g->height; y++) {
         const int64_t row = (int64_t)s->vpl + g->vback + (int64_t)y;
@@ -335,18 +361,19 @@ void centrev1_finish(centrev1_t *s, centrev1_diag_t *d) {
     const int64_t h = g->height, vpl = (int64_t)s->vpl;
     {
         const int64_t r0 = vpl + g->vback;
-        d->outside = total - lit_in(s, P, r0, r0 + h, window_clock(s, g->hback, 0),
-                                    window_clock(s, g->hback, g->width));
+        const span_t sp = window_span(s->hsync, s->cpp, g->hback, g->width);
+        d->outside = total - lit_in(s, P, r0, r0 + h, sp.lo, sp.hi);
     }
     // The offset from the window without the override that keeps it inside
-    // the line and the frame and out of the sync pulses.
+    // the line and the frame and out of the sync pulses (window_fits; the
+    // dy loop and the break below are its two upper bounds).
     int found = 0;
     uint64_t best = 0;
     for (int64_t dy = -(int64_t)s->vb0; vpl + s->vb0 + dy + h <= (int64_t)H; dy++) {
         const int64_t r0 = vpl + s->vb0 + dy;
         for (int64_t dx = -(int64_t)s->hb0; ; dx++) {
-            const int hb = (int)(s->hb0 + dx);
-            const int64_t c0 = window_clock(s, hb, 0), c1 = window_clock(s, hb, g->width);
+            const span_t sp = window_span(s->hsync, s->cpp, s->hb0 + dx, g->width);
+            const int64_t c0 = sp.lo, c1 = sp.hi;
             if (c1 > (int64_t)W) break;
             const uint64_t out = total - lit_in(s, P, r0, r0 + h, c0, c1);
             const int64_t l1 = llabs(dx) + llabs(dy), bl1 = (int64_t)abs(d->suggest_dx) + abs(d->suggest_dy);

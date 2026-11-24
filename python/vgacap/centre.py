@@ -14,7 +14,10 @@ colour | 0x80 when written, row 0 the first line of the vsync pulse, column
   number; 2. the smallest k >= 1 with the hsync pulse within 2 clocks of k
   times the mode's; 3. cpp_l); and the window (hback' = floor(B * hback /
   (hback + hfront) + 0.5) with B = L / cpp - hsync - width, the same
-  vertically), plus the override (dx, dy);
+  vertically), plus the override (dx, dy), with the bounds: the window
+  ([floor(a), ceil(b)) clocks, a = (hsync + hback') * cpp, b = a + width *
+  cpp) inside the line and frame and after the sync pulses, else
+  "bad-timing" (without the override) or "bad-window" (with it);
 - pick: pixel (p, y) is row vpulse_lines + vback' + y at clock
   floor((hsync + hback' + p + 0.5) * cpp), evaluated in that order; an
   unwritten clock, or one outside the line or the frame, is missing (0).
@@ -41,7 +44,7 @@ MAX_LINES = 1200
 @dataclass
 class Geometry:
     ok: bool
-    status: str                 # "ok", "no-sync" or "bad-timing"
+    status: str                 # "ok", "no-sync", "bad-timing" or "bad-window"
     mode: str = "unknown"
     cpp: float = 1.0
     width: int = 0
@@ -116,7 +119,30 @@ def geometry(hs: SyncInfo, vs: SyncInfo, dx: int = 0, dy: int = 0) -> Geometry:
     name = mode.name if mode is not None else "unknown"
     if not (16 <= width <= 4096 and 16 <= height <= 4096) or lines > MAX_LINES or L > MAX_LINE_CLOCKS:
         return Geometry(False, "bad-timing", name, cpp)
+    # The bounds: for the window the timing gives, then with the override.
+    if not window_fits(hsync, cpp, hb, vb, width, height, L, lines, vpl):
+        return Geometry(False, "bad-timing", name, cpp)
+    if not window_fits(hsync, cpp, hb + dx, vb + dy, width, height, L, lines, vpl):
+        return Geometry(False, "bad-window", name, cpp)
     return Geometry(True, "ok", name, cpp, width, height, hb + dx, vb + dy, hsync, vpl, L, lines)
+
+
+def window_span(hsync: float, cpp: float, hback: int, width: int) -> tuple[int, int]:
+    """The window's clocks, [floor(a), ceil(b)): those overlapping its span
+    [a, b) on the pick's clock axis, a = (hsync + hback) * cpp,
+    b = a + width * cpp."""
+    a = (hsync + float(hback)) * cpp
+    b = a + float(width) * cpp
+    return math.floor(a), math.ceil(b)
+
+
+def window_fits(hsync: float, cpp: float, hback: int, vback: int, width: int, height: int,
+                L: int, lines: int, vpl: int) -> bool:
+    """The spec's bounds: not starting inside a sync pulse, not past the line
+    or the frame."""
+    if hback < 0 or vback < 0 or hback > L or vback > lines:
+        return False
+    return window_span(hsync, cpp, hback, width)[1] <= L and vpl + vback + height <= lines
 
 
 def pick(raw: np.ndarray, geo: Geometry) -> tuple[bytes, int]:

@@ -97,7 +97,7 @@ typedef void (*vgasample_frame_fn)(void *user, const vgasample_frame_t *f);
 
 typedef struct vgasample_geometry {     // fixed at capture_after_clock
     int ok;                 // 0: no picture
-    const char *status;     // "no-sync" or "bad-timing" when !ok, else "ok"
+    const char *status;     // "no-sync", "bad-timing" or (centre-v1) "bad-window" when !ok, else "ok"
     const char *mode;       // table name or "unknown"
     double cpp; uint16_t width, height;
     int hback, vback;       // pixels / lines used (centre-v1: hback', vback')
@@ -154,10 +154,21 @@ void tbv1_free(tbv1_t *s);
 //   vpulse_lines, hback' = vback' = 0.
 // - bad-timing by size: width or height outside 16..4096, more than 1,200
 //   lines, or L above 7,596 clocks (the raw buffer).
+// - the window's clocks: on the pick's clock axis the window spans [a, b),
+//   a = (hsync + hback') * cpp, b = a + width * cpp; its clocks are those
+//   overlapping that, [floor(a), ceil(b)), in rows [vpulse_lines + vback',
+//   + height). At whole cpp that is the window exactly.
+// - bounds (the spec: the window never starts inside the hsync or vsync
+//   pulse and never extends past the line or the frame): hback' >= 0,
+//   vback' >= 0, ceil(b) <= L and vpulse_lines + vback' + height <= lines,
+//   checked in int64. Failed by the window the timing gives (dx = dy = 0):
+//   "bad-timing". Passed by it but failed once dx and dy are added:
+//   "bad-window", an override the run cannot use (vgacap-sample fails on it).
 // On failure (ok 0) the geometry follows tb-v1's convention: no-sync, and
 // bad-timing by period (hs.period == 0 || vs.period < 2 * hs.period), report
-// mode "unknown" and cpp 1; bad-timing by size reports the matched mode (or
-// "unknown") and its cpp. Width, height, hback and vback are 0 either way.
+// mode "unknown" and cpp 1; bad-timing by size or bounds, and bad-window,
+// report the matched mode (or "unknown") and its cpp. Width, height, hback
+// and vback are 0 either way.
 //
 // Pixel (p, y) is raw row vpulse_lines + vback' + y at clock
 // x = (uint32_t)floor((hsync + hback' + p + 0.5) * cpp), evaluated in that
@@ -177,12 +188,17 @@ typedef struct centrev1 centrev1_t;   // opaque, heap; owns its libvgaframe buff
 // dx, dy: the override (centre_window), in pixels and lines.
 centrev1_t *centrev1_create(int dx, int dy, vgasample_frame_fn fn, void *user);
 // Every clock from 0, in order and without gaps, with the clk-high uo_out.
-// The frame clock fc given to centrev1_calibrated must be fed each run
-// before centrev1 is, and centrev1_calibrated must come before any clock at
-// or after capture_after_clock is pushed.
+// Calling order, per run of clocks: the calibration first (vgacal_push);
+// the clocks it consumed (those before capture_after_clock) to centrev1;
+// once it is done, centrev1_calibrated (once, before any clock at or after
+// capture_after_clock reaches centrev1: it aborts otherwise); then the rest
+// of the run to the frame clock fc, then to centrev1. A trace that ends
+// before calibration does: vgacal_end_of_trace, then centrev1_calibrated.
 void centrev1_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks);
 // The calibration is done (or the trace ended first): fixes the geometry.
 // fc is kept and read at every frame. Frames ending before this are dropped.
+// Aborts if the calibration is not done, on a second call, or if a clock at
+// or after capture_after_clock was already pushed.
 void centrev1_calibrated(centrev1_t *s, const vgacal_t *cal, const vgafc_t *fc);
 // Valid after centrev1_calibrated (before it: ok 0, status "no-sync").
 const vgasample_geometry_t *centrev1_geometry(const centrev1_t *s);
@@ -192,20 +208,15 @@ void centrev1_set_raw_observer(centrev1_t *s, void (*fn)(void *user, const vgafr
 typedef struct centrev1_diag {
     // Over a 1-bit map of the clock positions (x < L, row < lines) ever
     // non-black in an emitted frame: outside is the lit positions outside
-    // the window used. The window's clocks are columns [b(0), b(width)) of
-    // rows [vpulse_lines + vback', + height), with b(p) = floor((hsync +
-    // hback' + p) * cpp + 0.5), the clock edge nearest pixel p's start
-    // (exact at whole cpp; at fractional cpp the design's boundaries are
-    // quantised to clocks, and the nearest edge keeps its last pixel in).
+    // the window used: its clocks [floor(a), ceil(b)) of its rows, as above.
     uint64_t outside;
-    // The offset from the window without the override that keeps the window
-    // inside the line and frame and out of the sync pulses (hback' + dx >= 0,
-    // vback' + dy >= 0) with the fewest lit positions outside; ties to the
-    // smallest |dx| + |dy|, then dy, then dx. (0, 0) when no offset fits.
+    // The offset from the window without the override that passes the
+    // bounds above with the fewest lit positions outside; ties to the
+    // smallest |dx| + |dy|, then dy, then dx.
     int suggest_dx, suggest_dy;
-    // Written clocks x of the window (x >= 1) in emitted frames whose colour
-    // differs from clock x - 1's; off_grid counts those not at a pixel
-    // boundary, (x - window start) % cpp != 0, for whole cpp only; else
+    // Written clocks x of the window's clocks (x >= 1) in emitted frames
+    // whose colour differs from clock x - 1's; off_grid counts those not at a
+    // pixel boundary, (x - floor(a)) % cpp != 0, for whole cpp only; else
     // UINT64_MAX.
     uint64_t colour_changes, off_grid;
     int dx, dy;                          // the override used
