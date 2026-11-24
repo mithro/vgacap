@@ -34,8 +34,9 @@ target_include_directories(usermod_vgacap INTERFACE
 # through a shared handler (firmware/pico/hal_rp2.h).
 target_compile_definitions(usermod_vgacap INTERFACE VGACAP_MPY_SIM=0 HAL_RP2_DMA_IRQ_INDEX=1)
 
-# Ours are held to -Wall -Wextra -Werror, as in the firmware build; the
-# port's own sources are not ours to.
-set_source_files_properties(${VGACAP_MPY_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror")
+# Ours are held to -Wall -Wextra -Werror, as in the firmware build, less
+# -Wunused-parameter, which MicroPython's own headers trip (as its unix
+# port's flags allow); the port's own sources are not ours to hold.
+set_source_files_properties(${VGACAP_MPY_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wno-unused-parameter;-Werror")
 
 target_link_libraries(usermod INTERFACE usermod_vgacap)
