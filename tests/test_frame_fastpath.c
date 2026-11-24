@@ -9,6 +9,10 @@
 // forced modes (one larger than the buffer), buffers narrower and shorter
 // than the line and frame, and a timing no table mode matches, cropped by
 // emit's auto bounding box, each under the Tiny VGA and a wide signal map.
+// Both sides also have an on_raw callback and an rgb6 buffer (M10 Task 10,
+// which made the same deliberate changes to the reference): each raw frame
+// handed to on_raw and each rgb6 picture are compared byte for byte too, and
+// two cases run with no on_frame at all.
 #include <stdint.h>
 #include "harness.h"
 #include "vgacap/frame.h"
@@ -26,16 +30,24 @@ typedef struct capture {
     vgaframe_output_t out[SLOTS];
     vgaframe_timing_t timing[SLOTS];
     uint8_t rgb[SLOTS][BUF_W * BUF_H * 3];
+    uint8_t rgb6[SLOTS][BUF_W * BUF_H];
+    // on_raw calls in the push, likewise.
+    int nraw;
+    vgaframe_raw_t raw_out[SLOTS];
+    vgaframe_timing_t raw_timing[SLOTS];
+    int raw_is_own[SLOTS];   // raw_out.raw was the owner's raw buffer
+    uint8_t raw[SLOTS][BUF_W * BUF_H];
 } capture_t;
 
 typedef struct side {
     vgaframe_t f;
-    uint8_t raw[BUF_W * BUF_H], rgb[BUF_W * BUF_H * 3], cover[BUF_H];
+    uint8_t raw[BUF_W * BUF_H], rgb[BUF_W * BUF_H * 3], cover[BUF_H], rgb6[BUF_W * BUF_H];
     capture_t cap;
 } side_t;
 
 static side_t lib, ref;   // lib: the library under test; ref: the a26c942 snapshot
-static unsigned long pushes, frames_compared, reports[4];   // reports: pushes by last_report
+static unsigned long pushes, frames_compared, raws_compared, reports[4];   // reports: pushes by last_report
+static int with_on_frame = 1;   // 0: both sides run with on_frame NULL
 // Continuous-mode frames emitted locked with no mode: the ones cropped by
 // emit's auto bounding box at a frame start.
 static unsigned long auto_locked_frames;
@@ -47,7 +59,18 @@ static void on_frame(void *u, const vgaframe_output_t *o) {
     c->continuous[c->n] = c->owner->in_frame;
     c->timing[c->n] = *o->timing;
     memcpy(c->rgb[c->n], o->rgb24, (size_t)o->height * o->stride);
+    if (o->rgb6) memcpy(c->rgb6[c->n], o->rgb6, (size_t)o->height * o->width);
     c->n++;
+}
+
+static void on_raw(void *u, const vgaframe_raw_t *r) {
+    capture_t *c = u;
+    if (c->nraw >= SLOTS) { c->overflow = 1; return; }
+    c->raw_out[c->nraw] = *r;
+    c->raw_timing[c->nraw] = *r->timing;
+    c->raw_is_own[c->nraw] = r->raw == c->owner->raw;
+    memcpy(c->raw[c->nraw], r->raw, (size_t)r->lines * r->stride);
+    c->nraw++;
 }
 
 // Fresh objects on both sides with a W x H buffer (at most BUF_W x BUF_H;
@@ -56,14 +79,18 @@ static void pair_init(const uint8_t map[VGACAP_SIG_COUNT], uint16_t W, uint16_t 
     vgaframe_config_t c; memset(&c, 0, sizeof c);
     c.max_clocks_per_line = W; c.max_lines = H; c.force_mode = force;
     memcpy(c.signal_map, map, VGACAP_SIG_COUNT);
-    c.on_frame = on_frame;
+    c.on_frame = with_on_frame ? on_frame : NULL;
+    c.on_raw = on_raw;
     memset(&lib, 0, sizeof lib); memset(&ref, 0, sizeof ref);
-    // rgb starts non-zero, so a store past the end of a picture shows.
+    // rgb and rgb6 start non-zero, so a store past the end of a picture shows.
     memset(lib.rgb, 0xA5, sizeof lib.rgb); memset(ref.rgb, 0xA5, sizeof ref.rgb);
+    memset(lib.rgb6, 0xA5, sizeof lib.rgb6); memset(ref.rgb6, 0xA5, sizeof ref.rgb6);
     lib.cap.owner = &lib.f; ref.cap.owner = &ref.f;
-    c.user = &lib.cap; vgaframe_init(&lib.f, &c, lib.raw, lib.rgb, lib.cover);
-    c.user = &ref.cap; ref_vgaframe_init(&ref.f, &c, ref.raw, ref.rgb, ref.cover);
-    pushes = frames_compared = auto_locked_frames = 0;
+    c.user = c.raw_user = &lib.cap; vgaframe_init(&lib.f, &c, lib.raw, lib.rgb, lib.cover);
+    c.user = c.raw_user = &ref.cap; ref_vgaframe_init(&ref.f, &c, ref.raw, ref.rgb, ref.cover);
+    vgaframe_set_rgb6_buffer(&lib.f, lib.rgb6);
+    ref_vgaframe_set_rgb6_buffer(&ref.f, ref.rgb6);
+    pushes = frames_compared = raws_compared = auto_locked_frames = 0;
     memset(reports, 0, sizeof reports);
 }
 
@@ -96,9 +123,19 @@ static int same_frames(const capture_t *a, const capture_t *b) {
         SAME(out[i].active_x0); SAME(out[i].active_y0); SAME(out[i].partial); SAME(out[i].frame_counter);
         if (!same_timing(&a->timing[i], &b->timing[i])) return mismatch("frame timing");
         if (memcmp(a->rgb[i], b->rgb[i], (size_t)a->out[i].height * a->out[i].stride)) return mismatch("frame rgb24");
+        if (!a->out[i].rgb6 || !b->out[i].rgb6) return mismatch("frame rgb6 is NULL");
+        if (memcmp(a->rgb6[i], b->rgb6[i], (size_t)a->out[i].height * a->out[i].width)) return mismatch("frame rgb6");
         frames_compared++;
         SAME(continuous[i]);
         if (a->continuous[i] && a->timing[i].locked && !a->timing[i].mode) auto_locked_frames++;
+    }
+    SAME(nraw);
+    for (int i = 0; i < a->nraw; i++) {
+        SAME(raw_out[i].stride); SAME(raw_out[i].lines); SAME(raw_out[i].retroactive);
+        if (!a->raw_is_own[i] || !b->raw_is_own[i]) return mismatch("raw frame is not the owner's raw buffer");
+        if (!same_timing(&a->raw_timing[i], &b->raw_timing[i])) return mismatch("raw frame timing");
+        if (memcmp(a->raw[i], b->raw[i], (size_t)a->raw_out[i].lines * a->raw_out[i].stride)) return mismatch("raw frame bytes");
+        raws_compared++;
     }
     return 1;
 }
@@ -107,6 +144,7 @@ static int same_buffers(void) {
     if (memcmp(lib.raw, ref.raw, sizeof lib.raw)) return mismatch("raw buffer");
     if (memcmp(lib.cover, ref.cover, sizeof lib.cover)) return mismatch("cover buffer");
     if (memcmp(lib.rgb, ref.rgb, sizeof lib.rgb)) return mismatch("rgb buffer");
+    if (memcmp(lib.rgb6, ref.rgb6, sizeof lib.rgb6)) return mismatch("rgb6 buffer");
     return 1;
 }
 
@@ -115,7 +153,7 @@ static int same_state(void) {
     const vgaframe_t *a = &lib.f, *b = &ref.f;
     SAME(last_report); SAME(x);
     if (a->last_report >= 0 && a->last_report < 4) reports[a->last_report]++;
-    SAME(y); SAME(in_frame); SAME(frames_seen);
+    SAME(y); SAME(in_frame); SAME(frames_seen); SAME(retro_frame);
     SAME(fram_active); SAME(fram_pending); SAME(fram_counter); SAME(fram_first_line);
     SAME(fram_line_count); SAME(fram_cpl); SAME(fram_remaining); SAME(fram_max_line);
     SAME(fram_anchor); SAME(fram_anchor_level); SAME(fram_h_high); SAME(fram_v_high); SAME(fram_clocks);
@@ -123,6 +161,7 @@ static int same_state(void) {
     if (!same_timing(&a->out_timing, &b->out_timing)) return mismatch("out_timing");
     if (!same_frames(&lib.cap, &ref.cap)) return 0;
     lib.cap.n = ref.cap.n = 0;
+    lib.cap.nraw = ref.cap.nraw = 0;
     if ((pushes & 4095) == 0 && !same_buffers()) return 0;
     return 1;
 }
@@ -323,10 +362,11 @@ static int random_case(uint64_t seed, const uint8_t map[VGACAP_SIG_COUNT], int i
     for (int pass = 0; pass < 2; pass++)
         if (!push_stream(0, n, map, is_tiny)) return 0;
     if (!flush_both()) return 0;
-    fprintf(stderr, "  seed %llu, %s %ux%u%s%s: %lu pushes (reports 0/1/2/3: %lu/%lu/%lu/%lu), %lu frames compared, %lu locked auto-cropped\n",
+    fprintf(stderr, "  seed %llu, %s %ux%u%s%s%s: %lu pushes (reports 0/1/2/3: %lu/%lu/%lu/%lu), %lu frames compared, %lu locked auto-cropped, %lu raw frames compared\n",
             (unsigned long long)seed, m->name, W, H, force ? ", forced " : "", force ? force->name : "",
-            pushes, reports[0], reports[1], reports[2], reports[3], frames_compared, auto_locked_frames);
-    return frames_compared > 0;
+            with_on_frame ? "" : ", no on_frame",
+            pushes, reports[0], reports[1], reports[2], reports[3], frames_compared, auto_locked_frames, raws_compared);
+    return with_on_frame ? frames_compared > 0 : raws_compared > 0;
 }
 
 static int random_stream(uint64_t seed, const uint8_t map[VGACAP_SIG_COUNT], int is_tiny) {
@@ -422,6 +462,15 @@ TEST(fastpath_equivalent_no_table_mode_auto_crop_small_buffer) {
     ASSERT_TRUE(both_maps(60, &odd_timing, 640, 450, NULL, 1));
 }
 
+TEST(fastpath_equivalent_random_tiny_no_on_frame) {
+    // Task 10: with no on_frame, emit only clears and counts.
+    with_on_frame = 0;
+    int ok = random_stream(6, tiny_map, 1) && frames_compared == 0;
+    ok = ok && both_maps(80, &odd_timing, BUF_W, BUF_H, NULL, 0) && frames_compared == 0;
+    with_on_frame = 1;
+    ASSERT_TRUE(ok);
+}
+
 TEST(fastpath_equivalent_no_table_mode_forced_800x600_56) {
     const vgaframe_mode_t *svga56 = vgaframe_mode_match(1024, 625);
     ASSERT_TRUE(svga56 != NULL);
@@ -444,5 +493,6 @@ int main(void) {
     RUN(fastpath_equivalent_no_table_mode_auto_crop);
     RUN(fastpath_equivalent_no_table_mode_auto_crop_small_buffer);
     RUN(fastpath_equivalent_no_table_mode_forced_800x600_56);
+    RUN(fastpath_equivalent_random_tiny_no_on_frame);
     RUN_TESTS_END();
 }
