@@ -382,6 +382,14 @@ static void push_rest(vgaframe_t *f, uint32_t sample, uint32_t run, uint8_t h, i
     }
 }
 
+// vgaframe_push holds the fast path every sample takes, and its speed moved
+// by some 15% with nothing but where the linker happened to place it (the
+// M10 Task 10 changes left it byte for byte the same but off a 64-byte
+// boundary). Pin it to one so that unrelated changes elsewhere in this file
+// cannot move it.
+#if defined(__GNUC__)
+__attribute__((aligned(64)))
+#endif
 void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
     uint8_t h = bit(f->cfg.signal_map, sample, VGACAP_SIG_HSYNC);
     if (vgaframe_timing_push_no_edge(&f->learner, h, run)) {
