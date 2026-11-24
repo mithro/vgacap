@@ -221,6 +221,16 @@ TEST(fc_glitch_adds_end) {
     vgacal_free(&cal); vgafc_free(&fc);
 }
 
+// tb.cpp:364 truncates the double product: 0.29 * 25175000 is 7300749.999999999.
+TEST(calib_limit_double) {
+    vgacal_t c;
+    vgacal_init(&c, HZ, 0.29);
+    ASSERT_EQ_U(c.calib_limit, 7300749);
+    vgacal_init(&c, HZ, 0.1);
+    ASSERT_EQ_U(c.calib_limit, 2517500);
+    vgacal_free(&c);
+}
+
 int main(void) {
     size_t count;
     const vgaframe_mode_t *modes = vgaframe_modes(&count);
@@ -229,6 +239,7 @@ int main(void) {
         fprintf(stderr, "mode table entry 0 is not 640x480@60\n");
         return 1;
     }
+    RUN(calib_limit_double);
     RUN(calib_640x480_vectors);
     RUN(calib_polarities);
     RUN(calib_no_sync);

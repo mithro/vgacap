@@ -224,3 +224,49 @@ def test_fc_glitch_adds_end(tmp_path):
     ref, ends = run_case(tmp_path, uo, rst)
     assert ref.capture_after_clock == 1_703_936
     assert ends == [v_end_640(4), g, v_end_640(5), v_end_640(6), v_end_640(7)]
+
+
+def test_calib_limit_double():
+    """tb.cpp:364 truncates the double product: 0.29 * 25175000 is
+    7300749.999999999, so the limit is 7300749 (tests/test_calib.c too)."""
+    assert calib.calib_limit(HZ, 0.29) == 7_300_749
+    assert calib.calib_limit(HZ, 0.1) == 2_517_500
+
+
+def sync_uo(hs: np.ndarray, vs: np.ndarray) -> np.ndarray:
+    uo = ((hs.astype(np.uint8) << 7) | (vs.astype(np.uint8) << 3)).astype(np.uint8)
+    uo[:R] = 0
+    return uo
+
+
+def test_calib_first_phase_skipped(tmp_path):
+    # vsync (active low): high from R, pulses [1000, 1100) and [3000, 3100),
+    # low again from 5000 on: six phases. analyse skips phase 0 (tb.cpp:221),
+    # leaving three high and two low, so vsync is not found; counting phase 0
+    # would give three of each.
+    clocks = 110_000
+    c = np.arange(clocks)
+    hs = (c % 256) >= 32
+    vs = ~(((c >= 1000) & (c < 1100)) | ((c >= 3000) & (c < 3100)) | (c >= 5000))
+    rst = (c >= R).astype(np.uint8)
+    ref, _ = run_case(tmp_path, sync_uo(hs, vs), rst, calib_seconds="0.004")
+    assert ref.v_phases == 6 and not ref.vs.found
+    assert ref.hs.found and ref.capture_after_clock == 100_700
+
+
+def test_calib_median_upper(tmp_path):
+    # hsync low 8 clocks, then high 30 and 50 in turn: with an even number of
+    # high phases, tb.cpp's median (v[size / 2] after sorting) is 50, not 30.
+    clocks = 110_000
+    c = np.arange(clocks)
+    m = (c - R) % 96
+    hs = ((m >= 8) & (m < 38)) | (m >= 46)
+    rst = (c >= R).astype(np.uint8)
+    ref, _ = run_case(tmp_path, sync_uo(hs, np.ones(clocks, dtype=bool)), rst, calib_seconds="0.003997")
+    # High phases completed before the limit, from the levels (phase 0, the
+    # first pulse, is not high).
+    lv = hs[R:ref.calib_limit]
+    edges = np.flatnonzero(lv[1:] != lv[:-1]) + 1
+    highs = [int(b - a) for a, b in zip(edges[:-1], edges[1:]) if lv[a]]
+    assert len(highs) % 2 == 0
+    assert ref.hs.found and ref.hs.period == 8 + sorted(highs)[len(highs) // 2] == 58
