@@ -47,6 +47,9 @@ if(VGACAP_HOST_EXTRAS)
   # file with a message saying so.
   target_link_libraries(vgacap-dump PRIVATE vgacap_trace)
   target_compile_definitions(vgacap-dump PRIVATE VGACAP_DUMP_TRACES)
+  # bench-runs --write-trace: the benchmark's stream as a simulation trace.
+  target_link_libraries(bench-runs PRIVATE vgacap_trace)
+  target_compile_definitions(bench-runs PRIVATE BENCH_WRITE_TRACE)
   # Test-only helper for python/tests/test_roundtrip_c.py: writes a trace.
   add_executable(trace-make tests/trace_make.c)
   target_link_libraries(trace-make PRIVATE vgacap_trace)
