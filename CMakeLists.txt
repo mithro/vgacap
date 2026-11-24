@@ -142,3 +142,8 @@ vgacap_add_test(test_time)
 # Test-only helper for python/tests/test_timebase.py; includes time.c to reach
 # its static 128-bit helpers, so it links no library.
 add_executable(test_time_dump tests/test_time_dump.c)
+# Test-only helper for python/tests/test_calib.py: one frame of
+# synth_frame_hvsync, to compare with synthtrace's testpatterns phase.
+add_executable(synth-hvsync-dump tests/synth_hvsync_dump.c tests/synth.c)
+target_include_directories(synth-hvsync-dump PRIVATE tests)
+target_link_libraries(synth-hvsync-dump PRIVATE vgacap_frame)

@@ -14,6 +14,7 @@ from vgacap import calib, synthtrace
 from vgacap.modes import MODES, Mode
 
 DUMP = pathlib.Path(__file__).resolve().parents[2] / "build" / "vgacap-calib-dump"
+SYNTH_DUMP = DUMP.parent / "synth-hvsync-dump"   # tests/synth_hvsync_dump.c
 HZ = 25_175_000
 R = synthtrace.RESET_CLOCKS
 K64 = 1 << 16
@@ -84,8 +85,8 @@ def v_end_640(k: int) -> int:
 
 @pytest.fixture(scope="module")
 def tp640(tmp_path_factory):
-    """8 frames of 640x480 testpatterns timing, a bar pattern."""
-    uo, rst = synthtrace.build(M640, R + 8 * F640, phase="testpatterns",
+    """11 frames of 640x480 testpatterns timing, a bar pattern."""
+    uo, rst = synthtrace.build(M640, R + 11 * F640, phase="testpatterns",
                                pixel=lambda x, y: (x // 10) & 0x3F)
     ref, ends = run_case(tmp_path_factory.mktemp("tp640"), uo, rst)
     return uo, ref, ends
@@ -102,7 +103,7 @@ def test_calib_640x480_vectors(tp640):
     assert ref.capture_after_clock == roundup64k(c8 + 1) == 1_703_936
 
 
-@pytest.mark.parametrize("phase", ["vesa", "playground"])
+@pytest.mark.parametrize("phase", ["testpatterns", "playground"])
 def test_calib_640x480_vectors_phases(tmp_path, phase):
     uo, rst = synthtrace.build(M640, R + 5 * F640, phase=phase)
     ref, _ = run_case(tmp_path, uo, rst)
@@ -123,8 +124,20 @@ def test_playground_phase_edges():
     t = synthtrace.design_pixels(m, F640, phase="testpatterns")
     assert ((t >> 7) & 1)[656] == 0 and ((t >> 3) & 1)[489 * 800 + 656] == 0
     assert ((t >> 3) & 1)[489 * 800 + 655] == 1
-    v = synthtrace.design_pixels(m, F640, phase="vesa")
-    assert ((v >> 3) & 1)[490 * 800 - 1] == 1 and ((v >> 3) & 1)[490 * 800] == 0
+    with pytest.raises(ValueError):
+        synthtrace.design_pixels(m, 10, phase="vesa")
+    assert synthtrace.PHASES == ("testpatterns", "playground")
+
+
+def test_testpatterns_matches_synth_c(tmp_path):
+    """synthtrace's testpatterns phase is tests/synth.c's synth_frame_hvsync
+    (checked against the Verilog with iverilog), byte for byte over one
+    640x480 frame from (0, 0), bars pixel."""
+    out = tmp_path / "hvsync.bin"
+    proc = subprocess.run([str(SYNTH_DUMP), str(out)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    d = synthtrace.design_pixels(M640, F640, phase="testpatterns", pixel=lambda x, y: (x // 10) & 0x3F)
+    assert out.read_bytes() == d.tobytes()
 
 
 @pytest.mark.parametrize("hpol", [False, True])
@@ -166,7 +179,7 @@ def test_calib_glitchy_hsync(tmp_path):
     assert not ref.vs.found
 
 
-@pytest.mark.parametrize("phase,cpp", [("playground", 1.5), ("testpatterns", 2), ("vesa", 1.25)])
+@pytest.mark.parametrize("phase,cpp", [("playground", 1.5), ("testpatterns", 2), ("testpatterns", 1.25)])
 def test_calib_run_equals_clock(tmp_path, phase, cpp):
     """C fed as runs (with half-clock runs from the trace) equals the
     per-clock reference, with fractional clocks per pixel and glitches."""
@@ -182,8 +195,8 @@ def test_calib_run_equals_clock(tmp_path, phase, cpp):
 def test_synthtrace_fractional_cpp():
     """Design pixel p covers clocks [floor(p * cpp), floor((p + 1) * cpp))."""
     m = SMALL
-    uo, _ = synthtrace.build(m, R + 2000, phase="vesa", cpp=1.5, pixel=lambda x, y: x & 0x3F)
-    d = synthtrace.design_pixels(m, 2000, phase="vesa", pixel=lambda x, y: x & 0x3F)
+    uo, _ = synthtrace.build(m, R + 2000, phase="testpatterns", cpp=1.5, pixel=lambda x, y: x & 0x3F)
+    d = synthtrace.design_pixels(m, 2000, phase="testpatterns", pixel=lambda x, y: x & 0x3F)
     for c in range(2000):
         p = 0
         while int((p + 1) * 1.5) <= c:
@@ -193,7 +206,8 @@ def test_synthtrace_fractional_cpp():
 
 def test_fc_counts(tp640):
     _, ref, ends = tp640
-    assert len(ends) >= 3
+    # capture_after_clock is 1703936, so ends k = 4 .. 10 of the 11 frames.
+    assert len(ends) == 7
     k = 0
     while v_end_640(k) < ref.capture_after_clock + 1:
         k += 1

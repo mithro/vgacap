@@ -16,13 +16,11 @@ The design is a free-running position counter (hpos, vpos) that reads
 (0, 0) in the first clock after reset, one design pixel per `cpp` clocks;
 with fractional `cpp`, design pixel p covers clocks
 [floor(p * cpp), floor((p + 1) * cpp)) counted from the end of reset. Its
-syncs follow one of three phases:
+syncs follow one of two phases:
 
-- ``vesa``: the syncs exactly on VESA positions: hsync in its pulse on
-  hpos in [H_ACTIVE + H_FRONT, + H_SYNC), vsync on whole lines vpos in
-  [V_ACTIVE + V_FRONT, + V_SYNC), so vsync changes at hpos 0.
-- ``testpatterns``: tt-vga-testpatterns' common/hvsync_generator.v, which
-  registers the syncs from the *next* position: hsync as ``vesa``, vsync
+- ``testpatterns`` (the default, and the VESA phase): tt-vga-testpatterns'
+  common/hvsync_generator.v, which registers the syncs from the *next*
+  position: hsync in its pulse on hpos in [H_ACTIVE + H_FRONT, + H_SYNC), vsync
   judged on vline = vpos + 1 from hpos H_ACTIVE + H_FRONT on, so vsync
   changes on the clock hsync starts (as tests/synth.c's synth_frame_hvsync,
   which is checked against that Verilog with iverilog).
@@ -64,7 +62,7 @@ UO_MASK = 0xFF
 RST_N_BIT = 40
 ENA_BIT = 41
 CLK_BIT = 42
-PHASES = ("vesa", "testpatterns", "playground")
+PHASES = ("testpatterns", "playground")
 #: Pairs per RUNS chunk: at most 17 bytes each, under MAX_CHUNK_LEN.
 RUNS_PER_CHUNK = 500_000
 
@@ -74,9 +72,7 @@ def _syncs(mode: Mode, phase: str, hpos: np.ndarray, vpos: np.ndarray) -> tuple[
     cpl, lpf = mode.cpl, mode.lpf
     hss = mode.h_active + mode.h_front
     vss = mode.v_active + mode.v_front
-    if phase == "vesa":
-        hj, vline = hpos, vpos
-    elif phase == "testpatterns":
+    if phase == "testpatterns":
         hj = hpos
         vline = np.where(hpos >= hss, (vpos + 1) % lpf, vpos)
     elif phase == "playground":
@@ -89,7 +85,7 @@ def _syncs(mode: Mode, phase: str, hpos: np.ndarray, vpos: np.ndarray) -> tuple[
     return h_pulse, v_pulse
 
 
-def design_pixels(mode: Mode, count: int, *, phase: str = "vesa",
+def design_pixels(mode: Mode, count: int, *, phase: str = "testpatterns",
                   pixel: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None,
                   start: int = 0) -> np.ndarray:
     """uo_out for design pixels start .. start + count - 1 (pixel 0 is (0, 0))."""
@@ -109,7 +105,7 @@ def design_pixels(mode: Mode, count: int, *, phase: str = "vesa",
     return ((hs << 7) | (b0 << 6) | (g0 << 5) | (r0 << 4) | (vs << 3) | (b1 << 2) | (g1 << 1) | r1).astype(np.uint8)
 
 
-def build(mode: Mode, clocks: int, *, phase: str = "vesa", cpp: float = 1,
+def build(mode: Mode, clocks: int, *, phase: str = "testpatterns", cpp: float = 1,
           pixel: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None,
           reset_clocks: int = RESET_CLOCKS, reset_uo: int = 0,
           h_glitches: Sequence[tuple[int, int]] = (), v_glitches: Sequence[tuple[int, int]] = ()
