@@ -26,6 +26,7 @@ void vgaframe_reset(vgaframe_t *f) {
     f->fram_active = 0; f->fram_pending = 0; f->fram_counter = 0;
     f->fram_first_line = 0; f->fram_line_count = 0; f->fram_cpl = 0;
     f->fram_remaining = 0; f->fram_max_line = 0; f->fram_anchor = 0;
+    f->fram_h_high = f->fram_v_high = f->fram_clocks = 0;
     memset(f->raw, 0, vgaframe_raw_size(&f->cfg));
     memset(f->cover, 0, f->cfg.max_lines);
 }
@@ -147,13 +148,23 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
         f->out_timing.hsync_width = m->h_sync;
         f->out_timing.vsync_lines = m->v_sync;
     }
+    if (is_fram && f->fram_clocks) {
+        // A FRAM picture's windows never span a whole frame, so the learner
+        // cannot measure polarity and the table's would be reported -- wrong
+        // for a design that inverts a mode's usual sense (tt_um_vgacal_modes
+        // ui_in[3:2] on fpga-4). A sync pulse is active for a small part of
+        // its period, so whichever level held for most of the picture's
+        // clocks is the idle one.
+        f->out_timing.hsync_positive = (uint8_t)(2 * f->fram_h_high < f->fram_clocks);
+        f->out_timing.vsync_positive = (uint8_t)(2 * f->fram_v_high < f->fram_clocks);
+    }
     vgaframe_output_t out;
     out.rgb24 = f->rgb; out.width = (uint16_t)w; out.height = (uint16_t)h; out.timing = &f->out_timing;
     out.stride = w * 3;   // rows are packed; emit() writes them that way above
     out.active_x0 = (uint16_t)x0; out.active_y0 = (uint16_t)y0; out.partial = partial;
     out.frame_counter = is_fram ? f->fram_counter : f->frames_seen;
     f->frames_seen++;
-    if (is_fram) f->fram_pending = 0;
+    if (is_fram) { f->fram_pending = 0; f->fram_h_high = f->fram_v_high = f->fram_clocks = 0; }
     if (f->cfg.on_frame) f->cfg.on_frame(f->cfg.user, &out);
     // In FRAM mode a frame's windows can land anywhere in [0, max_lines), not
     // just below lines_known (which is only this emit's notion of the frame
@@ -251,6 +262,9 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
     }
     f->x += run;
     if (f->fram_active) {
+        f->fram_clocks += run;
+        if (h) f->fram_h_high += run;
+        if (v) f->fram_v_high += run;
         uint32_t dec = run < f->fram_remaining ? run : f->fram_remaining;
         f->fram_remaining -= dec;
         if (f->fram_remaining == 0) {
@@ -278,6 +292,7 @@ void vgaframe_frame_begin(vgaframe_t *f, uint32_t frame_counter, uint16_t first_
                           uint16_t line_count, uint32_t clocks_per_line, uint32_t sample_count) {
     if (f->fram_pending && frame_counter != f->fram_counter && covered_any(f))
         emit(f, expected_lines(f), 1, 1);
+    if (frame_counter != f->fram_counter) f->fram_h_high = f->fram_v_high = f->fram_clocks = 0;
     f->fram_active = 1;
     f->fram_pending = 1;
     // A window interrupts whatever continuous-mode frame was in progress;

@@ -245,6 +245,9 @@ TEST(a_window_that_starts_inside_its_hsync_pulse_is_still_exact) {
             for (uint32_t i = 0; i < count; i++) vgaframe_push(&f, buf[first * 800u + late + i], 1);
         }
         ASSERT_EQ_U(nframes, 1); ASSERT_EQ_U(npartial, 0);
+        // The polarity the picture had, not the table's.
+        ASSERT_EQ_U(last.timing->hsync_positive, m->h_sync_positive);
+        ASSERT_EQ_U(last.timing->vsync_positive, m->v_sync_positive);
         for (uint16_t y = 0; y < 480; y++) for (uint16_t x = 0; x < 640; x++) {
             uint8_t g = grid(NULL, x, y); const uint8_t *q = last_rgb + (y * 640 + x) * 3;
             ASSERT_EQ_U(q[0], ((g >> 4) & 3) * 85); ASSERT_EQ_U(q[1], ((g >> 2) & 3) * 85); ASSERT_EQ_U(q[2], (g & 3) * 85);
