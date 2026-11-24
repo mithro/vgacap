@@ -3,6 +3,7 @@
 // and from FRAM partial-frame windows (see vgaframe_frame_begin).
 #include "vgacap/frame.h"
 #include <string.h>
+#include "internal.h"
 
 size_t vgaframe_raw_size(const vgaframe_config_t *c) { return (size_t)c->max_clocks_per_line * c->max_lines; }
 size_t vgaframe_rgb_size(const vgaframe_config_t *c) { return vgaframe_raw_size(c) * 3; }
@@ -23,6 +24,7 @@ void vgaframe_reset(vgaframe_t *f) {
     vgaframe_timing_init(&f->learner);
     memset(&f->out_timing, 0, sizeof f->out_timing);
     f->x = 0; f->y = 0; f->in_frame = 0; f->frames_seen = 0;
+    f->last_report = 0;
     f->fram_active = 0; f->fram_pending = 0; f->fram_counter = 0;
     f->fram_first_line = 0; f->fram_line_count = 0; f->fram_cpl = 0;
     f->fram_remaining = 0; f->fram_max_line = 0; f->fram_anchor = 0;
@@ -188,6 +190,7 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
     uint8_t h = bit(f->cfg.signal_map, sample, VGACAP_SIG_HSYNC);
     uint8_t v = bit(f->cfg.signal_map, sample, VGACAP_SIG_VSYNC);
     int r = vgaframe_timing_push(&f->learner, h, v, run);
+    f->last_report = r;
     // x is the clock offset within the line, which the learner tracks as
     // clk_in_line: a line start is reported at the *trailing* edge of its
     // hsync pulse (that is when the glitch filter can judge the pulse), so
@@ -260,7 +263,7 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
         memset(f->raw + f->y * W + f->x, vgaframe_colour(f->cfg.signal_map, sample) | 0x80, n);
         f->cover[f->y] = 1;
     }
-    f->x += run;
+    f->x = vgaframe_sat_add32(f->x, run);
     if (f->fram_active) {
         f->fram_clocks += run;
         if (h) f->fram_h_high += run;
@@ -322,4 +325,15 @@ void vgaframe_frame_begin(vgaframe_t *f, uint32_t frame_counter, uint16_t first_
     f->learner.h_low = 0;
     f->learner.v_high_lines = 0;
     f->learner.v_low_lines = 0;
+}
+
+void vgaframe_push64(vgaframe_t *f, uint32_t sample, uint64_t run) {
+    uint32_t first = run > UINT32_MAX ? UINT32_MAX : (uint32_t)run;
+    vgaframe_push(f, sample, first);
+    int report = f->last_report;
+    for (run -= first; run; run -= first) {
+        first = run > UINT32_MAX ? UINT32_MAX : (uint32_t)run;
+        vgaframe_push(f, sample, first);
+    }
+    f->last_report = report;
 }
