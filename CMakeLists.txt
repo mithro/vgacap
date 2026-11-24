@@ -14,6 +14,10 @@ enable_testing()
 add_library(vgacap_stream STATIC src/stream/writer.c src/stream/reader.c)
 # --- frame: VGA picture reconstruction (src/frame) ---
 add_library(vgacap_frame STATIC src/frame/modes.c src/frame/timing.c src/frame/frame.c)
+# Benchmark (not a test): libvgaframe on run-length input.
+add_executable(bench-runs bench/bench_runs.c tests/synth.c)
+target_include_directories(bench-runs PRIVATE tests)
+target_link_libraries(bench-runs PRIVATE vgacap_frame vgacap_stream)
 # --- tools: command-line utilities (src/tools) ---
 add_executable(vgacap-dump src/tools/vgacap_dump.c)
 target_link_libraries(vgacap-dump PRIVATE vgacap_stream)
