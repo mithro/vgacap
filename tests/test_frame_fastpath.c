@@ -261,6 +261,17 @@ static int random_stream(uint64_t seed, const uint8_t map[VGACAP_SIG_COUNT], int
     if (!push_both(idle, 5000)) return 0;
     if (!push64_both(idle, 5000000000ull)) return 0;
     if (!push_stream(0, n / 2, map, is_tiny)) return 0;
+    // A 600-line frame (frame 1 with line 300 repeated 75 times), which
+    // matches no mode and so is not emitted, then frame 1 as it is, which is:
+    // that emit clears only its own 526 lines, and lines 526 to 599 keep the
+    // long frame's pixels until the FRAM picture below clears every line.
+    size_t f1 = 800u * 525u, l300 = f1 + 300u * 800u;
+    if (!push_stream(f1, l300, map, is_tiny)) return 0;
+    for (int k = 0; k < 75; k++)
+        if (!push_stream(l300, l300 + 800u, map, is_tiny)) return 0;
+    if (!push_stream(l300, f1 + 525u * 800u, map, is_tiny)) return 0;
+    if (!push_stream(f1, f1 + 525u * 800u, map, is_tiny)) return 0;
+    if (!push_stream(3u * f1, 3u * f1 + 10u * 800u, map, is_tiny)) return 0;   // its end: the frame start that emits it
     // FRAM windows of 25 lines each, two pictures' worth of a few windows,
     // some cut short, each starting at a line's hsync leading edge.
     for (uint32_t k = 0; k < 8; k++) {
