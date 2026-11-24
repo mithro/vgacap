@@ -69,7 +69,10 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   the design has to be enabled with the stock firmware first and still be
   there after the switch. On the FPGA boards that relies on the iCE40
   keeping its configuration while the RP2350 resets into its bootloader
-  and into this firmware -- **an assumption, to be verified on hardware**.
+  and into this firmware. **Verified on fpga-4 (2026-11-24)**: after
+  BOOTSEL and this firmware, frame, window and streaming captures of
+  `tt_um_vgacal_bars` were pixel-exact, so the iCE40 kept its configuration
+  (tt-vga-capture `docs/results/2026-11-24-picosdk-firmware-fpga4/`).
   GPIO 1 is the iCE40's `CRESET_B` there (and the mux controller's reset
   on an ASIC carrier): the stock firmware leaves it driven high, while the
   RP2350 is in reset and in its bootloader it is an input with the pad's
