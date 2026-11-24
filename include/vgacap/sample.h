@@ -23,6 +23,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "vgacap/frame.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -126,6 +128,89 @@ uint64_t tbv1_frames(const tbv1_t *s);
 // are ignored. No-op when !ok or once capture has stopped.
 void tbv1_push(tbv1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks);   // clocks >= capture_after_clock
 void tbv1_free(tbv1_t *s);
+
+// centre-v1: libvgaframe's timing learner finds the lines and frames, at
+// clock resolution (its raw frame callback, vgaframe_raw_t); the sampler
+// picks every pixel itself, mid-pixel, from that clock-resolution frame.
+// The spec (raw-frames-and-hash-methods design, Layer 2's centre-v1 and
+// Layer 3) defines it; python/vgacap/centre.py is the reference for the
+// window and the pick.
+//
+// Geometry, fixed at centrev1_calibrated from the shared calibration (L =
+// hs.period clocks a line, lines = (vs.period + L / 2) / L, vpulse_lines =
+// (vs.pulse + L / 2) / L, as tb.cpp:403-421):
+// - mode: tb.cpp's summed-error rule (best below 0.03; cpp_l = L / the mode's
+//   line pixels in 0.9..4.5; then the non-standard-line-count fallback)
+//   against the shared 12-mode table, vgaframe_modes(), in table order;
+// - cpp: 1. |cpp_l - round(cpp_l)| < 0.01 gives round(cpp_l); 2. else the
+//   smallest k >= 1 with |hs.pulse - k * mode h_sync| <= 2 gives k; 3. else
+//   cpp_l itself;
+// - window: hsync = hs.pulse / cpp pixels, B = L / cpp - hsync - width,
+//   hback' = floor(B * hback / (hback + hfront) + 0.5); vertically
+//   B = lines - vpulse_lines - height and vback' likewise (0 for the
+//   non-standard-line-count fallback, whose height is lines - vpulse_lines).
+//   Then dx and dy are added; geometry hback and vback are the values used.
+// - unknown mode (tb.cpp:441-444): cpp 1, width L - hs.pulse, height lines -
+//   vpulse_lines, hback' = vback' = 0.
+// - bad-timing by size: width or height outside 16..4096, more than 1,200
+//   lines, or L above 7,596 clocks (the raw buffer).
+// On failure (ok 0) the geometry follows tb-v1's convention: no-sync, and
+// bad-timing by period (hs.period == 0 || vs.period < 2 * hs.period), report
+// mode "unknown" and cpp 1; bad-timing by size reports the matched mode (or
+// "unknown") and its cpp. Width, height, hback and vback are 0 either way.
+//
+// Pixel (p, y) is raw row vpulse_lines + vback' + y at clock
+// x = (uint32_t)floor((hsync + hback' + p + 0.5) * cpp), evaluated in that
+// order. A clock that was not written (no 0x80), or lies outside the line
+// (x >= L) or the frame (row >= lines or the rows received), is missing:
+// stored as 0 and counted in vgasample_frame_t.missing.
+//
+// Frames: start_clock is the hsync leading edge of row 0 (the first line of
+// the vsync pulse): the clock of the push that brought report 2 less
+// report_x, or for a retroactive frame (report 3) that less vsync_lines *
+// clocks_per_line. A frame is numbered with the latest frame-clock end in
+// [start_clock, the clock of the hsync trailing edge of row v], row v being
+// the first row libvgaframe judged out of the vsync pulse; with none it is
+// dropped (its number is a gap). Frames are emitted at the learner's next
+// frame boundary, so the frame cut off by the end of the trace never is.
+typedef struct centrev1 centrev1_t;   // opaque, heap; owns its libvgaframe buffers
+// dx, dy: the override (centre_window), in pixels and lines.
+centrev1_t *centrev1_create(int dx, int dy, vgasample_frame_fn fn, void *user);
+// Every clock from 0, in order and without gaps, with the clk-high uo_out.
+// The frame clock fc given to centrev1_calibrated must be fed each run
+// before centrev1 is, and centrev1_calibrated must come before any clock at
+// or after capture_after_clock is pushed.
+void centrev1_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks);
+// The calibration is done (or the trace ended first): fixes the geometry.
+// fc is kept and read at every frame. Frames ending before this are dropped.
+void centrev1_calibrated(centrev1_t *s, const vgacal_t *cal, const vgafc_t *fc);
+// Valid after centrev1_calibrated (before it: ok 0, status "no-sync").
+const vgasample_geometry_t *centrev1_geometry(const centrev1_t *s);
+// Tests and tools: fn sees libvgaframe's raw frame of every frame centre-v1
+// emits, just before the frame callback.
+void centrev1_set_raw_observer(centrev1_t *s, void (*fn)(void *user, const vgaframe_raw_t *r), void *user);
+typedef struct centrev1_diag {
+    // Over a 1-bit map of the clock positions (x < L, row < lines) ever
+    // non-black in an emitted frame: outside is the lit positions outside
+    // the window used. The window's clocks are columns
+    // [floor((hsync + hback') * cpp), floor((hsync + hback' + width) * cpp))
+    // of rows [vpulse_lines + vback', + height).
+    uint64_t outside;
+    // The offset from the window without the override that keeps the window
+    // inside the line and frame and out of the sync pulses (hback' + dx >= 0,
+    // vback' + dy >= 0) with the fewest lit positions outside; ties to the
+    // smallest |dx| + |dy|, then dy, then dx. (0, 0) when no offset fits.
+    int suggest_dx, suggest_dy;
+    // Written clocks x of the window (x >= 1) in emitted frames whose colour
+    // differs from clock x - 1's; off_grid counts those not at a pixel
+    // boundary, (x - window start) % cpp != 0, for whole cpp only; else
+    // UINT64_MAX.
+    uint64_t colour_changes, off_grid;
+    int dx, dy;                          // the override used
+} centrev1_diag_t;
+// End of trace: computes the diagnostics.
+void centrev1_finish(centrev1_t *s, centrev1_diag_t *d);
+void centrev1_free(centrev1_t *s);
 
 #ifdef __cplusplus
 }
