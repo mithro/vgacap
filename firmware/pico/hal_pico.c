@@ -81,6 +81,7 @@ int hal_clock(const fw_clock_plan_t *plan, const char **why) {
         *why = "the system clock cannot be set to that frequency";
         return -1;
     }
+    pwm_hw->slice[slice].csr = 0;  // free-running, normal polarity, disabled
     pwm_hw->slice[slice].div = plan->div16;
     pwm_set_wrap(slice, (uint16_t)plan->top);
     pwm_set_chan_level(slice, pwm_gpio_to_channel(pin), (uint16_t)plan->level);

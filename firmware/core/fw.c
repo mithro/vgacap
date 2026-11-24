@@ -85,6 +85,7 @@ static void out_init(out_t *o) {
 
 static void out_time(out_t *o, uint32_t dropped, const char *msg) {
     vgacap_writer_time(&o->w, 0, 0, dropped, msg);
+    hal_flush();
 }
 
 // The end of a capture's binary output: an 8-byte chunk header that is not
@@ -265,6 +266,7 @@ static void cmd_stream(const char *args) {
         }
         if (stopping) break;
         vgacap_writer_raw(&o.w, bufs[index], spc);
+        hal_flush();  // a whole chunk reaches the host now, not with the next one
         hal_stream_release(index);
         uint32_t overruns = hal_stream_overruns();
         if (overruns > reported) {
@@ -388,6 +390,7 @@ static void cmd_frame(const char *args) {
         }
         vgacap_writer_frame(&o.w, picture, (uint16_t)first, (uint16_t)lines_now, cpl, arena,
                             lines_now * cpl);
+        hal_flush();
         cursor += lines_now;
         if (cursor >= region_lines) {
             cursor = 0;
