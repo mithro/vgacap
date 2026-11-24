@@ -11,6 +11,8 @@ Subcommands:
   to a file, or, with `--out -`, to stdout as it arrives, so a video
   pipeline can consume the capture live.
 * `png` renders a captured stream to PNG images via `vgacap-frames`.
+* `reboot` restarts the board: into its flash firmware, or into the USB
+  bootloader to load a UF2 such as the capture firmware (firmware/).
 * `demo` points the whole GStreamer pipeline at a board and writes PNGs, a
   video file, a window and a browser-viewable MJPEG stream (`ttcap.demo`).
 
@@ -662,6 +664,38 @@ def _report(stats: CaptureStats, out_path: str, stream=None) -> None:
     print("wrote %s" % out_path, file=stream)
 
 
+#: `ttcap reboot --to` values.
+REBOOT_TARGETS = ("flash", "bootsel")
+
+
+def reboot(url: str, firmware: str = "micropython", to: str = "flash") -> None:
+    """Restart the board: into its flash firmware, or its USB bootloader.
+
+    `bootsel` from the stock firmware is how the capture firmware is loaded
+    (firmware/README.md): the board comes back as the RP2350's mass-storage
+    drive and takes a UF2. `flash` from the capture firmware is how the
+    stock firmware comes back, without a power cycle. Either way the USB
+    device goes away, so nothing waits for the board after it has accepted
+    the command.
+    """
+    if to not in REBOOT_TARGETS:
+        raise ValueError(f"to must be one of {REBOOT_TARGETS}, got {to!r}")
+    link = link_from_url(url)
+    try:
+        if firmware == "picosdk":
+            fw = FirmwareLink(link)
+            fw.sync()
+            fw.command("reboot" if to == "flash" else "bootsel")
+        else:
+            repl = RawRepl(link)
+            repl.enter()
+            repl.start("import machine\nmachine.%s()" % ("reset" if to == "flash" else "bootloader"))
+        print("rebooting to %s" % to)
+    finally:
+        with contextlib.suppress(OSError, LinkClosed):
+            link.close()
+
+
 def find_vgacap_frames(explicit: str | None = None) -> str:
     """Locate the C frame renderer.
 
@@ -898,6 +932,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="leave the project clock running after the capture",
     )
 
+    reboot_parser = subparsers.add_parser(
+        "reboot", help="restart the board into its flash firmware or its USB bootloader"
+    )
+    reboot_parser.add_argument("link", help="serial:/dev/ttyACM0 or ws://host:8765/serial")
+    reboot_parser.add_argument(
+        "--firmware", choices=FIRMWARES, default="micropython",
+        help="what runs on the board now (default micropython)",
+    )
+    reboot_parser.add_argument(
+        "--to", choices=REBOOT_TARGETS, default="flash",
+        help="flash: the firmware in flash, i.e. the stock firmware (default); "
+        "bootsel: the RP2350's USB bootloader, which takes a UF2",
+    )
+
     png_parser = subparsers.add_parser(
         "png", help="render a .vgacap stream to PNG images"
     )
@@ -988,6 +1036,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 3
+        return 0
+    if args.command == "reboot":
+        try:
+            reboot(args.link, firmware=args.firmware, to=args.to)
+        except CAPTURE_FAILURES as exc:
+            return _failed("reboot", exc)
         return 0
     if args.command == "png":
         try:

@@ -275,7 +275,11 @@ def test_stream_stops_between_chunks_on_request(fw):
     stats = session.stats()
     assert stats.clean, stats.format()
     assert seen[-1] == b"TIME"
-    assert 3 <= stats.chunks <= 6
+    # The simulator runs ahead of the reader by whatever the pipe holds, so
+    # how many chunks were already on their way when the stop arrived is
+    # not fixed; that the capture ended, cleanly, after the third is.
+    assert stats.chunks >= 4
+    assert all(tag == b"RAW " for tag in seen[1:-1])
     # the link is back in step for the next command
     assert fw.command("status")["clock_hz"] == "100000"
 
@@ -506,3 +510,21 @@ def test_frame_chunks_match_frame_rp2_on_the_emulator(fw, bars_uo, tmp_path):
         sub = tmp_path / name
         sub.mkdir()
         assert_pictures_exact(pictures(sub, stream_header_bytes(req) + out), bars_uo[1])
+
+
+def test_cli_reboot_with_the_capture_firmware(monkeypatch, bars_uo, capsys):
+    link = SimLink(bars_uo[0])
+    monkeypatch.setattr(cli, "link_from_url", lambda url: link)
+    assert cli.main(["reboot", "serial:/dev/ttyACM0", "--firmware", "picosdk"]) == 0
+    assert "rebooting to flash" in capsys.readouterr().out
+    assert link.proc.wait(timeout=10) == 0  # the simulated board is gone
+
+
+def test_cli_reboot_into_bootsel_from_micropython(monkeypatch, capsys):
+    from fake_repl import FakeBinaryBoard
+
+    board = FakeBinaryBoard()
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+    assert cli.main(["reboot", "serial:/dev/ttboard", "--to", "bootsel"]) == 0
+    assert board.commands[-1] == "import machine\nmachine.bootloader()"
+    assert board.closed
