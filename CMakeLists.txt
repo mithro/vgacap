@@ -51,12 +51,16 @@ if(VGACAP_HOST_EXTRAS)
   add_executable(trace-make tests/trace_make.c)
   target_link_libraries(trace-make PRIVATE vgacap_trace)
   # --- sample: the shared calibration and frame clock (src/sample), host only ---
-  add_library(vgacap_sample STATIC src/sample/calib.c src/sample/frameclock.c)
-  target_link_libraries(vgacap_sample PUBLIC vgacap_frame vgacap_trace vgacap_sha256 vgacap_zstd)
+  add_library(vgacap_sample STATIC src/sample/calib.c src/sample/frameclock.c src/sample/tbv1.c)
+  target_link_libraries(vgacap_sample PUBLIC vgacap_frame vgacap_trace vgacap_sha256 vgacap_zstd m)
   # Test-only helper for python/tests/test_calib.py: calibration and frame
   # clock of a trace.
   add_executable(vgacap-calib-dump tests/calib_dump.c)
   target_link_libraries(vgacap-calib-dump PRIVATE vgacap_sample)
+  # Test-only helper for python/tests/test_samplers.py: tb-v1's frames of a
+  # trace.
+  add_executable(vgacap-tbv1-dump tests/tbv1_dump.c)
+  target_link_libraries(vgacap-tbv1-dump PRIVATE vgacap_sample)
 endif()
 
 function(vgacap_add_test name)
@@ -102,6 +106,9 @@ if(VGACAP_HOST_EXTRAS)
   # The shared calibration (port of tb.cpp) and the frame clock.
   vgacap_add_test(test_calib tests/synth.c)
   target_link_libraries(test_calib PRIVATE vgacap_sample)
+  # tb-v1, the port of tb.cpp's frame decoding.
+  vgacap_add_test(test_tbv1 tests/synth.c)
+  target_link_libraries(test_tbv1 PRIVATE vgacap_sample)
   # Timing, meaningful only on big-storage: labelled perf, kept out of CI
   # (ctest -LE perf) and run by hand.
   add_test(NAME test_trace_push_speed COMMAND test_trace_write --speed)

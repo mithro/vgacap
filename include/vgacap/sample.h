@@ -81,6 +81,52 @@ void vgafc_init(vgafc_t *fc, const vgacal_t *c);
 void vgafc_push(vgafc_t *fc, uint8_t uo_out, uint64_t first, uint64_t clocks);
 void vgafc_free(vgafc_t *fc);
 
+// ---- samplers: trace clocks to frames -------------------------------------
+
+// One frame, handed to the sampler's callback; rgb6 (R<<4 | G<<2 | B, each
+// channel's first Tiny VGA bit most significant) is valid during the call.
+typedef struct vgasample_frame {
+    uint64_t number;        // frame number from the frame clock
+    uint64_t start_clock;   // per sampler, as the spec defines
+    const uint8_t *rgb6; uint16_t width, height;
+    uint32_t missing;       // centre-v1 only
+} vgasample_frame_t;
+typedef void (*vgasample_frame_fn)(void *user, const vgasample_frame_t *f);
+
+typedef struct vgasample_geometry {     // fixed at capture_after_clock
+    int ok;                 // 0: no picture
+    const char *status;     // "no-sync" or "bad-timing" when !ok, else "ok"
+    const char *mode;       // table name or "unknown"
+    double cpp; uint16_t width, height;
+    int hback, vback;       // pixels / lines used (centre-v1: hback', vback')
+} vgasample_geometry_t;
+
+// tb-v1: a port of tb.cpp:379-557, after the shared calibration. Mode from
+// tb.cpp's own 11-mode table (tb.cpp:39-51, in its order); frame k starts at
+// frame-clock end k (start_clock = ends[k]) and is emitted at end k + 1;
+// capture stops, as tb.cpp's loop, once target_frames =
+// (uint64_t)(seconds * fps + 0.5) frames are out or at clock_limit =
+// capture_after_clock + (uint64_t)((seconds + 2.5 / fps) * clock_hz).
+// Pixel p of a line is read at the first clock at which
+// (int)((x_clock + cpp / 2) / cpp) is p, x_clock counting clocks from the
+// hsync pulse's end; nothing written stays 0 (black).
+typedef struct tbv1 tbv1_t;   // opaque, heap
+// cal must be VGACAL_DONE. fc is the frame clock fed the same clocks (it may
+// be NULL); tb-v1 counts the ends by the same rule and, where fc already
+// holds end k, checks it is the same clock.
+tbv1_t *tbv1_create(const vgacal_t *cal, const vgafc_t *fc, double clock_hz, double seconds,
+                    vgasample_frame_fn fn, void *user);
+const vgasample_geometry_t *tbv1_geometry(const tbv1_t *s);
+// tb.cpp's frame target and clock limit (0 when !ok).
+uint64_t tbv1_target_frames(const tbv1_t *s);
+uint64_t tbv1_clock_limit(const tbv1_t *s);
+// Frames emitted so far (tb.cpp's `frames`).
+uint64_t tbv1_frames(const tbv1_t *s);
+// Feeds a run, in order and without gaps; clocks before capture_after_clock
+// are ignored. No-op when !ok or once capture has stopped.
+void tbv1_push(tbv1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks);   // clocks >= capture_after_clock
+void tbv1_free(tbv1_t *s);
+
 #ifdef __cplusplus
 }
 #endif
