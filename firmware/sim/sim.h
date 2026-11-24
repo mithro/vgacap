@@ -65,6 +65,9 @@ void sim_link_sent(size_t len);
 double sim_now(void);
 // Force the next frame capture's RXSTALL (tests of the rxstall reports).
 void sim_force_rxstall(int on);
+// How many buffers the last frame capture was armed with (hal_frame_arm's
+// spans): tests of chained buffers.
+unsigned sim_frame_spans(void);
 
 #ifdef __cplusplus
 }

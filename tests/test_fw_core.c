@@ -4,6 +4,7 @@
 // replies and the chunk bytes are checked exactly.
 #include "harness.h"
 #include "fw.h"
+#include "fw_capture.h"
 #include "fw_hal.h"
 #include "sim.h"
 #include "vgacap/stream.h"
@@ -338,6 +339,64 @@ TEST(frame_windows_sweep_the_region) {
     ASSERT_TRUE(streq(chunk(), "DONE"));
 }
 
+// Chained buffers, as the MicroPython module fills on a fragmented heap:
+// each used in whole lines, in order, a buffer too small for a line
+// skipped, and still ONE FRAM chunk per window, byte for byte the arena's.
+TEST(frame_into_chained_buffers_is_the_arenas_chunks) {
+    tiny_frames();
+    boot(CPL * LPF, 1e-6);
+    pos = 0;
+    send_at("clock hz=25000000\nframe cpl=16 region_first=3 region_lines=5 window_lines=0 "
+            "hsync_active=1 vsync_active=1 max_frames=2 max_bytes=0 edge=rising sample_delay=0 pio=1 sm=0\n", 0);
+    run();
+    line();
+    ASSERT_TRUE(streq(line(), "ok frame"));
+    ASSERT_TRUE(streq(chunk(), "TIME"));
+    size_t len;
+    const uint8_t *out = sim_output(&len);
+    static uint8_t want[8192];
+    size_t want_from = pos, want_len = len - pos - 8u;  // the FRAMs and the summary, not DONE
+    ASSERT_TRUE(want_len < sizeof want);
+    memcpy(want, out + want_from, want_len);
+
+    // A line is 4 words: 1 line (and 3 words over), none, 2 lines, the rest.
+    static uint32_t a[7], b[3], c[10], d[64];
+    const fw_span_t bufs[] = { { a, 7 }, { b, 3 }, { c, 10 }, { d, 64 } };
+    fw_frame_args_t args;
+    char why[FW_WHY_MAX];
+    ASSERT_EQ_U(fw_frame_parse(" cpl=16 region_first=3 region_lines=5 window_lines=0 hsync_active=1 "
+                               "vsync_active=1 max_frames=2 max_bytes=0 edge=rising sample_delay=0 "
+                               "pio=1 sm=0 clock_hz=25000000", 1, &args, why, sizeof why), 0);
+    fw_capture_result_t res;
+    pos = len;
+    ASSERT_EQ_U(fw_frame_run(&args, bufs, 4, NULL, NULL, &res, why, sizeof why), 0);
+    ASSERT_EQ_U(sim_frame_spans(), 3);
+    ASSERT_TRUE(streq(chunk(), "TIME"));
+    ASSERT_TRUE(streq(time_msg(), "frame window=5 buffers=3 hsync_active=1 vsync_active=1"));
+    out = sim_output(&len);
+    ASSERT_EQ_U(len - pos, want_len);
+    ASSERT_EQ_MEM(out + pos, want, want_len);
+
+    // Window captures cut the buffers short: 2 lines are a's and c's first.
+    pos = len;
+    args.window_lines = 2;
+    ASSERT_EQ_U(fw_frame_run(&args, bufs, 4, NULL, NULL, &res, why, sizeof why), 0);
+    ASSERT_TRUE(streq(chunk(), "TIME"));
+    ASSERT_TRUE(streq(time_msg(), "frame window=2 buffers=2 hsync_active=1 vsync_active=1"));
+    ASSERT_TRUE(streq(chunk(), "FRAM"));
+    ASSERT_TRUE(fram_is(0, 3, 2));
+    ASSERT_TRUE(streq(chunk(), "FRAM"));
+    ASSERT_TRUE(fram_is(0, 5, 2));
+    ASSERT_TRUE(streq(chunk(), "FRAM"));
+    ASSERT_TRUE(fram_is(0, 7, 1));
+    ASSERT_EQ_U(sim_frame_spans(), 1);  // the last window: one line, all a's
+
+    // Nothing but buffers too small for a line: the firmware's refusal.
+    const fw_span_t tiny_bufs[] = { { b, 3 } };
+    ASSERT_TRUE(fw_frame_run(&args, tiny_bufs, 1, NULL, NULL, &res, why, sizeof why) == -1);
+    ASSERT_TRUE(streq(why, "not one line of buffer: a line is 16 bytes"));
+}
+
 // The arena decides the window when it is smaller than the region.
 TEST(frame_window_limited_by_the_arena) {
     tiny_frames();
@@ -451,6 +510,7 @@ int main(void) {
     RUN(stream_stops_on_the_stop_byte);
     RUN(frame_whole_region_measures_polarity);
     RUN(frame_windows_sweep_the_region);
+    RUN(frame_into_chained_buffers_is_the_arenas_chunks);
     RUN(frame_window_limited_by_the_arena);
     RUN(frame_rxstall_is_reported_per_window_and_in_the_summary);
     RUN(frame_refusals);

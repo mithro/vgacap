@@ -20,6 +20,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "fw_hal.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -73,13 +75,17 @@ typedef struct fw_capture_result {
 // firmware answers `ok stream` / `ok frame` there. May be NULL.
 typedef void (*fw_started_fn)(void *user);
 
-// Run one capture into `arena` (`arena_bytes`, 4-byte aligned). Returns -1
-// with the refusal in `why` when it cannot start (nothing has been written
-// then), else 0 once the closing summary TIME chunk has been written.
+// Run one capture. A stream captures into `arena` (`arena_bytes`, 4-byte
+// aligned); a frame into the `count` buffers `bufs` (fw_hal.h), filled in
+// order, each used in whole lines -- the firmware's one arena, or the
+// MicroPython module's heap blocks; `count` may be 0 (no buffer: refused).
+// Returns -1 with the refusal in `why` when it cannot start (nothing has
+// been written then), else 0 once the closing summary TIME chunk has been
+// written.
 int fw_stream_run(const fw_stream_args_t *a, uint32_t *arena, size_t arena_bytes,
                   fw_started_fn started, void *user, fw_capture_result_t *res, char *why,
                   size_t whylen);
-int fw_frame_run(const fw_frame_args_t *a, uint32_t *arena, size_t arena_bytes,
+int fw_frame_run(const fw_frame_args_t *a, const fw_span_t *bufs, unsigned count,
                  fw_started_fn started, void *user, fw_capture_result_t *res, char *why,
                  size_t whylen);
 

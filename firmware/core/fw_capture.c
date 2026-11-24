@@ -214,7 +214,28 @@ static int idle_level(unsigned gpio) {
     return 2u * ones > POLARITY_READS ? 1 : 0;
 }
 
-int fw_frame_run(const fw_frame_args_t *a, uint32_t *arena, size_t arena_bytes,
+// The spans one capture of `lines` lines fills: the first buffers' whole
+// lines, in order, the last one cut short (frame_rp2.py main's arm loop).
+static unsigned window_spans(const fw_span_t *bufs, unsigned count, uint32_t line_words,
+                             uint32_t lines, fw_span_t *out) {
+    unsigned n = 0;
+    for (unsigned i = 0; i < count && lines; i++) {
+        uint32_t take = bufs[i].words / line_words;
+        if (!take) continue;
+        if (take > lines) take = lines;
+        out[n].buf = bufs[i].buf;
+        out[n].words = take * line_words;
+        n++;
+        lines -= take;
+    }
+    return n;
+}
+
+// The spans of the capture running now (static: FW_FRAME_MAX_BUFFERS of
+// them is 1 KB, too much for a MicroPython caller's stack).
+static fw_span_t spans[FW_FRAME_MAX_BUFFERS];
+
+int fw_frame_run(const fw_frame_args_t *a, const fw_span_t *bufs, unsigned count,
                  fw_started_fn started, void *user, fw_capture_result_t *res, char *why,
                  size_t whylen) {
     const fw_board_t *b = hal_board();
@@ -241,15 +262,20 @@ int fw_frame_run(const fw_frame_args_t *a, uint32_t *arena, size_t arena_bytes,
         return refuse(why, whylen, "sysclk %lu is not 2..32 whole project clocks of %lu",
                       (unsigned long)sysclk, (unsigned long)a->clock_hz);
     }
+    if (count > FW_FRAME_MAX_BUFFERS) {
+        return refuse(why, whylen, "%u buffers, at most %u", count, FW_FRAME_MAX_BUFFERS);
+    }
     uint32_t line_words = cpl / spw;
-    uint32_t capacity = (uint32_t)(arena_bytes / 4u / line_words);
     uint32_t window = region_lines;
     if (window_lines && window_lines < window) window = window_lines;
+    uint32_t capacity = 0;
+    for (unsigned i = 0; i < count && capacity < window; i++) capacity += bufs[i].words / line_words;
     if (window > capacity) window = capacity;
     if (!window) {
         return refuse(why, whylen, "not one line of buffer: a line is %lu bytes",
                       (unsigned long)(4u * line_words));
     }
+    unsigned buffers = window_spans(bufs, count, line_words, window, spans);
     unsigned hs_gpio = b->uo_gpio + 7u, vs_gpio = b->uo_gpio + 3u;
     if (hs_act < 0) hs_act = 1 - idle_level(hs_gpio);
     if (vs_act < 0) vs_act = 1 - idle_level(vs_gpio);
@@ -264,8 +290,8 @@ int fw_frame_run(const fw_frame_args_t *a, uint32_t *arena, size_t arena_bytes,
     out_t o;
     out_init(&o);
     char msg[96];
-    snprintf(msg, sizeof msg, "frame window=%lu buffers=1 hsync_active=%d vsync_active=%d",
-             (unsigned long)window, hs_act, vs_act);
+    snprintf(msg, sizeof msg, "frame window=%lu buffers=%u hsync_active=%d vsync_active=%d",
+             (unsigned long)window, buffers, hs_act, vs_act);
     out_time(&o, 0, msg);
 
     uint32_t cursor = 0, picture = 0, frames = 0, stalls = 0;
@@ -274,7 +300,8 @@ int fw_frame_run(const fw_frame_args_t *a, uint32_t *arena, size_t arena_bytes,
         uint32_t lines_now = window;
         if (lines_now > region_lines - cursor) lines_now = region_lines - cursor;
         uint32_t first = region_first + cursor;
-        hal_frame_arm(first, arena, lines_now * line_words);
+        unsigned n = window_spans(bufs, count, line_words, lines_now, spans);
+        hal_frame_arm(first, spans, n);
         while (!hal_frame_done()) {
             if (stop_requested(&o)) {
                 stopping = 1;
@@ -287,8 +314,11 @@ int fw_frame_run(const fw_frame_args_t *a, uint32_t *arena, size_t arena_bytes,
             stalls++;
             out_time(&o, 0, "rxstall");
         }
-        vgacap_writer_frame(&o.w, picture, (uint16_t)first, (uint16_t)lines_now, cpl, arena,
-                            lines_now * cpl);
+        // One unbroken run of samples, so ONE chunk: a chunk per buffer
+        // would restart libvgaframe's line position at every buffer.
+        vgacap_writer_frame_begin(&o.w, picture, (uint16_t)first, (uint16_t)lines_now, cpl,
+                                  lines_now * cpl);
+        for (unsigned i = 0; i < n; i++) vgacap_writer_frame_words(&o.w, spans[i].buf, spans[i].words);
         hal_flush();
         cursor += lines_now;
         if (cursor >= region_lines) {

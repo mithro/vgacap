@@ -232,7 +232,8 @@ static void cmd_frame(const char *args) {
     }
     a.clock_hz = S.clock_on ? S.clock.clock_hz : 0u;
     fw_capture_result_t res;
-    if (fw_frame_run(&a, arena, arena_bytes, started, (void *)"frame", &res, why, sizeof why)) {
+    fw_span_t buf = { arena, (uint32_t)(arena_bytes / 4u) };
+    if (fw_frame_run(&a, &buf, 1, started, (void *)"frame", &res, why, sizeof why)) {
         reply("err %s", why);
         return;
     }

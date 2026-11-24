@@ -97,11 +97,25 @@ void hal_stream_stop(uint32_t *overruns, int *rxstall);
 
 // ---- frame / window (frame_rp2.py) ------------------------------------------
 
+// One capture buffer: `words` words at `buf`. A frame capture fills a list
+// of them in order, one unbroken run of samples (frame_rp2.py's HEAP: on a
+// fragmented MicroPython heap no one block holds a frame).
+typedef struct fw_span {
+    uint32_t *buf;
+    uint32_t words;
+} fw_span_t;
+
+// Most buffers one frame capture may fill: the host's FRAME_MAX_BUFFERS
+// for frame_rp2.py (python/ttcap/capture.py). They cost no DMA channels,
+// only a 16-byte control block each.
+#define FW_FRAME_MAX_BUFFERS 128u
+
 int hal_frame_start(const fw_pio_program_t *prog, unsigned pio, unsigned sm, const char **why);
 // One capture: the state machine restarted with `skip_lines` in its TX
-// FIFO, RXSTALL cleared, a DMA of `words` into `buf`, and after it the
-// stopper that disables the state machine and raises the interrupt.
-void hal_frame_arm(uint32_t skip_lines, uint32_t *buf, uint32_t words);
+// FIFO, RXSTALL cleared, DMA into each of the `count` (1..FW_FRAME_MAX_
+// BUFFERS) spans in turn, and after them the stopper that disables the
+// state machine and raises the interrupt.
+void hal_frame_arm(uint32_t skip_lines, const fw_span_t *spans, unsigned count);
 int hal_frame_done(void);
 // After done: whether the RX FIFO overflowed during the window.
 int hal_frame_rxstall(void);
