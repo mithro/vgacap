@@ -483,7 +483,8 @@ int main(int argc, char **argv) {
         if ((size_t)snprintf(s->dir, sizeof s->dir, "%s/%s", out, SAMPLER_NAMES[k]) >= sizeof s->dir ||
             (size_t)snprintf(s->store_file, sizeof s->store_file, "%s_%s_frames.rgb6.zst", name,
                              SAMPLER_NAMES[k]) >= sizeof s->store_file ||
-            (size_t)snprintf(s->store_path, sizeof s->store_path, "%s/%s", s->dir, s->store_file) >= sizeof s->store_path) {
+            (size_t)snprintf(s->store_path, sizeof s->store_path, "%s/%s/%s_%s_frames.rgb6.zst", out, SAMPLER_NAMES[k],
+                             name, SAMPLER_NAMES[k]) >= sizeof s->store_path) {
             fprintf(stderr, PROG ": output path too long\n"); return 1;
         }
         if (make_dir(s->dir)) { fprintf(stderr, PROG ": cannot create %s: %s\n", s->dir, strerror(errno)); return 1; }
