@@ -36,9 +36,8 @@ class Board:
 
 
 def main():
-    uo = open(sys.argv[1], "rb").read()
     rate = float(sys.argv[2]) if len(sys.argv) > 2 else 1e6
-    vgacap.sim_board(uo, bytes_per_s=rate, rxstall=len(sys.argv) > 3 and sys.argv[3] == "rxstall")
+    vgacap.sim_board(sys.argv[1], bytes_per_s=rate, rxstall=len(sys.argv) > 3 and sys.argv[3] == "rxstall")
     names = {"tt": Board(), "__name__": "__main__"}
     OUT.write(b"MicroPython unix vgacap board\r\n>>> ")
     raw = False

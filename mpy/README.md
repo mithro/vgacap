@@ -119,7 +119,7 @@ The unix port, on the simulated board (`firmware/sim`), for the tests:
     cd python && uv run pytest -q tests/test_mpy_module.py
 
 Both pin MicroPython to b006887db6 (1.29.0-preview), what the demo boards
-run. The unix build adds `vgacap.sim_board(uo, *, bytes_per_s, rxstall)`,
+run. The unix build adds `vgacap.sim_board(path, *, bytes_per_s, rxstall)`,
 `vgacap.sim_clock(hz)` and `vgacap.sim_now()`, to set up the simulated
 board; the rp2 build has none of them.
 

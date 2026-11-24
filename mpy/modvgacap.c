@@ -22,6 +22,9 @@
 #include "py/stream.h"
 
 #if VGACAP_MPY_SIM
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "sim.h"
 #else
 #include "hal_rp2.h"
@@ -40,7 +43,6 @@ MP_REGISTER_ROOT_POINTER(mp_obj_t vgacap_link[3]);
 MP_REGISTER_ROOT_POINTER(mp_obj_t vgacap_buf);
 MP_REGISTER_ROOT_POINTER(void *vgacap_arena);
 #if VGACAP_MPY_SIM
-MP_REGISTER_ROOT_POINTER(mp_obj_t vgacap_sim_uo);
 #endif
 
 static int busy;
@@ -66,6 +68,13 @@ static void protocol_text(vstr_t *text, size_t n_args, mp_map_t *kw, own_args_t 
         if (!mp_map_slot_is_filled(kw, i)) continue;
         mp_obj_t key = kw->table[i].key, value = kw->table[i].value;
         qstr name = mp_obj_str_get_qstr(key);
+        // Keys must be names: one passed through **{...} must not carry
+        // further key=value text into the protocol line.
+        for (const char *k = qstr_str(name); *k; k++) {
+            if (!((*k >= 'a' && *k <= 'z') || *k == '_')) {
+                mp_raise_msg_varg(&mp_type_ValueError, MP_ERROR_TEXT("'%q' is not a key"), name);
+            }
+        }
         if (name == MP_QSTR_out) {
             own->out = value;
             continue;
@@ -142,12 +151,18 @@ static mp_obj_t run(engine_fn engine, const void *args, const own_args_t *own, u
     MP_STATE_PORT(vgacap_buf) = own->buf;
     MP_STATE_PORT(vgacap_arena) = allocated ? arena : NULL;
     busy = 1;
+#if VGACAP_MPY_SIM
+    int saved_intr = CTRL_C;  // the unix port keeps its own; the REPL's is Ctrl-C
+#else
+    int saved_intr = mp_interrupt_char;  // the raw REPL runs code with Ctrl-C
+#endif
     mp_hal_set_interrupt_char(-1);
     vgacap_link_begin(own->out, own->stop);
     int refused = engine(args, arena, bytes, why, sizeof why);
     mp_obj_t exc = vgacap_link_end();
-    // Last, as in the scripts' `finally`: from here a Ctrl-C interrupts again.
-    mp_hal_set_interrupt_char(CTRL_C);
+    // Last, as in the scripts' `finally`: from here a Ctrl-C interrupts again
+    // (or whatever the caller had set before).
+    mp_hal_set_interrupt_char(saved_intr);
     busy = 0;
     MP_STATE_PORT(vgacap_buf) = MP_OBJ_NULL;
     MP_STATE_PORT(vgacap_arena) = NULL;
@@ -186,10 +201,18 @@ static mp_obj_t vgacap_stream(size_t n_args, const mp_obj_t *pos, mp_map_t *kw) 
 }
 static MP_DEFINE_CONST_FUN_OBJ_KW(vgacap_stream_obj, 0, vgacap_stream);
 
-// The largest block of whole lines, up to `wanted` bytes, the heap holds:
-// halving down to one that fits, then a binary search back up. Each miss
-// costs MicroPython a collection, so about 2 log2(lines) of them.
+// Free heap a frame capture leaves MicroPython while it runs: what it
+// allocates between buffers (the scheduler, the ttboard SDK's soft timers)
+// must still fit. frame_rp2.py holds back 4 KB the same way.
+#define HEAP_RESERVE_BYTES 4096u
+
+// The largest block of whole lines, up to `wanted` bytes, the heap holds
+// with HEAP_RESERVE_BYTES still free: halving down to one that fits, then a
+// binary search back up -- the block found so far freed before each larger
+// probe, or no larger one could ever fit beside it. Each miss costs
+// MicroPython a collection, so about 2 log2(lines) of them.
 static uint32_t *largest_lines(size_t wanted, size_t line, size_t *bytes) {
+    void *reserve = m_malloc_maybe(HEAP_RESERVE_BYTES);
     size_t hi = wanted / line, lo = 0;  // lo fits (0: nothing yet), hi + 1 does not
     void *p = NULL;
     for (size_t n = hi; n; n /= 2) {
@@ -200,23 +223,22 @@ static uint32_t *largest_lines(size_t wanted, size_t line, size_t *bytes) {
         }
         hi = n - 1;
     }
-    if (!lo) {
-        *bytes = 0;
-        return NULL;
-    }
-    while (lo < hi) {
+    while (lo && lo < hi) {
         size_t mid = lo + (hi - lo + 1) / 2;
-        void *q = m_malloc_maybe(mid * line);
-        if (q) {
-            m_del(uint8_t, p, lo * line);
-            p = q;
+        m_del(uint8_t, p, lo * line);
+        p = m_malloc_maybe(mid * line);
+        if (p) {
             lo = mid;
         } else {
             hi = mid - 1;
+            // The block just given back: nothing else has allocated since.
+            p = m_malloc_maybe(lo * line);
+            if (!p) lo = 0;
         }
     }
+    if (reserve) m_del(uint8_t, reserve, HEAP_RESERVE_BYTES);
     *bytes = lo * line;
-    return p;
+    return lo ? p : NULL;
 }
 
 // frame(*, clock_hz, cpl, region_first, region_lines, window_lines,
@@ -257,29 +279,47 @@ static MP_DEFINE_CONST_FUN_OBJ_KW(vgacap_frame_obj, 0, vgacap_frame);
 // ---- the simulated board (unix test build) --------------------------------------------
 
 #if VGACAP_MPY_SIM
-// sim_board(uo, *, bytes_per_s=1e6, rxstall=False): (re)start the simulated
-// board on the design `uo` (one uo_out byte per project clock, repeated).
+// sim_board(path, *, bytes_per_s=1e6, rxstall=False): (re)start the
+// simulated board on the design in the file `path` (one uo_out byte per
+// project clock, repeated). Read with C stdio into C memory, not the
+// MicroPython heap, so a test can give MicroPython a small heap.
+static uint8_t *sim_uo;
+
 static mp_obj_t vgacap_sim_board(size_t n_args, const mp_obj_t *pos, mp_map_t *kw) {
-    enum { ARG_uo, ARG_bytes_per_s, ARG_rxstall };
+    enum { ARG_path, ARG_bytes_per_s, ARG_rxstall };
     static const mp_arg_t allowed[] = {
-        { MP_QSTR_uo, MP_ARG_REQUIRED | MP_ARG_OBJ, { .u_obj = MP_OBJ_NULL } },
+        { MP_QSTR_path, MP_ARG_REQUIRED | MP_ARG_OBJ, { .u_obj = MP_OBJ_NULL } },
         { MP_QSTR_bytes_per_s, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_obj = MP_OBJ_NULL } },
         { MP_QSTR_rxstall, MP_ARG_KW_ONLY | MP_ARG_BOOL, { .u_bool = false } },
     };
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed)];
     mp_arg_parse_all(n_args, pos, kw, MP_ARRAY_SIZE(allowed), allowed, args);
     not_busy();
-    mp_buffer_info_t bi;
-    mp_get_buffer_raise(args[ARG_uo].u_obj, &bi, MP_BUFFER_READ);
-    if (!bi.len) mp_raise_ValueError(MP_ERROR_TEXT("uo is empty"));
-    mp_obj_t uo = mp_obj_new_bytes(bi.buf, bi.len);  // ours: the simulator keeps a pointer
-    mp_buffer_info_t ui;
-    mp_get_buffer_raise(uo, &ui, MP_BUFFER_READ);
     mp_float_t rate = args[ARG_bytes_per_s].u_obj == MP_OBJ_NULL ? (mp_float_t)1e6
                                                                  : mp_obj_get_float(args[ARG_bytes_per_s].u_obj);
     if (!(rate > 0)) mp_raise_ValueError(MP_ERROR_TEXT("bytes_per_s must be positive"));
-    MP_STATE_PORT(vgacap_sim_uo) = uo;
-    sim_config_t cfg = { .uo = ui.buf, .uo_len = ui.len, .seconds_per_byte = 1.0 / (double)rate,
+    const char *path = mp_obj_str_get_str(args[ARG_path].u_obj);
+    FILE *f = fopen(path, "rb");
+    if (!f) mp_raise_OSError(MP_ENOENT);
+    size_t cap = (size_t)1 << 20, len = 0;
+    uint8_t *uo = malloc(cap);
+    while (uo) {
+        len += fread(uo + len, 1, cap - len, f);
+        if (len < cap) break;
+        cap *= 2u;
+        uint8_t *bigger = realloc(uo, cap);
+        if (!bigger) free(uo);
+        uo = bigger;
+    }
+    fclose(f);
+    if (!uo) mp_raise_msg(&mp_type_MemoryError, MP_ERROR_TEXT("sim_board: out of memory"));
+    if (!len) {
+        free(uo);
+        mp_raise_ValueError(MP_ERROR_TEXT("the design file is empty"));
+    }
+    free(sim_uo);
+    sim_uo = uo;
+    sim_config_t cfg = { .uo = sim_uo, .uo_len = len, .seconds_per_byte = 1.0 / (double)rate,
                          .arena_bytes = 0 };
     sim_init(&cfg);
     sim_force_rxstall(args[ARG_rxstall].u_bool);

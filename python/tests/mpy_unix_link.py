@@ -25,8 +25,9 @@ BOARD = pathlib.Path(__file__).resolve().parent / "mpy_unix_board.py"
 class MpyUnixLink:
     """`write`/`read`/`close` over the unix MicroPython's pipes."""
 
-    def __init__(self, uo_path, bytes_per_s: float = 1e6, rxstall: bool = False) -> None:
-        argv = [str(MPY_UNIX), "-X", "heapsize=4M", str(BOARD), str(uo_path), repr(float(bytes_per_s))]
+    def __init__(self, uo_path, bytes_per_s: float = 1e6, rxstall: bool = False,
+                 heapsize: str = "4M") -> None:
+        argv = [str(MPY_UNIX), "-X", "heapsize=" + heapsize, str(BOARD), str(uo_path), repr(float(bytes_per_s))]
         if rxstall:
             argv.append("rxstall")
         self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)

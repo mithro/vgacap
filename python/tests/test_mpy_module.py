@@ -319,3 +319,27 @@ def test_cli_refuses_a_firmware_without_the_module(monkeypatch, tmp_path, capsys
     assert not out.exists()
     # nothing was set up on the board: the probe came first
     assert not any("clock_project" in c for c in board.commands)
+
+
+def test_a_small_heap_gets_most_of_it_as_window(bars_uo, tmp_path):
+    # 640x480 needs 481 x 800 bytes; a 256 KB heap holds a fraction. The
+    # module takes the largest block of whole lines that leaves its 4 KB
+    # reserve, not merely the first power-of-two size that fitted.
+    link, repl = open_board(bars_uo[0], heapsize="256K")
+    try:
+        stats, data = capture(repl, frame_request(max_frames=1))
+    finally:
+        link.close()
+    assert stats.clean, stats.format()
+    window = int(stats.messages[0].split()[1].split("=")[1])
+    assert 0 < window < 481
+    assert window * 800 > 0.9 * (stats.mem_free_before - 4096 - 800), (window, stats.mem_free_before)
+    assert sum(f[2] for f in frams(data)) == 481
+    assert_pictures_exact(pictures(tmp_path, data), bars_uo[1])
+
+
+def test_keys_cannot_carry_protocol_text(board):
+    stdout, stderr = board.exec(
+        "import vgacap\nvgacap.stream(**{'buf_words': 64, 'max_bytes': 0, 'edge': 'falling', "
+        "'pio=1 sm': 0})")
+    assert stderr.strip().splitlines()[-1] == "ValueError: 'pio=1 sm' is not a key"
