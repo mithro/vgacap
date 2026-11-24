@@ -52,6 +52,7 @@ from .capture import (
     CaptureSession,
     CaptureStats,
     frames_to_max_bytes,
+    restore_mode,
     run_capture,
     select_project,
     stop_clock,
@@ -464,6 +465,7 @@ def capture(
     vga_mode: str = DEFAULT_VGA_MODE,
     window_lines: int = 0,
     sample_delay: int = 0,
+    ui_in: int | None = None,
 ) -> CaptureStats:
     """Run one capture to `out_path` and print what happened.
 
@@ -542,6 +544,7 @@ def capture(
                     window_lines=window_lines if framed else 0,
                     max_frames=max_frames,
                     sample_delay=sample_delay,
+                    ui_in=ui_in,
                 )
                 selection = select_project(repl, request)
                 print(
@@ -573,6 +576,8 @@ def capture(
             _report(stats, "stdout" if to_stdout else out_path, stream=say)
             if stop_clock_after:
                 stop_clock(repl)
+            if "mode_before" in selection:
+                restore_mode(repl, selection["mode_before"])
             if to_stdout and fp.consumer_closed:
                 raise ConsumerClosed()
         finally:
@@ -791,6 +796,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"frame/window modes: the VGA timing to expect (default {DEFAULT_VGA_MODE})",
     )
     capture_parser.add_argument(
+        "--ui-in",
+        type=lambda s: int(s, 0),
+        default=None,
+        help="drive the design's ui_in with this value (the SDK is switched "
+        "to ASIC_RP_CONTROL for the capture and put back afterwards); "
+        "default: leave the board's inputs alone",
+    )
+    capture_parser.add_argument(
         "--sample-delay",
         type=int,
         default=0,
@@ -872,6 +885,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 vga_mode=args.vga_mode,
                 window_lines=args.window_lines,
                 sample_delay=args.sample_delay,
+                ui_in=args.ui_in,
             )
         except ConsumerClosed:
             # The normal end of a pull: the pipeline stopped reading. The

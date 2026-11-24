@@ -221,12 +221,21 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
         // without this the window's first line would keep the start error.
         // The pulse's trailing edge is at x = hsync width whatever the
         // start, so put x there.
+        //
+        // The pulse's level is taken from the window's own first sample,
+        // not from the mode table: by contract that sample is inside the
+        // pulse, and a design may invert a mode's usual polarity
+        // (tt_um_vgacal_modes with ui_in[2] set did, on fpga-4, and the
+        // table's level made this give up and leave the line a pixel off).
+        // A first change later than the pulse width allows means the window
+        // did not start in a pulse after all, and nothing is moved.
         const vgaframe_mode_t *m = resolved_mode(f);
         uint32_t width = m ? m->h_sync : f->learner.t.hsync_width;
-        uint8_t level = m ? m->h_sync_positive : f->learner.t.hsync_positive;
-        if (h == level) f->fram_anchor = 2;
-        else {
-            if (f->fram_anchor == 2 && width) f->x = width;
+        if (f->fram_anchor == 1) {
+            f->fram_anchor_level = h;
+            f->fram_anchor = 2;
+        } else if (h != f->fram_anchor_level) {
+            if (width && f->x <= width + width / 4) f->x = width;
             f->fram_anchor = 0;
         }
     }

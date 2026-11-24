@@ -31,6 +31,9 @@ VGA = MODES["640x480@60"]
 
 def run_frame(profile, uo, *, period=5, high=2, delay=1, chip="rp2350", heap=None,
               stop_after_bytes=None, **cfg_kwargs):
+    # The SDK's jitter-free clocking: the project clock is the system clock
+    # over a whole number, so the CFG's clock_hz is exactly sysclk / period.
+    cfg_kwargs.setdefault("clock_hz", 133_000_000 // period)
     cfg = frame_cfg(profile, **cfg_kwargs)
     kwargs = {}
     if heap is not None:
@@ -216,12 +219,24 @@ def test_the_measured_default_sample_point_is_exact(tmp_path, bars_uo):
     assert_pictures_exact(frames, bars(640, 480))
 
 
-def test_a_sample_delay_that_does_not_fit_one_pixel_is_refused(bars_uo):
-    # 133 MHz / 25 MHz = 5 cycles a pixel; the loop is 3 + delay. On fpga-4
-    # (4 cycles a pixel) delays 2 and 3 skipped samples and gave no picture
-    # at all, with nothing to say why. Refused with a reason instead.
-    board, out = run_frame(RP2350_DBV3, bars_uo, sample_delay=3, clock_hz=25_000_000, max_frames=1)
+@pytest.mark.parametrize("clock_hz", [25_000_000, 133_000_000 // 40, 133_000_000])
+def test_a_clock_the_sampler_cannot_lock_to_is_refused(bars_uo, clock_hz):
+    # 133 MHz / 25 MHz is 5.32 (a fractional PWM would drift past the
+    # free-running sampler), / 3.325 MHz is 40 (past the delay field), and
+    # 133 MHz is 1. Each is refused with a reason, not captured wrong.
+    board, out = run_frame(RP2350_DBV3, bars_uo, clock_hz=clock_hz, max_frames=1)
 
     frams, times = chunks(out)
     assert frams == []
-    assert times == ["error=sample_delay does not fit one project clock"]
+    assert times == ["error=sysclk 133000000 is not 2..32 whole project clocks of %d" % clock_hz]
+
+
+@pytest.mark.parametrize("period,high", [(2, 1), (3, 1), (4, 2)])
+def test_two_to_four_system_clocks_a_pixel_are_exact(tmp_path, bars_uo, period, high):
+    # 800x600 at 40 MHz runs the RP2350 at 80 MHz: 2 clocks a pixel, which
+    # only the free-running sampler can keep up with.
+    board, out = run_frame(RP2350_DBV3, bars_uo, period=period, high=high, delay=0,
+                           edge="rising", max_frames=1)
+
+    _, frames = pictures(tmp_path, RP2350_DBV3, out)
+    assert_pictures_exact(frames, bars(640, 480))

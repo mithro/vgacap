@@ -369,6 +369,9 @@ class CaptureRequest:
     #: `frame_rp2.py` only: system clocks between the sampled edge and the
     #: read (SAMPLE POINT in frame_rp2.py).
     sample_delay: int = 0
+    #: The design's `ui_in`, driven by the RP2 (None leaves the board's
+    #: inputs alone) -- e.g. tt_um_vgacal_modes takes its mode there.
+    ui_in: int | None = None
 
     @property
     def is_frame(self) -> bool:
@@ -384,6 +387,8 @@ class CaptureRequest:
             raise ValueError(
                 f"script must be one of {CAPTURE_SCRIPTS}, got {self.script!r}"
             )
+        if self.ui_in is not None and not 0 <= self.ui_in <= 255:
+            raise ValueError(f"ui_in must be 0..255, got {self.ui_in}")
         if self.edge not in EDGES:
             raise ValueError(f"edge must be one of {EDGES}, got {self.edge!r}")
         if self.clock_hz <= 0:
@@ -572,6 +577,21 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
                         "first") from None
     _exec_checked(repl, "tt.clock_project_stop()")
     _exec_checked(repl, "tt.reset_project(True)")
+    if req.ui_in is not None:
+        # The design's inputs, set while it is held in reset so it starts in
+        # the mode they select. The RP2 only drives ui_in in ASIC_RP_CONTROL;
+        # the fpgas.online boards sit in ASIC_MANUAL_INPUTS (2), where
+        # writing tt.ui_in changes nothing -- measured on fpga-4. The mode it
+        # was in is returned so the caller can put it back (`restore_mode`).
+        out = _exec_checked(repl, "print(int(tt.mode))")
+        did["mode_before"] = int(out.strip().splitlines()[-1])
+        _exec_checked(
+            repl,
+            "from ttboard.mode import RPMode\n"
+            "tt.mode = RPMode.ASIC_RP_CONTROL\n"
+            "tt.ui_in.value = %d" % req.ui_in,
+        )
+        did["ui_in"] = req.ui_in
     # `clock_project_PWM(freqHz, duty_u16=0xffff/2, quiet=False,
     # max_rp2040_freq=...)` in both SDK 2.x and 3.x; only the
     # `max_rp2040_freq` default differs between them, and this passes
@@ -605,6 +625,11 @@ def stop_clock(repl: RawRepl) -> None:
     _exec_checked(repl, "tt.clock_project_stop()")
 
 
+def restore_mode(repl: RawRepl, mode: int) -> None:
+    """Put the SDK's RPMode back to what `select_project` found (`--ui-in`)."""
+    _exec_checked(repl, "tt.mode = %d" % int(mode))
+
+
 def _describe(req: CaptureRequest) -> str:
     """The header `desc` line: what the host knows and the board does not.
 
@@ -619,6 +644,8 @@ def _describe(req: CaptureRequest) -> str:
         parts.append(req.desc)
     if req.selection:
         parts.append("project=%s" % req.selection)
+    if req.ui_in is not None:
+        parts.append("ui_in=%d" % req.ui_in)
     parts.append(
         "clock=%d mode=extclk edge=%s profile=%s"
         % (req.clock_hz, req.edge, req.profile.name)

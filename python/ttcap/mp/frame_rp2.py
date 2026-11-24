@@ -62,10 +62,19 @@ picture's pixels came back with stray bits. So the edge and a delay of
 whole system clocks after it are CFG. Swept on fpga-4 at 25 MHz (100 MHz
 system clock, 4 cycles a pixel, 2026-11-24): falling+0 1.4% wrong,
 falling+1 exact, rising+0 exact, rising+1 10% wrong; the host defaults to
-rising+0, the middle of that window. The sampler loop is 3 instructions
-plus the delay, and must fit one pixel: past that it silently skips
-samples (the sweep's +2 and +3 gave no picture at all), so main() refuses
-such a delay with an `error=` TIME chunk instead.
+rising+0, the middle of that window.
+
+PHASE-LOCKED SAMPLING. The SDK always picks a jitter-free system clock, a
+whole multiple of the project clock (measured on fpga-4: 4x at 25 and
+31.5 MHz, 2x at 36 and 40 MHz; 28.322 MHz is given as 28.25 = 113 / 4), so
+the PWM that makes the project clock is phase-locked to the PIO. The
+sampler therefore syncs to one clock edge after the trigger and then runs
+free: `in pins [P-1]`, one sample every P system clocks, P = sysclk /
+clock. A wait-for-edge loop needs 3 instructions a sample and could not
+keep up at 2 clocks a pixel (800x600 at 40 MHz); a delay past 4 - 3 made
+it skip samples silently. main() refuses a ratio that is not whole (a
+fractional PWM would drift) or outside 2..32 (the delay field's reach;
+slower clocks are what stream mode is for).
 
 HEAP. One frame of 640x480 is 420,000 samples, and fpga-1 has ~414 KB free
 but in pieces: the largest block measured 142 KB (2026-11-24). So a
@@ -117,7 +126,7 @@ def on_done(_channel):
     DONE[0] = True
 
 
-def make_trigger(clk_gpio, hs_gpio, vs_gpio, hs_act, vs_act, in_count, push, clk_act, delay):
+def make_trigger(clk_gpio, hs_gpio, vs_gpio, hs_act, vs_act, in_count, push, clk_act, delay, period):
     """The trigger + sampler program, operands as closure cells.
 
     Same rules as `make_sampler()` in the prelude: every operand read in
@@ -157,10 +166,10 @@ def make_trigger(clk_gpio, hs_gpio, vs_gpio, hs_act, vs_act, in_count, push, clk
         wait(hs_act, gpio, hs_gpio)  # noqa: F821 - hsync leading edge
         jmp("skip")  # noqa: F821
         label("go")  # noqa: F821
-        wrap_target()  # noqa: F821
         wait(clk_idle, gpio, clk_gpio)  # noqa: F821
         wait(clk_act, gpio, clk_gpio)[delay]  # noqa: F821 - the edge, then `delay` cycles
-        in_(pins, in_count)  # noqa: F821
+        wrap_target()  # noqa: F821
+        in_(pins, in_count)[period - 1]  # noqa: F821 - one sample per project clock
         wrap()  # noqa: F821
 
     return trigger
@@ -231,8 +240,11 @@ def write_fram_chunk(out, counter, first, lines, parts):
 def main(out):
     """Capture windows of successive frames until told to stop."""
     # cpl being whole words is checked by the host (frame_cfg).
-    if 3 + SAMPLE_DELAY > machine.freq() // CLOCK_HZ:  # noqa: F821
-        write_time_chunk(out, 0, b"error=sample_delay does not fit one project clock")  # noqa: F821
+    sysclk = machine.freq()  # noqa: F821
+    period = (sysclk + CLOCK_HZ // 2) // CLOCK_HZ
+    if not 2 <= period <= 32 or abs(sysclk - period * CLOCK_HZ) * 200 > sysclk:
+        msg = "error=sysclk %d is not 2..32 whole project clocks of %d"
+        write_time_chunk(out, 0, (msg % (sysclk, CLOCK_HZ)).encode())  # noqa: F821
         return
     if not claim_pio(out):  # noqa: F821 - prelude
         return
@@ -246,7 +258,7 @@ def main(out):
 
     program = make_trigger(
         CLK_WAIT_GPIO, HSYNC_GPIO, VSYNC_GPIO, hs_act, vs_act, IN_COUNT, PUSH_THRESH,  # noqa: F821
-        1 if EDGE == "rising" else 0, SAMPLE_DELAY,  # noqa: F821
+        1 if EDGE == "rising" else 0, SAMPLE_DELAY, period,  # noqa: F821
     )
     sm = new_state_machine(program)  # noqa: F821 - prelude
 

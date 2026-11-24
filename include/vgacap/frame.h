@@ -153,10 +153,10 @@ typedef struct vgaframe {
     int fram_active, fram_pending;
     uint32_t fram_counter; uint16_t fram_first_line, fram_line_count; uint32_t fram_cpl; uint32_t fram_remaining;
     uint32_t fram_max_line;
-    // Re-anchoring a window's first line: 1 while the window's first hsync
-    // pulse has not been seen yet, 2 while inside it, 0 once done. See
-    // vgaframe_frame_begin().
-    uint8_t fram_anchor;
+    // Re-anchoring a window's first line: 1 until the window's first
+    // sample, 2 while still at that sample's hsync level (the pulse the
+    // window starts in), 0 once done. See vgaframe_push().
+    uint8_t fram_anchor, fram_anchor_level;
     // Timing actually used for the most recently emitted frame: the
     // learner's own measurement, unless emit() resolved a different mode
     // (force_mode, or a FRAM clocks-per-line table match) - see emit() in

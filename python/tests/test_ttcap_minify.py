@@ -206,10 +206,11 @@ def test_build_is_cfg_then_the_prelude_then_the_body():
     lines = script.split("\n")
 
     assert lines[0].startswith("CFG = {")
-    # Exactly the two minified parts after the CFG line, in order.
-    assert "\n".join(lines[1:]) == mp.minify(mp.load("prelude.py")) + mp.minify(
-        mp.load("capture_rp2.py")
-    )
+    # Exactly the two minified parts after the CFG line, in order, less
+    # their blank lines.
+    parts = mp.minify(mp.load("prelude.py")) + mp.minify(mp.load("capture_rp2.py"))
+    assert [line for line in lines[1:] if line] == [line for line in parts.split("\n") if line]
+    assert "" not in lines[1:-1]
     compile(script, "<stdin>", "exec")
 
 
@@ -222,10 +223,14 @@ def test_build_strips_the_body_docstring_too():
     assert "Board-side code shared" not in script
 
 
-def test_source_has_the_same_layout_as_build_without_the_cfg_line():
-    built = mp.build(capture_cfg(RP2040_TT06), "capture_rp2.py")
+def test_build_keeps_blank_lines_that_are_inside_a_string(monkeypatch):
+    sources = {"prelude.py": "X = 1\n", "body.py": 'T = """a\n\nb"""\n\n\nY = 2\n'}
+    monkeypatch.setattr(mp, "load", lambda name: sources[name])
 
-    assert mp.source("capture_rp2.py").count("\n") == built.count("\n") - 1
+    script = mp.build({}, "body.py")
+
+    assert script == 'CFG = {}\nX = 1\nT = """a\n\nb"""\nY = 2\n'
+    assert mp.locate(6, "body.py") == ("body.py", 6)
 
 
 def test_build_wants_a_body_and_never_a_second_prelude():
@@ -236,12 +241,15 @@ def test_build_wants_a_body_and_never_a_second_prelude():
 
 
 def test_locate_maps_each_part():
-    prelude_lines = mp.load("prelude.py").count("\n")
+    built = mp.build(capture_cfg(RP2040_TT06), "capture_rp2.py").split("\n")
 
     assert mp.locate(1, "capture_rp2.py") == ("CFG", 1)
-    assert mp.locate(2, "capture_rp2.py") == ("prelude.py", 1)
-    assert mp.locate(1 + prelude_lines, "capture_rp2.py") == ("prelude.py", prelude_lines)
-    assert mp.locate(2 + prelude_lines, "capture_rp2.py") == ("capture_rp2.py", 1)
+    # Every built line maps to the very line it came from.
+    for number, text in enumerate(built[1:-1], 2):
+        name, line = mp.locate(number, "capture_rp2.py")
+        assert mp.minify(mp.load(name)).split("\n")[line - 1] == text
+    files = [mp.locate(n, "capture_rp2.py")[0] for n in range(2, len(built))]
+    assert files == sorted(files, key=["prelude.py", "capture_rp2.py"].index)
     with pytest.raises(ValueError):
         mp.locate(10**6, "capture_rp2.py")
     with pytest.raises(ValueError):

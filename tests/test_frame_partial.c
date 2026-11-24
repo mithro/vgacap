@@ -224,8 +224,14 @@ TEST(a_missing_active_line_keeps_the_picture_pending) {
 TEST(a_window_that_starts_inside_its_hsync_pulse_is_still_exact) {
     // A board trigger can start one or two samples after the hsync leading
     // edge. Every window here does, and the picture must still be exact,
-    // including each window's first line.
-    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    // including each window's first line -- also when the design inverts
+    // the mode's usual hsync polarity (the table says negative for
+    // 640x480@60; the second pass drives it positive).
+    const vgaframe_mode_t *table = vgaframe_mode_match(800, 525);
+    for (int inverted = 0; inverted <= 1; inverted++) {
+    vgaframe_mode_t flipped = *table;
+    flipped.h_sync_positive = (uint8_t)!table->h_sync_positive;
+    const vgaframe_mode_t *m = inverted ? &flipped : table;
     size_t n = synth_frame(m, grid, NULL, buf, sizeof buf / sizeof buf[0]); ASSERT_TRUE(n == 800u * 525u);
     for (uint32_t late = 1; late <= 2; late++) {
         vgaframe_config_t c; memset(&c, 0, sizeof c); c.max_clocks_per_line = 1400; c.max_lines = 900;
@@ -243,6 +249,7 @@ TEST(a_window_that_starts_inside_its_hsync_pulse_is_still_exact) {
             uint8_t g = grid(NULL, x, y); const uint8_t *q = last_rgb + (y * 640 + x) * 3;
             ASSERT_EQ_U(q[0], ((g >> 4) & 3) * 85); ASSERT_EQ_U(q[1], ((g >> 2) & 3) * 85); ASSERT_EQ_U(q[2], (g & 3) * 85);
         }
+    }
     }
 }
 
