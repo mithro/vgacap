@@ -54,8 +54,8 @@ when the trace has no closing record, because the run was cut off.
 | value | meaning |
 |---|---|
 | `ok` | the simulation finished normally |
-| `sim-timeout` | the simulation hit its wall-clock limit before it produced a usable clip |
-| `unstable-sync` | the line or frame period varied by more than 1%, so there is no stable raster |
+| `sim-timeout` | the run was stopped by the wall-clock limit (SIGTERM), or produced fewer than half its target frames |
+| `unstable-sync` | frame length varied by more than 1%, or more than 1% of lines were short or long |
 | `no-sync` | no periodic hsync/vsync was seen during calibration |
 | `bad-timing` | sync was seen but is not a plausible raster |
 | `truncated` | the trace ended without a closing record |
