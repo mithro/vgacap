@@ -340,14 +340,27 @@ TEST(last_report_values) {
     const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
     size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
     vgaframe_t f; setup(&f, NULL);
-    int lines = 0, frames = 0, other = 0;
+    vgaframe_timing_learner_t ref; vgaframe_timing_init(&ref);
+    int lines = 0, frames = 0, retro = 0, first2_seen = 0;
     for (int fr = 0; fr < 3; fr++) for (size_t i = 0; i < n; i++) {
         vgaframe_push(&f, buf[i], 1);
+        int want = vgaframe_timing_push(&ref, (uint8_t)((buf[i] >> 7) & 1), (uint8_t)((buf[i] >> 3) & 1), 1);
+        ASSERT_EQ_U(f.last_report, want);   // pins 0 on every non-edge push
         int r = f.last_report;
-        if (r == 1) lines++; else if (r == 2) frames++; else if (r != 0 && r != 3) other++;
+        if (r == 1) lines++;
+        else if (r == 2) { frames++; first2_seen = 1; }
+        else if (r == 3) { retro++; ASSERT_TRUE(!first2_seen); }
     }
-    ASSERT_EQ_U(other, 0);
-    ASSERT_TRUE(frames >= 2); ASSERT_TRUE(lines >= 2 * 525);
+    // Exact totals for 3 frames of 525 lines (1575 hsync pulses). The stream
+    // begins at the first pulse's leading edge, with no earlier phase to
+    // measure it against, so that pulse is never reported as a line start,
+    // and frame 0's start (the same pulse) is lost with it. Frames 1 and 2
+    // start with a reported 2 each (frames fed - 1 == 2), and every other
+    // pulse reports 1: 1575 - 1 - 2 == 1572. The retroactive 3 may appear
+    // at most once, before the first 2; this stream does not need it.
+    ASSERT_EQ_U(frames, 2);
+    ASSERT_EQ_U(lines, 3 * 525 - 1 - 2);
+    ASSERT_TRUE(retro <= 1);
     // A split run keeps its first piece's report: the run that starts at a
     // line's hsync trailing edge reports 1, and its later pieces do not
     // overwrite it with 0.
