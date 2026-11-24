@@ -507,13 +507,17 @@ def capture(
                 raise ValueError(f"mode must be one of {sorted(CAPTURE_MODES)}, got {mode!r}")
             script = CAPTURE_MODES[mode]
             framed = script == "frame_rp2.py"
+            rle = script == "rle_rp2.py"
             if edge is None:
-                edge = FRAME_EDGE if framed else "falling"
+                edge = FRAME_EDGE if framed or rle else "falling"
             if mode == "window" and not window_lines:
                 window_lines = DEFAULT_WINDOW_LINES
             max_frames = 0
             if framed and frames is not None:
                 max_frames = frames
+            elif rle and frames is not None:
+                # A frame's bytes depend on the picture under RLE.
+                raise ValueError("--frames does not apply to --mode rle; use --max-bytes or --seconds")
             elif frames is not None:
                 # `buf_words` sizes the chunks, and the byte budget has to
                 # allow for each chunk's 12 non-sample bytes.
@@ -781,7 +785,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_parser.add_argument(
         "--edge", choices=["falling", "rising"], default=None,
         help="project-clock edge to sample (default: falling in stream mode, "
-        f"where outputs have long settled; {FRAME_EDGE} in frame/window modes, "
+        f"where outputs have long settled; {FRAME_EDGE} in frame/window/rle modes, "
         "measured at 25 MHz)",
     )
     capture_parser.add_argument("--desc", default="", help="note to store in the header")
@@ -792,7 +796,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="stream: every sample, at a clock the USB link can carry "
         "(~750 kHz RP2350, ~60 kHz RP2040); frame: whole frames at the "
         "project's real clock, sent between frames; window: the same, "
-        "--window-lines lines per frame (default stream)",
+        "--window-lines lines per frame; rle: every sample, run-length "
+        "encoded by the PIO, as fast as the picture's runs let the link "
+        "keep up (default stream)",
     )
     capture_parser.add_argument(
         "--vga-mode",
@@ -812,7 +818,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--sample-delay",
         type=int,
         default=0,
-        help="frame/window modes: system clocks to wait after --edge before "
+        help="frame/window/rle modes: system clocks to wait after --edge before "
         "reading uo_out, to sample where it is stable at a real VGA clock "
         "(default 0)",
     )

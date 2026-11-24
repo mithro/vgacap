@@ -42,10 +42,16 @@ from .repl import CHUNK_HEADER_LEN, RawRepl, ReplFramingError
 
 EDGES = ("falling", "rising")
 #: Board-side program bodies a `CaptureRequest` may name (`ttcap/mp/`).
-CAPTURE_SCRIPTS = ("capture_rp2.py", "frame_rp2.py")
+CAPTURE_SCRIPTS = ("capture_rp2.py", "frame_rp2.py", "rle_rp2.py")
 #: `ttcap capture --mode` names: continuous streaming at a reduced clock,
-#: or whole frames / windows of frames at the project's real clock.
-CAPTURE_MODES = {"stream": "capture_rp2.py", "frame": "frame_rp2.py", "window": "frame_rp2.py"}
+#: or whole frames / windows of frames at the project's real clock, or a
+#: stream run-length encoded by the PIO (`RLE ` chunks).
+CAPTURE_MODES = {
+    "stream": "capture_rp2.py",
+    "frame": "frame_rp2.py",
+    "window": "frame_rp2.py",
+    "rle": "rle_rp2.py",
+}
 #: The timing `frame_rp2.py` is told to expect unless asked otherwise.
 DEFAULT_VGA_MODE = "640x480@60"
 #: The sample point frame capture uses unless told otherwise: the rising
@@ -154,6 +160,45 @@ def frame_cfg(
         sample_delay=sample_delay,
         clock_hz=clock_hz,
     )
+    return cfg
+
+
+#: `rle_rp2.py` styles: phase-locked to a whole sysclk/clock ratio, waiting
+#: for every clock edge, or whichever is exact for the clock (see the body).
+RLE_STYLES = ("auto", "locked", "edge")
+
+
+def rle_cfg(
+    profile: BoardProfile,
+    clock_hz: int,
+    buf_words: int = DEFAULT_BUF_WORDS,
+    max_bytes: int = 0,
+    edge: str = "rising",
+    sample_delay: int = 0,
+    style: str = "auto",
+    mask: int = -1,
+    pio: int = DEFAULT_PIO,
+    sm: int = 0,
+) -> dict:
+    """Build the `CFG` dict for `rle_rp2.py` (PIO run-length streaming).
+
+    `edge` and `sample_delay` place the sample point as in frame capture
+    (the default is frame capture's measured one). `style` and `mask` are
+    the body's STYLE and MASK; `mask` -1 lets the board pick (1 on RP2350).
+    `buf_words` must be even: a DMA buffer is whole (value, run) pairs.
+    """
+    if not 0 <= sample_delay <= 31:
+        raise ValueError(f"sample_delay must be 0..31 system clocks, got {sample_delay}")
+    if style not in RLE_STYLES:
+        raise ValueError(f"style must be one of {RLE_STYLES}, got {style!r}")
+    if mask not in (-1, 0, 1):
+        raise ValueError(f"mask must be -1 (board decides), 0 or 1, got {mask}")
+    if buf_words % 2:
+        raise ValueError(f"buf_words must be even (whole pairs), got {buf_words}")
+    if clock_hz <= 0:
+        raise ValueError(f"clock_hz must be positive, got {clock_hz}")
+    cfg = capture_cfg(profile, buf_words=buf_words, max_bytes=max_bytes, edge=edge, pio=pio, sm=sm)
+    cfg.update(clock_hz=clock_hz, sample_delay=sample_delay, style=style, mask=mask)
     return cfg
 
 
@@ -397,11 +442,19 @@ class CaptureRequest:
     #: The design's `ui_in`, driven by the RP2 (None leaves the board's
     #: inputs alone) -- e.g. tt_um_vgacal_modes takes its mode there.
     ui_in: int | None = None
+    #: `rle_rp2.py` only: its STYLE and MASK (see `rle_cfg`).
+    rle_style: str = "auto"
+    rle_mask: int = -1
 
     @property
     def is_frame(self) -> bool:
         """Whole-frame/windowed capture rather than streaming."""
         return self.script == "frame_rp2.py"
+
+    @property
+    def is_rle(self) -> bool:
+        """Streaming, run-length encoded by the PIO."""
+        return self.script == "rle_rp2.py"
 
     def __post_init__(self) -> None:
         if self.project and self.design:
@@ -447,6 +500,19 @@ class CaptureRequest:
                 edge=self.edge,
                 sample_delay=self.sample_delay,
                 clock_hz=self.clock_hz,
+            )
+        if self.is_rle:
+            return rle_cfg(
+                self.profile,
+                clock_hz=self.clock_hz,
+                buf_words=self.buf_words,
+                max_bytes=self.max_bytes,
+                edge=self.edge,
+                sample_delay=self.sample_delay,
+                style=self.rle_style,
+                mask=self.rle_mask,
+                pio=self.pio,
+                sm=self.sm,
             )
         return capture_cfg(
             self.profile,
@@ -680,6 +746,8 @@ def _describe(req: CaptureRequest) -> str:
             "capture=%s vga_mode=%s sample_delay=%d"
             % ("window" if req.window_lines else "frame", req.vga_mode, req.sample_delay)
         )
+    if req.is_rle:
+        parts.append("capture=rle sample_delay=%d" % req.sample_delay)
     return " ".join(parts)
 
 
@@ -976,6 +1044,10 @@ class CaptureSession:
             # that reported samples=0 would make the CLI exit 3 ("the
             # sampler never saw a clock edge") on a perfectly good stream.
             self._samples += struct.unpack_from("<I", payload, offset)[0]
+        elif tag == b"RLE ":
+            # Samples are the runs' sum: u32 pair_count, then (value, run).
+            pairs = struct.unpack_from("<I", payload, 0)[0]
+            self._samples += sum(struct.unpack_from("<%dI" % (2 * pairs), payload, 4)[1::2])
         elif tag == b"TIME":
             # `dropped_samples` is a running total, so the newest chunk
             # simply replaces the old value -- never `+=`.
