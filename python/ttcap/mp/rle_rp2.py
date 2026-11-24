@@ -8,6 +8,10 @@ the prelude's:
     buf_words      32-bit words per DMA buffer (two are allocated); even,
                    so a buffer is whole (value, run) pairs
     max_bytes      stop after this many emitted bytes; 0 = until stopped
+    oneshot        1 = fill the two buffers once, back to back, stop the
+                   state machine and send them: buf_words pairs in one
+                   unbroken stretch at any clock, however busy the
+                   picture, for a link that could never stream it
     clock_hz       the project clock the host programmed
     sample_delay   system clocks after the sampled edge before the first
                    read (frame_rp2.py's SAMPLE POINT)
@@ -83,6 +87,7 @@ MAX_BYTES = CFG["max_bytes"]  # noqa: F821
 CLOCK_HZ = CFG["clock_hz"]  # noqa: F821
 SAMPLE_DELAY = CFG["sample_delay"]  # noqa: F821
 STYLE = CFG["style"]  # noqa: F821
+ONESHOT = CFG["oneshot"]  # noqa: F821
 MASK = CFG["mask"]  # noqa: F821
 
 BUF_BYTES = 4 * BUF_WORDS
@@ -114,21 +119,29 @@ def make_rle(clk_gpio, clk_act, delay, period, masked, in_count, locked):
     pad_eq = pad_long + 1 if locked else 0
     pad_entry = pad_long + 2 if locked else 0
 
+    # Both run inside rle() while asm_pio has swapped the globals, so
+    # the mnemonics resolve there, as rle()'s own do.
+    def edge():
+        wait(clk_idle, gpio, clk_gpio)  # noqa: F821
+        wait(clk_act, gpio, clk_gpio)[delay]  # noqa: F821
+
+    def sample():
+        if masked:
+            mov(y, pins)  # noqa: F821 - THE SAMPLE
+        else:
+            mov(osr, pins)  # noqa: F821 - THE SAMPLE
+            out(y, in_count)  # noqa: F821
+
+    # The ISR shifts left (the default) with autopush at 32 (also the
+    # default threshold); the OSR shifts right so `out` takes the low pins.
     @rp2.asm_pio(  # noqa: F821
-        in_shiftdir=rp2.PIO.SHIFT_LEFT,  # noqa: F821
         out_shiftdir=rp2.PIO.SHIFT_RIGHT,  # noqa: F821
         autopush=True,
-        push_thresh=32,
         fifo_join=rp2.PIO.JOIN_RX,  # noqa: F821
     )
     def rle():
-        wait(clk_idle, gpio, clk_gpio)  # noqa: F821
-        wait(clk_act, gpio, clk_gpio)[delay]  # noqa: F821
-        if masked:
-            mov(y, pins)  # noqa: F821 - the first sample
-        else:
-            mov(osr, pins)  # noqa: F821
-            out(y, in_count)  # noqa: F821
+        edge()
+        sample()
         in_(y, 32)  # noqa: F821 - v0, autopushed; ISR = 0
         mov(x, y)  # noqa: F821
         jmp("S")[pad_entry]  # noqa: F821
@@ -137,13 +150,8 @@ def make_rle(clk_gpio, clk_act, delay, period, masked, in_count, locked):
         wrap_target()  # noqa: F821
         label("S")  # noqa: F821
         if not locked:
-            wait(clk_idle, gpio, clk_gpio)  # noqa: F821
-            wait(clk_act, gpio, clk_gpio)[delay]  # noqa: F821
-        if masked:
-            mov(y, pins)  # noqa: F821 - THE SAMPLE
-        else:
-            mov(osr, pins)  # noqa: F821 - THE SAMPLE
-            out(y, in_count)  # noqa: F821
+            edge()
+        sample()
         jmp(x_not_y, "chg")  # noqa: F821
         mov(y, invert(isr))  # noqa: F821
         jmp(y_dec, "W")  # noqa: F821
@@ -280,6 +288,7 @@ def main(out):
     OVERRUNS[0] = 0
     dma_a = None
     dma_b = None
+    dma_s = None
     poller = None
     stdin = None
     saturated = 0
@@ -292,16 +301,25 @@ def main(out):
 
         dma_a = rp2.DMA()  # noqa: F821
         dma_b = rp2.DMA()  # noqa: F821
-        ctrl_a = dma_a.pack_ctrl(
-            size=2, inc_read=False, inc_write=True, treq_sel=DREQ,  # noqa: F821
-            chain_to=dma_b.channel, irq_quiet=False,
-        )
-        ctrl_b = dma_b.pack_ctrl(
-            size=2, inc_read=False, inc_write=True, treq_sel=DREQ,  # noqa: F821
-            chain_to=dma_a.channel, irq_quiet=False,
-        )
-        dma_a.config(read=RXF_ADDR, write=bufs[0], count=BUF_WORDS, ctrl=ctrl_a, trigger=False)  # noqa: F821
-        dma_b.config(read=RXF_ADDR, write=bufs[1], count=BUF_WORDS, ctrl=ctrl_b, trigger=False)  # noqa: F821
+        after_b = dma_a.channel
+        if ONESHOT:
+            # frame_rp2.py's stopper: B chains to a one-word unpaced copy
+            # of this state machine's bit into PIO CTRL's clear alias, so
+            # it stops a few cycles after the last word and RXSTALL keeps
+            # meaning a word lost inside the stretch.
+            dma_s = rp2.DMA()  # noqa: F821
+            stop_word = bytearray(4)
+            stop_word[0] = 1 << SM_NUM  # noqa: F821
+            dma_s.config(
+                read=stop_word, write=PIO_BASE + 0x3000, count=1,  # noqa: F821
+                ctrl=dma_s.pack_ctrl(size=2, inc_read=False, inc_write=False, treq_sel=0x3F,
+                                     chain_to=dma_s.channel, irq_quiet=True),
+            )
+            after_b = dma_s.channel
+        for dma, buf, to in ((dma_a, bufs[0], dma_b.channel), (dma_b, bufs[1], after_b)):
+            ctrl = dma.pack_ctrl(size=2, inc_read=False, inc_write=True, treq_sel=DREQ,  # noqa: F821
+                                 chain_to=to, irq_quiet=False)
+            dma.config(read=RXF_ADDR, write=buf, count=BUF_WORDS, ctrl=ctrl)  # noqa: F821
         WR_A = DMA_WRITE_ADDR0 + 0x40 * dma_a.channel
         WR_B = DMA_WRITE_ADDR0 + 0x40 * dma_b.channel
         TC_A = WR_A + 4
@@ -343,6 +361,8 @@ def main(out):
                 sent += write_time_chunk(out, OVERRUNS[0] * PAIRS_PER_BUF, b"overrun")  # noqa: F821
                 reported = OVERRUNS[0]
             index = 1 - index
+            if ONESHOT and index == 0:
+                break
             if MAX_BYTES and sent >= MAX_BYTES:
                 break
             if stop_requested(poller, stdin):  # noqa: F821
@@ -362,7 +382,7 @@ def main(out):
             rp2.PIO(PIO_NUM).remove_program(program)  # noqa: F821
         except Exception:
             pass
-        for dma in (dma_a, dma_b):
+        for dma in (dma_a, dma_b, dma_s):
             if dma is not None:
                 dma.active(0)
                 dma.close()
@@ -375,6 +395,7 @@ def main(out):
         del bufs
         dma_a = None
         dma_b = None
+        dma_s = None
         poller = None
         stdin = None
         gc.collect()  # noqa: F821

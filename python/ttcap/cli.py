@@ -467,6 +467,8 @@ def capture(
     window_lines: int = 0,
     sample_delay: int = 0,
     ui_in: int | None = None,
+    rle_mask: int = -1,
+    rle_oneshot: bool = False,
 ) -> CaptureStats:
     """Run one capture to `out_path` and print what happened.
 
@@ -550,6 +552,8 @@ def capture(
                     max_frames=max_frames,
                     sample_delay=sample_delay,
                     ui_in=ui_in,
+                    rle_mask=rle_mask,
+                    rle_oneshot=rle_oneshot,
                 )
                 selection = select_project(repl, request)
                 print(
@@ -823,6 +827,22 @@ def build_parser() -> argparse.ArgumentParser:
         "(default 0)",
     )
     capture_parser.add_argument(
+        "--rle-mask",
+        type=int,
+        choices=[-1, 0, 1],
+        default=-1,
+        help="rle mode: 1 = one-instruction sample under SHIFTCTRL.IN_COUNT "
+        "(RP2350), 0 = two instructions through the OSR (any RP2), -1 = the "
+        "board picks (default -1)",
+    )
+    capture_parser.add_argument(
+        "--rle-oneshot",
+        action="store_true",
+        help="rle mode: fill the two --buf-words buffers once at full speed, "
+        "then send them -- one unbroken stretch at a clock the link could "
+        "never stream",
+    )
+    capture_parser.add_argument(
         "--window-lines",
         type=int,
         default=0,
@@ -897,6 +917,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 window_lines=args.window_lines,
                 sample_delay=args.sample_delay,
                 ui_in=args.ui_in,
+                rle_mask=args.rle_mask,
+                rle_oneshot=args.rle_oneshot,
             )
         except ConsumerClosed:
             # The normal end of a pull: the pipeline stopped reading. The

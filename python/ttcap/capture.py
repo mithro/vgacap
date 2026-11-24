@@ -177,6 +177,7 @@ def rle_cfg(
     sample_delay: int = 0,
     style: str = "auto",
     mask: int = -1,
+    oneshot: bool = False,
     pio: int = DEFAULT_PIO,
     sm: int = 0,
 ) -> dict:
@@ -186,6 +187,7 @@ def rle_cfg(
     (the default is frame capture's measured one). `style` and `mask` are
     the body's STYLE and MASK; `mask` -1 lets the board pick (1 on RP2350).
     `buf_words` must be even: a DMA buffer is whole (value, run) pairs.
+    `oneshot` fills the two buffers once at full speed and sends them.
     """
     if not 0 <= sample_delay <= 31:
         raise ValueError(f"sample_delay must be 0..31 system clocks, got {sample_delay}")
@@ -198,7 +200,8 @@ def rle_cfg(
     if clock_hz <= 0:
         raise ValueError(f"clock_hz must be positive, got {clock_hz}")
     cfg = capture_cfg(profile, buf_words=buf_words, max_bytes=max_bytes, edge=edge, pio=pio, sm=sm)
-    cfg.update(clock_hz=clock_hz, sample_delay=sample_delay, style=style, mask=mask)
+    cfg.update(clock_hz=clock_hz, sample_delay=sample_delay, style=style, mask=mask,
+               oneshot=1 if oneshot else 0)
     return cfg
 
 
@@ -445,6 +448,8 @@ class CaptureRequest:
     #: `rle_rp2.py` only: its STYLE and MASK (see `rle_cfg`).
     rle_style: str = "auto"
     rle_mask: int = -1
+    #: `rle_rp2.py` only: fill both buffers once and send them (see rle_cfg).
+    rle_oneshot: bool = False
 
     @property
     def is_frame(self) -> bool:
@@ -474,7 +479,7 @@ class CaptureRequest:
         if self.seconds < 0:
             raise ValueError(f"seconds must not be negative, got {self.seconds}")
         if self.seconds == 0 and self.max_bytes == 0 and self.stop is None and not (
-            self.is_frame and self.max_frames
+            (self.is_frame and self.max_frames) or (self.is_rle and self.rle_oneshot)
         ):
             raise ValueError(
                 "seconds and max_bytes are both 0 and no stop callable was "
@@ -511,6 +516,7 @@ class CaptureRequest:
                 sample_delay=self.sample_delay,
                 style=self.rle_style,
                 mask=self.rle_mask,
+                oneshot=self.rle_oneshot,
                 pio=self.pio,
                 sm=self.sm,
             )

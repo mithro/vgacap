@@ -171,3 +171,21 @@ def test_the_request_builds_the_rle_cfg():
     assert cfg["style"] == "auto" and cfg["mask"] == -1 and cfg["clock_hz"] == 25_000_000
     with pytest.raises(ValueError, match="even"):
         rle_cfg(RP2350_DBV3, clock_hz=1, buf_words=4095)
+
+
+@pytest.mark.parametrize("name", ["bars", "random"])
+def test_oneshot_takes_an_unbroken_stretch_the_link_could_not_stream(bars_uo, name):
+    # 25 MHz at 150 MHz with the real USB rate: streaming overruns (above),
+    # but one shot of the two buffers is exact however busy the picture.
+    uo = bars_uo if name == "bars" else np.random.default_rng(3).integers(
+        0, 256, 50_000, dtype=np.uint8).tobytes()
+    stream = run(RP2350_DBV3, uo, 6, 150_000_000, cycles_per_byte=190.0,
+                 buf_words=20_000, oneshot=True)
+
+    msgs = messages(stream)
+    assert msgs[-1].startswith("overruns=0 rxstall=0")
+    rle_chunks = [p for t, p in read_chunks(stream) if t == "RLE "]
+    assert len(rle_chunks) == 2
+    got = samples_of(stream)
+    ok, _ = matches_signal(got, uo)
+    assert ok and len(got) >= 20_000
