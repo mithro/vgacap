@@ -4,8 +4,8 @@
 // ref_vgaframe_push, the a26c942 code kept under tests/fastpath_ref/, each
 // from a freshly initialised object (so the first push meets have_prev == 0).
 // After every push the two objects' state and the frames each one emitted are
-// compared, the frames byte for byte; the raw and cover buffers are compared
-// every few thousand pushes and at the end.
+// compared, the frames byte for byte; the whole raw, rgb and cover buffers
+// are compared every few thousand pushes and at the end.
 #include <stdint.h>
 #include "harness.h"
 #include "vgacap/frame.h"
@@ -47,6 +47,8 @@ static void pair_init(const uint8_t map[VGACAP_SIG_COUNT]) {
     memcpy(c.signal_map, map, VGACAP_SIG_COUNT);
     c.on_frame = on_frame;
     memset(&lib, 0, sizeof lib); memset(&ref, 0, sizeof ref);
+    // rgb starts non-zero, so a store past the end of a picture shows.
+    memset(lib.rgb, 0xA5, sizeof lib.rgb); memset(ref.rgb, 0xA5, sizeof ref.rgb);
     c.user = &lib.cap; vgaframe_init(&lib.f, &c, lib.raw, lib.rgb, lib.cover);
     c.user = &ref.cap; ref_vgaframe_init(&ref.f, &c, ref.raw, ref.rgb, ref.cover);
     pushes = frames_compared = 0;
@@ -90,6 +92,7 @@ static int same_frames(const capture_t *a, const capture_t *b) {
 static int same_buffers(void) {
     if (memcmp(lib.raw, ref.raw, sizeof lib.raw)) return mismatch("raw buffer");
     if (memcmp(lib.cover, ref.cover, sizeof lib.cover)) return mismatch("cover buffer");
+    if (memcmp(lib.rgb, ref.rgb, sizeof lib.rgb)) return mismatch("rgb buffer");
     return 1;
 }
 
@@ -279,6 +282,17 @@ static int random_stream(uint64_t seed, const uint8_t map[VGACAP_SIG_COUNT], int
         uint32_t samples = 25u * 800u - (rnd_below(3) == 0 ? rnd_below(800) : 0);
         size_t at = 800u * 525u + (size_t)first * 800u;
         if (!frame_begin_both(k / 4, first, 25, 800, samples)) return 0;
+        if (!push_stream(at, at + samples, map, is_tiny)) return 0;
+    }
+    // A FRAM picture whose windows cover every active line, so it is
+    // emitted complete-looking (partial_hint 0), but whose window at line
+    // 300 stops 300 clocks short, leaving the end of that line's active
+    // area unwritten: only the pixels themselves can mark it partial.
+    for (uint32_t first = 35; first < 515; first += 25) {
+        uint16_t count = (uint16_t)(first + 25 > 515 ? 515 - first : 25);
+        uint32_t samples = count * 800u - (first == 285 ? 300u : 0u);
+        size_t at = 800u * 525u + (size_t)first * 800u;
+        if (!frame_begin_both(9, (uint16_t)first, count, 800, samples)) return 0;
         if (!push_stream(at, at + samples, map, is_tiny)) return 0;
     }
     // Back to a continuous stream, long enough for the learner to settle
