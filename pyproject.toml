@@ -22,7 +22,7 @@ testpaths = ["python/tests", "gst/tests"]
 
 [tool.setuptools]
 package-dir = {"" = "python"}
-packages = ["vgacap", "ttcap", "ttcap.mp"]
+packages = ["vgacap", "ttcap", "ttcap.mp", "ttcap.emu"]
 
 [build-system]
 requires = ["setuptools>=68"]
