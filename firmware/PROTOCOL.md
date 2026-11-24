@@ -27,6 +27,7 @@ fields, or `err` followed by a message for a person.
 | `clock` | `hz=0..125000000` | `ok clock_hz=N actual_hz=N sysclk_hz=N period=P`, or for `hz=0` `ok clock_hz=0 sysclk_hz=N` |
 | `reset` | `hold=0\|1` | `ok reset=0\|1` |
 | `ui_in` | `value=-1..255` | `ok ui_in=V` |
+| `asic_select` | `index=0..1023` | `ok asic_select index=N`, after about 20 ms + 2 ms per index |
 | `stream` | see below | `ok stream`, then a capture |
 | `frame` | see below | `ok frame`, then a capture |
 | `program_stream` | `edge` | `ok words=... wrap_target=N wrap=N shiftctrl=0x... execctrl=0x...` |
@@ -46,6 +47,17 @@ fields, or `err` followed by a message for a person.
 * `ui_in value=V` drives `ui_in` (GPIO 17..24) with V; `value=-1` releases
   the pins. Until then they are left alone: the FPGA boards take `ui_in`
   from their own switches.
+* `asic_select index=N` (ASIC carriers only) selects the project at mux
+  index N exactly as the stock firmware's `ProjectMux.reset_and_clock_mux()`
+  does: `ctrl_sel_inc` (GPIO 2), `ctrl_sel_nrst` (GPIO 1) and `ctrl_ena`
+  (GPIO 0) low, 10 ms, `ctrl_sel_nrst` high, 10 ms, N pulses on
+  `ctrl_sel_inc` (1 ms high, 1 ms low), then `ctrl_ena` high. N is the
+  stock SDK's `tt.shuttle.<name>.count`. It is needed because those lines
+  float while the RP2350 is in its bootloader, so an ASIC board comes back
+  with no project selected (tt09, 2026-11-24). **Never on an FPGA
+  carrier**: GPIO 1 is the iCE40's `CRESET_B` there, and pulling it low
+  erases the FPGA's configuration. Until the first `asic_select` the three
+  pins are left alone.
 * `program_stream` / `program_frame` print the PIO program a capture with
   those operands would load, in hex, with its configuration -- for
   diagnosis and for the tests that compare it with MicroPython's assembler.

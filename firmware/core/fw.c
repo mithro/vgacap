@@ -182,6 +182,31 @@ static void cmd_reset(const char *args) {
     reply("ok reset=%d", S.reset_held);
 }
 
+// The stock firmware's ProjectMux.reset_and_clock_mux() (tt-micropython-
+// firmware src/ttboard/project_mux.py): reset the mux (inc, nrst, ena all
+// low, 10 ms, nrst high, 10 ms), `index` pulses on inc (1 ms high, 1 ms
+// low), then ena high. Running in place of the stock firmware, this is the
+// only way an ASIC board's project survives the switch: the mux lines float
+// while the RP2350 is in its bootloader (measured on tt09, 2026-11-24: no
+// sync at all until the project was selected again).
+static void cmd_asic_select(const char *args) {
+    static const fw_arg_spec_t specs[] = { { "index", 0, 1023, NULL } };
+    int64_t v[1];
+    PARSE(args, specs, v);
+    hal_asic_ctrl(0, 0, 0);
+    hal_delay_us(10000);
+    hal_asic_ctrl(0, 1, 0);
+    hal_delay_us(10000);
+    for (int64_t i = 0; i < v[0]; i++) {
+        hal_asic_ctrl(0, 1, 1);
+        hal_delay_us(1000);
+        hal_asic_ctrl(0, 1, 0);
+        hal_delay_us(1000);
+    }
+    hal_asic_ctrl(1, 1, 0);
+    reply("ok asic_select index=%d", (int)v[0]);
+}
+
 static void cmd_ui_in(const char *args) {
     static const fw_arg_spec_t specs[] = { { "value", -1, 255, NULL } };
     int64_t v[1];
@@ -430,7 +455,7 @@ static const struct {
 } COMMANDS[] = {
     { "hello", cmd_hello },       { "status", cmd_status },
     { "clock", cmd_clock },       { "reset", cmd_reset },
-    { "ui_in", cmd_ui_in },       { "stream", cmd_stream },
+    { "ui_in", cmd_ui_in },       { "asic_select", cmd_asic_select },       { "stream", cmd_stream },
     { "frame", cmd_frame },       { "program_stream", cmd_program_stream },
     { "program_frame", cmd_program_frame }, { "reboot", cmd_reboot_flash },
     { "bootsel", cmd_reboot_bootsel },

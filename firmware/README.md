@@ -74,13 +74,19 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   `tt_um_vgacal_bars` were pixel-exact, so the iCE40 kept its configuration
   (tt-vga-capture `docs/results/2026-11-24-picosdk-firmware-fpga4/`).
   GPIO 1 is the iCE40's `CRESET_B` there (and the mux controller's reset
-  on an ASIC carrier): the stock firmware leaves it driven high, while the
+  on an ASIC carrier). The stock firmware leaves it driven high; while the
   RP2350 is in reset and in its bootloader it is an input with the pad's
-  default pull-down, and this firmware drives it high again first thing at
-  boot. If the board's pull-up does not win over the pull-down in that
-  window, the FPGA comes back unconfigured and captures show no sync. The
-  ASIC boards' mux (GPIO 0/1/2) is not driven at all, so the same question
-  applies to whether the selected project survives there.
+  default pull-down, and this firmware leaves GPIO 0/1/2 alone unless told
+  otherwise (`asic_select`). On fpga-4 the FPGA's configuration survived
+  that anyway.
+* **ASIC boards lose their project across the switch.** On tt09
+  (2026-11-24) the stock firmware's frame capture of
+  `tt_um_rejunity_vga_logo` was clean, and this firmware's, after the
+  switch, saw no sync at all: the mux lines float in the bootloader and
+  the mux comes back with nothing selected. So this firmware selects the
+  project itself with `asic_select index=N`, the stock SDK's sequence
+  (PROTOCOL.md); `ttcap capture --firmware picosdk --asic-index N` sends
+  it. N is `tt.shuttle.<name>.count` under the stock firmware.
 * `ui_in` and `rst_n` are left untouched until `ui_in` / `reset` commands
   drive them; `ttcap` holds reset while it programs the clock and releases
   it last, as `select_project()` does.

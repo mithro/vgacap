@@ -528,3 +528,59 @@ def test_cli_reboot_into_bootsel_from_micropython(monkeypatch, capsys):
     assert cli.main(["reboot", "serial:/dev/ttboard", "--to", "bootsel"]) == 0
     assert board.commands[-1] == "import machine\nmachine.bootloader()"
     assert board.closed
+
+
+# -- ASIC carriers: the firmware selects the project itself ----------------------------
+
+
+def _stream_samples(data: bytes) -> np.ndarray:
+    raws = [payload for tag, payload in read_chunks(data) if tag == "RAW "]
+    return np.concatenate([np.frombuffer(p[4:], dtype=np.uint8).reshape(-1, 4)[:, ::-1].ravel()
+                           for p in raws])
+
+
+@pytest.fixture
+def asic_fw(bars_uo):
+    """The simulated board as an ASIC carrier, the design at mux index 5."""
+    link = SimLink(bars_uo[0], "--asic-index", "5")
+    firmware = FirmwareLink(link)
+    firmware.sync()
+    yield firmware
+    link.close()
+
+
+def test_an_asic_project_is_dark_until_selected(asic_fw):
+    """What tt09 showed on 2026-11-24: after the switch to this firmware the
+    mux has no project selected, so nothing comes out at all."""
+    _, data = capture(asic_fw, request(clock_hz=100_000, max_bytes=40_000))
+    samples = _stream_samples(data)
+    assert len(samples) and not samples.any()
+
+
+def test_asic_select_brings_the_design_back(asic_fw, bars_uo, tmp_path):
+    req = request(clock_hz=100_000, max_bytes=frames_to_max_bytes(RP2350_DBV3, 1), asic_index=5)
+    did = setup(asic_fw, req)
+    assert did["asic_index"] == 5
+    out = io.BytesIO()
+    stats = run_session(FirmwareSession(asic_fw, req), out)
+    assert stats.clean, stats.format()
+    assert_pictures_exact(pictures(tmp_path, out.getvalue()), bars_uo[1])
+
+
+def test_the_wrong_asic_index_selects_another_project(asic_fw):
+    _, data = capture(asic_fw, request(clock_hz=100_000, max_bytes=40_000, asic_index=4))
+    assert not _stream_samples(data).any()
+
+
+def test_asic_select_validates_its_index(fw):
+    with pytest.raises(CaptureError, match="index"):
+        fw.command("asic_select index=1024")
+    with pytest.raises(CaptureError, match="missing key 'index'"):
+        fw.command("asic_select")
+    assert fw.command("asic_select index=0") == {"index": "0"}
+
+
+def test_asic_index_needs_the_capture_firmware(tmp_path):
+    with pytest.raises(ValueError, match="--asic-index is for --firmware picosdk"):
+        cli.capture("serial:/dev/null", tmp_path / "x.vgacap", clock_hz=100_000,
+                    seconds=1, max_bytes=0, asic_index=3)

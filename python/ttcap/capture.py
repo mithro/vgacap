@@ -397,6 +397,11 @@ class CaptureRequest:
     #: The design's `ui_in`, driven by the RP2 (None leaves the board's
     #: inputs alone) -- e.g. tt_um_vgacal_modes takes its mode there.
     ui_in: int | None = None
+    #: `--firmware picosdk` on an ASIC board only: the project's index on the
+    #: chip's mux (the stock SDK's `tt.shuttle.<name>.count`), selected by the
+    #: capture firmware itself (its `asic_select` command). None leaves the
+    #: mux alone, which is right on an FPGA board.
+    asic_index: int | None = None
 
     @property
     def is_frame(self) -> bool:
@@ -412,6 +417,8 @@ class CaptureRequest:
             raise ValueError(
                 f"script must be one of {CAPTURE_SCRIPTS}, got {self.script!r}"
             )
+        if self.asic_index is not None and not 0 <= self.asic_index <= 1023:
+            raise ValueError(f"asic_index must be 0..1023, got {self.asic_index}")
         if self.ui_in is not None and not 0 <= self.ui_in <= 255:
             raise ValueError(f"ui_in must be 0..255, got {self.ui_in}")
         if self.edge not in EDGES:

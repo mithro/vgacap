@@ -253,6 +253,11 @@ def setup(link: FirmwareLink, req: CaptureRequest) -> dict:
     did: dict = {"project": None, "enable": "kept (capture firmware)", "clock_hz": req.clock_hz}
     link.command("clock hz=0")
     link.command("reset hold=1")
+    if req.asic_index is not None:
+        # The mux lines float while the RP2350 is in its bootloader, so an
+        # ASIC board comes back with no project selected (tt09, 2026-11-24).
+        link.command("asic_select index=%d" % req.asic_index, timeout=30.0)
+        did["asic_index"] = req.asic_index
     if req.ui_in is not None:
         link.command("ui_in value=%d" % req.ui_in)
         did["ui_in"] = req.ui_in
