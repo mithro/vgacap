@@ -30,6 +30,7 @@ typedef struct {
     uint32_t glitches_seen;   // lifetime total as of the last reported frame
     int have_frame;
     int failed;
+    int refused;   // the stream is not one this tool reads (exit 1)
 } app_t;
 
 // PPM rows are packed at exactly width * 3, so copy row by row from the
@@ -85,6 +86,15 @@ static void on_event(void *user, const vgacap_event_t *ev) {
     if (app->failed) return;
     switch (ev->type) {
     case VGACAP_EV_HEADER: {
+        // The frame layer counts every sample as a pixel clock: a stream
+        // with two samples a clock, or samples wider than 32 bits, is a
+        // simulation trace, not a capture.
+        if (ev->u.header->samples_per_clock != 1 || ev->u.header->sample_bits > 32) {
+            fprintf(stderr, "vgacap-frames: %s\n", "a simulation trace (samples_per_clock 2) is read with vgacap-sample, not vgacap-frames");
+            app->refused = 1;
+            app->failed = 1;
+            break;
+        }
         vgaframe_config_t cfg;
         memset(&cfg, 0, sizeof cfg);
         cfg.max_clocks_per_line = MAX_CPL;
@@ -180,6 +190,7 @@ int main(int argc, char **argv) {
     fprintf(stdout, "frames=%u glitches_total=%u\n", (unsigned)app.frames_written,
             (unsigned)app.frame.learner.t.glitches);
 
+    if (app.refused) return 1;
     if (app.failed) return 2;
     if (!app.have_frame) return 2;
     return 0;

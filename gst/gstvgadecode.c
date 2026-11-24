@@ -436,6 +436,14 @@ static void on_event(void *user, const vgacap_event_t *ev)
     switch (ev->type) {
     case VGACAP_EV_HEADER: {
         vgaframe_config_t cfg;
+        /* The frame layer counts every sample as a pixel clock: a stream
+         * with two samples a clock, or samples wider than 32 bits, is a
+         * simulation trace, not a capture. */
+        if (ev->u.header->samples_per_clock != 1 || ev->u.header->sample_bits > 32) {
+            GST_ELEMENT_ERROR(self, STREAM, WRONG_TYPE, ("%s", "a simulation trace (samples_per_clock 2) is read with vgacap-sample, not vgacap-frames"), (NULL));
+            self->flow = GST_FLOW_ERROR;
+            return;
+        }
         memset(&cfg, 0, sizeof cfg);
         cfg.max_clocks_per_line = (guint16)self->alloc_width;
         cfg.max_lines = (guint16)self->alloc_height;
