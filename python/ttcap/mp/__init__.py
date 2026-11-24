@@ -174,6 +174,12 @@ def minify(source: str) -> str:
     inside a string literal survives; lines inside a multi-line string
     literal are passed through untouched, so a blank line that is part of
     the data is not swallowed.
+
+    Indentation is rewritten to one space per block level, and a line that
+    continues a bracketed expression loses its indentation entirely (it has
+    no meaning there). Four spaces a level was ~30% of the minified frame
+    script, the difference between fitting the 10 KB compile budget and
+    not.
     """
     lines = source.split("\n")
     tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
@@ -187,8 +193,30 @@ def minify(source: str) -> str:
             row, column = token.start
             lines[row - 1] = lines[row - 1][:column]
 
+    # Lines whose first token sits inside brackets, or that follow a
+    # backslash continuation: their indentation is not block structure.
+    continued: set[int] = set()
+    depth = 0
+    seen: set[int] = set()
+    for token in tokens:
+        row = token.start[0]
+        if row not in seen and token.type not in (tokenize.NL, tokenize.NEWLINE,
+                                                   tokenize.INDENT, tokenize.DEDENT,
+                                                   tokenize.COMMENT):
+            seen.add(row)
+            if depth > 0:
+                continued.add(row)
+        if token.type == tokenize.OP and token.string in "([{":
+            depth += 1
+        elif token.type == tokenize.OP and token.string in ")]}":
+            depth -= 1
+    for number, text in enumerate(lines, 1):
+        if text.rstrip().endswith("\\") and number not in protected:
+            continued.add(number + 1)
+
     drop = _docstring_lines(ast.parse(source))
     out = []
+    levels = [0]
     for number, text in enumerate(lines, 1):
         if number in drop:
             out.append("")
@@ -196,8 +224,16 @@ def minify(source: str) -> str:
             out.append(text)
         elif not text.strip():
             out.append("")
+        elif number in continued:
+            out.append(text.strip())
         else:
-            out.append(text.rstrip())
+            width = len(text) - len(text.lstrip(" "))
+            if width > levels[-1]:
+                levels.append(width)
+            else:
+                while width < levels[-1]:
+                    levels.pop()
+            out.append(" " * (len(levels) - 1) + text.strip())
     return "\n".join(out)
 
 

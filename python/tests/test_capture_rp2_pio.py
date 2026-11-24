@@ -63,15 +63,25 @@ def _exec_functions(source: str, names, globals_=None) -> dict:
 
 
 def _exec_constant_block(source: str, cfg: dict) -> dict:
-    """Execute the script's leading constant assignments with `cfg` bound."""
+    """Execute the script's top-level constant assignments with `cfg` bound.
+
+    Every module-level `NAME = expr` that calls nothing and reads only CFG
+    and names bound before it, in order -- the prelude's and the body's
+    alike, wherever they sit between the function definitions. (Not, say,
+    `MEM = machine.mem32`: that needs the board.)
+    """
     namespace: dict = {"CFG": cfg}
     body = []
+    bound = {"CFG"}
     for node in ast.parse(mp.with_cfg(source, cfg)).body:
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
+        if not isinstance(node, ast.Assign):
             continue
-        if not isinstance(node, (ast.Assign, ast.Expr)):
-            break
+        if any(isinstance(n, ast.Call) for n in ast.walk(node.value)):
+            continue
+        if any(isinstance(n, ast.Name) and n.id not in bound for n in ast.walk(node.value)):
+            continue
         body.append(node)
+        bound.update(t.id for t in node.targets if isinstance(t, ast.Name))
     exec(compile(ast.Module(body=body, type_ignores=[]), SCRIPT, "exec"), namespace)  # noqa: S102
     return namespace
 
@@ -183,7 +193,9 @@ def test_rp2350_sets_the_pio_gpio_base_before_the_state_machine(source):
     # gpio_base shifts the whole PIO block's pin window; it must be set
     # before the state machine is created.
     main_src = ast.unparse(_main_node(source))
-    assert main_src.index("set_gpio_base(") < main_src.index("rp2.StateMachine(")
+    assert main_src.index("claim_pio(") < main_src.index("new_state_machine(")
+    assert "set_gpio_base(" in ast.unparse(_function_node(source, "claim_pio"))
+    assert "rp2.StateMachine(" in ast.unparse(_function_node(source, "new_state_machine"))
 
 
 class _StubPioBlock:
@@ -293,11 +305,15 @@ def test_time_chunks_report_a_cumulative_dropped_count(source):
 
 
 def test_main_reports_a_refused_gpio_base_move(source):
-    main_src = ast.unparse(_main_node(source))
+    claim = ast.unparse(_function_node(source, "claim_pio"))
 
-    assert "set_gpio_base(rp2.PIO(PIO_NUM), PIO_NUM, GPIO_BASE)" in main_src
-    assert "gpio_base is not " in main_src
-    assert "write_time_chunk" in main_src
+    assert "set_gpio_base(rp2.PIO(PIO_NUM), PIO_NUM, GPIO_BASE)" in claim
+    assert "gpio_base is not " in claim
+    assert "write_time_chunk" in claim
+    # ... and main gives up when it does.
+    main = _main_node(source)
+    first = main.body[1] if isinstance(main.body[0], ast.Expr) else main.body[0]
+    assert ast.unparse(first) == "if not claim_pio(out):\n    return"
 
 
 # -- (c) RX FIFO address, DREQ and DMA register arithmetic ----------------
@@ -415,7 +431,10 @@ def test_init_input_pins_never_touches_the_rp2040_ui_in_pads(source):
 
 
 def test_main_initialises_pins_before_creating_the_state_machine(source):
-    assert source.index("init_input_pins(machine.Pin") < source.index("rp2.StateMachine(")
+    claim = ast.unparse(_function_node(source, "claim_pio"))
+    assert "init_input_pins(machine.Pin, UO_GPIOS)" in claim
+    main_src = ast.unparse(_main_node(source))
+    assert main_src.index("claim_pio(") < main_src.index("new_state_machine(")
 
 
 # -- (e) shutdown structure -----------------------------------------------
@@ -481,13 +500,14 @@ def test_main_removes_the_sampler_program_from_the_block_in_finally(source):
 def test_main_defensively_clears_the_block_before_adding_the_sampler(source):
     # PIO0 is skipped: it holds the stock firmware's own program (the FPGA
     # loader) on FPGA boards, so it must not be touched here.
-    main_src = ast.unparse(_main_node(source))
+    fresh = ast.unparse(_function_node(source, "new_state_machine"))
 
-    assert "PIO_NUM != 0" in main_src
-    idx_guard = main_src.index("PIO_NUM != 0")
-    idx_remove = main_src.index("remove_program()")  # the no-argument, pre-add call
-    idx_sm = main_src.index("rp2.StateMachine(")
+    assert "PIO_NUM != 0" in fresh
+    idx_guard = fresh.index("PIO_NUM != 0")
+    idx_remove = fresh.index("remove_program()")  # the no-argument, pre-add call
+    idx_sm = fresh.index("rp2.StateMachine(")
     assert idx_guard < idx_remove < idx_sm
+    assert "new_state_machine(sampler)" in ast.unparse(_main_node(source))
 
 
 def test_main_catches_keyboardinterrupt(source):

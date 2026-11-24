@@ -182,6 +182,70 @@ TEST(incomplete_fram_flushes_at_a_continuous_frame_start) {
     }
 }
 
+TEST(windows_covering_only_the_active_lines_complete_the_picture) {
+    // A window capture covers the active area plus a line of margin and
+    // never the blanking. That is a whole picture, not a partial one.
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, grid, NULL, buf, sizeof buf / sizeof buf[0]); ASSERT_TRUE(n == 800u * 525u);
+    vgaframe_config_t c; memset(&c, 0, sizeof c); c.max_clocks_per_line = 1400; c.max_lines = 900;
+    static const uint8_t map[8] = { 7, 3, 0, 4, 1, 5, 2, 6 }; memcpy(c.signal_map, map, 8);
+    c.force_mode = NULL; c.on_frame = on_frame;
+    vgaframe_t f; nframes = npartial = 0; ASSERT_EQ_U(vgaframe_init(&f, &c, raw, rgb, cover), 0);
+    // Lines 34..459 then 459..514: two windows of one picture, as the
+    // board sends them when its heap holds 425 lines.
+    vgaframe_frame_begin(&f, 3, 34, 425, 800, 425 * 800);
+    for (uint32_t i = 0; i < 425u * 800u; i++) vgaframe_push(&f, buf[34u * 800u + i], 1);
+    ASSERT_EQ_U(nframes, 0);
+    vgaframe_frame_begin(&f, 3, 459, 56, 800, 56 * 800);
+    for (uint32_t i = 0; i < 56u * 800u; i++) vgaframe_push(&f, buf[459u * 800u + i], 1);
+    ASSERT_EQ_U(nframes, 1); ASSERT_EQ_U(npartial, 0); ASSERT_EQ_U(last.frame_counter, 3);
+    ASSERT_EQ_U(last.width, 640); ASSERT_EQ_U(last.height, 480);
+    for (uint16_t y = 0; y < 480; y++) for (uint16_t x = 0; x < 640; x++) {
+        uint8_t g = grid(NULL, x, y); const uint8_t *q = last_rgb + (y * 640 + x) * 3;
+        ASSERT_EQ_U(q[0], ((g >> 4) & 3) * 85); ASSERT_EQ_U(q[1], ((g >> 2) & 3) * 85); ASSERT_EQ_U(q[2], (g & 3) * 85);
+    }
+}
+
+TEST(a_missing_active_line_keeps_the_picture_pending) {
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, grid, NULL, buf, sizeof buf / sizeof buf[0]); (void)n;
+    vgaframe_config_t c; memset(&c, 0, sizeof c); c.max_clocks_per_line = 1400; c.max_lines = 900;
+    static const uint8_t map[8] = { 7, 3, 0, 4, 1, 5, 2, 6 }; memcpy(c.signal_map, map, 8);
+    c.force_mode = m; c.on_frame = on_frame;
+    vgaframe_t f; nframes = npartial = 0; vgaframe_init(&f, &c, raw, rgb, cover);
+    // Active lines are 35..514; this covers 35..513, one short.
+    vgaframe_frame_begin(&f, 4, 35, 479, 800, 479 * 800);
+    for (uint32_t i = 0; i < 479u * 800u; i++) vgaframe_push(&f, buf[35u * 800u + i], 1);
+    ASSERT_EQ_U(nframes, 0);
+    vgaframe_flush(&f);
+    ASSERT_EQ_U(nframes, 1); ASSERT_EQ_U(npartial, 1);
+}
+
+TEST(a_window_that_starts_inside_its_hsync_pulse_is_still_exact) {
+    // A board trigger can start one or two samples after the hsync leading
+    // edge. Every window here does, and the picture must still be exact,
+    // including each window's first line.
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, grid, NULL, buf, sizeof buf / sizeof buf[0]); ASSERT_TRUE(n == 800u * 525u);
+    for (uint32_t late = 1; late <= 2; late++) {
+        vgaframe_config_t c; memset(&c, 0, sizeof c); c.max_clocks_per_line = 1400; c.max_lines = 900;
+        static const uint8_t map[8] = { 7, 3, 0, 4, 1, 5, 2, 6 }; memcpy(c.signal_map, map, 8);
+        c.force_mode = NULL; c.on_frame = on_frame;
+        vgaframe_t f; nframes = npartial = 0; ASSERT_EQ_U(vgaframe_init(&f, &c, raw, rgb, cover), 0);
+        for (uint32_t first = 34; first < 515; first += 37) {
+            uint32_t lines = first + 37 <= 515 ? 37 : 515 - first;
+            uint32_t count = lines * 800u - late;
+            vgaframe_frame_begin(&f, 7, (uint16_t)first, (uint16_t)lines, 800, count);
+            for (uint32_t i = 0; i < count; i++) vgaframe_push(&f, buf[first * 800u + late + i], 1);
+        }
+        ASSERT_EQ_U(nframes, 1); ASSERT_EQ_U(npartial, 0);
+        for (uint16_t y = 0; y < 480; y++) for (uint16_t x = 0; x < 640; x++) {
+            uint8_t g = grid(NULL, x, y); const uint8_t *q = last_rgb + (y * 640 + x) * 3;
+            ASSERT_EQ_U(q[0], ((g >> 4) & 3) * 85); ASSERT_EQ_U(q[1], ((g >> 2) & 3) * 85); ASSERT_EQ_U(q[2], (g & 3) * 85);
+        }
+    }
+}
+
 int main(void) {
     RUN(windows_reassemble_into_one_frame);
     RUN(windows_reassemble_without_force_mode);
@@ -190,5 +254,8 @@ int main(void) {
     RUN(new_counter_flushes_partial);
     RUN(continuous_frames_after_fram_still_reconstruct);
     RUN(incomplete_fram_flushes_at_a_continuous_frame_start);
+    RUN(windows_covering_only_the_active_lines_complete_the_picture);
+    RUN(a_missing_active_line_keeps_the_picture_pending);
+    RUN(a_window_that_starts_inside_its_hsync_pulse_is_still_exact);
     RUN_TESTS_END();
 }

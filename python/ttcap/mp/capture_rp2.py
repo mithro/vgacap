@@ -5,7 +5,8 @@ A program body: `ttcap.mp.build(cfg, "capture_rp2.py")` puts
 `prelude.py` in front of it, which supplies the imports, the shared CFG
 keys, the register arithmetic, the chunk writers, `make_sampler()`,
 `set_gpio_base()`, `init_input_pins()` and the cooperative stop -- read that
-file's docstring first. Keys this body reads on top of the prelude's:
+file's docstring first. This body adds the DMA register map it re-arms
+channels through and `make_sampler()`, the plain sampler program. Keys this body reads on top of the prelude's:
 
     buf_words    32-bit words per DMA buffer (two are allocated), e.g. 4096
     max_bytes    stop after this many emitted bytes; 0 = run until Ctrl-C
@@ -44,6 +45,62 @@ MAX_BYTES = CFG["max_bytes"]  # noqa: F821
 
 BUF_BYTES = 4 * BUF_WORDS
 SAMPLES_PER_CHUNK = BUF_WORDS * SAMPLES_PER_WORD  # noqa: F821 - prelude
+
+
+DMA_BASE = 0x50000000
+DMA_CH_STRIDE = 0x40
+DMA_CH_WRITE_ADDR = 0x04
+DMA_CH_TRANS_COUNT = 0x08
+
+
+def dma_reg(channel, offset):
+    """Absolute address of one register of DMA channel `channel`."""
+    return DMA_BASE + DMA_CH_STRIDE * channel + offset
+
+
+def make_sampler(clk_gpio, in_count, push, rising):
+    """Assemble the sampler program with its operands as closure cells.
+
+    `clk_gpio` is the *absolute* GPIO number of the project clock, which is
+    what `wait ... gpio` wants even on a relocated RP2350 window -- see the
+    prelude's CLK_WAIT_GPIO note.
+
+    `clk_gpio` and `in_count` are read inside the program body, so they
+    must be cells (`LOAD_DEREF`) rather than module globals: `asm_pio`
+    clears `__globals__` while it assembles. `push` is only a decorator
+    argument, evaluated before that happens.
+    """
+    if rising:
+
+        @rp2.asm_pio(
+            in_shiftdir=rp2.PIO.SHIFT_LEFT,
+            autopush=True,
+            push_thresh=push,
+            fifo_join=rp2.PIO.JOIN_RX,
+        )
+        def sampler():
+            wrap_target()  # noqa: F821 - PIO assembler directives
+            wait(0, gpio, clk_gpio)  # noqa: F821
+            wait(1, gpio, clk_gpio)  # noqa: F821 - rising edge
+            in_(pins, in_count)  # noqa: F821
+            wrap()  # noqa: F821
+
+    else:
+
+        @rp2.asm_pio(
+            in_shiftdir=rp2.PIO.SHIFT_LEFT,
+            autopush=True,
+            push_thresh=push,
+            fifo_join=rp2.PIO.JOIN_RX,
+        )
+        def sampler():
+            wrap_target()  # noqa: F821
+            wait(1, gpio, clk_gpio)  # noqa: F821
+            wait(0, gpio, clk_gpio)  # noqa: F821 - falling: outputs settled
+            in_(pins, in_count)  # noqa: F821
+            wrap()  # noqa: F821
+
+    return sampler
 
 
 # --- hard IRQ state ------------------------------------------------------
@@ -101,38 +158,11 @@ def on_b(_channel):
 
 def main(out):
     """Run the sampler, streaming RAW chunks to `out` until told to stop."""
-    if GPIO_BASE:
-        if not set_gpio_base(rp2.PIO(PIO_NUM), PIO_NUM, GPIO_BASE):
-            write_time_chunk(
-                out,
-                0,
-                (
-                    "error=PIO"
-                    + str(PIO_NUM)
-                    + " gpio_base is not "
-                    + str(GPIO_BASE)
-                    + " and could not be moved; try another pio block"
-                ).encode(),
-            )
-            return
-
-    init_input_pins(machine.Pin, UO_GPIOS)
+    if not claim_pio(out):
+        return
 
     sampler = make_sampler(CLK_WAIT_GPIO, IN_COUNT, PUSH_THRESH, EDGE == "rising")
-    # Defensively drop any MicroPython-managed programs left in this block by
-    # an earlier capture: `finally` below removes the sampler on a clean
-    # exit, but a board that was reset between runs or lost that cleanup
-    # some other way accumulates programs until the block's 32-slot
-    # instruction memory is full, and the StateMachine() call below then
-    # fails with `OSError: [Errno 12] ENOMEM` (measured on tt07 after about
-    # ten captures). Only PIO_NUM != 0: PIO0 holds the stock firmware's own
-    # program (the FPGA loader) on FPGA boards, so it must be left alone.
-    if PIO_NUM != 0:
-        try:
-            rp2.PIO(PIO_NUM).remove_program()
-        except Exception:
-            pass
-    sm = rp2.StateMachine(PIO_NUM * 4 + SM_NUM, sampler, in_base=machine.Pin(IN_BASE))
+    sm = new_state_machine(sampler)
 
     global WR_A, WR_B, TC_A, TC_B, ADDR_A, ADDR_B
 

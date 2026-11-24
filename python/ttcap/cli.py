@@ -38,9 +38,14 @@ import time
 from typing import Callable, Iterator, Sequence
 
 from .boards import RP2040_TT06, RP2350_DBV3, profile_from_gpio_map
+from vgacap.modes import MODES
+
 from .capture import (
+    CAPTURE_MODES,
     DEFAULT_BUF_WORDS,
     DEFAULT_PIO,
+    DEFAULT_VGA_MODE,
+    DEFAULT_WINDOW_LINES,
     CaptureError,
     CaptureRequest,
     CaptureSession,
@@ -454,8 +459,17 @@ def capture(
     desc: str = "",
     pio: int = DEFAULT_PIO,
     stop_clock_after: bool = True,
+    mode: str = "stream",
+    vga_mode: str = DEFAULT_VGA_MODE,
+    window_lines: int = 0,
 ) -> CaptureStats:
     """Run one capture to `out_path` and print what happened.
+
+    `mode` picks the board program: "stream" (every sample, at a clock the
+    link can carry), "frame" (whole frames at the project's real clock,
+    swept in as many windows as the board's heap needs) or "window" (the
+    same with `window_lines` lines per frame). In the frame modes `frames`
+    counts pictures and the board stops itself after that many.
 
     The stream file is opened only once the board has accepted every setup
     command, and is removed again if the run fails before a single byte is
@@ -484,7 +498,16 @@ def capture(
         repl.enter()
         try:
             board = resolve_profile(repl, profile)
-            if frames is not None:
+            if mode not in CAPTURE_MODES:
+                raise ValueError(f"mode must be one of {sorted(CAPTURE_MODES)}, got {mode!r}")
+            script = CAPTURE_MODES[mode]
+            framed = script == "frame_rp2.py"
+            if mode == "window" and not window_lines:
+                window_lines = DEFAULT_WINDOW_LINES
+            max_frames = 0
+            if framed and frames is not None:
+                max_frames = frames
+            elif frames is not None:
                 # `buf_words` sizes the chunks, and the byte budget has to
                 # allow for each chunk's 12 non-sample bytes.
                 max_bytes = frames_to_max_bytes(board, frames, buf_words=buf_words)
@@ -510,6 +533,10 @@ def capture(
                     desc=desc,
                     pio=pio,
                     stop=stop,
+                    script=script,
+                    vga_mode=vga_mode,
+                    window_lines=window_lines if framed else 0,
+                    max_frames=max_frames,
                 )
                 selection = select_project(repl, request)
                 print(
@@ -718,8 +745,9 @@ def build_parser() -> argparse.ArgumentParser:
     capture_limit.add_argument(
         "--frames",
         type=int,
-        help="stop after enough bytes for N frames, assuming 640x480@60 "
-        "timing (800x525 clocks) plus one frame of margin",
+        help="stream mode: stop after enough bytes for N frames, assuming "
+        "640x480@60 timing (800x525 clocks) plus one frame of margin; frame "
+        "and window modes: stop after N complete pictures",
     )
     capture_parser.add_argument(
         "--out",
@@ -740,6 +768,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="project-clock edge to sample (default falling: outputs have settled)",
     )
     capture_parser.add_argument("--desc", default="", help="note to store in the header")
+    capture_parser.add_argument(
+        "--mode",
+        choices=sorted(CAPTURE_MODES),
+        default="stream",
+        help="stream: every sample, at a clock the USB link can carry "
+        "(~750 kHz RP2350, ~60 kHz RP2040); frame: whole frames at the "
+        "project's real clock, sent between frames; window: the same, "
+        "--window-lines lines per frame (default stream)",
+    )
+    capture_parser.add_argument(
+        "--vga-mode",
+        choices=sorted(MODES),
+        default=DEFAULT_VGA_MODE,
+        help=f"frame/window modes: the VGA timing to expect (default {DEFAULT_VGA_MODE})",
+    )
+    capture_parser.add_argument(
+        "--window-lines",
+        type=int,
+        default=0,
+        help="frame/window modes: most lines per capture; 0 = as many as the "
+        f"board's heap holds (window mode default {DEFAULT_WINDOW_LINES})",
+    )
     capture_parser.add_argument(
         "--pio",
         type=int,
@@ -803,6 +853,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 desc=args.desc,
                 pio=args.pio,
                 stop_clock_after=args.stop_clock,
+                mode=args.mode,
+                vga_mode=args.vga_mode,
+                window_lines=args.window_lines,
             )
         except ConsumerClosed:
             # The normal end of a pull: the pipeline stopped reading. The

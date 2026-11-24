@@ -136,7 +136,7 @@ def test_minify_keeps_blank_lines_inside_a_multiline_string():
 def test_minify_removes_module_and_function_docstrings():
     source = '"""Module."""\n\n\ndef f():\n    """Doc."""\n    return 1\n'
 
-    assert mp.minify(source) == "\n\n\ndef f():\n\n    return 1\n"
+    assert mp.minify(source) == "\n\n\ndef f():\n\n return 1\n"
 
 
 def test_minify_keeps_a_docstring_that_is_the_whole_body():
@@ -144,8 +144,37 @@ def test_minify_keeps_a_docstring_that_is_the_whole_body():
     source = 'def f():\n    """Only this."""\n'
 
     minified = mp.minify(source)
-    assert minified == source
+    assert minified == 'def f():\n """Only this."""\n'
     compile(minified, "<test>", "exec")
+
+
+def test_minify_indents_one_space_a_level_and_drops_continuation_indent():
+    source = (
+        "def f(a,\n"
+        "      b):\n"
+        "    if a:\n"
+        "        x = (1 +\n"
+        "             2)\n"
+        "        return x\n"
+        "    y = 3 + \\\n"
+        "        4\n"
+        "    return y\n"
+    )
+
+    minified = mp.minify(source)
+
+    assert minified == (
+        "def f(a,\n"
+        "b):\n"
+        " if a:\n"
+        "  x = (1 +\n"
+        "2)\n"
+        "  return x\n"
+        " y = 3 + \\\n"
+        "4\n"
+        " return y\n"
+    )
+    assert ast.dump(ast.parse(minified)) == ast.dump(ast.parse(source))
 
 
 # -- module_level_names ---------------------------------------------------

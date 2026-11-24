@@ -33,6 +33,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
+from vgacap.modes import MODES
 from vgacap.stream import Header, Writer
 
 from . import mp
@@ -41,7 +42,17 @@ from .repl import CHUNK_HEADER_LEN, RawRepl, ReplFramingError
 
 EDGES = ("falling", "rising")
 #: Board-side program bodies a `CaptureRequest` may name (`ttcap/mp/`).
-CAPTURE_SCRIPTS = ("capture_rp2.py",)
+CAPTURE_SCRIPTS = ("capture_rp2.py", "frame_rp2.py")
+#: `ttcap capture --mode` names: continuous streaming at a reduced clock,
+#: or whole frames / windows of frames at the project's real clock.
+CAPTURE_MODES = {"stream": "capture_rp2.py", "frame": "frame_rp2.py", "window": "frame_rp2.py"}
+#: The timing `frame_rp2.py` is told to expect unless asked otherwise.
+DEFAULT_VGA_MODE = "640x480@60"
+#: Lines per window when `--mode window` is asked for without a size.
+DEFAULT_WINDOW_LINES = 48
+#: Most DMA buffers (one channel each, plus the stopper) a frame capture
+#: may chain. fpga-1's heap gave 8 useful blocks; RP2350 has 16 channels.
+FRAME_MAX_BUFFERS = 8
 
 #: Informational only, and only a guess: the rp2 port boots RP2040 at
 #: 133 MHz but RP2350 at 150 MHz, and the capture never changes the system
@@ -78,6 +89,57 @@ CLOCKS_PER_FRAME_640X480 = 800 * 525
 #: then leaves in the REPL's globals. Measured on tt07, where the script
 #: compiles with 84,208 bytes free and 32 KB of that goes to the buffers.
 COMPILE_HEADROOM_BYTES = 24_000
+
+
+def frame_cfg(
+    profile: BoardProfile,
+    vga_mode: str = DEFAULT_VGA_MODE,
+    window_lines: int = 0,
+    max_frames: int = 0,
+    max_bytes: int = 0,
+    pio: int = DEFAULT_PIO,
+    sm: int = 0,
+    margin_lines: int = 1,
+    hsync_active: int = -1,
+    vsync_active: int = -1,
+) -> dict:
+    """Build the `CFG` dict for `frame_rp2.py` (whole-frame/windowed capture).
+
+    The region is the mode's active lines plus `margin_lines` above them:
+    a window can start a sample late (see the body's docstring), and the
+    margin keeps that off the first line of the picture. Line 0 is the
+    first line of the vsync pulse, as libvgaframe counts. `window_lines`
+    0 lets the board take as many lines as its heap holds; `hsync_active`
+    and `vsync_active` -1 have it measure the sync polarities itself.
+    """
+    if vga_mode not in MODES:
+        raise ValueError(f"unknown VGA mode {vga_mode!r}; known: {', '.join(MODES)}")
+    mode = MODES[vga_mode]
+    if mode.cpl % profile.samples_per_word:
+        raise ValueError(
+            f"{vga_mode}: {mode.cpl} clocks per line is not a whole number of "
+            f"{profile.samples_per_word}-sample words"
+        )
+    if window_lines < 0 or max_frames < 0:
+        raise ValueError("window_lines and max_frames must not be negative")
+    if not 0 <= margin_lines <= mode.v_sync + mode.v_back:
+        raise ValueError(f"margin_lines must be 0..{mode.v_sync + mode.v_back}")
+    for name, value in (("hsync_active", hsync_active), ("vsync_active", vsync_active)):
+        if value not in (-1, 0, 1):
+            raise ValueError(f"{name} must be -1 (measure), 0 or 1")
+    cfg = capture_cfg(profile, max_bytes=max_bytes, pio=pio, sm=sm)
+    del cfg["buf_words"]  # capture_rp2.py's; the frame body sizes its own
+    cfg.update(
+        cpl=mode.cpl,
+        region_first=mode.v_sync + mode.v_back - margin_lines,
+        region_lines=mode.v_active + margin_lines,
+        window_lines=window_lines,
+        hsync_active=hsync_active,
+        vsync_active=vsync_active,
+        max_buffers=FRAME_MAX_BUFFERS,
+        max_frames=max_frames,
+    )
+    return cfg
 
 
 def min_free_bytes(buf_words: int) -> int:
@@ -284,6 +346,17 @@ class CaptureRequest:
     #: prelude: `capture_rp2.py` streams continuously; Milestone 6 adds the
     #: whole-frame and windowed programs alongside it.
     script: str = "capture_rp2.py"
+    #: `frame_rp2.py` only: the VGA timing to expect (a `vgacap.modes`
+    #: name), the most lines per capture (0 = what the heap holds), and
+    #: how many pictures to take before stopping (0 = no limit).
+    vga_mode: str = DEFAULT_VGA_MODE
+    window_lines: int = 0
+    max_frames: int = 0
+
+    @property
+    def is_frame(self) -> bool:
+        """Whole-frame/windowed capture rather than streaming."""
+        return self.script == "frame_rp2.py"
 
     def __post_init__(self) -> None:
         if self.project and self.design:
@@ -294,13 +367,20 @@ class CaptureRequest:
             raise ValueError(
                 f"script must be one of {CAPTURE_SCRIPTS}, got {self.script!r}"
             )
+        if self.script == "frame_rp2.py" and self.edge != "falling":
+            raise ValueError(
+                "frame capture samples on the falling edge only (its PIO "
+                "program waits for it); edge must be 'falling'"
+            )
         if self.edge not in EDGES:
             raise ValueError(f"edge must be one of {EDGES}, got {self.edge!r}")
         if self.clock_hz <= 0:
             raise ValueError(f"clock_hz must be positive, got {self.clock_hz}")
         if self.seconds < 0:
             raise ValueError(f"seconds must not be negative, got {self.seconds}")
-        if self.seconds == 0 and self.max_bytes == 0 and self.stop is None:
+        if self.seconds == 0 and self.max_bytes == 0 and self.stop is None and not (
+            self.is_frame and self.max_frames
+        ):
             raise ValueError(
                 "seconds and max_bytes are both 0 and no stop callable was "
                 "given: the capture would never stop"
@@ -313,6 +393,16 @@ class CaptureRequest:
 
     def cfg(self) -> dict:
         """The `CFG` dict for the board-side script."""
+        if self.is_frame:
+            return frame_cfg(
+                self.profile,
+                vga_mode=self.vga_mode,
+                window_lines=self.window_lines,
+                max_frames=self.max_frames,
+                max_bytes=self.max_bytes,
+                pio=self.pio,
+                sm=self.sm,
+            )
         return capture_cfg(
             self.profile,
             buf_words=self.buf_words,
@@ -321,6 +411,19 @@ class CaptureRequest:
             pio=self.pio,
             sm=self.sm,
         )
+
+    def min_free(self) -> int:
+        """Free heap the board needs before this capture is worth sending.
+
+        Streaming allocates its two DMA buffers up front (`min_free_bytes`).
+        A frame capture sizes its buffers to whatever the heap holds, so it
+        needs the compile headroom plus one line -- less than that and it
+        could not capture anything at all.
+        """
+        if self.is_frame:
+            line_bytes = MODES[self.vga_mode].cpl // self.profile.samples_per_word * 4
+            return COMPILE_HEADROOM_BYTES + line_bytes
+        return min_free_bytes(self.buf_words)
 
 
 @dataclass(frozen=True)
@@ -505,6 +608,11 @@ def _describe(req: CaptureRequest) -> str:
         "clock=%d mode=extclk edge=%s profile=%s"
         % (req.clock_hz, req.edge, req.profile.name)
     )
+    if req.is_frame:
+        parts.append(
+            "capture=%s vga_mode=%s"
+            % ("window" if req.window_lines else "frame", req.vga_mode)
+        )
     return " ".join(parts)
 
 
@@ -870,22 +978,28 @@ class CaptureSession:
             req, repl = self._req, self._repl
             script = mp.build(req.cfg(), req.script)
 
-            needed = min_free_bytes(req.buf_words)
+            needed = req.min_free()
             self._mem_free = prepare_board(repl, mp.module_level_names(script))
             if self._mem_free < needed:
+                if req.is_frame:
+                    why = "one line of frame buffer plus %d to compile the script" % (
+                        COMPILE_HEADROOM_BYTES
+                    )
+                else:
+                    why = (
+                        "2 x %d bytes of DMA buffer for --buf-words %d, plus %d to "
+                        "compile the script" % (4 * req.buf_words, req.buf_words, COMPILE_HEADROOM_BYTES)
+                    )
                 raise CaptureError(
                     "board has only %d bytes of free heap after a collect, "
-                    "need %d (2 x %d bytes of DMA buffer for --buf-words %d, "
-                    "plus %d to compile the script); compiling it there can "
-                    "fail without a clean error (tt07 printed 'FATAL: "
-                    "uncaught exception' and halted). Reset the board, or "
-                    "ask for fewer buffer words, and try again."
+                    "need %d (%s); compiling it there can fail without a "
+                    "clean error (tt07 printed 'FATAL: uncaught exception' "
+                    "and halted). Reset the board%s, and try again."
                     % (
                         self._mem_free,
                         needed,
-                        4 * req.buf_words,
-                        req.buf_words,
-                        COMPILE_HEADROOM_BYTES,
+                        why,
+                        "" if req.is_frame else ", or ask for fewer buffer words",
                     )
                 )
 

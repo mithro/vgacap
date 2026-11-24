@@ -408,7 +408,13 @@ class _SM:
 
     def _push(self, word: int) -> None:
         self.rx.append(word)
-        self.board.dma_service(self)
+        # DMA and any IRQ it raises happen at this state machine's time,
+        # which runs ahead of the board's while it executes.
+        self.board.event_now = self.now
+        try:
+            self.board.dma_service(self)
+        finally:
+            self.board.event_now = None
 
 
 class _PioBlock:
@@ -545,6 +551,10 @@ class Board:
         self._next_addr = SRAM_BASE
         self.configured_pins: list[tuple[int, object]] = []
         self.kbd_intr = 3
+        #: The time of the DMA event being handled, if any (see _SM._push).
+        self.event_now: int | None = None
+        #: What one `Pin.value()` costs a MicroPython loop, in cycles.
+        self.pin_read_cycles = 150
 
     # -- time ---------------------------------------------------------------
 
@@ -621,7 +631,8 @@ class Board:
                     if value & (1 << sm.index) and sm.enabled:
                         # The stopper DMA's write lands a few cycles after
                         # the transfer that triggered it.
-                        sm.disable_at = self.now + 3 if sm.disable_at is None else sm.disable_at
+                        at = self.now if self.event_now is None else self.event_now
+                        sm.disable_at = at + 3 if sm.disable_at is None else sm.disable_at
                 return
         ch, reg = self._dma_reg(addr)
         if ch is not None:
@@ -746,7 +757,9 @@ class _Pin:
     def value(self, v=None):
         if v is not None:
             raise BoardError("driving pins is not emulated")
-        return self._board.wave.value(self.gpio, self._board.now)
+        board = self._board
+        board.advance(board.pin_read_cycles)
+        return board.wave.value(self.gpio, board.now)
 
     def __repr__(self) -> str:
         return "Pin(GPIO%d, mode=IN)" % self.gpio

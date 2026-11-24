@@ -836,3 +836,54 @@ def test_a_short_raw_payload_stops_the_board_too():
 
     assert board.interrupts == 1
     assert repl.exec("print(1)") == ("1\r\n", "")
+
+
+# -- frame / window capture (frame_rp2.py) --------------------------------
+
+
+def test_frame_cfg_covers_the_active_lines_plus_a_margin():
+    from ttcap.capture import frame_cfg
+
+    cfg = frame_cfg(RP2350_DBV3)
+
+    # 640x480@60: vsync 2 + back porch 33 lines, so active starts at 35;
+    # the region starts one line above it.
+    assert (cfg["cpl"], cfg["region_first"], cfg["region_lines"]) == (800, 34, 481)
+    assert (cfg["hsync_active"], cfg["vsync_active"]) == (-1, -1)
+    assert cfg["window_lines"] == 0 and cfg["max_frames"] == 0
+    assert "buf_words" not in cfg
+    assert cfg["edge"] == "falling"  # the prelude reads it
+
+
+def test_frame_cfg_refuses_what_the_board_could_not_do():
+    from ttcap.capture import frame_cfg
+
+    with pytest.raises(ValueError, match="unknown VGA mode"):
+        frame_cfg(RP2350_DBV3, vga_mode="1x1@1")
+    with pytest.raises(ValueError, match="hsync_active"):
+        frame_cfg(RP2350_DBV3, hsync_active=2)
+    with pytest.raises(ValueError, match="must not be negative"):
+        frame_cfg(RP2350_DBV3, window_lines=-1)
+
+
+def test_a_frame_request_builds_the_frame_cfg_and_may_end_on_a_picture_count():
+    req = request(RP2350_DBV3, script="frame_rp2.py", seconds=0, max_bytes=0, max_frames=3,
+                  window_lines=40, vga_mode="800x600@60")
+
+    cfg = req.cfg()
+
+    assert cfg["max_frames"] == 3 and cfg["window_lines"] == 40 and cfg["cpl"] == 1056
+    # Compile room plus one line of 1056 one-byte samples, not two DMA
+    # buffers: the board sizes its frame buffers to its own heap.
+    assert req.min_free() == capture.COMPILE_HEADROOM_BYTES + 1056
+    assert "capture=window vga_mode=800x600@60" in capture.stream_header_bytes(req).decode("latin-1")
+
+
+def test_a_frame_request_samples_on_the_falling_edge_only():
+    with pytest.raises(ValueError, match="falling edge only"):
+        request(RP2350_DBV3, script="frame_rp2.py", edge="rising")
+
+
+def test_a_frame_request_with_no_limit_at_all_is_refused():
+    with pytest.raises(ValueError, match="never stop"):
+        request(RP2350_DBV3, script="frame_rp2.py", seconds=0, max_bytes=0, max_frames=0)

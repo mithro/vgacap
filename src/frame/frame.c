@@ -25,7 +25,7 @@ void vgaframe_reset(vgaframe_t *f) {
     f->x = 0; f->y = 0; f->in_frame = 0; f->frames_seen = 0;
     f->fram_active = 0; f->fram_pending = 0; f->fram_counter = 0;
     f->fram_first_line = 0; f->fram_line_count = 0; f->fram_cpl = 0;
-    f->fram_remaining = 0; f->fram_max_line = 0;
+    f->fram_remaining = 0; f->fram_max_line = 0; f->fram_anchor = 0;
     memset(f->raw, 0, vgaframe_raw_size(&f->cfg));
     memset(f->cover, 0, f->cfg.max_lines);
 }
@@ -69,10 +69,23 @@ static int covered_any(const vgaframe_t *f) {
     return 0;
 }
 
+// Is the accumulated FRAM picture complete? With a mode known, that means
+// every line of its *active* area: those are the only lines emit() crops
+// out, and a window capture has no reason to spend memory on blanking (on
+// a board with ~350 KB of usable heap, 525 lines of 800 one-byte samples
+// do not fit, the 481 a picture needs nearly do). Without a mode, every
+// line of the frame, since nothing says which of them are picture.
 static int covered(const vgaframe_t *f) {
-    uint32_t n = expected_lines(f);
-    if (!n) return 0;
-    for (uint32_t y = 0; y < n && y < f->cfg.max_lines; y++)
+    const vgaframe_mode_t *m = resolved_mode(f);
+    uint32_t y0 = 0, n;
+    if (m) {
+        y0 = (uint32_t)m->v_sync + m->v_back;
+        n = y0 + m->v_active;
+    } else {
+        n = expected_lines(f);
+        if (!n) return 0;
+    }
+    for (uint32_t y = y0; y < n && y < f->cfg.max_lines; y++)
         if (!f->cover[y]) return 0;
     return 1;
 }
@@ -199,6 +212,24 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
         f->x = f->learner.report_x;
         if (f->in_frame) f->y++;
     }
+    if (f->fram_active && f->fram_anchor) {
+        // A window starts at an hsync leading edge by contract, but a
+        // hardware trigger sees that edge through an input synchroniser and
+        // may start a sample or two into the pulse (the RP2350 at 5 system
+        // clocks a pixel does). The learner cannot re-place x at this
+        // pulse's trailing edge, because it never saw the leading one, so
+        // without this the window's first line would keep the start error.
+        // The pulse's trailing edge is at x = hsync width whatever the
+        // start, so put x there.
+        const vgaframe_mode_t *m = resolved_mode(f);
+        uint32_t width = m ? m->h_sync : f->learner.t.hsync_width;
+        uint8_t level = m ? m->h_sync_positive : f->learner.t.hsync_positive;
+        if (h == level) f->fram_anchor = 2;
+        else {
+            if (f->fram_anchor == 2 && width) f->x = width;
+            f->fram_anchor = 0;
+        }
+    }
     if (!f->in_frame && !f->fram_active) return;
     uint32_t W = f->cfg.max_clocks_per_line;
     if (f->y < f->cfg.max_lines && f->x < W) {
@@ -251,6 +282,7 @@ void vgaframe_frame_begin(vgaframe_t *f, uint32_t frame_counter, uint16_t first_
     f->fram_remaining = sample_count;
     f->y = first_line;
     f->x = 0;
+    f->fram_anchor = 1;
     if ((uint32_t)first_line + line_count > f->fram_max_line) f->fram_max_line = (uint32_t)first_line + line_count;
     // The window starts at an hsync leading edge, but is not contiguous with
     // whatever the learner last saw (a different, possibly distant, window).
