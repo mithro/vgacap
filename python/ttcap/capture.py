@@ -693,9 +693,34 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
     # max_rp2040_freq=...)` in both SDK 2.x and 3.x; only the
     # `max_rp2040_freq` default differs between them, and this passes
     # neither it nor any other optional argument.
-    _exec_checked(repl, f"tt.clock_project_PWM({int(req.clock_hz)})")
+    _exec_checked(repl, clock_command(req))
     _exec_checked(repl, "tt.reset_project(False)")
     return did
+
+
+#: The RP2350's rated system clock. The SDK's `clock_project_PWM` scans down
+#: from `max_rp2040_freq` (133 MHz unless told otherwise) for the first
+#: system clock that is an even multiple of the project clock, so 25 MHz
+#: gets 100 MHz: 4 system clocks a project clock.
+RP2350_SYSCLK_HZ = 150_000_000
+
+
+def clock_command(req: CaptureRequest) -> str:
+    """The `tt.clock_project_PWM` call for this capture.
+
+    PIO run counting in its locked style needs at least 6 system clocks a
+    project clock (`rle_rp2.py`), which the SDK's default choice cannot give
+    at 25 MHz. On an RP2350 an `rle_rp2.py` capture therefore lets the SDK
+    go up to the chip's rated 150 MHz: 25 MHz then gets 150 MHz, 6 to 1.
+    Measured on fpga-4, 2026-11-24: prbs exact at 25 MHz with sample points
+    rising+0/+1/+4/+5 (offsets 2-3 after the edge are where uo_out changes).
+    Every other capture keeps the SDK's default choice, under which its
+    sample points were measured.
+    """
+    hz = int(req.clock_hz)
+    if req.is_rle and req.profile.pio_gpio_base == 16:  # the RP2350 profile
+        return f"tt.clock_project_PWM({hz}, max_rp2040_freq={RP2350_SYSCLK_HZ})"
+    return f"tt.clock_project_PWM({hz})"
 
 
 def prepare_board(repl: RawRepl, names: list[str], timeout: float = 10.0) -> int:

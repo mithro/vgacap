@@ -121,6 +121,30 @@ def test_sends_the_setup_commands_in_order():
     }
 
 
+def test_rle_on_an_rp2350_lets_the_sdk_use_150_mhz():
+    """Locked PIO run counting needs 6 system clocks a project clock; the
+    SDK's default would give 25 MHz only 4 (100 MHz)."""
+    board = FakeChunkBoard([])
+    repl = connect(board)
+    select_project(repl, request(profile=RP2350_DBV3, clock_hz=25_000_000,
+                                 script="rle_rp2.py"))
+    assert "tt.clock_project_PWM(25000000, max_rp2040_freq=150000000)" in board.commands
+
+
+@pytest.mark.parametrize("profile, script", [
+    (RP2350_DBV3, "capture_rp2.py"),
+    (RP2350_DBV3, "frame_rp2.py"),
+    (RP2040_TT06, "rle_rp2.py"),
+])
+def test_other_captures_keep_the_sdks_own_system_clock(profile, script):
+    """Frame capture's sample point was measured under the SDK's default
+    system clock; only RLE on an RP2350 asks for more."""
+    board = FakeChunkBoard([])
+    repl = connect(board)
+    select_project(repl, request(profile=profile, clock_hz=1_000_000, script=script))
+    assert "tt.clock_project_PWM(1000000)" in board.commands
+
+
 def test_leaves_the_current_design_alone_when_no_project_is_named():
     board = FakeChunkBoard([])
     repl = connect(board)
