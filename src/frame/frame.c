@@ -246,23 +246,10 @@ static inline void store_run(vgaframe_t *f, uint32_t sample, uint32_t run) {
     f->x = vgaframe_sat_add32(f->x, run);
 }
 
-void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
-    uint8_t h = bit(f->cfg.signal_map, sample, VGACAP_SIG_HSYNC);
+// The rest of a push, after the learner has seen it and reported r: kept
+// out of vgaframe_push so that the common case there stays small.
+static void push_rest(vgaframe_t *f, uint32_t sample, uint32_t run, uint8_t h, int r) {
     uint8_t v = bit(f->cfg.signal_map, sample, VGACAP_SIG_VSYNC);
-    int r;
-    if (vgaframe_timing_push_no_edge(&f->learner, h, run)) {
-        // No hsync edge, so no report: x and y stay where they are, and in
-        // continuous mode all that is left is to store the run.
-        f->last_report = 0;
-        if (!f->fram_active) {
-            if (f->in_frame) store_run(f, sample, run);
-            return;
-        }
-        r = 0;
-    } else {
-        r = vgaframe_timing_push(&f->learner, h, v, run);
-        f->last_report = r;
-    }
     // x is the clock offset within the line, which the learner tracks as
     // clk_in_line: a line start is reported at the *trailing* edge of its
     // hsync pulse (that is when the glitch filter can judge the pulse), so
@@ -342,6 +329,24 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
             if (covered(f)) emit(f, expected_lines(f), 0, 1);
         }
     }
+}
+
+void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
+    uint8_t h = bit(f->cfg.signal_map, sample, VGACAP_SIG_HSYNC);
+    if (vgaframe_timing_push_no_edge(&f->learner, h, run)) {
+        // No hsync edge, so no report: x and y stay where they are, and in
+        // continuous mode all that is left is to store the run.
+        f->last_report = 0;
+        if (!f->fram_active) {
+            if (f->in_frame) store_run(f, sample, run);
+            return;
+        }
+        push_rest(f, sample, run, h, 0);
+        return;
+    }
+    int r = vgaframe_timing_push(&f->learner, h, bit(f->cfg.signal_map, sample, VGACAP_SIG_VSYNC), run);
+    f->last_report = r;
+    push_rest(f, sample, run, h, r);
 }
 
 void vgaframe_flush(vgaframe_t *f) {
