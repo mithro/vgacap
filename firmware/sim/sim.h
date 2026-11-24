@@ -17,10 +17,10 @@
 // MicroPython's assembler by python/tests/test_fw_sim.py, and
 // ttcap.emu runs those words cycle by cycle. One consequence: here a frame
 // window's first sample is the clock on which the hsync edge appears,
-// while the PIO's in ttcap.emu is 1-2 clocks later (on the board it also
-// depends on the input synchroniser),
-// depending on the clock duty and the design's output delay. libvgaframe
-// re-places x at every hsync, so the pictures are the same.
+// while in ttcap.emu the PIO's is 1-2 clocks later, depending on the clock
+// duty and the design's output delay (on the board, on the input
+// synchroniser too). libvgaframe re-places x at every hsync, so the
+// pictures are the same.
 #ifndef VGACAP_FW_SIM_H
 #define VGACAP_FW_SIM_H
 
