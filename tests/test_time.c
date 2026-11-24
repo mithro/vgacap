@@ -15,11 +15,9 @@ TEST(time_vectors) {
 }
 
 TEST(time_halves_round_up) {
-    // 1e12 / (1 * 2e12) is exactly 0.5 ps: rounds up to 1.
-    // hz is 32-bit, so use s=4, hz=500000000 -> d = 2e9; n=1: 1e12/2e9 = 500 (exact).
-    // 1e12/(s*hz) = 0.5 needs d = 2e12: s=4000, hz=500000000.
+    // s * hz = 4000 * 500000000 = 2e12, so n = 1 is exactly 0.5 ps (-> 1)
+    // and n = 3 is exactly 1.5 ps (-> 2). d >= 2^32 also exercises the bit loop.
     ASSERT_EQ_U(vgacap_sample_time_ps(1, 4000, 500000000), 1);
-    // 1.5 ps -> 2: d = 1e12/1.5 not integral; use n=3, d=2e12 -> 1.5 -> 2.
     ASSERT_EQ_U(vgacap_sample_time_ps(3, 4000, 500000000), 2);
 }
 

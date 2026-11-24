@@ -15,9 +15,32 @@ static void mul64x64(uint64_t a, uint64_t b, uint64_t *hi, uint64_t *lo) {
     *hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
 }
 
-// (hi:lo) / d, d != 0: 128-bit quotient and remainder, by binary long division.
+// (hi:lo) / d, d != 0: 128-bit quotient and remainder.
+// High word 0: one native 64-bit divide. Otherwise d < 2^32 (every real clock:
+// d = s * clock_hz is below 2^33 in practice): schoolbook long division in
+// 32-bit digits, at most four 64/32 divides, leading zero digits skipped.
+// Larger d falls back to the bit loop below.
 static void divmod128(uint64_t hi, uint64_t lo, uint64_t d,
                       uint64_t *qhi, uint64_t *qlo, uint64_t *rem) {
+    if (hi == 0) { *qhi = 0; *qlo = lo / d; *rem = lo % d; return; }
+    if (d >> 32 == 0 && hi < d) {           // quotient fits 64 bits: two divides
+        uint64_t c1 = (hi << 32) | (lo >> 32), q1 = c1 / d, r1 = c1 - q1 * d;
+        uint64_t c0 = (r1 << 32) | (lo & 0xFFFFFFFFu), q0 = c0 / d;
+        *qhi = 0; *qlo = (q1 << 32) | q0; *rem = c0 - q0 * d;
+        return;
+    }
+    if (d >> 32 == 0) {
+        uint64_t digit[4] = { hi >> 32, hi & 0xFFFFFFFFu, lo >> 32, lo & 0xFFFFFFFFu };
+        uint64_t q[4], r = 0;
+        for (int i = 0; i < 4; i++) {
+            if (r == 0 && digit[i] == 0) { q[i] = 0; continue; }
+            uint64_t cur = (r << 32) | digit[i];    // r < d < 2^32: fits
+            q[i] = cur / d;                         // < 2^32 because r < d
+            r = cur - q[i] * d;
+        }
+        *qhi = (q[0] << 32) | q[1]; *qlo = (q[2] << 32) | q[3]; *rem = r;
+        return;
+    }
     uint64_t r = 0, qh = 0, ql = 0;
     for (int i = 127; i >= 0; i--) {
         uint64_t bit = i >= 64 ? (hi >> (i - 64)) & 1u : (lo >> i) & 1u;
@@ -44,7 +67,7 @@ uint64_t vgacap_sample_time_ps(uint64_t n, uint32_t samples_per_clock, uint32_t 
     return qlo;
 }
 
-// Shortest %.{p}g (p = 1..17) that reads back exactly. %g switches to an
+// The %.{p}g (p = 1..17) that reads back exactly: see time.h for the rule. %g switches to an
 // exponent once the exponent reaches p, so 25175000.0 would print as
 // "2.5175e+07" at p = 5; plain decimal is preferred: the first round-tripping p
 // whose text has no exponent wins, and only if none has (huge or tiny values)
