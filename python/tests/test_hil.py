@@ -394,3 +394,110 @@ def test_frames_left_by_an_earlier_run_do_not_count(workspace):
     result = statuses(second.stdout)
     assert result["demo-frames"] == "FAIL", second.stdout
     assert result["video"] == "FAIL", second.stdout
+
+
+# ------------------------------------------------- --stop-bridge etiquette
+
+
+def _health_server(body: bytes):
+    """A one-thread HTTP server answering every GET with `body`."""
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - the http.server spelling
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, "http://127.0.0.1:%d/health" % server.server_port
+
+
+def test_bridge_clients_reads_the_daemons_count():
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    server, url = _health_server(b'{"clients": 2, "kind": "fpga"}')
+    try:
+        assert hil.bridge_clients(url) == 2
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize("body", [b"not json", b'{"kind": "fpga"}', b'{"clients": "1"}'])
+def test_bridge_clients_that_cannot_be_read_are_not_zero(body):
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    server, url = _health_server(body)
+    try:
+        got = hil.bridge_clients(url)
+    finally:
+        server.shutdown()
+    assert got != 0 and isinstance(got, str), got
+
+
+def test_an_unreachable_bridge_is_not_idle():
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    got = hil.bridge_clients("http://127.0.0.1:9/health", timeout=2)
+    assert isinstance(got, str) and got.startswith("unknown"), got
+
+
+def test_stop_bridge_refuses_while_a_visitor_is_connected(tmp_path, monkeypatch):
+    """The bridge also serves the public site, whose visitors cannot see a
+    claims file: with a client connected, nothing may be stopped."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    server, url = _health_server(b'{"clients": 1}')
+    calls = []
+
+    def fake_run(argv, **_kw):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0)  # "fpgas-tt is active"
+
+    monkeypatch.setattr(hil.shutil, "which", lambda _name: "/bin/systemctl")
+    monkeypatch.setattr(hil.subprocess, "run", fake_run)
+    args = hil.build_parser().parse_args(
+        [str(tmp_path / "report.md"), "--clock-hz", "500000",
+         "--link", "serial:/dev/null", "--stop-bridge", "--bridge-health", url,
+         "--workdir", str(tmp_path)])
+    run = hil.Hil(args)
+    try:
+        with pytest.raises(hil.Fatal, match="1 client"):
+            run.stop_bridge()
+    finally:
+        server.shutdown()
+    assert not run.bridge_stopped
+    assert not any("stop" in argv for argv in calls), calls
+
+
+def test_restart_sdk_leaves_raw_repl_then_soft_resets():
+    from ttcap.repl import restart_sdk
+
+    class FakeLink:
+        def __init__(self):
+            self.written = []
+            self.replies = [b"MPY: soft reboot\r\n", b"tt.sdk_version=3.1.0\r\n>>> "]
+
+        def write(self, data):
+            self.written.append(data)
+
+        def read(self, timeout):
+            return self.replies.pop(0) if self.replies else b""
+
+        def close(self):
+            raise AssertionError("restart_sdk must leave the link to its caller")
+
+    link = FakeLink()
+    ok, text = restart_sdk(link, wait=1.0)
+    assert ok and "sdk_version" in text
+    assert link.written == [b"\x02", b"\r\n", b"\x04"]

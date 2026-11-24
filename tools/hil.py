@@ -50,6 +50,7 @@ import contextlib
 import datetime
 import fcntl
 import http.client
+import json
 import os
 import pathlib
 import re
@@ -606,6 +607,12 @@ class Hil:
         if not active:
             self.notes.append("fpgas-tt was already stopped; left alone.")
             return
+        # The bridge serves visitors of the public site too, who cannot see
+        # a claims file: never cut one off.
+        clients = bridge_clients(self.args.bridge_health)
+        if clients != 0:
+            raise Fatal("--stop-bridge refused: the bridge at %s has %s client(s) "
+                        "connected" % (self.args.bridge_health, clients))
         # Marked before the attempt: a stop that takes effect and then times
         # out must still be undone.
         self.bridge_stopped = True
@@ -617,6 +624,11 @@ class Hil:
         if not self.bridge_stopped:
             return
         self.bridge_stopped = False
+        # Put the board back first. fpgas-tt judges the board when it
+        # starts ("safe start"); started while the capture's design is still
+        # enabled, it reported `left: <design>` on tt09 until restarted
+        # again (2026-11-24).
+        self.restart_board()
         try:
             code = subprocess.run(["sudo", "-n", "systemctl", "start", "fpgas-tt"],
                                   check=False, timeout=120).returncode
@@ -629,6 +641,30 @@ class Hil:
                 "WARNING: `sudo systemctl start fpgas-tt` failed (%s) -- the "
                 "bridge is still down and the next user of this board will "
                 "find it so." % why)
+
+    def restart_board(self) -> None:
+        """Ctrl-B, Ctrl-D on the run's own serial link (see restart_sdk)."""
+        if not self.args.link.startswith("serial:"):
+            return
+        from ttcap.cli import link_from_url
+        from ttcap.repl import restart_sdk
+        try:
+            link = link_from_url(self.args.link)
+            try:
+                ok, _text = restart_sdk(link)
+            finally:
+                link.close()
+        except Exception as exc:  # noqa: BLE001 - reported, then the bridge still starts
+            ok, why = False, "%s: %s" % (type(exc).__name__, exc)
+        else:
+            why = "no soft reboot seen"
+        if ok:
+            self.notes.append("Board restarted to the SDK's start state before "
+                              "fpgas-tt was started again.")
+        else:
+            self.notes.append("WARNING: restarting the board before fpgas-tt "
+                              "failed (%s); the bridge may report the capture's "
+                              "design as left enabled." % why)
 
     # ------------------------------------------------------------------ main
 
@@ -897,6 +933,21 @@ def resolve_link(args: argparse.Namespace) -> str:
     return bridge_ws_url(args.board)
 
 
+def bridge_clients(url: str, timeout: float = 5.0) -> int | str:
+    """`clients` from fpgas-tt's /health, or why it could not be read.
+
+    Anything but an int is a refusal to stop the bridge: a bridge that
+    cannot say it is idle is not known to be idle.
+    """
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            clients = json.load(resp).get("clients")
+    except Exception as exc:  # noqa: BLE001 - every failure is a refusal
+        return "unknown (%s: %s)" % (type(exc).__name__, exc)
+    return clients if isinstance(clients, int) else "unknown (%r)" % (clients,)
+
+
 def parse_fps(text: str) -> tuple[float, str]:
     """`30`, `30/1` and `29.97` as a number and as GStreamer spells it."""
     if "/" in text:
@@ -960,7 +1011,12 @@ def build_parser() -> argparse.ArgumentParser:
                              "pipeline: probe, capture, reconstruct, reference")
     parser.add_argument("--stop-bridge", action="store_true",
                         help="stop fpgas-tt first (it holds /dev/ttboard open) "
-                             "and start it again afterwards")
+                             "and start it again afterwards; refused while "
+                             "the bridge has clients, and the board is "
+                             "restarted (Ctrl-B, Ctrl-D) before it starts")
+    parser.add_argument("--bridge-health", default="http://127.0.0.1:8765/health",
+                        help="fpgas-tt's /health, read for its client count "
+                             "before --stop-bridge (default: %(default)s)")
     parser.add_argument("--lock-dir",
                         help="where the per-board lock file lives "
                              "(default $XDG_RUNTIME_DIR, else the temp dir)")

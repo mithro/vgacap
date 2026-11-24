@@ -413,3 +413,27 @@ class RawRepl:
         if stderr:
             raise RuntimeError(f"remote error executing {code!r}: {stderr}")
         return stdout
+
+
+def restart_sdk(link: ReplLink, wait: float = 15.0) -> tuple[bool, str]:
+    """Put a demo board back to the SDK's start state: Ctrl-B, then Ctrl-D.
+
+    Leaves the raw REPL (Ctrl-B) and soft-resets from the friendly REPL
+    (Ctrl-D), so `main.py` runs again and the SDK re-initialises with its
+    default project. Never `machine.soft_reset()` from the raw REPL:
+    measured on fpga-4, that leaves "the SDK is not running".
+
+    Returns (whether a soft reboot was seen, the last of what the board
+    printed). The link is left open; closing it is the caller's.
+    """
+    link.write(b"\x02")  # leave the raw REPL, if in it
+    time.sleep(0.5)
+    link.write(b"\r\n")
+    time.sleep(0.5)
+    link.write(b"\x04")  # soft reset from the friendly REPL
+    deadline = time.monotonic() + wait
+    seen = b""
+    while time.monotonic() < deadline:
+        seen += link.read(0.5)
+    text = seen.decode("utf-8", "replace")
+    return "soft reboot" in text.lower(), text[-1500:]
