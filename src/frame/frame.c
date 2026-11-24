@@ -238,7 +238,9 @@ static inline void store_run(vgaframe_t *f, uint32_t sample, uint32_t run) {
         uint32_t n = run > (W - f->x) ? (W - f->x) : run;
         uint8_t px = f->pixel_table_ok ? f->pixel_table[sample & 0xFF]
                                        : (uint8_t)(vgaframe_colour(f->cfg.signal_map, sample) | 0x80);
-        memset(f->raw + f->y * W + f->x, px, n);
+        uint8_t *d = f->raw + f->y * W + f->x;
+        if (n == 1) *d = px;   // the commonest run on a busy picture: no call
+        else memset(d, px, n);
         f->cover[f->y] = 1;
         if (f->x + n > f->dirty_x_end) f->dirty_x_end = f->x + n;
         if (f->y >= f->dirty_y_end) f->dirty_y_end = f->y + 1;
