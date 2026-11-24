@@ -189,31 +189,28 @@ def idle_level(pin, reads):
 
 
 def plan_buffers(lines_wanted, max_buffers):
-    """Allocate up to `max_buffers` buffers of whole lines, largest first.
+    """Allocate up to `max_buffers` buffers of whole lines, biggest first.
 
-    Returns a list of [bytearray, lines]. Each buffer is the most lines
-    still wanted that one contiguous block holds, found by bisection (each
-    probe is freed and collected before the next, so the probes do not
-    fragment the heap they are measuring). It stops when not one more line
-    fits or the buffer count is reached. The total may be less than wanted
-    -- the caller sweeps the rest in later frames.
+    Returns a list of [bytearray, lines]. Fixed chunk sizes, 64 lines
+    while they fit, then 16, 4 and 1: a successful allocation is kept, so
+    it leaves no garbage, and each size can fail only once -- and a failed
+    allocation is what costs, because MicroPython collects before giving
+    up. Measured on the tt09 board (RP2350, 400 KB heap): 341 ms for 456
+    lines in 27 buffers. Bisecting each block's exact capacity, with a
+    collect per probe, found 455 lines in 3,762 ms -- once per capture
+    session, but most of a short one. The total may be less than wanted;
+    the caller sweeps the rest in later frames.
     """
     bufs = []
     left = lines_wanted
-    while left > 0 and len(bufs) < max_buffers:
-        lo, hi = 0, left
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
+    for size in (64, 16, 4, 1):
+        while left > 0 and len(bufs) < max_buffers:
+            n = size if size < left else left
             try:
-                bytearray(mid * LINE_BYTES)
-                lo = mid
+                bufs.append([bytearray(n * LINE_BYTES), n])
             except MemoryError:
-                hi = mid - 1
-            gc.collect()  # noqa: F821
-        if not lo:
-            break
-        bufs.append([bytearray(lo * LINE_BYTES), lo])
-        left -= lo
+                break
+            left -= n
     return bufs
 
 
@@ -265,17 +262,22 @@ def main(out):
     wanted = REGION_LINES
     if WINDOW_LINES and WINDOW_LINES < wanted:
         wanted = WINDOW_LINES
+    # Everything the capture needs besides the frame buffers is allocated
+    # first, and a few KB are held back while planning: plan_buffers() takes
+    # the heap down to fragments smaller than a line, and the control-block
+    # table, the DMA objects and the chunk headers must still fit after it.
+    stop_word = bytearray(4)
+    stop_word[0] = 1 << SM_NUM  # noqa: F821 - SM_ENABLE bit in PIO CTRL
+    table = bytearray(16 * (MAX_BUFFERS + 1))
+    reserve = bytearray(4096)
     bufs = plan_buffers(wanted, MAX_BUFFERS)
+    reserve = None
     if not bufs:
         write_time_chunk(out, 0, b"error=not one line of heap for a frame buffer")  # noqa: F821
         return
     window = 0
     for item in bufs:
         window += item[1]
-
-    stop_word = bytearray(4)
-    stop_word[0] = 1 << SM_NUM  # noqa: F821 - SM_ENABLE bit in PIO CTRL
-    table = bytearray(16 * (len(bufs) + 1))
     data = None
     ctl = None
     poller = None

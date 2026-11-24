@@ -96,12 +96,15 @@ def test_whole_frames_at_26_6_mhz_are_pixel_exact(tmp_path, bars_uo, high, delay
     board, out = run_frame(RP2350_DBV3, bars_uo, high=high, delay=delay, max_frames=2)
 
     frams, times = chunks(out)
-    assert times[0].startswith("frame window=434 buffers=4 hsync_active=0 vsync_active=0")
+    window = int(times[0].split()[1].split("=")[1])
+    assert "hsync_active=0 vsync_active=0" in times[0]
     assert times[-1] == "frames=2 stalls=0 rxstall=0 sysclk_hz=133000000"
-    # This heap (fpga-1's largest blocks) holds 434 of the 481 lines, so
-    # each picture is two captures, and they share its frame counter.
+    # This heap (fpga-1's largest blocks, 347 KB) holds fewer than the 481
+    # lines, so each picture is two captures sharing its frame counter.
+    assert 400 <= window < 481
     assert [(c, first, n) for c, first, n, _, _ in frams] == [
-        (0, 34, 434), (0, 468, 47), (1, 34, 434), (1, 468, 47)
+        (0, 34, window), (0, 34 + window, 481 - window),
+        (1, 34, window), (1, 34 + window, 481 - window),
     ]
     assert all(cpl == 800 and samples == n * 800 for _, _, n, cpl, samples in frams)
     report, frames = pictures(tmp_path, RP2350_DBV3, out)
@@ -115,18 +118,18 @@ def test_a_heap_that_holds_the_whole_region_takes_one_capture_a_picture(tmp_path
 
     frams, times = chunks(out)
     assert [(c, first, n) for c, first, n, _, _ in frams] == [(0, 34, 481), (1, 34, 481)]
-    assert times[0].startswith("frame window=481 buffers=1")
+    assert times[0].startswith("frame window=481 ")
 
 
 def test_many_small_heap_blocks_still_make_one_whole_frame(tmp_path, bars_uo):
     # fpga-4's case: plenty of heap in total, in more pieces than there are
     # DMA channels. Control blocks make the piece count a table length.
-    heap = (142_000,) + (12_000,) * 21  # 22 blocks, 395 KB
+    heap = (142_000,) + (13_000,) * 21  # 22 blocks, 415 KB
     board, out = run_frame(RP2350_DBV3, bars_uo, heap=heap, max_frames=1)
 
     frams, times = chunks(out)
     assert [(c, first, n) for c, first, n, _, _ in frams] == [(0, 34, 481)]
-    assert "buffers=22" in times[0]
+    assert int(times[0].split()[2].split("=")[1]) > 16  # more blocks than DMA channels
     _, frames = pictures(tmp_path, RP2350_DBV3, out)
     assert_pictures_exact(frames, bars(640, 480))
     _, frames = pictures(tmp_path, RP2350_DBV3, out)
@@ -156,9 +159,11 @@ def test_an_rp2040_board_assembles_pictures_from_many_windows(tmp_path):
     board, out = run_frame(RP2040_TT06, uo, chip="rp2040", heap=(40_000, 24_000), max_frames=1)
 
     frams, times = chunks(out)
-    # Bisection finds each block's exact capacity: 25 + 15 lines.
-    assert times[0].startswith("frame window=40 buffers=2")
-    assert len(frams) == 13  # ceil(481 / 40)
+    # 1,600 bytes a line: 4-line chunks, then single lines, use all but
+    # the last few hundred bytes of each block -- 24 + 15 lines.
+    window = int(times[0].split()[1].split("=")[1])
+    assert 30 <= window <= 40  # 64 KB of heap, less the table and the reserve
+    assert len(frams) == -(-481 // window)
     _, frames = pictures(tmp_path, RP2040_TT06, out)
     assert_pictures_exact(frames, image)
 
