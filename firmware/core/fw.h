@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-// The capture firmware's command loop and capture engines (portable).
+// The capture firmware's command loop (portable).
 //
 // firmware/PROTOCOL.md is the contract: line commands in, `ok`/`err` lines
 // out, and during a capture vgacap chunks followed by a `DONE` marker. The
-// streaming engine is python/ttcap/mp/capture_rp2.py's main() and the
-// frame engine frame_rp2.py's main(), statement for statement where the
-// order matters (when a stop is noticed, what is counted in max_bytes,
-// which TIME chunks are written and what they say), so a stream from this
-// firmware and one from those scripts are read by the same host code.
+// captures themselves are fw_capture.c's engines, which the MicroPython
+// module (mpy/) drives too; this file is the protocol around them: the
+// line reader, the board-state commands, the replies and the DONE marker.
 #ifndef VGACAP_FW_H
 #define VGACAP_FW_H
 
 #include <stddef.h>
 #include <stdint.h>
+
+#include "fw_capture.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,10 +20,6 @@ extern "C" {
 
 #define FW_PROTOCOL_VERSION 1
 #define FW_LINE_MAX 256
-
-// Bytes that ask a running capture to stop: Ctrl-C, and "q" for a human.
-#define FW_STOP_BYTE 0x03
-#define FW_STOP_BYTE_HUMAN 'q'
 
 void fw_init(void);
 // Read whatever the host has sent and run every complete line. Returns
