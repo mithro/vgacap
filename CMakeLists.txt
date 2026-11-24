@@ -51,8 +51,8 @@ if(VGACAP_HOST_EXTRAS)
   add_executable(trace-make tests/trace_make.c)
   target_link_libraries(trace-make PRIVATE vgacap_trace)
   # --- sample: the shared calibration and frame clock (src/sample), host only ---
-  add_library(vgacap_sample STATIC src/sample/calib.c src/sample/frameclock.c src/sample/tbv1.c src/sample/centrev1.c src/sample/hashes.c)
-  target_link_libraries(vgacap_sample PUBLIC vgacap_frame vgacap_trace vgacap_sha256 vgacap_zstd m)
+  add_library(vgacap_sample STATIC src/sample/calib.c src/sample/frameclock.c src/sample/tbv1.c src/sample/centrev1.c src/sample/hashes.c src/sample/outputs.c)
+  target_link_libraries(vgacap_sample PUBLIC vgacap_frame vgacap_trace vgacap_stream vgacap_sha256 vgacap_zstd m)
   # Test-only helper for python/tests/test_calib.py: calibration and frame
   # clock of a trace.
   add_executable(vgacap-calib-dump tests/calib_dump.c)
@@ -116,6 +116,13 @@ if(VGACAP_HOST_EXTRAS)
   # centre-v1: libvgaframe's lines and frames, its own mid-pixel pick.
   vgacap_add_test(test_centrev1 tests/synth.c)
   target_link_libraries(test_centrev1 PRIVATE vgacap_sample)
+  # frames.txt and the hash files.
+  vgacap_add_test(test_outputs)
+  target_link_libraries(test_outputs PRIVATE vgacap_sample)
+  # Test-only helper for python/tests/test_framesfile.py: writes the text
+  # outputs of a fixed run.
+  add_executable(vgacap-outputs-dump tests/outputs_dump.c)
+  target_link_libraries(vgacap-outputs-dump PRIVATE vgacap_sample)
   # The frame hash methods.
   vgacap_add_test(test_hashes)
   target_link_libraries(test_hashes PRIVATE vgacap_sample)
