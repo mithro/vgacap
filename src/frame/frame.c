@@ -116,6 +116,17 @@ static void clear_raw(vgaframe_t *f, uint32_t lines) {
     if (lines >= f->dirty_y_end) f->dirty_x_end = f->dirty_y_end = 0;   // raw is all zero now
 }
 
+// rgb24 for each raw byte: a written pixel's colour, two bits a channel
+// scaled by 85, or magenta for a pixel never written. Four bytes an entry,
+// the fourth spare, so that emit can store a pixel with one 4-byte copy.
+#define RGB_OF(p) { ((p) & 0x80) ? (((p) >> 4) & 3) * 85 : 255, \
+                    ((p) & 0x80) ? (((p) >> 2) & 3) * 85 : 0,   \
+                    ((p) & 0x80) ? ((p) & 3) * 85 : 255, 0 }
+#define RGB_OF4(p) RGB_OF(p), RGB_OF((p) + 1), RGB_OF((p) + 2), RGB_OF((p) + 3)
+#define RGB_OF16(p) RGB_OF4(p), RGB_OF4((p) + 4), RGB_OF4((p) + 8), RGB_OF4((p) + 12)
+#define RGB_OF64(p) RGB_OF16(p), RGB_OF16((p) + 16), RGB_OF16((p) + 32), RGB_OF16((p) + 48)
+static const uint8_t rgb_of[256][4] = { RGB_OF64(0), RGB_OF64(64), RGB_OF64(128), RGB_OF64(192) };
+
 // Emits the accumulated picture. `lines_known` bounds how much of `raw` to
 // scan for the auto-crop bounding box and to clear afterwards. `is_fram`
 // says whether this is the FRAM accumulation being published (which names
@@ -149,15 +160,22 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
     if (x0 + w > W) w = W - x0;
     if (y0 + h > f->cfg.max_lines) h = f->cfg.max_lines - y0;
     uint8_t partial = partial_hint;
-    for (uint32_t y = 0; y < h; y++)
-        for (uint32_t x = 0; x < w; x++) {
-            uint8_t p = f->raw[(y0 + y) * W + x0 + x];
-            uint8_t *o = f->rgb + (y * w + x) * 3;
-            if (!(p & 0x80)) { o[0] = 255; o[1] = 0; o[2] = 255; partial = 1; continue; }
-            o[0] = (uint8_t)(((p >> 4) & 3) * 85);
-            o[1] = (uint8_t)(((p >> 2) & 3) * 85);
-            o[2] = (uint8_t)((p & 3) * 85);
+    if (w && h) {
+        // Each pixel is one 4-byte copy from rgb_of, whose spare fourth byte
+        // the next pixel overwrites; the very last pixel is copied as 3
+        // bytes so nothing past the picture is touched. `written` keeps
+        // 0x80 only while every pixel had it.
+        uint8_t *o = f->rgb, written = 0x80;
+        for (uint32_t y = 0; y < h; y++) {
+            const uint8_t *r = f->raw + (y0 + y) * W + x0;
+            uint32_t n = y + 1 < h ? w : w - 1;
+            for (uint32_t x = 0; x < n; x++, o += 3) { written &= r[x]; memcpy(o, rgb_of[r[x]], 4); }
         }
+        uint8_t p = f->raw[(y0 + h - 1) * W + x0 + w - 1];
+        written &= p;
+        memcpy(o, rgb_of[p], 3);
+        if (!(written & 0x80)) partial = 1;
+    }
     // Report the timing actually used for this crop: the learner's own
     // measurement, unless resolved_mode() picked a different mode (a
     // force_mode, or - in FRAM mode - a clocks-per-line table match the
