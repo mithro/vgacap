@@ -549,6 +549,7 @@ def capture(
     sample_delay: int = 0,
     ui_in: int | None = None,
     firmware: str = "micropython",
+    asic_index: int | None = None,
 ) -> CaptureStats:
     """Run one capture to `out_path` and print what happened.
 
@@ -585,6 +586,9 @@ def capture(
     say = sys.stderr if to_stdout else sys.stdout
     if firmware not in FIRMWARES:
         raise ValueError(f"firmware must be one of {FIRMWARES}, got {firmware!r}")
+    if asic_index is not None and firmware != "picosdk":
+        raise ValueError("--asic-index is for --firmware picosdk; the stock "
+                         "firmware selects a project with --project")
     link = link_from_url(url)
     try:
         drivers = {"picosdk": _FirmwareBoard, mpmodule.FIRMWARE: _ModuleBoard}
@@ -634,6 +638,7 @@ def capture(
                     max_frames=max_frames,
                     sample_delay=sample_delay,
                     ui_in=ui_in,
+                    asic_index=asic_index,
                 )
                 selection = driver.setup(request)
                 print(
@@ -929,6 +934,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"frame/window modes: the VGA timing to expect (default {DEFAULT_VGA_MODE})",
     )
     capture_parser.add_argument(
+        "--asic-index",
+        type=int,
+        default=None,
+        help="--firmware picosdk on an ASIC board: select the project at this "
+        "mux index (the stock SDK's tt.shuttle.<name>.count) before capturing; "
+        "the selection does not survive the switch to the capture firmware. "
+        "Never on an FPGA board, where the mux reset line erases the FPGA",
+    )
+    capture_parser.add_argument(
         "--ui-in",
         type=lambda s: int(s, 0),
         default=None,
@@ -1034,6 +1048,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sample_delay=args.sample_delay,
                 ui_in=args.ui_in,
                 firmware=args.firmware,
+                asic_index=args.asic_index,
             )
         except ConsumerClosed:
             # The normal end of a pull: the pipeline stopped reading. The

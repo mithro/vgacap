@@ -61,6 +61,12 @@ int hal_clock(const fw_clock_plan_t *plan, const char **why);
 void hal_reset(int hold);
 // Drive ui_in with `value`, or release the pins when value < 0.
 void hal_ui_in(int value);
+// ASIC carriers only: drive the project mux's control lines (demo board
+// v3: ctrl_ena GPIO 0, ctrl_sel_nrst GPIO 1, ctrl_sel_inc GPIO 2) to these
+// levels. On an FPGA carrier GPIO 1 is the iCE40's CRESET_B and low erases
+// the FPGA's configuration, so only the explicit asic_select command, which
+// the host sends only for an ASIC board, calls this.
+void hal_asic_ctrl(int ena, int nrst, int inc);
 // Level of one GPIO, read directly.
 int hal_gpio_get(unsigned gpio);
 void hal_delay_us(uint32_t us);
