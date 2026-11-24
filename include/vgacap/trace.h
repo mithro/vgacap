@@ -113,6 +113,17 @@ const vgacap_trace_info_t *vgacap_trace_info(const vgacap_trace_reader_t *r);
 // reports them; the samples after one keep their running numbers).
 int vgacap_trace_read(vgacap_trace_reader_t *r, uint64_t from, uint64_t to,
                       vgacap_trace_run_fn fn, void *user, char *err, size_t errlen);
+// The same runs, in the same order, in batches: fn gets n >= 1 runs at a
+// time (run i: first_sample[i], value[i], run[i], as vgacap_trace_run_fn's),
+// at most 1,024, the arrays valid during the call. Return nonzero to stop:
+// no run after that batch is delivered. A read that fails delivers every run
+// before the fault first, as vgacap_trace_read does. (vgacap_trace_read is
+// this with a loop over each batch. One call a batch, not a run, and RUNS
+// pairs decoded straight into the arrays, are what make it fast.)
+typedef int (*vgacap_trace_runs_fn)(void *user, const uint64_t *first_sample, const uint64_t *value,
+                                    const uint64_t *run, size_t n);
+int vgacap_trace_read_runs(vgacap_trace_reader_t *r, uint64_t from, uint64_t to,
+                           vgacap_trace_runs_fn fn, void *user, char *err, size_t errlen);
 // Block `i`'s uncompressed bytes (for a plain stream, block 0 is the whole
 // file), valid until the next call on `r`. Returns 0, or -1 with `err` set.
 int vgacap_trace_block_data(vgacap_trace_reader_t *r, uint32_t i, const uint8_t **data, size_t *len,

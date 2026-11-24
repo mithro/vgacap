@@ -254,8 +254,7 @@ static void start_capture(tool_t *t) {
 // A run of samples [s, s + r) holds the clk-high samples 2c + 1 of clocks
 // [s >> 1, (s + r) >> 1) (clock_first 0); a run of only clk-low samples
 // holds none.
-static int on_run(void *user, uint64_t s, uint64_t value, uint64_t r) {
-    tool_t *t = user;
+static inline int on_run(tool_t *t, uint64_t s, uint64_t value, uint64_t r) {
     if (t->failed) return 1;
     uint64_t c0 = s >> 1, c1 = (s + r) >> 1;
     if (c1 <= c0) return 0;
@@ -274,6 +273,13 @@ static int on_run(void *user, uint64_t s, uint64_t value, uint64_t r) {
         }
     }
     return t->failed;
+}
+
+static int on_runs(void *user, const uint64_t *s, const uint64_t *value, const uint64_t *r, size_t n) {
+    tool_t *t = user;
+    for (size_t i = 0; i < n; i++)
+        if (on_run(t, s[i], value[i], r[i])) return 1;
+    return 0;
 }
 
 // ---- arguments and META ------------------------------------------------------
@@ -514,7 +520,7 @@ int main(int argc, char **argv) {
     vgacap_trace_read_stats_t before, after;
     vgacap_trace_read_stats(r, &before);
     int passes = 1;
-    int rc = vgacap_trace_read(r, 0, info->samples, on_run, t, err, sizeof err);
+    int rc = vgacap_trace_read_runs(r, 0, info->samples, on_runs, t, err, sizeof err);
     if (rc) { fprintf(stderr, PROG ": %s: %s\n", trace, err); return 1; }
     if (t->failed) { fprintf(stderr, PROG ": %s\n", t->why); return 1; }
     if (t->gap || t->next != clocks) {
