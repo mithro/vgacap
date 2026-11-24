@@ -2,7 +2,8 @@
 """Host side of a vgacap capture run.
 
 `capture_cfg()` turns a `BoardProfile` into the `CFG` dict that
-`ttcap.mp.with_cfg()` prepends to `ttcap/mp/capture_rp2.py`.
+`ttcap.mp.build()` puts in front of the shared `ttcap/mp/prelude.py` and
+the request's program body (`capture_rp2.py` unless it names another).
 `select_project()` puts the board's design and project clock in the state
 the capture needs, and `run_capture()` writes the `VGCH` header the board
 never sees and then splices the board's own chunks after it, verbatim.
@@ -39,6 +40,8 @@ from .boards import BoardProfile
 from .repl import CHUNK_HEADER_LEN, RawRepl, ReplFramingError
 
 EDGES = ("falling", "rising")
+#: Board-side program bodies a `CaptureRequest` may name (`ttcap/mp/`).
+CAPTURE_SCRIPTS = ("capture_rp2.py",)
 
 #: Informational only, and only a guess: the rp2 port boots RP2040 at
 #: 133 MHz but RP2350 at 150 MHz, and the capture never changes the system
@@ -277,11 +280,19 @@ class CaptureRequest:
     #: RP2040's 60 kHz ceiling. A consumer that cannot wait that long wants
     #: `CaptureSession.request_stop()` instead, which is thread-safe.
     stop: Callable[[], bool] | None = None
+    #: The board-side program body `ttcap.mp.build()` puts after the shared
+    #: prelude: `capture_rp2.py` streams continuously; Milestone 6 adds the
+    #: whole-frame and windowed programs alongside it.
+    script: str = "capture_rp2.py"
 
     def __post_init__(self) -> None:
         if self.project and self.design:
             raise ValueError(
                 "project and design both name a tt.shuttle entry; give only one"
+            )
+        if self.script not in CAPTURE_SCRIPTS:
+            raise ValueError(
+                f"script must be one of {CAPTURE_SCRIPTS}, got {self.script!r}"
             )
         if self.edge not in EDGES:
             raise ValueError(f"edge must be one of {EDGES}, got {self.edge!r}")
@@ -827,7 +838,7 @@ class CaptureSession:
             ),
             seconds=elapsed,
             rxstall=self._rxstall,
-            stderr=self._stderr if self._finished else self._repl.last_stderr,
+            stderr=self._stderr if self._finished else self._board_stderr(),
             messages=tuple(self._messages),
             timed_out=self._timed_out,
             dropped=self._dropped,
@@ -835,13 +846,21 @@ class CaptureSession:
             mem_free_before=self._mem_free,
         )
 
+    def _board_stderr(self) -> str:
+        """The board's stderr, each traceback line given its file and line.
+
+        The board compiled one concatenated script, so it numbers lines in
+        that; `mp.annotate()` adds e.g. `[capture_rp2.py:123]` after each.
+        """
+        return mp.annotate(self._repl.last_stderr, self._req.script)
+
     def _finalise(self) -> None:
         """Freeze the stats. Idempotent, and must never raise."""
         if self._finished:
             return
         if self._start is not None:
             self._elapsed = time.monotonic() - self._start
-        self._stderr = self._repl.last_stderr
+        self._stderr = self._board_stderr()
         self._finished = True
         self._stats = self._snapshot()
 
@@ -849,7 +868,7 @@ class CaptureSession:
         """The stream itself. See `run_capture` for what the protocol is."""
         try:
             req, repl = self._req, self._repl
-            script = mp.with_cfg(mp.minify(mp.load("capture_rp2.py")), req.cfg())
+            script = mp.build(req.cfg(), req.script)
 
             needed = min_free_bytes(req.buf_words)
             self._mem_free = prepare_board(repl, mp.module_level_names(script))

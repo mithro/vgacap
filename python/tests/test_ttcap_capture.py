@@ -460,6 +460,43 @@ def test_ships_the_profile_and_pio_in_the_script_it_runs():
     assert cfg["pio"] == DEFAULT_PIO != 0
 
 
+def test_ships_the_prelude_and_the_requested_body_as_one_script():
+    board = FakeChunkBoard([])
+    repl = connect(board)
+    req = request(RP2040_TT06)
+
+    run_capture(repl, req, io.BytesIO())
+
+    (script,) = [c for c in board.commands if c.startswith("CFG = ")]
+    assert req.script == "capture_rp2.py"
+    assert script == mp.build(req.cfg(), "capture_rp2.py")
+
+
+def test_a_request_names_only_a_known_program_body():
+    with pytest.raises(ValueError, match="script must be one of"):
+        request(RP2040_TT06, script="nope.py")
+    with pytest.raises(ValueError, match="script must be one of"):
+        request(RP2040_TT06, script="prelude.py")
+
+
+def test_board_traceback_lines_name_the_file_they_came_from():
+    req = request(RP2040_TT06)
+    built = mp.build(req.cfg(), req.script).split("\n")
+    line = next(n for n, text in enumerate(built, 1) if text.startswith("def main("))
+    own = mp.load("capture_rp2.py").split("\n")
+    expected = next(n for n, text in enumerate(own, 1) if text.startswith("def main("))
+    board = FakeChunkBoard(
+        [],
+        stderr='Traceback (most recent call last):\r\n  File "<stdin>", line %d, in main\r\nMemoryError\r\n' % line,
+    )
+    repl = connect(board)
+
+    stats = run_capture(repl, req, io.BytesIO())
+
+    assert "[capture_rp2.py:%d]" % expected in stats.stderr
+    assert "MemoryError" in stats.stderr
+
+
 def test_stream_with_no_samples_is_still_a_valid_file():
     profile = RP2040_TT06
     board = FakeChunkBoard([time_chunk(profile, 0, "overruns=0 rxstall=1")])
@@ -528,7 +565,7 @@ def test_the_cleanup_snippet_actually_runs_on_a_dirty_namespace(monkeypatch, cap
     stub = types.SimpleNamespace(collect=gc.collect, mem_free=lambda: 84_208)
     monkeypatch.setitem(sys.modules, "gc", stub)
 
-    names = mp.module_level_names(mp.load("capture_rp2.py")) + ["CFG"]
+    names = mp.module_level_names(mp.source("capture_rp2.py")) + ["CFG"]
     assert "gc" in names, "the script imports gc, so the snippet must survive losing it"
     namespace: dict = {"__builtins__": __builtins__}
     for name in names:

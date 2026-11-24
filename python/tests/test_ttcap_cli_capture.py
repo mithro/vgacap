@@ -310,7 +310,7 @@ def cli_cleanup_command(profile) -> str:
     from ttcap import mp
     from ttcap.capture import _CLEANUP, capture_cfg
 
-    script = mp.with_cfg(mp.minify(mp.load("capture_rp2.py")), capture_cfg(profile))
+    script = mp.build(capture_cfg(profile), "capture_rp2.py")
     return _CLEANUP % (mp.module_level_names(script),)
 
 
