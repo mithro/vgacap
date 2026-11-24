@@ -20,4 +20,18 @@ static inline void vgaframe_timing_add_run(vgaframe_timing_learner_t *l, uint8_t
     else   l->h_low  = vgaframe_sat_add32(l->h_low, run);
     l->clk_in_line = vgaframe_sat_add32(l->clk_in_line, run);
 }
+
+// The learner's no-edge case, which is most pushes: once a sample has been
+// seen, a push at the hsync level already held adds `run` clocks
+// (vgaframe_timing_add_run) and reports nothing. vsync is not looked at:
+// it is sampled only at an accepted pulse's trailing edge, which this is
+// not. Returns 1 when it has done the push, else 0 and the caller does the
+// full vgaframe_timing_push. vgaframe_timing_push begins with this, and
+// vgaframe_push calls it first to skip the rest, so the fast path and the
+// slow path's tail are one piece of code.
+static inline int vgaframe_timing_push_no_edge(vgaframe_timing_learner_t *l, uint8_t h, uint32_t run) {
+    if (!l->have_prev || h != l->prev_h) return 0;
+    vgaframe_timing_add_run(l, h, run);
+    return 1;
+}
 #endif

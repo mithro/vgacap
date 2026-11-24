@@ -92,6 +92,7 @@ static int pulse_is_a_line_start(const vgaframe_timing_learner_t *l, uint32_t wi
 }
 
 int vgaframe_timing_push(vgaframe_timing_learner_t *l, uint8_t h, uint8_t v, uint32_t run) {
+    if (vgaframe_timing_push_no_edge(l, h, run)) return 0;
     int ret = 0;
     if (!l->have_prev) {
         l->have_prev = 1;

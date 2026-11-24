@@ -198,11 +198,40 @@ static void flush_pending_fram(vgaframe_t *f) {
     f->fram_pending = 0;
 }
 
+// Stores `run` clocks of `sample` at (x, y), clipped to the buffer, and
+// moves x on past them.
+static inline void store_run(vgaframe_t *f, uint32_t sample, uint32_t run) {
+    uint32_t W = f->cfg.max_clocks_per_line;
+    if (f->y < f->cfg.max_lines && f->x < W) {
+        // f->x < W is guaranteed above, so W - f->x cannot underflow; compare
+        // against it directly instead of f->x + run, which can itself wrap
+        // for a large run and defeat the clip entirely.
+        uint32_t n = run > (W - f->x) ? (W - f->x) : run;
+        uint8_t px = f->pixel_table_ok ? f->pixel_table[sample & 0xFF]
+                                       : (uint8_t)(vgaframe_colour(f->cfg.signal_map, sample) | 0x80);
+        memset(f->raw + f->y * W + f->x, px, n);
+        f->cover[f->y] = 1;
+    }
+    f->x = vgaframe_sat_add32(f->x, run);
+}
+
 void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
     uint8_t h = bit(f->cfg.signal_map, sample, VGACAP_SIG_HSYNC);
     uint8_t v = bit(f->cfg.signal_map, sample, VGACAP_SIG_VSYNC);
-    int r = vgaframe_timing_push(&f->learner, h, v, run);
-    f->last_report = r;
+    int r;
+    if (vgaframe_timing_push_no_edge(&f->learner, h, run)) {
+        // No hsync edge, so no report: x and y stay where they are, and in
+        // continuous mode all that is left is to store the run.
+        f->last_report = 0;
+        if (!f->fram_active) {
+            if (f->in_frame) store_run(f, sample, run);
+            return;
+        }
+        r = 0;
+    } else {
+        r = vgaframe_timing_push(&f->learner, h, v, run);
+        f->last_report = r;
+    }
     // x is the clock offset within the line, which the learner tracks as
     // clk_in_line: a line start is reported at the *trailing* edge of its
     // hsync pulse (that is when the glitch filter can judge the pulse), so
@@ -266,18 +295,7 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
         }
     }
     if (!f->in_frame && !f->fram_active) return;
-    uint32_t W = f->cfg.max_clocks_per_line;
-    if (f->y < f->cfg.max_lines && f->x < W) {
-        // f->x < W is guaranteed above, so W - f->x cannot underflow; compare
-        // against it directly instead of f->x + run, which can itself wrap
-        // for a large run and defeat the clip entirely.
-        uint32_t n = run > (W - f->x) ? (W - f->x) : run;
-        uint8_t px = f->pixel_table_ok ? f->pixel_table[sample & 0xFF]
-                                       : (uint8_t)(vgaframe_colour(f->cfg.signal_map, sample) | 0x80);
-        memset(f->raw + f->y * W + f->x, px, n);
-        f->cover[f->y] = 1;
-    }
-    f->x = vgaframe_sat_add32(f->x, run);
+    store_run(f, sample, run);
     if (f->fram_active) {
         f->fram_clocks += run;
         if (h) f->fram_h_high += run;
