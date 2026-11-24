@@ -15,4 +15,14 @@
 size_t synth_frame(const vgaframe_mode_t *m, uint8_t (*pixel)(void *user, uint16_t x, uint16_t y),
                    void *user, uint32_t *out, size_t out_len);
 
+
+// Writes one full frame of Tiny VGA samples as tt-vga-testpatterns'
+// common/hvsync_generator.v registers them, for one pass of hpos/vpos from
+// (0, 0): the stream does NOT start at a sync edge, and vsync changes on the
+// very clock hsync starts (see synth.c for the derivation). `pixel` is called
+// with (hpos, vpos) for the active area. Returns the sample count (cpl * lpf),
+// or 0 if out_len is too small.
+size_t synth_frame_hvsync(const vgaframe_mode_t *m, uint8_t (*pixel)(void *user, uint16_t x, uint16_t y),
+                          void *user, uint32_t *out, size_t out_len);
+
 #endif
