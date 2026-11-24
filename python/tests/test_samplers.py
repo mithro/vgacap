@@ -325,13 +325,12 @@ def test_centre_matches_python(centre_case):
     assert all(missing == 0 for _, _, missing, _ in frames)
 
 
+@pytest.mark.parametrize("centre_case", ["cpp0.95"], indirect=True)
 def test_centre_below_one(centre_case):
     """Every pixel holds the colour of the clock the rule names, counted from
     the frame's start clock in whole lines. At cpp 0.95 some design pixels
     have no clock and appear nowhere."""
-    name, uo, (geo, frames, _) = centre_case
-    if name != "cpp0.95":
-        pytest.skip("the cpp 0.95 case")
+    _, uo, (geo, frames, _) = centre_case
     assert geo.line_clocks == 760
     x = np.floor((geo.hsync + geo.hback + np.arange(geo.width) + 0.5) * geo.cpp).astype(np.int64)
     rows = geo.vpulse_lines + geo.vback + np.arange(geo.height)

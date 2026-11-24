@@ -192,9 +192,11 @@ void centrev1_set_raw_observer(centrev1_t *s, void (*fn)(void *user, const vgafr
 typedef struct centrev1_diag {
     // Over a 1-bit map of the clock positions (x < L, row < lines) ever
     // non-black in an emitted frame: outside is the lit positions outside
-    // the window used. The window's clocks are columns
-    // [floor((hsync + hback') * cpp), floor((hsync + hback' + width) * cpp))
-    // of rows [vpulse_lines + vback', + height).
+    // the window used. The window's clocks are columns [b(0), b(width)) of
+    // rows [vpulse_lines + vback', + height), with b(p) = floor((hsync +
+    // hback' + p) * cpp + 0.5), the clock edge nearest pixel p's start
+    // (exact at whole cpp; at fractional cpp the design's boundaries are
+    // quantised to clocks, and the nearest edge keeps its last pixel in).
     uint64_t outside;
     // The offset from the window without the override that keeps the window
     // inside the line and frame and out of the sync pulses (hback' + dx >= 0,
