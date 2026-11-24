@@ -52,6 +52,8 @@ vgacap_add_test(test_modes)
 vgacap_add_test(test_timing tests/synth.c)
 vgacap_add_test(test_frame tests/synth.c)
 vgacap_add_test(test_frame_partial tests/synth.c)
+# The fast path against the a26c942 push path kept in tests/fastpath_ref/.
+vgacap_add_test(test_frame_fastpath tests/synth.c tests/fastpath_ref/ref.c)
 vgacap_add_test(test_stream_header)
 vgacap_add_test(test_stream_raw)
 vgacap_add_test(test_stream_chunks)
