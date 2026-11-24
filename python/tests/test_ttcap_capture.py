@@ -879,9 +879,12 @@ def test_a_frame_request_builds_the_frame_cfg_and_may_end_on_a_picture_count():
     assert "capture=window vga_mode=800x600@60" in capture.stream_header_bytes(req).decode("latin-1")
 
 
-def test_a_frame_request_samples_on_the_falling_edge_only():
-    with pytest.raises(ValueError, match="falling edge only"):
-        request(RP2350_DBV3, script="frame_rp2.py", edge="rising")
+def test_a_frame_request_carries_its_sample_point_to_the_board():
+    cfg = request(RP2350_DBV3, script="frame_rp2.py", edge="rising", sample_delay=2).cfg()
+
+    assert (cfg["edge"], cfg["sample_delay"]) == ("rising", 2)
+    with pytest.raises(ValueError, match="sample_delay"):
+        request(RP2350_DBV3, script="frame_rp2.py", sample_delay=32).cfg()
 
 
 def test_a_frame_request_with_no_limit_at_all_is_refused():

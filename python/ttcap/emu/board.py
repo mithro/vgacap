@@ -226,14 +226,17 @@ class _SM:
                     % (in_base, self.block.index, self.block.base)
                 )
             self.in_base = in_base
+        if prog[7] is not None:
+            raise BoardError("side-set is not emulated")
         self.program = prog
         self.code = [self._decode(word) for word in data]
+        # With no side-set, bits 12:8 are all delay: idle cycles after the
+        # instruction completes (a stalled instruction's delay waits too).
+        self.delays = [(word >> 8) & 0x1F for word in data]
         self.reset_state()
 
     def _decode(self, word: int) -> tuple:
         op = word >> 13
-        if (word >> 8) & 0x1F:
-            raise BoardError("instruction 0x%04x uses delay/side-set, not emulated" % word)
         if op == 0:
             return (_JMP, (word >> 5) & 7, word & 0x1F)
         if op == 1:
@@ -292,13 +295,14 @@ class _SM:
             if self.now >= limit:
                 return
             ins = code[self.pc]
+            d = self.delays[self.pc]
             kind = ins[0]
             if kind == _WAIT:
                 t = wave.next_time(ins[2], ins[1], self.now)
                 if t is None or t >= limit:
                     self.now = limit
                     continue
-                self.now = t + 1
+                self.now = t + 1 + d
                 self._next_pc()
             elif kind == _IN:
                 bits = ins[1]
@@ -316,12 +320,12 @@ class _SM:
                         self.now = limit
                         continue
                     self.isr, self.isr_count = 0, 0
-                    self.now += 1
+                    self.now += 1 + d
                     self._next_pc()
                     self._push(isr)
                 else:
                     self.isr, self.isr_count = isr, count
-                    self.now += 1
+                    self.now += 1 + d
                     self._next_pc()
             elif kind == _JMP:
                 cond, target = ins[1], ins[2]
@@ -341,7 +345,7 @@ class _SM:
                     take = self.x != self.y
                 else:
                     raise BoardError("jmp condition %d not emulated" % cond)
-                self.now += 1
+                self.now += 1 + d
                 if take:
                     self.pc = target
                 else:
@@ -355,7 +359,7 @@ class _SM:
                 else:
                     self.osr = self.tx.pop(0)
                 self.osr_count = 0
-                self.now += 1
+                self.now += 1 + d
                 self._next_pc()
             elif kind == _PUSH:
                 if len(self.rx) >= self.rx_depth:
@@ -366,12 +370,12 @@ class _SM:
                 else:
                     word = self.isr
                     self.isr, self.isr_count = 0, 0
-                    self.now += 1
+                    self.now += 1 + d
                     self._next_pc()
                     self._push(word)
                     continue
                 self.isr, self.isr_count = 0, 0
-                self.now += 1
+                self.now += 1 + d
                 self._next_pc()
             elif kind == _MOV:
                 _, dest, mov_op, src = ins
@@ -390,7 +394,7 @@ class _SM:
                     self.isr, self.isr_count = value, 0
                 elif dest == 7:
                     self.osr, self.osr_count = value, 0
-                self.now += 1
+                self.now += 1 + d
                 if dest == 5:
                     self.pc = value & 0x1F
                 else:
@@ -400,7 +404,7 @@ class _SM:
                     self.x = ins[2]
                 else:
                     self.y = ins[2]
-                self.now += 1
+                self.now += 1 + d
                 self._next_pc()
 
     def _rx_stalled(self) -> None:

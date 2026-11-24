@@ -48,6 +48,10 @@ CAPTURE_SCRIPTS = ("capture_rp2.py", "frame_rp2.py")
 CAPTURE_MODES = {"stream": "capture_rp2.py", "frame": "frame_rp2.py", "window": "frame_rp2.py"}
 #: The timing `frame_rp2.py` is told to expect unless asked otherwise.
 DEFAULT_VGA_MODE = "640x480@60"
+#: The sample point frame capture uses unless told otherwise: the rising
+#: edge, read at once. Swept on fpga-4 at 25 MHz, 2026-11-24 (frame_rp2.py,
+#: SAMPLE POINT): the middle of a two-point window where uo_out is stable.
+FRAME_EDGE = "rising"
 #: Lines per window when `--mode window` is asked for without a size.
 DEFAULT_WINDOW_LINES = 48
 #: Most DMA buffers (one channel each, plus the stopper) a frame capture
@@ -102,6 +106,9 @@ def frame_cfg(
     margin_lines: int = 1,
     hsync_active: int = -1,
     vsync_active: int = -1,
+    edge: str = "falling",
+    sample_delay: int = 0,
+    clock_hz: int = 25_000_000,
 ) -> dict:
     """Build the `CFG` dict for `frame_rp2.py` (whole-frame/windowed capture).
 
@@ -111,7 +118,11 @@ def frame_cfg(
     first line of the vsync pulse, as libvgaframe counts. `window_lines`
     0 lets the board take as many lines as its heap holds; `hsync_active`
     and `vsync_active` -1 have it measure the sync polarities itself.
+    `edge` and `sample_delay` (system clocks after that edge) place the
+    sample point; see SAMPLE POINT in frame_rp2.py.
     """
+    if not 0 <= sample_delay <= 31:
+        raise ValueError(f"sample_delay must be 0..31 system clocks, got {sample_delay}")
     if vga_mode not in MODES:
         raise ValueError(f"unknown VGA mode {vga_mode!r}; known: {', '.join(MODES)}")
     mode = MODES[vga_mode]
@@ -127,7 +138,7 @@ def frame_cfg(
     for name, value in (("hsync_active", hsync_active), ("vsync_active", vsync_active)):
         if value not in (-1, 0, 1):
             raise ValueError(f"{name} must be -1 (measure), 0 or 1")
-    cfg = capture_cfg(profile, max_bytes=max_bytes, pio=pio, sm=sm)
+    cfg = capture_cfg(profile, max_bytes=max_bytes, edge=edge, pio=pio, sm=sm)
     del cfg["buf_words"]  # capture_rp2.py's; the frame body sizes its own
     cfg.update(
         cpl=mode.cpl,
@@ -138,6 +149,8 @@ def frame_cfg(
         vsync_active=vsync_active,
         max_buffers=FRAME_MAX_BUFFERS,
         max_frames=max_frames,
+        sample_delay=sample_delay,
+        clock_hz=clock_hz,
     )
     return cfg
 
@@ -352,6 +365,9 @@ class CaptureRequest:
     vga_mode: str = DEFAULT_VGA_MODE
     window_lines: int = 0
     max_frames: int = 0
+    #: `frame_rp2.py` only: system clocks between the sampled edge and the
+    #: read (SAMPLE POINT in frame_rp2.py).
+    sample_delay: int = 0
 
     @property
     def is_frame(self) -> bool:
@@ -366,11 +382,6 @@ class CaptureRequest:
         if self.script not in CAPTURE_SCRIPTS:
             raise ValueError(
                 f"script must be one of {CAPTURE_SCRIPTS}, got {self.script!r}"
-            )
-        if self.script == "frame_rp2.py" and self.edge != "falling":
-            raise ValueError(
-                "frame capture samples on the falling edge only (its PIO "
-                "program waits for it); edge must be 'falling'"
             )
         if self.edge not in EDGES:
             raise ValueError(f"edge must be one of {EDGES}, got {self.edge!r}")
@@ -402,6 +413,9 @@ class CaptureRequest:
                 max_bytes=self.max_bytes,
                 pio=self.pio,
                 sm=self.sm,
+                edge=self.edge,
+                sample_delay=self.sample_delay,
+                clock_hz=self.clock_hz,
             )
         return capture_cfg(
             self.profile,
@@ -610,8 +624,8 @@ def _describe(req: CaptureRequest) -> str:
     )
     if req.is_frame:
         parts.append(
-            "capture=%s vga_mode=%s"
-            % ("window" if req.window_lines else "frame", req.vga_mode)
+            "capture=%s vga_mode=%s sample_delay=%d"
+            % ("window" if req.window_lines else "frame", req.vga_mode, req.sample_delay)
         )
     return " ".join(parts)
 

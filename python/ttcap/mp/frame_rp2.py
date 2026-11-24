@@ -6,6 +6,11 @@ front of it (imports, shared CFG keys, registers, chunk writers,
 `set_gpio_base()`, `init_input_pins()`, cooperative stop) -- read that
 docstring first. Keys this body reads on top of the prelude's:
 
+    sample_delay   system clocks to wait after the sampled project-clock
+                   edge (`edge`, from the prelude) before reading the pins:
+                   moves the sample point into the window where uo_out is
+                   stable (see SAMPLE POINT)
+    clock_hz       the project clock the host programmed
     cpl            clocks per line of the VGA mode (800 for 640x480@60); a
                    multiple of samples_per_word, so a line is whole words
     region_first   first frame line of the picture region (line 0 is the
@@ -48,6 +53,20 @@ at 5 system clocks a pixel) only shifts the window's first line, and
 libvgaframe re-places x at every hsync trailing edge it sees after that --
 which is why the default region starts a line above the active area.
 
+SAMPLE POINT. At a real VGA clock there are only 4-5 system clocks per
+pixel (the SDK runs the RP2350 at 100 MHz for a 25 MHz project clock), and
+the design's uo_out changes a clock-to-output delay after each rising
+edge -- through the FPGA, the pads and the input synchroniser -- which on
+fpga-4 put the transition right at the falling edge: 1.4% of the bars
+picture's pixels came back with stray bits. So the edge and a delay of
+whole system clocks after it are CFG. Swept on fpga-4 at 25 MHz (100 MHz
+system clock, 4 cycles a pixel, 2026-11-24): falling+0 1.4% wrong,
+falling+1 exact, rising+0 exact, rising+1 10% wrong; the host defaults to
+rising+0, the middle of that window. The sampler loop is 3 instructions
+plus the delay, and must fit one pixel: past that it silently skips
+samples (the sweep's +2 and +3 gave no picture at all), so main() refuses
+such a delay with an `error=` TIME chunk instead.
+
 HEAP. One frame of 640x480 is 420,000 samples, and fpga-1 has ~414 KB free
 but in pieces: the largest block measured 142 KB (2026-11-24). So a
 capture is a CHAIN of buffers, each a whole number of lines, allocated
@@ -67,6 +86,8 @@ reported per capture (`rxstall` TIME chunk) and in the summary.
 """
 
 CPL = CFG["cpl"]  # noqa: F821 - CFG is prepended by the host
+CLOCK_HZ = CFG["clock_hz"]  # noqa: F821
+SAMPLE_DELAY = CFG["sample_delay"]  # noqa: F821
 REGION_FIRST = CFG["region_first"]  # noqa: F821
 REGION_LINES = CFG["region_lines"]  # noqa: F821
 WINDOW_LINES = CFG["window_lines"]  # noqa: F821
@@ -90,7 +111,7 @@ def on_done(_channel):
     DONE[0] = True
 
 
-def make_trigger(clk_gpio, hs_gpio, vs_gpio, hs_act, vs_act, in_count, push):
+def make_trigger(clk_gpio, hs_gpio, vs_gpio, hs_act, vs_act, in_count, push, clk_act, delay):
     """The trigger + sampler program, operands as closure cells.
 
     Same rules as `make_sampler()` in the prelude: every operand read in
@@ -110,6 +131,7 @@ def make_trigger(clk_gpio, hs_gpio, vs_gpio, hs_act, vs_act, in_count, push):
     vs_gpio &= 31
     hs_idle = 1 - hs_act
     vs_idle = 1 - vs_act
+    clk_idle = 1 - clk_act
 
     @rp2.asm_pio(  # noqa: F821
         in_shiftdir=rp2.PIO.SHIFT_LEFT,  # noqa: F821
@@ -130,8 +152,8 @@ def make_trigger(clk_gpio, hs_gpio, vs_gpio, hs_act, vs_act, in_count, push):
         jmp("skip")  # noqa: F821
         label("go")  # noqa: F821
         wrap_target()  # noqa: F821
-        wait(1, gpio, clk_gpio)  # noqa: F821
-        wait(0, gpio, clk_gpio)  # noqa: F821 - falling: outputs settled
+        wait(clk_idle, gpio, clk_gpio)  # noqa: F821
+        wait(clk_act, gpio, clk_gpio)[delay]  # noqa: F821 - the edge, then `delay` cycles
         in_(pins, in_count)  # noqa: F821
         wrap()  # noqa: F821
 
@@ -202,8 +224,9 @@ def write_fram_chunk(out, counter, first, lines, parts):
 
 def main(out):
     """Capture windows of successive frames until told to stop."""
-    if CPL % SAMPLES_PER_WORD:  # noqa: F821
-        write_time_chunk(out, 0, b"error=cpl is not a whole number of words")  # noqa: F821
+    # cpl being whole words is checked by the host (frame_cfg).
+    if 3 + SAMPLE_DELAY > machine.freq() // CLOCK_HZ:  # noqa: F821
+        write_time_chunk(out, 0, b"error=sample_delay does not fit one project clock")  # noqa: F821
         return
     if not claim_pio(out):  # noqa: F821 - prelude
         return
@@ -216,7 +239,8 @@ def main(out):
         vs_act = 1 - idle_level(machine.Pin(VSYNC_GPIO), 2000)  # noqa: F821
 
     program = make_trigger(
-        CLK_WAIT_GPIO, HSYNC_GPIO, VSYNC_GPIO, hs_act, vs_act, IN_COUNT, PUSH_THRESH  # noqa: F821
+        CLK_WAIT_GPIO, HSYNC_GPIO, VSYNC_GPIO, hs_act, vs_act, IN_COUNT, PUSH_THRESH,  # noqa: F821
+        1 if EDGE == "rising" else 0, SAMPLE_DELAY,  # noqa: F821
     )
     sm = new_state_machine(program)  # noqa: F821 - prelude
 

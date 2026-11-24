@@ -46,6 +46,7 @@ from .capture import (
     DEFAULT_PIO,
     DEFAULT_VGA_MODE,
     DEFAULT_WINDOW_LINES,
+    FRAME_EDGE,
     CaptureError,
     CaptureRequest,
     CaptureSession,
@@ -455,13 +456,14 @@ def capture(
     max_bytes: int = 0,
     frames: int | None = None,
     buf_words: int = DEFAULT_BUF_WORDS,
-    edge: str = "falling",
+    edge: str | None = None,
     desc: str = "",
     pio: int = DEFAULT_PIO,
     stop_clock_after: bool = True,
     mode: str = "stream",
     vga_mode: str = DEFAULT_VGA_MODE,
     window_lines: int = 0,
+    sample_delay: int = 0,
 ) -> CaptureStats:
     """Run one capture to `out_path` and print what happened.
 
@@ -502,6 +504,8 @@ def capture(
                 raise ValueError(f"mode must be one of {sorted(CAPTURE_MODES)}, got {mode!r}")
             script = CAPTURE_MODES[mode]
             framed = script == "frame_rp2.py"
+            if edge is None:
+                edge = FRAME_EDGE if framed else "falling"
             if mode == "window" and not window_lines:
                 window_lines = DEFAULT_WINDOW_LINES
             max_frames = 0
@@ -537,6 +541,7 @@ def capture(
                     vga_mode=vga_mode,
                     window_lines=window_lines if framed else 0,
                     max_frames=max_frames,
+                    sample_delay=sample_delay,
                 )
                 selection = select_project(repl, request)
                 print(
@@ -764,8 +769,10 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"words per DMA buffer, two are allocated (default {DEFAULT_BUF_WORDS})",
     )
     capture_parser.add_argument(
-        "--edge", choices=["falling", "rising"], default="falling",
-        help="project-clock edge to sample (default falling: outputs have settled)",
+        "--edge", choices=["falling", "rising"], default=None,
+        help="project-clock edge to sample (default: falling in stream mode, "
+        f"where outputs have long settled; {FRAME_EDGE} in frame/window modes, "
+        "measured at 25 MHz)",
     )
     capture_parser.add_argument("--desc", default="", help="note to store in the header")
     capture_parser.add_argument(
@@ -782,6 +789,14 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(MODES),
         default=DEFAULT_VGA_MODE,
         help=f"frame/window modes: the VGA timing to expect (default {DEFAULT_VGA_MODE})",
+    )
+    capture_parser.add_argument(
+        "--sample-delay",
+        type=int,
+        default=0,
+        help="frame/window modes: system clocks to wait after --edge before "
+        "reading uo_out, to sample where it is stable at a real VGA clock "
+        "(default 0)",
     )
     capture_parser.add_argument(
         "--window-lines",
@@ -856,6 +871,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 mode=args.mode,
                 vga_mode=args.vga_mode,
                 window_lines=args.window_lines,
+                sample_delay=args.sample_delay,
             )
         except ConsumerClosed:
             # The normal end of a pull: the pipeline stopped reading. The

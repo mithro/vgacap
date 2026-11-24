@@ -193,3 +193,22 @@ def test_the_uploaded_frame_script_fits_in_the_board(profile):
     script = mp.build(frame_cfg(profile), "frame_rp2.py")
 
     assert len(script) < 10_000
+
+
+def test_the_measured_default_sample_point_is_exact(tmp_path, bars_uo):
+    # Rising edge, read at once: the middle of the window swept on fpga-4.
+    board, out = run_frame(RP2350_DBV3, bars_uo, edge="rising", sample_delay=0, max_frames=1)
+
+    _, frames = pictures(tmp_path, RP2350_DBV3, out)
+    assert_pictures_exact(frames, bars(640, 480))
+
+
+def test_a_sample_delay_that_does_not_fit_one_pixel_is_refused(bars_uo):
+    # 133 MHz / 25 MHz = 5 cycles a pixel; the loop is 3 + delay. On fpga-4
+    # (4 cycles a pixel) delays 2 and 3 skipped samples and gave no picture
+    # at all, with nothing to say why. Refused with a reason instead.
+    board, out = run_frame(RP2350_DBV3, bars_uo, sample_delay=3, clock_hz=25_000_000, max_frames=1)
+
+    frams, times = chunks(out)
+    assert frams == []
+    assert times == ["error=sample_delay does not fit one project clock"]
