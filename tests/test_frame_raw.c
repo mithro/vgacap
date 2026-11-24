@@ -87,13 +87,16 @@ static uint32_t tiny(uint8_t c, uint32_t hs, uint32_t vs) {
 }
 
 // Lines [from, lines) of an 801-clock frame of `lines` lines with odd801's
-// sync (both pulses negative, starting at line 0 clock 0), every clock -
-// blanking and sync included - of colour `c`. Returns the samples written.
+// sync (both pulses negative, starting at line 0 clock 0), every clock
+// outside the hsync pulse - blanking included - of colour `c`, the pulse
+// black (a line start is reported at the pulse's trailing edge, so a lit
+// pulse would land at the end of the line before). Returns the samples
+// written.
 static size_t odd_frame(uint32_t *out, uint32_t lines, uint32_t from, uint8_t c) {
     size_t k = 0;
     for (uint32_t y = from; y < lines; y++)
         for (uint32_t x = 0; x < 801; x++)
-            out[k++] = tiny(c, x >= odd801.h_sync, y >= odd801.v_sync);
+            out[k++] = tiny(x >= odd801.h_sync ? c : 0, x >= odd801.h_sync, y >= odd801.v_sync);
     return k;
 }
 
@@ -128,12 +131,23 @@ static int any_written(const uint8_t *r, uint32_t y0, uint32_t y1) {
 }
 
 // ---- tests -----------------------------------------------------------------
+//
+// A stream that starts at a frame's vsync pulse (synth_frame's line 0) cannot
+// claim that first frame: the pulse is only known to be the pulse once the
+// idle phase after it has ended, which is the next frame's start (report 2).
+// So "a stream of N frames" below is N frames after that unclaimed one, and
+// the start of the frame after them, whose boundary completes the last.
 
 TEST(raw_fires_without_lock) {
     ASSERT_TRUE(vgaframe_mode_match(801, 525) == NULL);
     ASSERT_TRUE(vgaframe_mode_match_cpl(801) == NULL);
     vgaframe_t f; setup(&f, on_frame, 1, 0);
-    push_all(&f, buf, synth_frames(&odd801, bars, 2, 0));
+    // From line 100 of a frame: the next one, claimed retroactively, and
+    // the first 10 lines of the one after, whose start completes it. The
+    // first measurement of the timing is at that start, so nothing is
+    // locked yet.
+    size_t n = synth_frames(&odd801, bars, 3, 100) - (525u - 10u) * 801u;
+    push_all(&f, buf, n);
     ASSERT_EQ_U(nframes, 0);
     ASSERT_EQ_U(rl.n, 1);
     ASSERT_EQ_U(rl.lines[0], 525);
@@ -141,33 +155,36 @@ TEST(raw_fires_without_lock) {
     ASSERT_TRUE(rl.raw_is_buffer[0]);
     ASSERT_EQ_U(rl.locked[0], 0);
     ASSERT_TRUE(rl.mode[0] == NULL);
+    ASSERT_EQ_U(rl.retro[0], 1);
 }
 
 TEST(raw_fires_for_black) {
     vgaframe_t f; setup(&f, on_frame, 1, 0);
     push_all(&f, buf, synth_frames(&odd801, black, 5, 0));
-    // Frames 1 to 4 are completed by the next one's start; frame 5 is not.
-    ASSERT_EQ_U(rl.n, 4);
+    // Frame 1 is never claimed and frame 5 never completed: 2, 3 and 4 are
+    // each completed by the next one's start.
+    ASSERT_EQ_U(rl.n, 3);
     ASSERT_EQ_U(nframes, 0);
-    for (int i = 0; i < 4; i++) ASSERT_EQ_U(rl.lines[i], 525);
+    for (int i = 0; i < 3; i++) ASSERT_EQ_U(rl.lines[i], 525);
 }
 
 TEST(shorter_second_frame_clean) {
-    // A lead-in from line 200 of a 520-line frame, then A (525 lines) and B
-    // (520), every clock lit, then the start of a frame that completes B.
-    // Neighbouring frames never agree, and 801 clocks match no mode, so
-    // nothing is emitted and only the boundary clears raw.
+    // A lead-in from line 200 of a 520-line frame, then A (525 lines, claimed
+    // retroactively at the end of its vsync pulse) and B (520), every clock
+    // lit, then the start of a frame that completes B. A and B do not agree,
+    // and 801 clocks match no mode, so nothing is emitted and only the
+    // boundary clears raw.
     size_t n = 0;
     n += odd_frame(buf + n, 520, 200, 0x3F);
     n += odd_frame(buf + n, 525, 0, 0x3F);
     n += odd_frame(buf + n, 520, 0, 0x3F);
     n += odd_frame(buf + n, 10, 0, 0x3F);
-    vgaframe_t f; setup(&f, on_frame, 1, 3);
+    vgaframe_t f; setup(&f, on_frame, 1, 2);
     push_all(&f, buf, n);
     ASSERT_EQ_U(nframes, 0);
-    ASSERT_EQ_U(rl.n, 3);
-    ASSERT_EQ_U(rl.lines[1], 525);
-    ASSERT_EQ_U(rl.lines[2], 520);
+    ASSERT_EQ_U(rl.n, 2);
+    ASSERT_EQ_U(rl.lines[0], 525);
+    ASSERT_EQ_U(rl.lines[1], 520);
     ASSERT_TRUE(any_written(rl.snap, 519, 520));
     ASSERT_TRUE(!any_written(rl.snap, 520, 525));
 }
@@ -175,7 +192,9 @@ TEST(shorter_second_frame_clean) {
 TEST(retroactive_first_frame) {
     const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
     vgaframe_t f; setup(&f, on_frame, 1, 1);
-    push_all(&f, buf, synth_frames(m, bars, 3, 100));   // starts mid-frame, at line 100
+    // Starts mid-frame, at line 100: frame 2 is claimed retroactively at the
+    // end of its vsync pulse, frame 3 by its report 2, frame 4 never ends.
+    push_all(&f, buf, synth_frames(m, bars, 4, 100));
     ASSERT_EQ_U(rl.n, 2);
     ASSERT_EQ_U(rl.retro[0], 1);
     ASSERT_EQ_U(rl.lines[0], 525);
@@ -231,7 +250,9 @@ TEST(no_on_frame_skips_conversion) {
     vgaframe_set_rgb6_buffer(&f, rgb6buf);
     memset(rgb, 0xAB, sizeof rgb);
     memset(rgb6buf, 0xAB, sizeof rgb6buf);
-    push_all(&f, buf, synth_frames(m, bars, 5, 0));
+    // Five frames, the first unclaimed, and the start of a sixth: frames 2
+    // to 5 are completed.
+    push_all(&f, buf, synth_frames(m, bars, 6, 0) - (525u - 10u) * 800u);
     ASSERT_EQ_U(rl.n, 4);
     ASSERT_TRUE(f.frames_seen >= 1);   // emit's bookkeeping still ran
     for (size_t i = 0; i < sizeof rgb; i++) if (rgb[i] != 0xAB) { ASSERT_EQ_U(rgb[i], 0xAB); }
@@ -239,23 +260,24 @@ TEST(no_on_frame_skips_conversion) {
 }
 
 TEST(boundary_clears_after_early_return) {
-    // A lead-in from line 200, then F1 and F2: 525 lines of black, which
-    // lock the learner (they agree) with no mode (801 clocks), so F2's
-    // boundary calls emit and emit's auto-crop finds nothing to show and
-    // returns early. F3 is 520 lines, lit, and F4's start completes it.
+    // A lead-in from line 200, then F1 (claimed retroactively) and F2: 525
+    // lines of black, which lock the learner (they agree) with no mode (801
+    // clocks), so F2's boundary calls emit and emit's auto-crop finds nothing
+    // to show and returns early. F3 is 520 lines, lit, and F4's start
+    // completes it.
     size_t n = 0;
     n += odd_frame(buf + n, 525, 200, 0);
     n += odd_frame(buf + n, 525, 0, 0);
     n += odd_frame(buf + n, 525, 0, 0);
     n += odd_frame(buf + n, 520, 0, 0x2A);
     n += odd_frame(buf + n, 10, 0, 0x2A);
-    vgaframe_t f; setup(&f, on_frame, 1, 4);
+    vgaframe_t f; setup(&f, on_frame, 1, 3);
     push_all(&f, buf, n);
-    ASSERT_EQ_U(rl.n, 4);
-    ASSERT_EQ_U(rl.locked[2], 1);          // F2's boundary: locked, so emit ran
-    ASSERT_TRUE(rl.mode[2] == NULL);       // with no mode: the auto-crop
-    ASSERT_EQ_U(rl.nframes_at[3], 0);      // ... which returned early
-    ASSERT_EQ_U(rl.lines[3], 520);
+    ASSERT_EQ_U(rl.n, 3);
+    ASSERT_EQ_U(rl.locked[1], 1);          // F2's boundary: locked, so emit ran
+    ASSERT_TRUE(rl.mode[1] == NULL);       // with no mode: the auto-crop
+    ASSERT_EQ_U(rl.nframes_at[2], 0);      // ... which returned early
+    ASSERT_EQ_U(rl.lines[2], 520);
     ASSERT_EQ_U(rl.snap[(size_t)519 * W + 800], 0x80 | 0x2A);
     ASSERT_TRUE(!any_written(rl.snap, 520, 525));
 }
