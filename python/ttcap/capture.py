@@ -54,9 +54,10 @@ DEFAULT_VGA_MODE = "640x480@60"
 FRAME_EDGE = "rising"
 #: Lines per window when `--mode window` is asked for without a size.
 DEFAULT_WINDOW_LINES = 48
-#: Most DMA buffers (one channel each, plus the stopper) a frame capture
-#: may chain. fpga-1's heap gave 8 useful blocks; RP2350 has 16 channels.
-FRAME_MAX_BUFFERS = 8
+#: Most heap blocks one frame capture may fill. They cost no DMA channels
+#: (control blocks: two channels whatever the count), only 16 bytes of
+#: table each; fpga-4 needed more than 15 to reach the 481 lines.
+FRAME_MAX_BUFFERS = 32
 
 #: Informational only, and only a guess: the rp2 port boots RP2040 at
 #: 133 MHz but RP2350 at 150 MHz, and the capture never changes the system

@@ -21,7 +21,7 @@ docstring first. Keys this body reads on top of the prelude's:
     hsync_active   level of uo_out[7] during the hsync pulse, 0 or 1;
                    -1 = measure it on the board
     vsync_active   the same for uo_out[3]
-    max_buffers    most DMA buffers (one channel each) a capture may chain
+    max_buffers    most heap blocks (whole lines each) one capture may use
     max_frames     stop after this many pictures; 0 = until stopped
     max_bytes      stop after this many emitted bytes; 0 = until stopped
 
@@ -69,16 +69,22 @@ such a delay with an `error=` TIME chunk instead.
 
 HEAP. One frame of 640x480 is 420,000 samples, and fpga-1 has ~414 KB free
 but in pieces: the largest block measured 142 KB (2026-11-24). So a
-capture is a CHAIN of buffers, each a whole number of lines, allocated
-largest-first, each filled by its own DMA channel chained to the next. The
-chain is one unbroken sample stream, so a capture is sent as ONE FRAM
-chunk -- one header, then each buffer's bytes in order. Splitting it into a
-chunk per buffer would restart libvgaframe's line position at every buffer
-and carry the trigger's start error onto each buffer's first line.
+capture fills a list of buffers, each a whole number of lines, allocated
+largest-first. A DMA channel per buffer ran out of channels first: on
+fpga-4, 15 buffers (all 16 channels with the stopper) reached 473 of the
+481 lines. So two channels do it with CONTROL BLOCKS: a control channel
+copies a 4-word block (READ_ADDR, WRITE_ADDR, TRANS_COUNT, CTRL_TRIG) from
+a table into the data channel's alias-0 registers, which starts it; the
+data channel chains back to the control channel for the next block. The
+capture is one unbroken sample stream, so it is sent as ONE FRAM chunk --
+one header, then each buffer's bytes in order (a chunk per buffer would
+restart libvgaframe's line position at every buffer).
 
-STOPPING THE SAMPLER. The last buffer's channel chains to a one-word
-"stopper" channel that writes this state machine's bit to the PIO CTRL
-atomic-clear alias, disabling it a few cycles after the last sample. A
+STOPPING THE SAMPLER. The table's last block turns the data channel into a
+"stopper": one word, this state machine's bit, copied to the PIO CTRL
+atomic-clear alias, disabling it a few cycles after the last sample. That
+block alone raises the channel's IRQ, which is how main() learns the
+window is in. A
 sampler left running would fill the RX FIFO and set RXSTALL the moment the
 DMA finished, and then RXSTALL could no longer mean what it must mean here:
 samples were lost *inside* the window, so the picture is wrong. It is
@@ -103,7 +109,7 @@ LINE_WORDS = CPL // SAMPLES_PER_WORD  # noqa: F821
 LINE_BYTES = 4 * LINE_WORDS
 PIO_CTRL_CLR = PIO_BASE + 0x3000  # noqa: F821 - CTRL (+0x000) atomic clear
 
-#: Set by the stopper channel's completion IRQ: the whole window is in.
+#: Set by the stopper block's completion IRQ: the whole window is in.
 DONE = [False]
 
 
@@ -257,8 +263,9 @@ def main(out):
 
     stop_word = bytearray(4)
     stop_word[0] = 1 << SM_NUM  # noqa: F821 - SM_ENABLE bit in PIO CTRL
-    chans = []
-    stopper = None
+    table = bytearray(16 * (len(bufs) + 1))
+    data = None
+    ctl = None
     poller = None
     stdin = None
     frames = 0
@@ -271,37 +278,30 @@ def main(out):
         poller = select.poll()  # noqa: F821
         poller.register(stdin, select.POLLIN)  # noqa: F821
 
-        for _ in bufs:
-            chans.append(rp2.DMA())  # noqa: F821
-        stopper = rp2.DMA()  # noqa: F821
-        stopper.config(
-            read=stop_word,
-            write=PIO_CTRL_CLR,
-            count=1,
-            ctrl=stopper.pack_ctrl(
-                size=2, inc_read=False, inc_write=False, irq_quiet=False
-            ),
-            trigger=False,
+        data = rp2.DMA()  # noqa: F821
+        ctl = rp2.DMA()  # noqa: F821
+        # A buffer block: paced by the PIO's RX DREQ, then back to ctl.
+        # Every field that decides correctness is spelled out rather than
+        # left to pack_ctrl's defaults: an IRQ from a fill block would end
+        # the capture early, and a paced halt block would never run.
+        fill = data.pack_ctrl(
+            size=2, inc_read=False, inc_write=True, treq_sel=DREQ,  # noqa: F821
+            chain_to=ctl.channel, irq_quiet=True,
         )
-        stopper.irq(on_done, hard=True)
-        # Two CTRL words per channel: chained to the next buffer, or --
-        # for the last buffer a (possibly shorter) window uses -- straight
-        # to the stopper, so an unused channel is never triggered.
-        ctrls = []
-        for i in range(len(chans)):
-            pair = []
-            for nxt in (chans[i + 1] if i + 1 < len(chans) else stopper, stopper):
-                pair.append(
-                    chans[i].pack_ctrl(
-                        size=2,
-                        inc_read=False,
-                        inc_write=True,
-                        treq_sel=DREQ,  # noqa: F821
-                        chain_to=nxt.channel,
-                        irq_quiet=True,
-                    )
-                )
-            ctrls.append(pair)
+        # The last block: unpaced, one word, chains nowhere, raises the IRQ.
+        halt = data.pack_ctrl(
+            size=2, inc_read=False, inc_write=False, treq_sel=0x3F,
+            chain_to=data.channel, irq_quiet=False,
+        )
+        # ctl: 4 words per trigger into data's alias-0 registers; the write
+        # ring (16 bytes) brings it back to READ_ADDR for the next block,
+        # and the read address walks on through the table.
+        ctl_ctrl = ctl.pack_ctrl(
+            size=2, inc_read=True, inc_write=True, ring_size=4, ring_sel=True,
+            treq_sel=0x3F, chain_to=ctl.channel, irq_quiet=True,
+        )
+        data_regs = 0x50000000 + 0x40 * data.channel  # DMA CHn alias 0
+        data.irq(on_done, hard=True)
 
         report = "frame window=%d buffers=%d hsync_active=%d vsync_active=%d"
         report %= (window, len(bufs), hs_act, vs_act)
@@ -324,21 +324,22 @@ def main(out):
             sm.restart()
             sm.put(first)
             take = lines_now
-            for i in range(len(chans)):
-                n = bufs[i][1] if bufs[i][1] < take else take
+            at = 0
+            for buf, n in bufs:
+                if n > take:
+                    n = take
                 if n == 0:
                     break
                 take -= n
-                chans[i].config(
-                    read=RXF_ADDR,  # noqa: F821
-                    write=bufs[i][0],
-                    count=n * LINE_WORDS,
-                    ctrl=ctrls[i][1 if take == 0 else 0],
-                    trigger=False,
-                )
+                for word in (RXF_ADDR, uctypes.addressof(buf), n * LINE_WORDS, fill):  # noqa: F821
+                    table[at : at + 4] = _le32(word)  # noqa: F821
+                    at += 4
+            for word in (uctypes.addressof(stop_word), PIO_CTRL_CLR, 1, halt):  # noqa: F821
+                table[at : at + 4] = _le32(word)  # noqa: F821
+                at += 4
             DONE[0] = False
             MEM[FDEBUG_ADDR] = RXSTALL_BIT  # noqa: F821
-            chans[0].active(1)
+            ctl.config(read=table, write=data_regs, count=4, ctrl=ctl_ctrl, trigger=True)
             sm.active(1)
 
             while not DONE[0]:
@@ -355,14 +356,13 @@ def main(out):
 
             parts = []
             take = lines_now
-            for i in range(len(chans)):
-                n = bufs[i][1] if bufs[i][1] < take else take
+            for buf, n in bufs:
+                if n > take:
+                    buf = memoryview(buf)[: take * LINE_BYTES]
+                    n = take
                 if n == 0:
                     break
                 take -= n
-                buf = bufs[i][0]
-                if n < bufs[i][1]:
-                    buf = memoryview(buf)[: n * LINE_BYTES]
                 parts.append(buf)
             sent += write_fram_chunk(out, picture, first, lines_now, parts)
             parts = None
@@ -384,21 +384,18 @@ def main(out):
         # Same order and reasons as capture_rp2.py's finally; kbd_intr(3)
         # stays the very last statement.
         rxstall = (MEM[FDEBUG_ADDR] >> SM_NUM) & 1  # noqa: F821
-        for dma in chans:
-            dma.irq(None)
-        if stopper is not None:
-            stopper.irq(None)
+        for dma in (data, ctl):
+            if dma is not None:
+                dma.irq(None)
         sm.active(0)
         try:
             rp2.PIO(PIO_NUM).remove_program(program)  # noqa: F821
         except Exception:
             pass
-        for dma in chans:
-            dma.active(0)
-            dma.close()
-        if stopper is not None:
-            stopper.active(0)
-            stopper.close()
+        for dma in (ctl, data):
+            if dma is not None:
+                dma.active(0)
+                dma.close()
         summary = "frames=%d stalls=%d rxstall=%d sysclk_hz=%d" % (
             frames, stalls, 1 if (stalls or rxstall) else 0, machine.freq()  # noqa: F821
         )
@@ -406,8 +403,8 @@ def main(out):
         if hasattr(out, "flush"):
             out.flush()
         del bufs
-        chans = None
-        stopper = None
+        data = None
+        ctl = None
         poller = None
         stdin = None
         gc.collect()  # noqa: F821

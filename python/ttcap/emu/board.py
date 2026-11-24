@@ -478,6 +478,15 @@ class _Channel:
         return bool((self.ctrl >> 5) & 1)
 
     @property
+    def ring_size(self) -> int:
+        return (self.ctrl >> 6) & 0xF
+
+    @property
+    def ring_sel(self) -> bool:
+        """True: the ring applies to the write address."""
+        return bool((self.ctrl >> 10) & 1)
+
+    @property
     def chain_to(self) -> int:
         return (self.ctrl >> 11) & 0xF
 
@@ -557,6 +566,8 @@ class Board:
         self.kbd_intr = 3
         #: The time of the DMA event being handled, if any (see _SM._push).
         self.event_now: int | None = None
+        self._dma_queue: list[tuple[str, _Channel]] = []
+        self._dma_running = False
         #: What one `Pin.value()` costs a MicroPython loop, in cycles.
         self.pin_read_cycles = 150
 
@@ -649,12 +660,17 @@ class Board:
             if reg == DMA_TRANS_COUNT:
                 ch.reload = value
                 return
+            if reg == DMA_CTRL_TRIG:
+                # CTRL through its trigger alias: load it and start.
+                ch.ctrl = value
+                self.dma_trigger(ch)
+                return
         raise BoardError("mem32 write of unmodelled address 0x%08x" % addr)
 
     def _dma_reg(self, addr: int):
         if DMA_BASE <= addr < DMA_BASE + DMA_STRIDE * len(self.channels):
             num, reg = divmod(addr - DMA_BASE, DMA_STRIDE)
-            if reg in (DMA_READ_ADDR, DMA_WRITE_ADDR, DMA_TRANS_COUNT):
+            if reg in (DMA_READ_ADDR, DMA_WRITE_ADDR, DMA_TRANS_COUNT, DMA_CTRL_TRIG):
                 return self.channels[num], reg
         return None, 0
 
@@ -667,6 +683,13 @@ class Board:
                     return sm
         return None
 
+    def _stepped(self, ch: _Channel, addr: int, write: bool) -> int:
+        """`addr` after one 4-byte transfer, honouring the address ring."""
+        if ch.ring_size and ch.ring_sel == write:
+            mask = (1 << ch.ring_size) - 1
+            return (addr & ~mask) | ((addr + 4) & mask)
+        return addr + 4
+
     def _transfer(self, ch: _Channel, word: int) -> None:
         dest = ch.write_addr
         obj, offset = self._find(dest)
@@ -677,9 +700,9 @@ class Board:
         else:
             self.mem32_write(dest, word)
         if ch.inc_write:
-            ch.write_addr += 4
+            ch.write_addr = self._stepped(ch, ch.write_addr, True)
         if ch.inc_read:
-            ch.read_addr += 4
+            ch.read_addr = self._stepped(ch, ch.read_addr, False)
         ch.remaining -= 1
         if ch.remaining == 0:
             self._complete(ch)
@@ -687,19 +710,38 @@ class Board:
     def _complete(self, ch: _Channel) -> None:
         ch.busy = False
         if ch.chain_to != ch.num:
-            self.dma_trigger(self.channels[ch.chain_to])
+            self._dma_queue.append(("start", self.channels[ch.chain_to]))
         if not ch.irq_quiet and ch.handler is not None:
-            ch.handler(ch.owner)
+            self._dma_queue.append(("irq", ch))
 
     def dma_trigger(self, ch: _Channel) -> None:
-        if not ch.enabled:
+        """Start `ch` -- from the script, a chain, or another channel's write
+        to its CTRL_TRIG. Starts are queued and run one at a time, so a DMA
+        that triggers DMA (control blocks) behaves as the hardware's
+        sequential bus does instead of recursing mid-transfer."""
+        self._dma_queue.append(("start", ch))
+        self._run_dma()
+
+    def _run_dma(self) -> None:
+        if self._dma_running:
             return
-        ch.busy = True
-        ch.remaining = ch.reload
-        if ch.remaining == 0:
-            self._complete(ch)
-            return
-        self._service(ch)
+        self._dma_running = True
+        try:
+            while self._dma_queue:
+                kind, ch = self._dma_queue.pop(0)
+                if kind == "irq":
+                    ch.handler(ch.owner)
+                    continue
+                if not ch.enabled:
+                    continue
+                ch.busy = True
+                ch.remaining = ch.reload
+                if ch.remaining == 0:
+                    self._complete(ch)
+                    continue
+                self._service(ch)
+        finally:
+            self._dma_running = False
 
     def _service(self, ch: _Channel) -> None:
         sm = self._rx_source(ch)
@@ -716,6 +758,7 @@ class Board:
         for ch in self.channels:
             if ch.busy and self._rx_source(ch) is sm:
                 self._service(ch)
+        self._run_dma()
 
     # -- the script ---------------------------------------------------------
 
@@ -787,7 +830,10 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             size = len(self)
-            if size >= 1024:
+            # Small objects (a 4-byte stop word, a 16-byte control block)
+            # are noise next to the blocks that matter; a frame line (800
+            # bytes and up) is not.
+            if size >= 256:
                 for i, free in enumerate(blocks):
                     if free >= size:
                         blocks[i] -= size

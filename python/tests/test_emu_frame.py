@@ -93,12 +93,12 @@ def test_whole_frames_at_26_6_mhz_are_pixel_exact(tmp_path, bars_uo, high, delay
     board, out = run_frame(RP2350_DBV3, bars_uo, high=high, delay=delay, max_frames=2)
 
     frams, times = chunks(out)
-    assert times[0].startswith("frame window=438 buffers=8 hsync_active=0 vsync_active=0")
+    assert times[0].startswith("frame window=434 buffers=4 hsync_active=0 vsync_active=0")
     assert times[-1] == "frames=2 stalls=0 rxstall=0 sysclk_hz=133000000"
-    # fpga-1's heap holds 438 of the 481 lines, so each picture is two
-    # captures, and they share its frame counter.
+    # This heap (fpga-1's largest blocks) holds 434 of the 481 lines, so
+    # each picture is two captures, and they share its frame counter.
     assert [(c, first, n) for c, first, n, _, _ in frams] == [
-        (0, 34, 438), (0, 472, 43), (1, 34, 438), (1, 472, 43)
+        (0, 34, 434), (0, 468, 47), (1, 34, 434), (1, 468, 47)
     ]
     assert all(cpl == 800 and samples == n * 800 for _, _, n, cpl, samples in frams)
     report, frames = pictures(tmp_path, RP2350_DBV3, out)
@@ -113,6 +113,19 @@ def test_a_heap_that_holds_the_whole_region_takes_one_capture_a_picture(tmp_path
     frams, times = chunks(out)
     assert [(c, first, n) for c, first, n, _, _ in frams] == [(0, 34, 481), (1, 34, 481)]
     assert times[0].startswith("frame window=481 buffers=1")
+
+
+def test_many_small_heap_blocks_still_make_one_whole_frame(tmp_path, bars_uo):
+    # fpga-4's case: plenty of heap in total, in more pieces than there are
+    # DMA channels. Control blocks make the piece count a table length.
+    heap = (142_000,) + (12_000,) * 21  # 22 blocks, 395 KB
+    board, out = run_frame(RP2350_DBV3, bars_uo, heap=heap, max_frames=1)
+
+    frams, times = chunks(out)
+    assert [(c, first, n) for c, first, n, _, _ in frams] == [(0, 34, 481)]
+    assert "buffers=22" in times[0]
+    _, frames = pictures(tmp_path, RP2350_DBV3, out)
+    assert_pictures_exact(frames, bars(640, 480))
     _, frames = pictures(tmp_path, RP2350_DBV3, out)
     assert_pictures_exact(frames, bars(640, 480))
 
