@@ -409,3 +409,5 @@ void vgaframe_push64(vgaframe_t *f, uint32_t sample, uint64_t run) {
     }
     f->last_report = report;
 }
+
+void vgaframe_set_rgb6_buffer(vgaframe_t *f, uint8_t *rgb6) { (void)f; (void)rgb6; }   // stub (RED)

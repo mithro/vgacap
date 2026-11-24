@@ -126,6 +126,11 @@ typedef struct vgaframe_output {
     // need it afterwards. (Same contract as vgacap_event_t's u.time.msg.)
     const uint8_t *rgb24; uint16_t width, height;
     uint32_t stride;                 // bytes per row of rgb24 (currently width * 3)
+    // The same picture as one 6-bit colour (rr gg bb) per byte, rows packed
+    // (width bytes a row), 0 for a pixel never written (which rgb24 shows as
+    // magenta). NULL unless vgaframe_set_rgb6_buffer gave a buffer; same
+    // lifetime as rgb24.
+    const uint8_t *rgb6;
     const vgaframe_timing_t *timing;
     uint16_t active_x0, active_y0;   // where the crop came from
     uint8_t  partial;                // 1 if not every line was covered
@@ -134,12 +139,29 @@ typedef struct vgaframe_output {
 
 typedef void (*vgaframe_frame_fn)(void *user, const vgaframe_output_t *out);
 
+// One continuous-mode frame as it was received, before any crop: called at
+// every frame boundary while a frame is in progress (the learner's report 2),
+// whatever the lock, mode and content, and before on_frame for the same
+// frame. The raw frame is valid only during the callback; it is cleared at
+// every frame boundary.
+typedef struct vgaframe_raw {
+    const uint8_t *raw;      // max_clocks_per_line bytes per row; 6-bit colour | 0x80 written
+    uint32_t stride;         // max_clocks_per_line
+    uint32_t lines;          // rows this frame received (y + 1), capped at max_lines
+    const vgaframe_timing_t *timing;  // the learner's, at the boundary
+    uint8_t  retroactive;    // 1 for a frame claimed with report 3 (rows below vsync_lines unwritten)
+} vgaframe_raw_t;
+typedef void (*vgaframe_raw_fn)(void *user, const vgaframe_raw_t *r);
+
 typedef struct vgaframe_config {
     uint16_t max_clocks_per_line;    // raw buffer width  (e.g. 1400)
     uint16_t max_lines;              // raw buffer height (e.g. 900)
     uint8_t  signal_map[VGACAP_SIG_COUNT];
     const vgaframe_mode_t *force_mode;  // NULL = detect
+    // on_frame NULL: no picture is cropped or converted (emit keeps only its
+    // bookkeeping: frames_seen, the FRAM pending state and the clearing).
     vgaframe_frame_fn on_frame; void *user;
+    vgaframe_raw_fn on_raw; void *raw_user;   // NULL = no raw-frame callback
 } vgaframe_config_t;
 
 // raw:  max_clocks_per_line * max_lines bytes (6-bit colour + 0x80 "written" bit per pixel)
@@ -190,6 +212,11 @@ typedef struct vgaframe {
     // [0, dirty_x_end), so clearing raw after a frame need only zero that
     // box: the rest is zero already. Both are 0 when raw is all zero.
     uint32_t dirty_x_end, dirty_y_end;
+    // Optional rgb6 output buffer (vgaframe_set_rgb6_buffer), NULL if none.
+    uint8_t *rgb6;
+    // 1 while the frame in progress was claimed retroactively (report 3),
+    // 0 once a report 2 starts one: vgaframe_raw_t.retroactive.
+    uint8_t retro_frame;
 } vgaframe_t;
 
 // Binds the caller's buffers and puts the object in its starting state; see
@@ -201,6 +228,10 @@ int  vgaframe_init(vgaframe_t *f, const vgaframe_config_t *cfg, uint8_t *raw, ui
 // exactly as it would after a fresh vgaframe_init. Use it after a stream
 // discontinuity, a flush/seek, or a reconnect.
 void vgaframe_reset(vgaframe_t *f);
+// Gives emit a vgaframe_raw_size() byte buffer to fill with the rgb6 picture
+// beside rgb24 (vgaframe_output_t.rgb6); NULL turns it off. Kept across
+// vgaframe_reset.
+void vgaframe_set_rgb6_buffer(vgaframe_t *f, uint8_t *rgb6);
 void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run);
 // As vgaframe_push for a run of up to 2^64-1 clocks; x saturates at
 // UINT32_MAX instead of wrapping. last_report is the first piece's: a later
