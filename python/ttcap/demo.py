@@ -54,6 +54,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from .firmware import FIRMWARES
 from .boards import WELLAND, bridge_ws_url
 # Same package, and the octet is the one part of a Welland address the tunnel
 # hint has to spell out; `bridge_ws_url` hands back a whole URL.
@@ -574,6 +575,7 @@ def source_properties(
     capture_mode: str = "stream",
     vga_mode: str | None = None,
     window_lines: int = 0,
+    firmware: str = "micropython",
 ) -> list[str]:
     """`vgacapttsrc`'s settings, as `name=value` tokens.
 
@@ -596,6 +598,8 @@ def source_properties(
     # Only what differs from the element's own defaults, like buf-words.
     if capture_mode != "stream":
         props.append("capture-mode=%s" % capture_mode)
+    if firmware != "micropython":
+        props.append("firmware=%s" % firmware)
     if vga_mode:
         props.append("vga-mode=%s" % vga_mode)
     if window_lines:
@@ -692,6 +696,7 @@ def build_pipeline(
     capture_mode: str = "stream",
     vga_mode: str | None = None,
     window_lines: int = 0,
+    firmware: str = "micropython",
 ) -> tuple[list[str], list[str]]:
     """The `gst-launch-1.0` argument vector, and what it writes.
 
@@ -759,6 +764,7 @@ def build_pipeline(
             capture_mode=capture_mode,
             vga_mode=vga_mode,
             window_lines=window_lines,
+            firmware=firmware,
         ),
         "!",
         "vgadecode",
@@ -1295,6 +1301,7 @@ def plan_demo(
             capture_mode=args.mode,
             vga_mode=args.vga_mode,
             window_lines=args.window_lines,
+            firmware=args.firmware,
             png=args.png,
             video=args.video,
             video_encoder=args.video_encoder,
@@ -1518,6 +1525,12 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--vga-mode", help="frame/window modes: the VGA timing to expect (ttcap's default 640x480@60)"
+    )
+    parser.add_argument(
+        "--firmware", choices=list(FIRMWARES), default="micropython",
+        help="what runs on the board: the stock MicroPython firmware (default), or "
+        "vgacap's pico-sdk capture firmware (firmware/), loaded with `ttcap reboot "
+        "--to bootsel`; the latter cannot select a design itself",
     )
     parser.add_argument(
         "--window-lines", type=int, default=0,

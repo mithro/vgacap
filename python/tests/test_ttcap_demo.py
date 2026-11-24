@@ -575,6 +575,29 @@ def test_a_stream_demo_leaves_the_capture_mode_to_the_element(tmp_path, capsys):
 
 
 @needs_gstreamer
+def test_a_demo_on_the_capture_firmware_tells_the_source(tmp_path, capsys):
+    code = main([
+        "demo", "--link", "serial:/dev/ttyACM0",
+        "--clock-hz", "25000000", "--seconds", "10", "--outdir", str(tmp_path / "o"),
+        "--mode", "frame", "--firmware", "picosdk", "--dry-run",
+    ])
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "firmware=picosdk" in printed and "capture-mode=frame" in printed
+
+
+@needs_gstreamer
+def test_a_stock_firmware_demo_leaves_the_firmware_to_the_element(tmp_path, capsys):
+    code = main([
+        "demo", "--board", "tt07", "--project", "tt_um_rejunity_vga",
+        "--clock-hz", "60000", "--seconds", "10", "--outdir", str(tmp_path / "o"),
+        "--dry-run",
+    ])
+    assert code == 0
+    assert "firmware=" not in capsys.readouterr().out
+
+
+@needs_gstreamer
 def test_dry_run_binds_no_port(tmp_path):
     # `--serve` on a dry run must not take the port: the whole point is that
     # nothing happens, and a port left bound would fail the next real run.
