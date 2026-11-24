@@ -148,8 +148,8 @@ int fw_stream_run(const fw_stream_args_t *a, uint32_t *arena, size_t arena_bytes
     res->lost = 0;
     uint32_t buf_words = a->buf_words;
     if (!buf_words || (uint64_t)buf_words * 8u > arena_bytes) {
-        return refuse(why, whylen, "buf_words %lu needs %llu bytes of buffer, have %lu",
-                      (unsigned long)buf_words, (unsigned long long)buf_words * 8u,
+        return refuse(why, whylen, "buf_words %lu needs two buffers of %lu bytes, have %lu in all",
+                      (unsigned long)buf_words, (unsigned long)buf_words * 4ul,
                       (unsigned long)arena_bytes);
     }
     uint64_t max_bytes = a->max_bytes;

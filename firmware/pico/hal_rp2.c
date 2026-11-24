@@ -41,6 +41,12 @@ static struct {
     int offset;  // -1: nothing loaded
 } P = { .offset = -1 };
 
+// RP2350 pads come out of reset with ISO set and read 0 for ever otherwise.
+// Only these pads: the clock, ui_in and uio are left as they are.
+void hal_rp2_uo_inputs(void) {
+    for (unsigned i = 0; i < 8; i++) gpio_init(fw_board_dbv3.uo_gpio + i);
+}
+
 static PIO pio_block(unsigned index) {
     return index == 0 ? pio0 : index == 1 ? pio1 : pio2;
 }
@@ -59,10 +65,7 @@ static void unload(void) {
 // MicroPython's loader does (pio.c add_program_at_offset).
 static int load(const fw_pio_program_t *prog, unsigned pio, unsigned sm, const char **why) {
     if (hal_rp2_pio_prepare(pio, sm, why)) return -1;
-    // uo_out: inputs, out of isolation. RP2350 pads come out of reset with
-    // ISO set and read 0 for ever otherwise (prelude.py init_input_pins).
-    // Only these pads: the clock, ui_in and uio are left as they are.
-    for (unsigned i = 0; i < 8; i++) gpio_init(fw_board_dbv3.uo_gpio + i);
+    hal_rp2_uo_inputs();
     P.pio = pio_block(pio);
     P.sm = sm;
     memcpy(P.words, prog->words, sizeof P.words);

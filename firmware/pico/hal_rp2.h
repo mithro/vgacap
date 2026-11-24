@@ -34,6 +34,12 @@ extern "C" {
 // MicroPython's, which refuses one claimed by something else.
 int hal_rp2_pio_prepare(unsigned pio, unsigned sm, const char **why);
 
+// Bring the uo_out pads up as inputs, out of the RP2350's pad isolation, and
+// nothing else (prelude.py init_input_pins). Each capture does it before it
+// loads its program; the module also does it before a frame capture
+// measures the sync polarities.
+void hal_rp2_uo_inputs(void);
+
 #ifdef __cplusplus
 }
 #endif

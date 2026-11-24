@@ -258,7 +258,7 @@ void hal_idle(void) {
     if (S.streaming && S.clock_on) next = next_fill_time();
     if (S.framing && S.done_at < next) next = S.done_at;
     if (!S.fds && S.in_pos < S.in_len && S.in[S.in_pos].at < next) next = S.in[S.in_pos].at;
-    if (next < INFINITY) {
+    if (!isinf(next)) {
         if (next > S.now) advance(next - S.now);
         return;
     }
