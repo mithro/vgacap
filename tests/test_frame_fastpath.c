@@ -413,7 +413,7 @@ static const uint8_t wide_map[VGACAP_SIG_COUNT] = { 30, 12, 8, 17, 22, 9, 31, 25
 
 // 700 x 500 clocks, which no table mode has (checked below), so frames are
 // emitted only once the learner locks, and cropped by the auto bounding box.
-static const vgaframe_mode_t odd_timing = { "odd700x500", 560, 20, 60, 60, 440, 10, 2, 48, 0, 0 };
+static const vgaframe_mode_t odd_timing = { "odd700x500", 560, 20, 60, 60, 440, 10, 2, 48, 0, 0, 0 };
 
 // Both maps; with `need_auto`, each run must also emit at least one locked
 // continuous frame through the auto-crop.

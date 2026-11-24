@@ -21,7 +21,7 @@ static void setup(vgaframe_t *f, uint16_t maxc, uint16_t maxl, vgaframe_raw_fn o
 }
 
 TEST(learner_762) {
-    static const vgaframe_mode_t m = { "sim762", 610, 15, 91, 46, 480, 10, 2, 33, 0, 0 };
+    static const vgaframe_mode_t m = { "sim762", 610, 15, 91, 46, 480, 10, 2, 33, 0, 0, 0 };
     size_t n = synth_frame(&m, grad, NULL, buf, sizeof buf / sizeof buf[0]);
     ASSERT_EQ_U(n, 762u * 525u);
     vgaframe_t f; setup(&f, 1400, 900, NULL, NULL);
@@ -34,7 +34,7 @@ TEST(learner_762) {
 }
 
 TEST(learner_3584) {
-    static const vgaframe_mode_t m = { "sim3584", 2560, 64, 256, 704, 480, 10, 2, 33, 0, 0 };
+    static const vgaframe_mode_t m = { "sim3584", 2560, 64, 256, 704, 480, 10, 2, 33, 0, 0, 0 };
     size_t n = synth_frame(&m, grad, NULL, buf, sizeof buf / sizeof buf[0]);
     ASSERT_EQ_U(n, 3584u * 525u);
     vgaframe_t f; setup(&f, 7596, 1200, NULL, NULL);

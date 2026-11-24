@@ -59,7 +59,7 @@ int vgaframe_init(vgaframe_t *f, const vgaframe_config_t *cfg, uint8_t *raw, uin
 // only) a table match on the most recent FRAM chunk's clocks_per_line -
 // windows lie inside one frame so the learner alone can never learn
 // lines_per_frame from a pure FRAM stream, but each window still carries its
-// own clocks_per_line, and that is unique across the built-in table.
+// own clocks_per_line, and that is unique across the non-extended entries.
 static const vgaframe_mode_t *resolved_mode(const vgaframe_t *f) {
     if (f->cfg.force_mode) return f->cfg.force_mode;
     if (f->learner.t.mode) return f->learner.t.mode;
