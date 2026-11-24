@@ -54,10 +54,12 @@ from .capture import (
     frame_note,
     frames_to_max_bytes,
     restore_mode,
-    run_capture,
+    run_session,
     select_project,
     stop_clock,
 )
+from .firmware import FIRMWARES, FirmwareLink, FirmwareSession
+from . import firmware as fwproto
 from .demo import add_parser as add_demo_parser, demo
 from .repl import LinkClosed, RawRepl, ReplFramingError, ReplLink, SerialLink, WebSocketLink
 from .throughput import DEFAULT_BLOCK, DEFAULT_TOTAL, ThroughputResult, measure_throughput
@@ -360,9 +362,7 @@ def _watch_for_stop(session: CaptureSession, flag: _StopFlag, poll: float = 0.02
         time.sleep(poll)
 
 
-def _stream_capture(
-    repl: RawRepl, request: CaptureRequest, fp, flag: _StopFlag
-) -> CaptureStats:
+def _stream_capture(session: CaptureSession, fp, flag: _StopFlag) -> CaptureStats:
     """`run_capture()` for `--out -`: same bytes, plus a prompt stop.
 
     Identical to `run_capture` -- the same `CaptureSession`, the same
@@ -372,7 +372,6 @@ def _stream_capture(
     needs the session handle to do that, and `run_capture`'s contract is
     "write to a file object" and should stay that way.
     """
-    session = CaptureSession(repl, request)
     watcher = threading.Thread(
         target=_watch_for_stop, args=(session, flag), daemon=True
     )
@@ -446,6 +445,55 @@ def _discard_empty(out_path: str) -> None:
         pass
 
 
+class _MicroPythonBoard:
+    """The stock firmware: everything through the raw REPL (`ttcap.mp`)."""
+
+    def __init__(self, link: ReplLink) -> None:
+        self.repl = RawRepl(link)
+        self.repl.enter()
+
+    def profile(self, name: str):
+        return resolve_profile(self.repl, name)
+
+    def setup(self, request: CaptureRequest) -> dict:
+        return select_project(self.repl, request)
+
+    def session(self, request: CaptureRequest) -> CaptureSession:
+        return CaptureSession(self.repl, request)
+
+    def teardown(self, selection: dict, stop_clock_after: bool) -> None:
+        if stop_clock_after:
+            stop_clock(self.repl)
+        if "mode_before" in selection:
+            restore_mode(self.repl, selection["mode_before"])
+
+    def close(self) -> None:
+        self.repl.exit()
+
+
+class _FirmwareBoard:
+    """The pico-sdk capture firmware (`firmware/`, `ttcap.firmware`)."""
+
+    def __init__(self, link: ReplLink) -> None:
+        self.link = FirmwareLink(link)
+        self.link.sync()
+
+    def profile(self, name: str):
+        return fwproto.profile_for(self.link, name)
+
+    def setup(self, request: CaptureRequest) -> dict:
+        return fwproto.setup(self.link, request)
+
+    def session(self, request: CaptureRequest) -> CaptureSession:
+        return FirmwareSession(self.link, request)
+
+    def teardown(self, selection: dict, stop_clock_after: bool) -> None:
+        fwproto.teardown(self.link, selection, stop_clock_after)
+
+    def close(self) -> None:
+        pass
+
+
 def capture(
     url: str,
     out_path: str,
@@ -467,8 +515,13 @@ def capture(
     window_lines: int = 0,
     sample_delay: int = 0,
     ui_in: int | None = None,
+    firmware: str = "micropython",
 ) -> CaptureStats:
     """Run one capture to `out_path` and print what happened.
+
+    `firmware` is what runs on the board: "micropython", the stock firmware
+    driven through its raw REPL, or "picosdk", the capture firmware in
+    `firmware/` (PROTOCOL.md), which cannot select a design itself.
 
     `mode` picks the board program: "stream" (every sample, at a clock the
     link can carry), "frame" (whole frames at the project's real clock,
@@ -497,12 +550,13 @@ def capture(
     # stdout. There is no third option and no flag: a stream is either
     # parseable or it is not.
     say = sys.stderr if to_stdout else sys.stdout
+    if firmware not in FIRMWARES:
+        raise ValueError(f"firmware must be one of {FIRMWARES}, got {firmware!r}")
     link = link_from_url(url)
     try:
-        repl = RawRepl(link)
-        repl.enter()
+        driver = _FirmwareBoard(link) if firmware == "picosdk" else _MicroPythonBoard(link)
         try:
-            board = resolve_profile(repl, profile)
+            board = driver.profile(profile)
             if mode not in CAPTURE_MODES:
                 raise ValueError(f"mode must be one of {sorted(CAPTURE_MODES)}, got {mode!r}")
             script = CAPTURE_MODES[mode]
@@ -547,7 +601,7 @@ def capture(
                     sample_delay=sample_delay,
                     ui_in=ui_in,
                 )
-                selection = select_project(repl, request)
+                selection = driver.setup(request)
                 print(
                     "profile=%s project=%s enable=%s"
                     % (board.name, selection["project"], selection["enable"]),
@@ -563,10 +617,11 @@ def capture(
                     out_path, on_consumer_close=flag.set if to_stdout else None
                 ) as fp:
                     try:
+                        session = driver.session(request)
                         if to_stdout:
-                            stats = _stream_capture(repl, request, fp, flag)
+                            stats = _stream_capture(session, fp, flag)
                         else:
-                            stats = run_capture(repl, request, fp)
+                            stats = run_session(session, fp)
                     except BaseException:
                         if not to_stdout and fp.tell() == 0:
                             _discard_empty(out_path)
@@ -579,14 +634,11 @@ def capture(
                 note = frame_note(stats.messages, request.cfg()["region_lines"])
                 if note:
                     print(note, file=say)
-            if stop_clock_after:
-                stop_clock(repl)
-            if "mode_before" in selection:
-                restore_mode(repl, selection["mode_before"])
+            driver.teardown(selection, stop_clock_after)
             if to_stdout and fp.consumer_closed:
                 raise ConsumerClosed()
         finally:
-            repl.exit()
+            driver.close()
     finally:
         link.close()
 
@@ -716,6 +768,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     capture_parser.add_argument(
         "link", help="serial:/dev/ttyACM0 or ws://host:8765/serial"
+    )
+    capture_parser.add_argument(
+        "--firmware",
+        choices=FIRMWARES,
+        default="micropython",
+        help="what runs on the board: micropython, the stock firmware driven "
+        "through its raw REPL (default), or picosdk, the vgacap capture "
+        "firmware (firmware/README.md), which keeps whatever design is "
+        "loaded and cannot take --project/--design",
     )
     capture_parser.add_argument(
         "--profile",
@@ -891,6 +952,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 window_lines=args.window_lines,
                 sample_delay=args.sample_delay,
                 ui_in=args.ui_in,
+                firmware=args.firmware,
             )
         except ConsumerClosed:
             # The normal end of a pull: the pipeline stopped reading. The
