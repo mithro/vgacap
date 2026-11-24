@@ -15,7 +15,9 @@
 //     returns;
 //   - emit doing only its bookkeeping (frames_seen, FRAM pending state,
 //     clearing) when on_frame is NULL;
-//   - and the rgb6 output beside rgb24 (vgaframe_set_rgb6_buffer).
+//   - the rgb6 output beside rgb24 (vgaframe_set_rgb6_buffer);
+//   - and (Task 10 fix round 1) flush_pending_fram clearing all of raw and
+//     cover when emit declines the pending FRAM picture.
 // Nothing else differs from a26c942.
 #include "vgacap/frame.h"
 #include <string.h>
@@ -208,8 +210,13 @@ static int emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int i
 // A continuous-mode frame has started, so any FRAM accumulation still
 // waiting for the window that would complete it is never going to get it:
 // publish what was covered and free the buffer for the new frame.
+// Task 10 (fix round 1): a picture emit declines is cleared here too, so
+// the continuous frame that follows does not start on its pixels.
 static void flush_pending_fram(vgaframe_t *f) {
-    if (f->fram_pending && covered_any(f)) emit(f, expected_lines(f), 1, 1);
+    if (f->fram_pending && covered_any(f) && !emit(f, expected_lines(f), 1, 1)) {
+        memset(f->raw, 0, (size_t)f->cfg.max_clocks_per_line * f->cfg.max_lines);
+        memset(f->cover, 0, f->cfg.max_lines);
+    }
     f->fram_pending = 0;
 }
 

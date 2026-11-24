@@ -160,6 +160,11 @@ typedef struct vgaframe_config {
     const vgaframe_mode_t *force_mode;  // NULL = detect
     // on_frame NULL: no picture is cropped or converted (emit keeps only its
     // bookkeeping: frames_seen, the FRAM pending state and the clearing).
+    // A FRAM picture that emit declines (nothing lit with no mode, or a crop
+    // past the buffer) is consumed - no longer pending - only when on_frame
+    // is NULL. With on_frame set it stays pending, pixels and all, until a
+    // continuous frame start clears it; a new FRAM counter or vgaframe_flush
+    // whose emit also declines leaves it in raw.
     vgaframe_frame_fn on_frame; void *user;
     vgaframe_raw_fn on_raw; void *raw_user;   // NULL = no raw-frame callback
 } vgaframe_config_t;
@@ -237,7 +242,11 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run);
 // UINT32_MAX instead of wrapping. last_report is the first piece's: a later
 // piece of the same run does not overwrite it.
 void vgaframe_push64(vgaframe_t *f, uint32_t sample, uint64_t run);
-void vgaframe_flush(vgaframe_t *f);   // emit whatever is buffered as partial (end of stream)
+// Emits whatever is buffered as partial (end of stream). Follow it with
+// vgaframe_reset before pushing more: when that emit returns early (nothing
+// to crop) the buffered pixels are not cleared, and further pushes would
+// build on them.
+void vgaframe_flush(vgaframe_t *f);
 // helper: 6-bit colour (rr gg bb) from a sample via the signal map
 uint8_t vgaframe_colour(const uint8_t *signal_map, uint32_t sample);
 

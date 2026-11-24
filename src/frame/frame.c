@@ -251,8 +251,11 @@ static int emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int i
 
 // A continuous-mode frame boundary (report 2) ends the frame in progress:
 // hand it to on_raw as received, emit it if the timing is trusted, and clear
-// raw and cover whether or not emit ran or returned early, so every frame
-// starts from an empty buffer.
+// raw and cover whether or not emit ran or returned early, so the next
+// frame starts from an empty buffer. (That holds for every frame started at
+// a boundary, and for one started after a pending FRAM picture - see
+// flush_pending_fram - but not after a vgaframe_flush whose emit returned
+// early: see vgaframe_flush in frame.h.)
 static void end_frame(vgaframe_t *f) {
     if (f->cfg.on_raw) {
         vgaframe_raw_t r;
@@ -274,9 +277,13 @@ static void end_frame(vgaframe_t *f) {
 
 // A continuous-mode frame has started, so any FRAM accumulation still
 // waiting for the window that would complete it is never going to get it:
-// publish what was covered and free the buffer for the new frame.
+// publish what was covered and free the buffer for the new frame. Freed
+// even when emit declines the picture (an early return: nothing lit with no
+// mode, or a crop past the buffer), which clears nothing: the new frame must
+// not be built on top of the FRAM windows' pixels.
 static void flush_pending_fram(vgaframe_t *f) {
-    if (f->fram_pending && covered_any(f)) emit(f, expected_lines(f), 1, 1);
+    if (f->fram_pending && covered_any(f) && !emit(f, expected_lines(f), 1, 1))
+        clear_frame(f, f->cfg.max_lines);
     f->fram_pending = 0;
 }
 
