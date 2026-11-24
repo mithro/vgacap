@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "fw_board.h"
@@ -151,6 +152,15 @@ static void advance(double seconds) {
 }
 
 // ---- the host link --------------------------------------------------------------
+//
+// A front end that brings its own link (the MicroPython module's unix build,
+// mpy/: its link is a MicroPython stream) builds this file with
+// VGACAP_SIM_NO_LINK, which leaves out the hal_* link functions below and
+// has it report what it sends through sim_link_sent().
+
+void sim_link_sent(size_t len) { advance((double)len * S.cfg.seconds_per_byte); }
+
+#ifndef VGACAP_SIM_NO_LINK
 
 static int fd_fill(int timeout_ms) {
     if (S.fdbuf_pos < S.fdbuf_len) return 1;
@@ -206,12 +216,13 @@ int hal_write(const uint8_t *buf, size_t len) {
         memcpy(S.out + S.out_len, buf, len);
         S.out_len += len;
     }
-    advance((double)len * S.cfg.seconds_per_byte);
+    sim_link_sent(len);
     return 0;
 }
 
 void hal_flush(void) {}
 int hal_host_gone(void) { return 0; }
+#endif  // VGACAP_SIM_NO_LINK
 
 // ---- the board ------------------------------------------------------------------
 
@@ -251,10 +262,18 @@ void hal_idle(void) {
         if (next > S.now) advance(next - S.now);
         return;
     }
+#ifdef VGACAP_SIM_NO_LINK
+    // Nothing to wait for but the front end's own link: let real time pass
+    // so that it can notice a stop byte.
+    struct timespec ms = { 0, 1000000 };
+    nanosleep(&ms, NULL);
+    return;
+#else
     if (S.fds) {
         fd_fill(100);  // nothing to wait for but the host
         return;
     }
+#endif
     fprintf(stderr, "sim: the firmware is waiting for something that can never happen\n");
     exit(3);
 }

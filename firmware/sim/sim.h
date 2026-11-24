@@ -54,6 +54,10 @@ const uint8_t *sim_output(size_t *len);
 // fd reached end of file.
 int sim_input_closed(void);
 
+// What a front end with its own link (VGACAP_SIM_NO_LINK) has just sent the
+// host: the simulated USB time it costs, as the built-in link charges it.
+void sim_link_sent(size_t len);
+
 double sim_now(void);
 // Force the next frame capture's RXSTALL (tests of the rxstall reports).
 void sim_force_rxstall(int on);
