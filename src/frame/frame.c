@@ -251,6 +251,8 @@ static inline void store_run(vgaframe_t *f, uint32_t sample, uint32_t run) {
 // The rest of a push, after the learner has seen it and reported r: kept
 // out of vgaframe_push so that the common case there stays small.
 static void push_rest(vgaframe_t *f, uint32_t sample, uint32_t run, uint8_t h, int r) {
+    // vgaframe_push's fast path handles a no-edge push (r == 0) outside FRAM
+    // mode without coming here, so r == 0 logic added here would be bypassed.
     uint8_t v = bit(f->cfg.signal_map, sample, VGACAP_SIG_VSYNC);
     // x is the clock offset within the line, which the learner tracks as
     // clk_in_line: a line start is reported at the *trailing* edge of its
