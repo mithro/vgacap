@@ -100,9 +100,9 @@ struct dump_state { uint64_t total; uint32_t hash; int error; };
 static void on_event(void *user, const vgacap_event_t *ev) {
     struct dump_state *s = (struct dump_state *)user;
     if (ev->type == VGACAP_EV_RUN) {
-        uint32_t v = ev->u.run.value;
+        uint64_t v = ev->u.run.value;
         uint8_t b[4] = { (uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24) };
-        for (uint32_t i = 0; i < ev->u.run.run; i++)
+        for (uint64_t i = 0; i < ev->u.run.run; i++)
             for (int k = 0; k < 4; k++) s->hash = (s->hash ^ b[k]) * 16777619u;
         s->total += ev->u.run.run;
     } else if (ev->type == VGACAP_EV_RESYNC) {

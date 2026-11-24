@@ -99,7 +99,7 @@ static void on_event(void *user, const vgacap_event_t *ev) {
         break;
     }
     case VGACAP_EV_RUN:
-        vgaframe_push(&app->frame, ev->u.run.value, ev->u.run.run);
+        vgaframe_push64(&app->frame, (uint32_t)ev->u.run.value, ev->u.run.run);
         break;
     case VGACAP_EV_FRAME_BEGIN:
         vgaframe_frame_begin(&app->frame, ev->u.frame.frame_counter, ev->u.frame.first_line,
@@ -107,6 +107,8 @@ static void on_event(void *user, const vgacap_event_t *ev) {
                              ev->u.frame.sample_count);
         break;
     case VGACAP_EV_TIME:
+    case VGACAP_EV_BLOCK:
+    case VGACAP_EV_META:
         break;
     case VGACAP_EV_RESYNC:
         // Not fatal: the frame layer re-derives timing from the sync bits, so

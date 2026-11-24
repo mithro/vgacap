@@ -463,7 +463,7 @@ static void on_event(void *user, const vgacap_event_t *ev)
             break;
         self->frame_clk = self->clock_pos;
         self->clock_pos += ev->u.run.run;
-        vgaframe_push(&self->frame, ev->u.run.value, ev->u.run.run);
+        vgaframe_push64(&self->frame, (uint32_t)ev->u.run.value, ev->u.run.run);
         break;
     case VGACAP_EV_FRAME_BEGIN:
         if (!self->frame_ready)
@@ -475,6 +475,9 @@ static void on_event(void *user, const vgacap_event_t *ev)
     case VGACAP_EV_TIME:
         if (ev->u.time.clock_hz)
             set_clock_rate(self, ev->u.time.clock_hz);
+        break;
+    case VGACAP_EV_BLOCK:
+    case VGACAP_EV_META:
         break;
     case VGACAP_EV_RESYNC:
         /* Not fatal: the frame layer re-derives timing from the sync bits, so
