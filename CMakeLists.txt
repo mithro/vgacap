@@ -85,6 +85,7 @@ if(VGACAP_HOST_EXTRAS)
   # The trace reader: ranges, a rebuilt seek table, plain VGCH streams.
   vgacap_add_test(test_trace_read)
   target_link_libraries(test_trace_read PRIVATE vgacap_trace vgacap_zlib)
+  target_include_directories(test_trace_read PRIVATE src/trace)
   target_compile_definitions(test_trace_read PRIVATE
     VGACAP_DUMP_PATH="$<TARGET_FILE:vgacap-dump>" VGACAP_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
   add_dependencies(test_trace_read vgacap-dump)
@@ -96,11 +97,13 @@ if(VGACAP_HOST_EXTRAS)
     LABELS perf WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 else()
   # Without the host extras vgacap-dump cannot read a trace and must say so.
+  # PASS_REGULAR_EXPRESSION replaces the exit-code check, so the wrapper
+  # prints the exit code after the message, and the pattern needs both.
   add_test(NAME vgacap_dump_refuses_zstd COMMAND sh -c
-    "printf '\\050\\265\\057\\375' > dump_refuses_zstd.zst && \"$<TARGET_FILE:vgacap-dump>\" dump_refuses_zstd.zst; test $? -eq 1"
+    "printf '\\050\\265\\057\\375' > dump_refuses_zstd.zst && \"$<TARGET_FILE:vgacap-dump>\" dump_refuses_zstd.zst 2>&1; echo \"exit=$?\""
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
   set_tests_properties(vgacap_dump_refuses_zstd PROPERTIES PASS_REGULAR_EXPRESSION
-    "vgacap-dump: built without VGACAP_HOST_EXTRAS; decompress with zstd -d first")
+    "vgacap-dump: built without VGACAP_HOST_EXTRAS; decompress with zstd -d first\nexit=1\n")
 endif()
 
 # --- firmware: the pico-sdk capture firmware's portable core (firmware/core),

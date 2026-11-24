@@ -3,11 +3,14 @@
 // VGCH stream, mmap'ed read-only, read by sample ranges.
 //
 // Opening a trace. The blocks are the seek table's frames when the table is
-// there and agrees with the file: each frame where the table puts it, of
-// the compressed size it gives (ZSTD_findFrameCompressedSize), declaring
-// the decompressed size it gives, and the table's skippable frame running
-// exactly to the end of the file. Otherwise (a trace cut short, or a table
-// that does not match) the frames are walked from the start and kept up to
+// there and agrees with what can be checked without reading the frames:
+// each frame's header, where the table puts it, declares the decompressed
+// size the table gives (at most a block's), and the table's skippable frame
+// runs exactly to the end of the file. A frame's compressed size is not
+// checked at open (that would walk every zstd block header, paging in
+// nearly the whole file): a wrong one fails when the frame is decoded.
+// Otherwise (a trace cut short, or a table that does not match) the frames
+// are walked from the start with ZSTD_findFrameCompressedSize and kept up to
 // the first incomplete one, and table_rebuilt is 1. The start of every
 // block is decompressed until its BLKH, which gives the block's first
 // sample (block 0 also gives the header and META(open)). The last block is
@@ -25,6 +28,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define ZSTD_STATIC_LINKING_ONLY   // ZSTD_isSkippableFrame
 #include "vgacap/trace.h"
+#include "trace_read_stats.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -57,6 +61,7 @@ struct vgacap_trace_reader {
     size_t buf_len;
     char *open_meta, *close_meta;
     uint64_t clk;           // the clock bit's mask, or 0
+    vgacap_trace_read_stats_t stats;
     vgacap_reader_t sr;
 };
 
@@ -105,8 +110,9 @@ static int frame_ok(const uint8_t *p, size_t avail, size_t *csize) {
 
 // ---- the seek table, or the frames walked -------------------------------------
 
-// The blocks from the seek table, if it is there and matches the frames.
-// Returns 0, or 1 if the table cannot be used (R->nblocks is then 0).
+// The blocks from the seek table, if it is there and agrees with the frame
+// headers. Reads the table and each frame's header only. Returns 0, or 1 if
+// the table cannot be used (R->nblocks is then 0).
 static int blocks_from_table(vgacap_trace_reader_t *R) {
     ZSTD_seekable *zs = ZSTD_seekable_create();
     if (!zs) return 1;
@@ -116,20 +122,26 @@ static int blocks_from_table(vgacap_trace_reader_t *R) {
     size_t end = 0;
     for (unsigned i = 0; i < n && !bad; i++) {
         unsigned long long off = ZSTD_seekable_getFrameCompressedOffset(zs, i);
-        size_t csize = ZSTD_seekable_getFrameCompressedSize(zs, i), c;
-        if (off != end || off >= R->size || !frame_ok(R->map + off, R->size - off, &c) || c != csize ||
-            ZSTD_getFrameContentSize(R->map + off, c) != ZSTD_seekable_getFrameDecompressedSize(zs, i) ||
-            add_block(R, (size_t)off, c)) {
-            bad = 1;
-        } else {
-            end = (size_t)off + c;
+        size_t csize = ZSTD_seekable_getFrameCompressedSize(zs, i);
+        size_t dsize = ZSTD_seekable_getFrameDecompressedSize(zs, i);
+        if (off != end || off >= R->size || csize > R->size - off || ZSTD_isSkippableFrame(R->map + off, csize)) {
+            bad = 1; break;
         }
+        // The frame header only (at most 18 bytes).
+        unsigned long long d = ZSTD_getFrameContentSize(R->map + off, csize);
+        R->stats.bytes_touched += ZSTD_FRAMEHEADERSIZE_MAX < csize ? ZSTD_FRAMEHEADERSIZE_MAX : csize;
+        if (d == ZSTD_CONTENTSIZE_UNKNOWN || d == ZSTD_CONTENTSIZE_ERROR || d != dsize ||
+            d > VGACAP_TRACE_BLOCK_BYTES || add_block(R, (size_t)off, csize)) {
+            bad = 1; break;
+        }
+        end = (size_t)off + csize;
     }
     // What follows the last frame is the table itself, a skippable frame to
-    // the end of the file.
+    // the end of the file (its header gives its size).
     if (!bad && (end >= R->size || !ZSTD_isSkippableFrame(R->map + end, R->size - end) ||
                  ZSTD_findFrameCompressedSize(R->map + end, R->size - end) != R->size - end))
         bad = 1;
+    if (!bad) R->stats.bytes_touched += R->size - end;
     ZSTD_seekable_free(zs);
     if (bad) R->nblocks = 0;
     return bad;
@@ -140,11 +152,16 @@ static int blocks_from_table(vgacap_trace_reader_t *R) {
 static int blocks_by_walking(vgacap_trace_reader_t *R) {
     size_t pos = 0, c;
     while (pos < R->size && frame_ok(R->map + pos, R->size - pos, &c)) {
+        R->stats.bytes_touched += c;   // findFrameCompressedSize walks the whole frame
         if (add_block(R, pos, c)) return -1;
         pos += c;
     }
     return 0;
 }
+
+// A reader left inside a chunk (its header or payload) or hunting for one:
+// the bytes it was fed stopped mid-chunk.
+static int mid_chunk(const vgacap_reader_t *sr) { return sr->scanning || sr->in_payload || sr->hdrfill; }
 
 // ---- decompressing ----------------------------------------------------------------
 
@@ -154,6 +171,8 @@ static int decode_block(vgacap_trace_reader_t *R, uint32_t i, char *err, size_t 
     R->buf_block = -1;
     const struct block *b = &R->blocks[i];
     size_t d = ZSTD_decompressDCtx(R->dctx, R->buf, VGACAP_TRACE_BLOCK_BYTES, R->map + b->off, b->csize);
+    R->stats.blocks_decoded++;
+    R->stats.bytes_touched += b->csize;
     if (ZSTD_isError(d)) {
         set_err(err, errlen, "block %u (offset %zu): zstd: %s", i, b->off, ZSTD_getErrorName(d));
         return -1;
@@ -211,7 +230,7 @@ static int read_start(vgacap_trace_reader_t *R, uint32_t i, char *err, size_t er
     ZSTD_DCtx_reset(R->dctx, ZSTD_reset_session_only);
     uint8_t out[4096];
     ZSTD_inBuffer in = { R->map + b->off, b->csize, 0 };
-    size_t total = 0;
+    size_t total = 0, consumed = 0;
     while (!s.got_block && !s.bad && total < START_LIMIT) {
         ZSTD_outBuffer ob = { out, sizeof out, 0 };
         size_t rc = ZSTD_decompressStream(R->dctx, &ob, &in);
@@ -221,6 +240,8 @@ static int read_start(vgacap_trace_reader_t *R, uint32_t i, char *err, size_t er
         }
         vgacap_reader_feed(&R->sr, out, ob.pos);
         total += ob.pos;
+        R->stats.bytes_touched += in.pos - consumed;
+        consumed = in.pos;
         if (rc == 0 || (ob.pos == 0 && in.pos == in.size)) break;   // the frame ended
     }
     if (s.bad || !s.got_block) {
@@ -281,7 +302,7 @@ static int read_last(vgacap_trace_reader_t *R, char *err, size_t errlen) {
     if (i == 0) vgacap_reader_init(&R->sr, on_scan, &s);
     else vgacap_reader_init_header(&R->sr, on_scan, &s, &R->info.header);
     vgacap_reader_feed(&R->sr, R->buf, R->buf_len);
-    if (s.error || s.loss || R->sr.scanning) {
+    if (s.error || s.loss || mid_chunk(&R->sr)) {
         set_err(err, errlen, "block %u: %s", i, s.error ? s.error : s.loss ? s.loss : "ends inside a chunk");
         free(R->close_meta); R->close_meta = NULL;
         return -1;
@@ -423,7 +444,7 @@ int vgacap_trace_read(vgacap_trace_reader_t *R, uint64_t from, uint64_t to,
         else vgacap_reader_init_header(&R->sr, on_read, &d, &R->info.header);
         feed_until_done(&R->sr, &d, R->buf, R->buf_len);
         if (d.what) { set_err(err, errlen, "block %u: %s", i, d.what); return -1; }
-        if (!d.done && R->sr.scanning) { set_err(err, errlen, "block %u: ends inside a chunk", i); return -1; }
+        if (!d.done && mid_chunk(&R->sr)) { set_err(err, errlen, "block %u: ends inside a chunk", i); return -1; }
         if (!d.done && i + 1 < R->nblocks && d.n != R->blocks[i + 1].first) {
             set_err(err, errlen, "block %u ends at sample %llu but block %u starts at %llu", i,
                     (unsigned long long)d.n, i + 1, (unsigned long long)R->blocks[i + 1].first);
@@ -441,6 +462,8 @@ int vgacap_trace_block_data(vgacap_trace_reader_t *R, uint32_t i, const uint8_t 
     *data = R->buf; *len = R->buf_len;
     return 0;
 }
+
+void vgacap_trace_read_stats(const vgacap_trace_reader_t *R, vgacap_trace_read_stats_t *out) { *out = R->stats; }
 
 void vgacap_trace_close(vgacap_trace_reader_t *R) {
     if (!R) return;

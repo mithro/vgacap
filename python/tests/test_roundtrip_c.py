@@ -75,3 +75,21 @@ def test_c_dump_reads_a_trace(tmp_path):
     out = subprocess.run([str(DUMP), str(plain)], capture_output=True, text=True, check=True).stdout
     assert want in out
     assert "trace blocks=" not in out
+
+
+def test_plain_v2_fixture_is_current(tmp_path):
+    """tests/fixtures/plain-v2.vgacap (read by tests/test_trace_read.c) is what
+    its generator writes now, so the two cannot drift apart."""
+    import sys
+    fixtures = pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures"
+    out = tmp_path / "plain-v2.vgacap"
+    subprocess.run([sys.executable, str(fixtures / "make_plain_v2.py"), str(out)], check=True)
+    assert out.read_bytes() == (fixtures / "plain-v2.vgacap").read_bytes()
+    # And it holds the samples trace-make writes for 3000 clocks, every 7.
+    dump = subprocess.run([str(DUMP), str(out)], capture_output=True, text=True, check=True).stdout
+    samples = [trace_make_sample(s, 7) for s in range(6000)]
+    h64 = 0xCBF29CE484222325
+    for v in samples:
+        for b in v.to_bytes(6, "little"):
+            h64 = ((h64 ^ b) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    assert f"total_samples=6000 crc64={h64:016x}" in dump

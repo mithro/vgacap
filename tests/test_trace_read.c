@@ -7,6 +7,7 @@
 #define ZSTD_STATIC_LINKING_ONLY  // ZSTD_isSkippableFrame
 #include "harness.h"
 #include "vgacap/trace.h"
+#include "trace_read_stats.h"   // src/trace: what the reader decoded
 #include <errno.h>
 #include <inttypes.h>
 #include <stdint.h>
@@ -331,7 +332,7 @@ TEST(test_trace_bad_table) {
 
 // The 5-block trace decompressed (what `zstd -d` gives: a plain v2 VGCH
 // stream with a BLKH per block) reads the same as the trace.
-TEST(test_trace_plain_vgch) {
+TEST(test_trace_decompressed_plain) {
     const char *src = five_path();
     ASSERT_TRUE(src != NULL);
     vgacap_trace_reader_t *z = open_or_say(src);
@@ -396,6 +397,231 @@ TEST(test_trace_plain_vgch) {
     free(a); free(b);
     vgacap_trace_close(p);
     vgacap_trace_close(z);
+    remove(path);
+}
+
+// Every run a read delivers, in full.
+struct all_runs { size_t n, cap; uint64_t *first, *value, *len; };
+
+static int on_all(void *user, uint64_t first, uint64_t value, uint64_t run) {
+    struct all_runs *a = user;
+    if (a->n == a->cap) {
+        a->cap = a->cap ? 2 * a->cap : 1024;
+        a->first = realloc(a->first, a->cap * sizeof *a->first);
+        a->value = realloc(a->value, a->cap * sizeof *a->value);
+        a->len = realloc(a->len, a->cap * sizeof *a->len);
+        if (!a->first || !a->value || !a->len) { fprintf(stderr, "  out of memory\n"); exit(2); }
+    }
+    a->first[a->n] = first; a->value[a->n] = value; a->len[a->n] = run; a->n++;
+    return 0;
+}
+
+static void all_free(struct all_runs *a) { free(a->first); free(a->value); free(a->len); memset(a, 0, sizeof *a); }
+
+static int all_same(const struct all_runs *a, const struct all_runs *b) {
+    if (a->n != b->n) { fprintf(stderr, "  %zu runs vs %zu\n", a->n, b->n); return 0; }
+    for (size_t i = 0; i < a->n; i++)
+        if (a->first[i] != b->first[i] || a->value[i] != b->value[i] || a->len[i] != b->len[i]) {
+            fprintf(stderr, "  run %zu: (%" PRIu64 ", %" PRIx64 ", %" PRIu64 ") vs (%" PRIu64 ", %" PRIx64 ", %" PRIu64 ")\n",
+                    i, a->first[i], a->value[i], a->len[i], b->first[i], b->value[i], b->len[i]);
+            return 0;
+        }
+    return 1;
+}
+
+// tests/fixtures/plain-v2.vgacap, a plain v2 stream from the Python writer
+// (tests/fixtures/make_plain_v2.py: 3000 clocks, uo_out every 7), reads the
+// same, run for run, as a trace of the same samples from the C writer.
+TEST(test_trace_plain_vgch) {
+    char path[256]; tmp_path(path, sizeof path, "read_plain_twin.vgct.zst");
+    ASSERT_TRUE(make_trace(path, 3000, 7) == 0);
+    vgacap_trace_reader_t *z = open_or_say(path);
+    vgacap_trace_reader_t *p = open_or_say(VGACAP_FIXTURES "/plain-v2.vgacap");
+    ASSERT_TRUE(z != NULL && p != NULL);
+    const vgacap_trace_info_t *pi = vgacap_trace_info(p), *zi = vgacap_trace_info(z);
+    ASSERT_EQ_U(pi->compressed, 0);
+    ASSERT_EQ_U(zi->compressed, 1);
+    ASSERT_EQ_U(pi->blocks, 1);
+    ASSERT_EQ_U(pi->header.version, 2);
+    ASSERT_EQ_U(pi->header.sample_bits, 43);
+    ASSERT_EQ_U(pi->header.samples_per_clock, 2);
+    ASSERT_EQ_U(pi->header.clock_bit, 42);
+    ASSERT_EQ_U(pi->header.clock_hz, zi->header.clock_hz);
+    ASSERT_TRUE(strcmp(pi->header.desc, "plain v2 fixture") == 0);
+    ASSERT_EQ_U(pi->samples, 6000);
+    ASSERT_EQ_U(zi->samples, 6000);
+    ASSERT_TRUE(pi->open_meta && strcmp(pi->open_meta, zi->open_meta) == 0);
+    ASSERT_TRUE(pi->close_meta && strcmp(pi->close_meta, zi->close_meta) == 0);
+    const uint64_t ranges[][2] = { { 0, UINT64_MAX }, { 1, 2 }, { 13, 29 }, { 2999, 4001 }, { 5990, 7000 } };
+    for (unsigned i = 0; i < sizeof ranges / sizeof ranges[0]; i++) {
+        struct all_runs a = { 0, 0, NULL, NULL, NULL }, b = { 0, 0, NULL, NULL, NULL };
+        char err[256] = "";
+        ASSERT_EQ_U(vgacap_trace_read(p, ranges[i][0], ranges[i][1], on_all, &a, err, sizeof err), 0);
+        ASSERT_EQ_U(vgacap_trace_read(z, ranges[i][0], ranges[i][1], on_all, &b, err, sizeof err), 0);
+        ASSERT_TRUE(a.n > 0);
+        ASSERT_EQ_U(a.first[0], ranges[i][0]);
+        int same = all_same(&a, &b);
+        uint64_t total = 0;
+        for (size_t k = 0; k < a.n; k++) {
+            if (a.value[k] != sample_value(a.first[k], 7)) same = 0;
+            total += a.len[k];
+        }
+        all_free(&a); all_free(&b);
+        ASSERT_TRUE(same);
+        ASSERT_EQ_U(total, (ranges[i][1] < 6000 ? ranges[i][1] : 6000) - ranges[i][0]);
+    }
+    vgacap_trace_close(p);
+    vgacap_trace_close(z);
+    remove(path);
+}
+
+static int count_run(void *user, uint64_t first, uint64_t value, uint64_t run) {
+    (void)first; (void)value;
+    *(uint64_t *)user += run;
+    return 0;
+}
+
+// Opening a trace with a good seek table reads the table and each frame's
+// header and start, not the frames; a range read decompresses only the
+// blocks it needs. The values here barely compress (an LCG), so the frames
+// are megabytes each.
+TEST(test_trace_open_touches_little) {
+    char path[256]; tmp_path(path, sizeof path, "read_random.vgct.zst");
+    vgacap_header_t h;
+    vgacap_header_init_v2(&h, 43, 2, 42, 0);
+    char err[256] = "";
+    vgacap_trace_writer_t *t = vgacap_trace_create(path, &h, OPEN_META, 1, err, sizeof err);
+    ASSERT_TRUE(t != NULL);
+    // A new value every sample: blocks close by size, about 2.39 M samples
+    // each; this leaves a short third block.
+    const uint64_t samples = 4790000;
+    uint64_t x = 1; int bad = 0;
+    for (uint64_t s = 0; s < samples; s++) {
+        x = x * 6364136223846793005ull + 1442695040888963407ull;
+        bad |= vgacap_trace_push(t, ((x >> 22) & (CLK42 - 1)) | ((s & 1) ? CLK42 : 0));
+    }
+    ASSERT_EQ_U(bad, 0);
+    ASSERT_EQ_U(vgacap_trace_finish(t, CLOSE_META, err, sizeof err), 0);
+
+    size_t len; uint8_t *file = slurp(path, &len);
+    ASSERT_TRUE(file != NULL);
+    size_t off[8], end;
+    ASSERT_EQ_U(frame_offsets(file, len, off, 8, &end), 3);
+    ASSERT_TRUE(off[2] > 20u * 1024u * 1024u);    // blocks 0 and 1 are big
+    ASSERT_TRUE(len - off[2] < 1024u * 1024u);     // block 2 and the table are not
+
+    vgacap_trace_reader_t *r = open_or_say(path);
+    ASSERT_TRUE(r != NULL);
+    ASSERT_EQ_U(vgacap_trace_info(r)->table_rebuilt, 0);
+    ASSERT_EQ_U(vgacap_trace_info(r)->samples, samples);
+    vgacap_trace_read_stats_t st;
+    vgacap_trace_read_stats(r, &st);
+    ASSERT_EQ_U(st.blocks_decoded, 1);   // the last block, for its samples and META(close)
+    // Three block starts (zstd takes in a whole zstd block, at most 128 KiB
+    // stored, to give the first bytes), the last frame, the table and the
+    // frame headers: 418,125 bytes of 29.4 MB when this was written.
+    if (st.bytes_touched >= (len - off[2]) + 3 * 140000u)
+        fprintf(stderr, "  open touched %" PRIu64 " of %zu bytes\n", st.bytes_touched, len);
+    ASSERT_TRUE(st.bytes_touched < (len - off[2]) + 3 * 140000u);
+
+    // A range inside block 1 decompresses block 1 alone.
+    // Block 0 holds about (16 MiB - 64 KiB - 16 - 141) / 7 = 2,387,360 one-sample
+    // pairs, so b1 + 1000 is in block 1 and b1 - 2000 in block 0.
+    uint64_t b1 = 2387000, got = 0;
+    vgacap_trace_read_stats_t before = st;
+    ASSERT_EQ_U(vgacap_trace_read(r, b1 + 1000, b1 + 1010, count_run, &got, err, sizeof err), 0);
+    ASSERT_EQ_U(got, 10);
+    vgacap_trace_read_stats(r, &st);
+    ASSERT_EQ_U(st.blocks_decoded - before.blocks_decoded, 1);
+    ASSERT_EQ_U(st.bytes_touched - before.bytes_touched, off[2] - off[1]);
+    // The same block again comes from the cache; a range across blocks 0
+    // and 1 decodes both.
+    before = st;
+    ASSERT_EQ_U(vgacap_trace_read(r, b1 + 2000, b1 + 2010, count_run, &got, err, sizeof err), 0);
+    vgacap_trace_read_stats(r, &st);
+    ASSERT_EQ_U(st.blocks_decoded - before.blocks_decoded, 0);
+    ASSERT_EQ_U(vgacap_trace_read(r, b1 - 2000, b1 + 3000, count_run, &got, err, sizeof err), 0);
+    vgacap_trace_read_stats(r, &st);
+    ASSERT_EQ_U(st.blocks_decoded - before.blocks_decoded, 2);
+    vgacap_trace_close(r);
+
+    // Without the table the frames are walked: the whole file is read.
+    char cut[256]; tmp_path(cut, sizeof cut, "read_random_cut.vgct.zst");
+    ASSERT_TRUE(spit(cut, file, end) == 0);
+    free(file);
+    r = open_or_say(cut);
+    ASSERT_TRUE(r != NULL);
+    ASSERT_EQ_U(vgacap_trace_info(r)->table_rebuilt, 1);
+    vgacap_trace_read_stats(r, &st);
+    ASSERT_TRUE(st.bytes_touched >= end);
+    vgacap_trace_close(r);
+    remove(cut);
+    remove(path);
+}
+
+// Recompresses `n` bytes as one checksummed zstd frame, appended to `f`.
+static int put_frame(FILE *f, const uint8_t *p, size_t n) {
+    ZSTD_CCtx *c = ZSTD_createCCtx();
+    size_t cap = ZSTD_compressBound(n);
+    uint8_t *z = malloc(cap);
+    int rc = -1;
+    if (c && z && !ZSTD_isError(ZSTD_CCtx_setParameter(c, ZSTD_c_checksumFlag, 1))) {
+        size_t k = ZSTD_compress2(c, z, cap, p, n);
+        if (!ZSTD_isError(k) && fwrite(z, 1, k, f) == k) rc = 0;
+    }
+    free(z); ZSTD_freeCCtx(c);
+    return rc;
+}
+
+// A two-block trace rebuilt with one block's bytes cut 3 bytes short (inside
+// a chunk) but recompressed, so zstd finds nothing wrong: the reader must.
+static int write_cut_block(const char *out, const uint8_t *b0, size_t n0, const uint8_t *b1, size_t n1, int which) {
+    FILE *f = fopen(out, "wb");
+    if (!f) { perror(out); return -1; }
+    int rc = put_frame(f, b0, which == 0 ? n0 - 3 : n0) | put_frame(f, b1, which == 1 ? n1 - 3 : n1);
+    if (fclose(f) != 0) rc = -1;
+    return rc;
+}
+
+TEST(test_trace_block_mid_chunk) {
+    char path[256]; tmp_path(path, sizeof path, "read_two.vgct.zst");
+    ASSERT_TRUE(make_trace(path, VGACAP_TRACE_BLOCK_CLOCKS + 100, 0) == 0);
+    vgacap_trace_reader_t *r = open_or_say(path);
+    ASSERT_TRUE(r != NULL);
+    ASSERT_EQ_U(vgacap_trace_info(r)->blocks, 2);
+    char err[256] = "";
+    const uint8_t *p; size_t n0, n1;
+    ASSERT_EQ_U(vgacap_trace_block_data(r, 0, &p, &n0, err, sizeof err), 0);
+    uint8_t *b0 = malloc(n0); memcpy(b0, p, n0);
+    ASSERT_EQ_U(vgacap_trace_block_data(r, 1, &p, &n1, err, sizeof err), 0);
+    uint8_t *b1 = malloc(n1); memcpy(b1, p, n1);
+    vgacap_trace_close(r);
+
+    // Block 0 ends inside its RUNS pair: reading through it is an error.
+    char cut[256]; tmp_path(cut, sizeof cut, "read_two_cut.vgct.zst");
+    ASSERT_TRUE(write_cut_block(cut, b0, n0, b1, n1, 0) == 0);
+    r = open_or_say(cut);
+    ASSERT_TRUE(r != NULL);
+    ASSERT_EQ_U(vgacap_trace_info(r)->blocks, 2);
+    uint64_t got = 0;
+    err[0] = 0;
+    ASSERT_EQ_U((unsigned)(vgacap_trace_read(r, 0, UINT64_MAX, count_run, &got, err, sizeof err) + 1), 0);
+    if (!strstr(err, "inside a chunk")) fprintf(stderr, "  err: %s\n", err);
+    ASSERT_TRUE(strstr(err, "block 0: ends inside a chunk") != NULL);
+    vgacap_trace_close(r);
+
+    // The last block ends inside its META(close): it is not a whole block,
+    // so it is dropped (the table is rebuilt), leaving block 0.
+    ASSERT_TRUE(write_cut_block(cut, b0, n0, b1, n1, 1) == 0);
+    r = open_or_say(cut);
+    ASSERT_TRUE(r != NULL);
+    ASSERT_EQ_U(vgacap_trace_info(r)->table_rebuilt, 1);
+    ASSERT_EQ_U(vgacap_trace_info(r)->blocks, 1);
+    ASSERT_EQ_U(vgacap_trace_info(r)->samples, BLOCK_SAMPLES);
+    ASSERT_TRUE(vgacap_trace_info(r)->close_meta == NULL);
+    vgacap_trace_close(r);
+    free(b0); free(b1);
+    remove(cut);
     remove(path);
 }
 
@@ -472,7 +698,10 @@ int main(void) {
     RUN(test_trace_truncated);
     RUN(test_trace_truncated_in_table);
     RUN(test_trace_bad_table);
+    RUN(test_trace_decompressed_plain);
     RUN(test_trace_plain_vgch);
+    RUN(test_trace_open_touches_little);
+    RUN(test_trace_block_mid_chunk);
     RUN(test_trace_v1_capture);
     RUN(test_trace_not_a_trace);
     if (five_ready) remove(five_path());
