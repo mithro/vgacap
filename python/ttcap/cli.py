@@ -56,6 +56,7 @@ from .capture import (
     frame_note,
     frames_to_max_bytes,
     restore_mode,
+    run_capture,
     run_session,
     select_project,
     stop_clock,
@@ -463,6 +464,9 @@ class _MicroPythonBoard:
     def session(self, request: CaptureRequest) -> CaptureSession:
         return CaptureSession(self.repl, request)
 
+    def run_to_file(self, request: CaptureRequest, fp) -> CaptureStats:
+        return run_capture(self.repl, request, fp)
+
     def teardown(self, selection: dict, stop_clock_after: bool) -> None:
         if stop_clock_after:
             stop_clock(self.repl)
@@ -488,6 +492,9 @@ class _FirmwareBoard:
 
     def session(self, request: CaptureRequest) -> CaptureSession:
         return FirmwareSession(self.link, request)
+
+    def run_to_file(self, request: CaptureRequest, fp) -> CaptureStats:
+        return run_session(self.session(request), fp)
 
     def teardown(self, selection: dict, stop_clock_after: bool) -> None:
         fwproto.teardown(self.link, selection, stop_clock_after)
@@ -619,11 +626,10 @@ def capture(
                     out_path, on_consumer_close=flag.set if to_stdout else None
                 ) as fp:
                     try:
-                        session = driver.session(request)
                         if to_stdout:
-                            stats = _stream_capture(session, fp, flag)
+                            stats = _stream_capture(driver.session(request), fp, flag)
                         else:
-                            stats = run_session(session, fp)
+                            stats = driver.run_to_file(request, fp)
                     except BaseException:
                         if not to_stdout and fp.tell() == 0:
                             _discard_empty(out_path)
