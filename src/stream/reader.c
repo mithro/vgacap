@@ -26,6 +26,9 @@ static int has_clock(const vgacap_reader_t *r) {
     return r->have_header && r->header.clock_bit != VGACAP_CLOCK_BIT_NONE;
 }
 
+static int tag_is(const vgacap_reader_t *r, const char *t) { return memcmp(r->tag, t, 4) == 0; }
+static int is_tag(const uint8_t *t, const char *name) { return memcmp(t, name, 4) == 0; }
+
 static int fail(vgacap_reader_t *r, const char *what) {
     vgacap_event_t ev; ev.type = VGACAP_EV_ERROR; ev.u.error.what = what; r->cb(r->user, &ev);
     r->in_payload = 0; r->hdrfill = 0; r->failed = 1; return -1;
@@ -34,14 +37,15 @@ static int fail(vgacap_reader_t *r, const char *what) {
 // Framing error: stop parsing this chunk and hunt for the next plausible
 // chunk header. `already` seeds the skip count with the bytes of the current
 // (bad) chunk that are known to be lost. Returns 1, the "framing error"
-// sentinel the payload handlers propagate. Any loss in a stream with a clock
-// bit makes the sample index unknown until the next BLKH.
+// sentinel the payload handlers propagate. In a stream with a clock bit the
+// sample index becomes unknown when framing is regained (scan_byte), unless
+// the loss was exactly one TIME chunk.
 static int resync(vgacap_reader_t *r, const char *what, uint32_t already) {
+    r->resync_time_len = (tag_is(r, VGACAP_TAG_TIME) && r->length <= VGACAP_MAX_CHUNK_LEN) ? 8u + r->length : 0;
     r->scanning = 1; r->skipped = already; r->resync_what = what;
     r->scanfill = 0; r->in_payload = 0; r->hdrfill = 0; r->pfill = 0;
     r->consumed = 0; r->remaining_items = 0; r->sample_index = 0; r->have_last_event = 0;
     r->skip_what = NULL;
-    if (has_clock(r)) r->pos_known = 0;
     return 1;
 }
 
@@ -59,8 +63,6 @@ static int skip_rest(vgacap_reader_t *r, const char *what) {
     return 0;
 }
 
-static int tag_is(const vgacap_reader_t *r, const char *t) { return memcmp(r->tag, t, 4) == 0; }
-static int is_tag(const uint8_t *t, const char *name) { return memcmp(t, name, 4) == 0; }
 
 static int tag_known(const uint8_t *t) {
     return is_tag(t, VGACAP_TAG_HEADER) || is_tag(t, VGACAP_TAG_RAW) || is_tag(t, VGACAP_TAG_RLE) ||
@@ -270,10 +272,12 @@ static int end_payload(vgacap_reader_t *r) {
     if (!r->skip_what && tag_is(r, VGACAP_TAG_RUNS) && (r->remaining_items || r->vfill || r->lebcount))
         r->skip_what = "RUNS pairs do not fill the chunk";
     if (r->skip_what) {
-        // "Data lost, framing kept": the whole chunk is reported.
+        // "Data lost, framing kept": the whole chunk is reported. A skipped
+        // META carried no samples, so n stays known; any other skipped chunk
+        // (RUNS, BLKH, a forbidden or unknown one) could have.
         report(r, 8u + r->length, r->skip_what);
         r->skip_what = NULL;
-        if (has_clock(r)) r->pos_known = 0;
+        if (has_clock(r) && !tag_is(r, VGACAP_TAG_META)) r->pos_known = 0;
     } else if (tag_is(r, VGACAP_TAG_HEADER)) {
         vgacap_event_t ev; ev.type = VGACAP_EV_HEADER; ev.u.header = &r->header; r->have_header = 1;
         r->sample_pos = 0; r->pos_known = 1;
@@ -304,8 +308,7 @@ static int end_payload(vgacap_reader_t *r) {
     } else if (tag_is(r, VGACAP_TAG_META)) {
         r->metabuf[r->length] = 0;
         if (!meta_text_ok(r->metabuf, r->length)) {
-            report(r, 8u + r->length, "bad META text");
-            if (has_clock(r)) r->pos_known = 0;
+            report(r, 8u + r->length, "bad META text");   // no samples lost: n stays known
         } else {
             vgacap_event_t ev; ev.type = VGACAP_EV_META;
             ev.u.meta.text = r->metabuf; ev.u.meta.len = (uint16_t)r->length;
@@ -548,6 +551,7 @@ static void scan_byte(vgacap_reader_t *r, uint8_t b) {
     if (!tag_known(r->scanbuf) || header_problem(r, r->scanbuf, length)) return;
     memcpy(r->tag, r->scanbuf, 4); r->length = length;
     r->scanning = 0; r->scanfill = 0;
+    if (has_clock(r) && !(r->resync_time_len && r->skipped == r->resync_time_len)) r->pos_known = 0;
     report(r, r->skipped, r->resync_what);
     open_chunk(r);
 }

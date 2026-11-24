@@ -132,7 +132,9 @@ def test_v2_narrow_stream_allows_raw_and_counts_samples():
     def body(w, fp):
         w.raw([0xABC, 0x123, 0xFFF]); w.events([(0, 1), (10, 2)]); w.runs([(7, 5)]); w.block(19)
     _, items = read_stream(stream(Header(version=2, sample_bits=12, samples_per_word=2), body))
-    assert items[-1] == ("block", 19)
+    # 3 RAW samples + 11 EVNT samples + 5 RUNS samples: BLKH(19) follows.
+    assert items == [("run", 0xABC, 1), ("run", 0x123, 1), ("run", 0xFFF, 1),
+                     ("run", 1, 10), ("run", 2, 1), ("run", 7, 5), ("block", 19)]
 
 
 def test_clock_first_one():
@@ -200,6 +202,16 @@ T = vgch_v2()  # a good trace header
     (T + chunk(b"EVNT", bytes(4)), "chunk not allowed with a sample clock"),
     (T + chunk(b"XYZW", b"abc"), "chunk not allowed with a sample clock"),
     (T + chunk(b"RLE ", struct.pack("<III", 1, 3, 2)), "RLE  chunk not allowed in version 2"),
+    # Short forbidden chunks: the ban is reported, not the length (C's order).
+    (T + chunk(b"RAW ", b"\0\0"), "chunk not allowed with a sample clock"),
+    (T + chunk(b"RLE ", b"\0\0"), "RLE  chunk not allowed in version 2"),
+    (vgch_v2(bits=8, spw=1, spc=1, cb=0xFF) + chunk(b"RLE ", b"\0\0"), "RLE  chunk not allowed in version 2"),
+    (vgch_v2(spc=1, cb=0xFF) + chunk(b"RAW ", b"\0\0"), "chunk not allowed with sample_bits over 32"),
+    # Two faults: a count the length cannot hold is judged before pair 1.
+    (T + chunk(b"RUNS", struct.pack("<I", 5) + (CLK | 1).to_bytes(6, "little") + b"\x01"),
+     "RUNS pairs do not fill the chunk"),
+    # Allowed but short: the same "bad ... length" as C.
+    (vgch_v2(bits=8, spw=1, spc=1, cb=0xFF) + chunk(b"RAW ", b"\0\0"), "bad RAW length"),
     (vgch_v2(spc=1, cb=0xFF) + chunk(b"RLE ", struct.pack("<III", 1, 3, 2)), "RLE  chunk not allowed in version 2"),
     (vgch_v2(spc=1, cb=0xFF) + chunk(b"RAW ", struct.pack("<II", 1, 5)), "chunk not allowed with sample_bits over 32"),
     (vgch_v2(spc=1, cb=0xFF) + chunk(b"FRAM", bytes(16)), "chunk not allowed with sample_bits over 32"),
@@ -344,3 +356,26 @@ def test_c_dump_reports_v2_skips(tmp_path):
 def test_read_chunks_sees_new_tags():
     data = stream(trace_header(), lambda w, fp: (w.meta(OPEN), w.block(0), w.runs([(1, 1)])))
     assert [t for t, _ in read_chunks(data)] == ["VGCH", "META", "BLKH", "RUNS"]
+
+
+def test_c_dump_survives_bad_sample_bits(tmp_path):
+    # A VGCH whose sample_bits (200) the first pass never validated used to
+    # make vgacap-dump read 25 value bytes into an 8-byte buffer.
+    data = vgch_v2(bits=200, spc=1, cb=0xFF) + runs_chunk([(1, 1)], vbytes=25)
+    f = tmp_path / "s.vgacap"; f.write_bytes(data)
+    proc = subprocess.run([str(DUMP), str(f)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc
+    assert "RUNS pairs=1 runs=0 (malformed)" in proc.stdout
+    assert "error: bad sample_bits 200" in proc.stderr
+    assert "reason=bad sample_bits" in proc.stdout
+
+
+def test_c_dump_bad_meta_keeps_n_known(tmp_path):
+    # Ruling K: a bad META in a clock stream loses no samples, so every later
+    # RUNS is still delivered.
+    data = (vgch_v2() + runs_chunk([(1, 5)]) + chunk(b"META", b"meta=open\n")
+            + runs_chunk([(2, 7)]) + runs_chunk([(3, 9)]))
+    f = tmp_path / "s.vgacap"; f.write_bytes(data)
+    out = subprocess.run([str(DUMP), str(f)], capture_output=True, text=True, check=True).stdout
+    assert "reason=bad META text" in out
+    assert "total_samples=21 crc64=" in out

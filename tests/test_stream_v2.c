@@ -88,6 +88,7 @@ static void put_runs1(uint64_t value, unsigned vb, const uint8_t *run, size_t ru
     for (unsigned i = 0; i < vb; i++) put_u8((uint8_t)(value >> (8 * i)));
     put(run, runlen);
 }
+static void put_meta(const char *t) { put_head("META", (uint32_t)strlen(t)); put(t, strlen(t)); }
 static void writer_runs1(uint64_t value, uint64_t run) { ASSERT_EQ_U(vgacap_writer_runs(&W, &value, &run, 1), 0); }
 
 #define CLK42 (1ull << 42)
@@ -294,8 +295,8 @@ static void expect_runs_skip(const char *what, size_t chunk_bytes, size_t runs_b
     ASSERT_EQ_U(nth(VGACAP_EV_RUN, runs_before)->u.run.value & 0xFF, 0x55);
 }
 
-// The same, in a stream with no clock bit, where n stays known after a loss
-// and the next chunk's run is delivered without a BLKH.
+// A content error in a clock stream: the chunk is skipped and n becomes
+// unknown, so the next RUNS is discarded too.
 TEST(runs_reject_clock_bit_set) {
     start_v2(43, 2, 42, 0);
     const uint8_t one = 1;
@@ -308,6 +309,9 @@ TEST(runs_reject_clock_bit_set) {
     ASSERT_EQ_U(count(VGACAP_EV_RUN), 0);
 }
 
+// The rest of the RUNS content errors use streams with no clock bit, where n
+// stays known after a loss and the next chunk's run is delivered without a
+// BLKH (expect_runs_skip).
 TEST(runs_reject_overlong_leb) {
     start_v2(43, 1, VGACAP_CLOCK_BIT_NONE, 0);
     const uint8_t nonmin[3] = { 0x81, 0x80, 0x00 };
@@ -363,6 +367,16 @@ TEST(runs_length_mismatch) {
     start_v2(43, 1, VGACAP_CLOCK_BIT_NONE, 0);
     put_head("RUNS", 2); put_u16le(1);
     expect_runs_skip("RUNS pairs do not fill the chunk", 8 + 2, 0);
+}
+
+TEST(runs_two_faults_early_bound_first) {
+    // pair_count 5 that the length cannot hold, and pair 1's clock bit set:
+    // the count is judged first (the Python mirror must agree).
+    start_trace();
+    put_head("RUNS", 4 + 7); put_u32le(5); put_u64le(CLK42 | 1); outlen -= 2; put_u8(1);
+    ASSERT_EQ_U(feed_all(), 0);
+    ASSERT_EQ_U(count(VGACAP_EV_RESYNC), 1);
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 0), "RUNS pairs do not fill the chunk"));
 }
 
 TEST(runs_reject_no_pairs) {
@@ -450,6 +464,17 @@ TEST(clock_stream_rejects_raw) {
     }
     ASSERT_EQ_U(count(VGACAP_EV_RUN), 0); ASSERT_EQ_U(count(VGACAP_EV_FRAME_BEGIN), 0);
     ASSERT_EQ_U(count(VGACAP_EV_TIME), 1);
+    // Short forbidden chunks are reported by the ban, not by their length.
+    start_trace(); put_head("RLE ", 2); put_u16le(0);
+    ASSERT_EQ_U(feed_all(), 0);
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 0), "RLE  chunk not allowed in version 2"));
+    ASSERT_EQ_U(nth(VGACAP_EV_RESYNC, 0)->u.resync.skipped, 10);
+    start_v2(8, 1, VGACAP_CLOCK_BIT_NONE, 0); put_head("RLE ", 2); put_u16le(0);
+    ASSERT_EQ_U(feed_all(), 0);
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 0), "RLE  chunk not allowed in version 2"));
+    start_v2(43, 1, VGACAP_CLOCK_BIT_NONE, 0); put_head("RAW ", 2); put_u16le(0);
+    ASSERT_EQ_U(feed_all(), 0);
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 0), "chunk not allowed with sample_bits over 32"));
     // The clock-bit check applies before the sample_bits one: a 16-bit
     // stream with a clock bit says "sample clock" too.
     start_v2(16, 2, 15, 0);
@@ -581,6 +606,63 @@ TEST(clock_loss_discards_until_blkh) {
     ASSERT_EQ_U(count(VGACAP_EV_RUN), 1); ASSERT_EQ_U(count(VGACAP_EV_RESYNC), 1);
 }
 
+// Ruling K: in a clock stream n becomes unknown only after a loss that could
+// have carried samples. META and TIME losses leave it known.
+TEST(clock_n_after_non_runs_skips) {
+    // A bad META (text, then length): every later RUNS is delivered.
+    start_trace();
+    writer_runs1(1, 5);
+    put_meta("meta=open\n");                               // bad META text
+    writer_runs1(2, 7);
+    put_head("META", 0);                                    // bad META length
+    writer_runs1(3, 9);
+    ASSERT_EQ_U(feed_all(), 0);
+    ASSERT_EQ_U(count(VGACAP_EV_RESYNC), 2);
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 0), "bad META text"));
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 1), "bad META length"));
+    ASSERT_EQ_U(count(VGACAP_EV_RUN), 3);
+    ASSERT_EQ_U(nth(VGACAP_EV_RUN, 1)->u.run.value, 2 | CLK42);   // n = 5
+    ASSERT_EQ_U(nth(VGACAP_EV_RUN, 2)->u.run.value, 3);           // n = 12: clock 0
+    ASSERT_EQ_U(rd.sample_pos, 21);
+    // A TIME whose msg_len is wrong: a byte-wise resync that regains framing
+    // exactly at the TIME chunk's end lost only the TIME, so n stays known.
+    start_trace();
+    writer_runs1(1, 5);
+    put_head("TIME", 18); put_u64le(1); put_u32le(0); put_u32le(0); put_u16le(20);
+    writer_runs1(2, 7);
+    ASSERT_EQ_U(feed_all(), 0);
+    ASSERT_EQ_U(count(VGACAP_EV_RESYNC), 1);
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 0), "TIME msg_len does not match chunk length"));
+    ASSERT_EQ_U(count(VGACAP_EV_RUN), 2);
+    ASSERT_EQ_U(rd.sample_pos, 12);
+    // A forbidden chunk: later RUNS are discarded until the next BLKH.
+    const char *forbid[3] = { "RAW ", "RLE ", "XYZW" };
+    for (size_t k = 0; k < 3; k++) {
+        start_trace();
+        writer_runs1(1, 5);
+        put_head(forbid[k], 8); put_u32le(1); put_u32le(5);
+        writer_runs1(2, 7);
+        ASSERT_EQ_U(vgacap_writer_block(&W, 12), 0);
+        writer_runs1(3, 1);
+        ASSERT_EQ_U(feed_all(), 0);
+        ASSERT_EQ_U(count(VGACAP_EV_RUN), 2);
+        ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 1), "RUNS discarded: sample position unknown until BLKH"));
+        ASSERT_EQ_U(count(VGACAP_EV_RESYNC), 2);   // the ban, the discard; the BLKH is silent
+    }
+    // A bad BLKH: the same.
+    start_trace();
+    writer_runs1(1, 5);
+    put_head("BLKH", 4); put_u32le(0);
+    writer_runs1(2, 7);
+    ASSERT_EQ_U(vgacap_writer_block(&W, 12), 0);
+    writer_runs1(3, 1);
+    ASSERT_EQ_U(feed_all(), 0);
+    ASSERT_EQ_U(count(VGACAP_EV_RUN), 2);
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 0), "bad BLKH length"));
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 1), "RUNS discarded: sample position unknown until BLKH"));
+    ASSERT_EQ_U(count(VGACAP_EV_RESYNC), 2);
+}
+
 TEST(init_header_decodes_block) {
     // Block 1 of a trace, decoded on its own: BLKH + RUNS, no VGCH.
     vgacap_header_t h; vgacap_header_init_v2(&h, 43, 2, 42, 0);
@@ -608,7 +690,6 @@ TEST(init_header_decodes_block) {
 static const char *OPEN_OK =
     "meta=open\nproject=tt_um_x\ncalib_seconds=0.5\nseconds=2\nlayout=tt-um-43\n";
 
-static void put_meta(const char *t) { put_head("META", (uint32_t)strlen(t)); put(t, strlen(t)); }
 
 TEST(meta_event) {
     const char *texts[4] = {
@@ -747,10 +828,10 @@ int main(void) {
     RUN(leb128_vectors); RUN(header_v2_round_trip); RUN(worked_example_bytes); RUN(header_v2_rules);
     RUN(header_v1_defaults); RUN(runs_round_trip_43bit); RUN(runs_clock_first_one); RUN(runs_other_widths);
     RUN(runs_reject_clock_bit_set); RUN(runs_reject_overlong_leb); RUN(runs_reject_padding_bits);
-    RUN(runs_reject_zero_run); RUN(runs_length_mismatch); RUN(runs_reject_no_pairs); RUN(runs_adjacent_pairs);
+    RUN(runs_reject_zero_run); RUN(runs_length_mismatch); RUN(runs_two_faults_early_bound_first); RUN(runs_reject_no_pairs); RUN(runs_adjacent_pairs);
     RUN(runs_writer_refuses_bad_pairs); RUN(runs_need_v2_header); RUN(rle_rejected_in_v2);
     RUN(clock_stream_rejects_raw); RUN(wide_stream_rejects_raw); RUN(v2_narrow_stream_allows_raw);
     RUN(block_sets_position); RUN(bad_blkh_length); RUN(clock_loss_discards_until_blkh);
-    RUN(init_header_decodes_block); RUN(meta_event); RUN(meta_bad_text); RUN(v1_streams_unchanged);
+    RUN(clock_n_after_non_runs_skips); RUN(init_header_decodes_block); RUN(meta_event); RUN(meta_bad_text); RUN(v1_streams_unchanged);
     RUN_TESTS_END();
 }

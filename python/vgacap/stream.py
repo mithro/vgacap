@@ -237,12 +237,20 @@ class Writer:
         self.fp.write(_chunk(b"TIME", struct.pack("<QIIH", host_time_ns, clock_hz, dropped, len(m)) + m))
 
 
-def read_chunks(data: bytes) -> Iterator[tuple[str, bytes]]:
+def _too_short(tag: str, length: int, pos: int | None = None) -> ValueError:
+    # The C reader's string ("bad RAW length", ...), then the detail.
+    where = "" if pos is None else f" at offset {pos}"
+    return ValueError(f"bad {tag.strip()} length: chunk {tag!r}{where} is too short ({length} bytes)")
+
+
+def read_chunks(data: bytes, check_min: bool = True) -> Iterator[tuple[str, bytes]]:
     """Walk the chunk framing, rejecting anything implausible.
 
     The C reader resynchronises on a framing error; this mirror does not need
     to (it reads whole files, not a serial link), so it raises instead. What
-    both must agree on is *which* streams are well formed.
+    both must agree on is *which* streams are well formed. `check_min=False`
+    leaves the per-tag minimum length to the caller (read_stream checks it
+    after the version 2 chunk bans, in the C reader's order).
     """
     pos = 0
     while pos + 8 <= len(data):
@@ -253,8 +261,8 @@ def read_chunks(data: bytes) -> Iterator[tuple[str, bytes]]:
         length = struct.unpack_from("<I", data, pos + 4)[0]
         if length > MAX_CHUNK_LEN:
             raise ValueError(f"chunk {tag!r} at offset {pos} declares {length} bytes (max {MAX_CHUNK_LEN})")
-        if length < MIN_CHUNK_LEN.get(tag, 0):
-            raise ValueError(f"chunk {tag!r} at offset {pos} is too short ({length} bytes)")
+        if check_min and length < MIN_CHUNK_LEN.get(tag, 0):
+            raise _too_short(tag, length, pos)
         pos += 8
         if pos + length > len(data):
             raise ValueError(f"truncated chunk {tag!r}")
@@ -320,6 +328,9 @@ def _runs_pairs(h: Header, p: bytes) -> list[tuple[int, int]]:
     if n == 0:
         raise ValueError("RUNS has no pairs")
     vb, pos, prev, pairs = h.vbytes, 4, None, []
+    # As C: a count the length cannot hold is refused before any pair.
+    if len(p) - 4 < n * (vb + 1):
+        raise ValueError("RUNS pairs do not fill the chunk")
     for _ in range(n):
         if pos + vb > len(p):
             raise ValueError("RUNS pairs do not fill the chunk")
@@ -354,8 +365,12 @@ def read_stream(data: bytes) -> tuple[Header, list]:
                 v |= (header.clock_first ^ (n & 1)) << header.clock_bit
             items.append(("run", v, r))
             n += r
-    for tag, p in read_chunks(data):
+    for tag, p in read_chunks(data, check_min=False):
+        # The C reader's order: VGCH length, chunk before header, the v2
+        # bans, then each allowed tag's minimum length.
         if tag == "VGCH":
+            if len(p) < MIN_CHUNK_LEN["VGCH"]:
+                raise ValueError("bad VGCH length")
             header, n = parse_header(p), 0
             continue
         if header is None:
@@ -363,6 +378,8 @@ def read_stream(data: bytes) -> tuple[Header, list]:
         what = _forbidden(header, tag)
         if what:
             raise ValueError(what)
+        if len(p) < MIN_CHUNK_LEN.get(tag, 0):
+            raise _too_short(tag, len(p))
         if tag == "RUNS":
             runs_out(_runs_pairs(header, p))
         elif tag == "BLKH":

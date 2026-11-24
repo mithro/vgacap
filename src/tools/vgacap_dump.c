@@ -45,7 +45,7 @@ static int skip_bytes(FILE *fp, uint32_t n) {
 static int walk_runs(FILE *fp, uint32_t pairs, unsigned vbytes, uint32_t *left, uint64_t *total) {
     for (uint32_t i = 0; i < pairs; i++) {
         uint8_t v[8];
-        if (*left < vbytes || read_exact(fp, v, vbytes)) return -1;
+        if (vbytes > sizeof v || *left < vbytes || read_exact(fp, v, vbytes)) return -1;
         *left -= vbytes;
         uint64_t run = 0;
         for (unsigned k = 0;; k++) {
@@ -75,7 +75,15 @@ static void print_chunks(FILE *fp) {
             char desc[VGACAP_DESC_MAX + 1];
             if (dl > VGACAP_DESC_MAX || read_exact(fp, desc, dl)) { fprintf(stderr, "error: truncated VGCH desc\n"); return; }
             desc[dl] = 0;
-            vbytes = (buf[2] + 7u) / 8u;
+            // sample_bits is not validated by this pass otherwise (the
+            // reader in the second pass judges the header): a RUNS chunk is
+            // walked only with a width the format allows, at most 8 bytes.
+            if (buf[2] >= 1 && buf[2] <= 64) {
+                vbytes = (buf[2] + 7u) / 8u;
+            } else {
+                vbytes = 0;
+                fprintf(stderr, "error: bad sample_bits %u in VGCH\n", buf[2]);
+            }
             if (version == 2) {
                 char cb[8];
                 if (buf[21] == VGACAP_CLOCK_BIT_NONE) snprintf(cb, sizeof cb, "none");

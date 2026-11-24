@@ -240,11 +240,15 @@ typedef struct vgacap_reader {
     // Version 2. n, the index of the next sample to deliver: 0 after a VGCH,
     // advanced by every delivered sample, set by each BLKH.
     uint64_t    sample_pos;
-    // 0 while n is unknown: after a reported loss in a stream with a clock
-    // bit, or before the first BLKH of a reader made by
+    // 0 while n is unknown: after a loss that could have carried samples, in
+    // a stream with a clock bit, or before the first BLKH of a reader made by
     // vgacap_reader_init_header. RUNS chunks are then discarded (and
-    // reported) until a BLKH.
+    // reported) until a BLKH. Losses of META or TIME alone leave n known.
     int         pos_known;
+    // A byte-wise resync that began on a TIME chunk: 8 + its length. If the
+    // scan regains framing after exactly that many bytes, only the TIME was
+    // lost and n stays known. 0 otherwise.
+    uint32_t    resync_time_len;
     const char *skip_what;     // non-NULL: skipping this chunk by its length, report at its end
     // RUNS pair assembly
     uint8_t     vbytes, vfill, lebcount, have_prev;
