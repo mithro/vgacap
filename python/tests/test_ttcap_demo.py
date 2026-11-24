@@ -549,6 +549,32 @@ def test_dry_run_prints_a_pipeline_and_touches_nothing(tmp_path, capsys):
 
 
 @needs_gstreamer
+def test_a_frame_mode_demo_asks_the_source_for_whole_frames(tmp_path, capsys):
+    code = main([
+        "demo", "--board", "tt07", "--project", "tt_um_rejunity_vga",
+        "--clock-hz", "40000000", "--seconds", "10", "--outdir", str(tmp_path / "o"),
+        "--mode", "window", "--vga-mode", "800x600@60", "--window-lines", "64",
+        "--dry-run",
+    ])
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "capture-mode=window" in printed
+    assert "vga-mode=800x600@60" in printed and "window-lines=64" in printed
+
+
+@needs_gstreamer
+def test_a_stream_demo_leaves_the_capture_mode_to_the_element(tmp_path, capsys):
+    code = main([
+        "demo", "--board", "tt07", "--project", "tt_um_rejunity_vga",
+        "--clock-hz", "60000", "--seconds", "10", "--outdir", str(tmp_path / "o"),
+        "--dry-run",
+    ])
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "capture-mode=" not in printed and "vga-mode=" not in printed
+
+
+@needs_gstreamer
 def test_dry_run_binds_no_port(tmp_path):
     # `--serve` on a dry run must not take the port: the whole point is that
     # nothing happens, and a port left bound would fail the next real run.

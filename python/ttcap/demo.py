@@ -571,6 +571,9 @@ def source_properties(
     profile: str,
     buf_words: int | None,
     ttcap_command: str,
+    capture_mode: str = "stream",
+    vga_mode: str | None = None,
+    window_lines: int = 0,
 ) -> list[str]:
     """`vgacapttsrc`'s settings, as `name=value` tokens.
 
@@ -590,6 +593,13 @@ def source_properties(
         props.append("design=%s" % design)
     if buf_words is not None:
         props.append("buf-words=%d" % buf_words)
+    # Only what differs from the element's own defaults, like buf-words.
+    if capture_mode != "stream":
+        props.append("capture-mode=%s" % capture_mode)
+    if vga_mode:
+        props.append("vga-mode=%s" % vga_mode)
+    if window_lines:
+        props.append("window-lines=%d" % window_lines)
     return props
 
 
@@ -679,6 +689,9 @@ def build_pipeline(
     window: bool = False,
     mjpeg_fd: int | None = None,
     fps: str | None = None,
+    capture_mode: str = "stream",
+    vga_mode: str | None = None,
+    window_lines: int = 0,
 ) -> tuple[list[str], list[str]]:
     """The `gst-launch-1.0` argument vector, and what it writes.
 
@@ -743,6 +756,9 @@ def build_pipeline(
             profile=profile,
             buf_words=buf_words,
             ttcap_command=ttcap_command,
+            capture_mode=capture_mode,
+            vga_mode=vga_mode,
+            window_lines=window_lines,
         ),
         "!",
         "vgadecode",
@@ -1276,6 +1292,9 @@ def plan_demo(
             profile=args.profile,
             buf_words=args.buf_words,
             ttcap_command=args.ttcap_command,
+            capture_mode=args.mode,
+            vga_mode=args.vga_mode,
+            window_lines=args.window_lines,
             png=args.png,
             video=args.video,
             video_encoder=args.video_encoder,
@@ -1488,6 +1507,21 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--buf-words", type=int, help="words per DMA buffer; also the stop latency"
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["stream", "frame", "window"],
+        default="stream",
+        help="stream: every sample at a clock the link carries; frame/window: "
+        "whole frames at the design's real clock, sent between frames "
+        "(see `ttcap capture --help`; default stream)",
+    )
+    parser.add_argument(
+        "--vga-mode", help="frame/window modes: the VGA timing to expect (ttcap's default 640x480@60)"
+    )
+    parser.add_argument(
+        "--window-lines", type=int, default=0,
+        help="frame/window modes: most lines per captured frame (0 = ttcap's default)",
     )
     parser.add_argument(
         "--ttcap-command",
