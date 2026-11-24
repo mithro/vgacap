@@ -39,6 +39,18 @@ jobs:
           grep -q 'skipping the plugin' configure.log
           test ! -e build/libgstvgacap.so
           ! ctest --test-dir build -N | grep -q gst_plugin_inspect
+      # The RP1 (Pi 5) capture tool cannot run here, but it must keep
+      # compiling against the piolib it was proven with on pi-sw2-p4
+      # (capture-rp1/README.md); -Werror so a warning is a failure.
+      - name: vgacap-rp1 compiles against piolib
+        env:
+          PIOLIB_COMMIT: 05e8808e84ed99b168b14a4025dddb9118fa1c17
+        run: |
+          git init -q utils
+          git -C utils remote add origin https://github.com/raspberrypi/utils.git
+          git -C utils fetch -q --depth 1 origin "$PIOLIB_COMMIT"
+          git -C utils checkout -q FETCH_HEAD
+          make -C capture-rp1 PIOLIB="$PWD/utils/piolib" CFLAGS="-O2 -Wall -Wextra -Werror"
 
   python:
     name: Python suite, no GStreamer
