@@ -51,6 +51,7 @@ from .capture import (
     CaptureRequest,
     CaptureSession,
     CaptureStats,
+    frame_note,
     frames_to_max_bytes,
     restore_mode,
     run_capture,
@@ -574,6 +575,10 @@ def capture(
             # consumer that walked away still produced a real capture, and
             # its stats are the only overruns/rxstall report there is.
             _report(stats, "stdout" if to_stdout else out_path, stream=say)
+            if framed:
+                note = frame_note(stats.messages, request.cfg()["region_lines"])
+                if note:
+                    print(note, file=say)
             if stop_clock_after:
                 stop_clock(repl)
             if "mode_before" in selection:

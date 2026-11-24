@@ -156,6 +156,30 @@ def frame_cfg(
     return cfg
 
 
+def frame_note(messages: tuple[str, ...] | list[str], region_lines: int) -> str:
+    """What a frame/window capture's pictures are made of, if it matters.
+
+    The board's opening TIME message says how many lines one capture takes
+    (`frame window=N ...`). When that is less than the picture region,
+    each picture is swept from several *consecutive captured* frames:
+    exact for a static or frame-periodic design, torn for anything that
+    changes between them (tt_um_vgacal_counter in window mode, measured on
+    fpga-4: 1,040 pixels). Returns "" when every picture is one frame.
+    """
+    for msg in messages:
+        if msg.startswith("frame window="):
+            window = int(msg.split()[1].split("=")[1])
+            if window >= region_lines:
+                return ""
+            frames = -(-region_lines // window)
+            return (
+                "note: each picture is assembled from %d captured frames (%d of its "
+                "%d lines per frame): exact for a static design, torn for one "
+                "that changes from frame to frame" % (frames, window, region_lines)
+            )
+    return ""
+
+
 def min_free_bytes(buf_words: int) -> int:
     """Free heap the board needs before this capture is worth sending.
 

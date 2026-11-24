@@ -890,3 +890,15 @@ def test_a_frame_request_carries_its_sample_point_to_the_board():
 def test_a_frame_request_with_no_limit_at_all_is_refused():
     with pytest.raises(ValueError, match="never stop"):
         request(RP2350_DBV3, script="frame_rp2.py", seconds=0, max_bytes=0, max_frames=0)
+
+
+def test_a_picture_swept_from_several_frames_says_so():
+    from ttcap.capture import frame_note
+
+    swept = frame_note(["frame window=48 buffers=1 hsync_active=0 vsync_active=0"], 481)
+    whole = frame_note(["frame window=481 buffers=23 hsync_active=0 vsync_active=0"], 481)
+
+    assert swept.startswith("note: each picture is assembled from 11 captured frames")
+    assert "torn for one that changes" in swept
+    assert whole == ""
+    assert frame_note(["overruns=0 rxstall=0"], 481) == ""
