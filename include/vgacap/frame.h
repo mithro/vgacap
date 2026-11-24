@@ -186,6 +186,10 @@ typedef struct vgaframe {
     // leaves pixel_table_ok at 0 and keeps vgaframe_colour.
     uint8_t pixel_table_ok;
     uint8_t pixel_table[256];
+    // Every non-zero byte of raw lies in lines [0, dirty_y_end) and columns
+    // [0, dirty_x_end), so clearing raw after a frame need only zero that
+    // box: the rest is zero already. Both are 0 when raw is all zero.
+    uint32_t dirty_x_end, dirty_y_end;
 } vgaframe_t;
 
 // Binds the caller's buffers and puts the object in its starting state; see

@@ -30,6 +30,7 @@ void vgaframe_reset(vgaframe_t *f) {
     f->fram_remaining = 0; f->fram_max_line = 0; f->fram_anchor = 0;
     f->fram_h_high = f->fram_v_high = f->fram_clocks = 0;
     memset(f->raw, 0, vgaframe_raw_size(&f->cfg));
+    f->dirty_x_end = f->dirty_y_end = 0;
     memset(f->cover, 0, f->cfg.max_lines);
 }
 
@@ -103,6 +104,16 @@ static int covered(const vgaframe_t *f) {
     for (uint32_t y = y0; y < n && y < f->cfg.max_lines; y++)
         if (!f->cover[y]) return 0;
     return 1;
+}
+
+// Zeroes raw's lines [0, lines), as a memset of them would leave it, but
+// only inside the dirty box: everything outside it is zero already.
+static void clear_raw(vgaframe_t *f, uint32_t lines) {
+    uint32_t W = f->cfg.max_clocks_per_line;
+    uint32_t ny = lines < f->dirty_y_end ? lines : f->dirty_y_end, nx = f->dirty_x_end;
+    if (nx == W) memset(f->raw, 0, (size_t)W * ny);
+    else for (uint32_t y = 0; y < ny; y++) memset(f->raw + (size_t)y * W, 0, nx);
+    if (lines >= f->dirty_y_end) f->dirty_x_end = f->dirty_y_end = 0;   // raw is all zero now
 }
 
 // Emits the accumulated picture. `lines_known` bounds how much of `raw` to
@@ -186,7 +197,7 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
     // "written" pixels from a differently-shaped frame for the next one.
     uint32_t clear_lines = is_fram ? f->cfg.max_lines :
                            (lines_known < f->cfg.max_lines ? lines_known + 1 : f->cfg.max_lines);
-    memset(f->raw, 0, (size_t)W * clear_lines);
+    clear_raw(f, clear_lines);
     memset(f->cover, 0, f->cfg.max_lines);
 }
 
@@ -211,6 +222,8 @@ static inline void store_run(vgaframe_t *f, uint32_t sample, uint32_t run) {
                                        : (uint8_t)(vgaframe_colour(f->cfg.signal_map, sample) | 0x80);
         memset(f->raw + f->y * W + f->x, px, n);
         f->cover[f->y] = 1;
+        if (f->x + n > f->dirty_x_end) f->dirty_x_end = f->x + n;
+        if (f->y >= f->dirty_y_end) f->dirty_y_end = f->y + 1;
     }
     f->x = vgaframe_sat_add32(f->x, run);
 }
