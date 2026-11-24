@@ -5,19 +5,24 @@
 // from a freshly initialised object (so the first push meets have_prev == 0).
 // After every push the two objects' state and the frames each one emitted are
 // compared, the frames byte for byte; the whole raw, rgb and cover buffers
-// are compared every few thousand pushes and at the end.
+// are compared every few thousand pushes and at the end. The cases cover
+// forced modes (one larger than the buffer), buffers narrower and shorter
+// than the line and frame, and a timing no table mode matches, cropped by
+// emit's auto bounding box, each under the Tiny VGA and a wide signal map.
 #include <stdint.h>
 #include "harness.h"
 #include "vgacap/frame.h"
 #include "synth.h"
 #include "fastpath_ref/ref.h"
 
-#define BUF_W 1000
+#define BUF_W 1000  // the largest buffer any case asks pair_init for
 #define BUF_H 700
 #define SLOTS 4     // frames one push can emit is at most 2 (a pending FRAM flush, then a frame)
 
 typedef struct capture {
     int n, overflow;
+    const vgaframe_t *owner;
+    int continuous[SLOTS];   // emitted inside a continuous-mode frame (owner->in_frame at the callback)
     vgaframe_output_t out[SLOTS];
     vgaframe_timing_t timing[SLOTS];
     uint8_t rgb[SLOTS][BUF_W * BUF_H * 3];
@@ -31,27 +36,34 @@ typedef struct side {
 
 static side_t lib, ref;   // lib: the library under test; ref: the a26c942 snapshot
 static unsigned long pushes, frames_compared, reports[4];   // reports: pushes by last_report
+// Continuous-mode frames emitted locked with no mode: the ones cropped by
+// emit's auto bounding box at a frame start.
+static unsigned long auto_locked_frames;
 
 static void on_frame(void *u, const vgaframe_output_t *o) {
     capture_t *c = u;
     if (c->n >= SLOTS) { c->overflow = 1; return; }
     c->out[c->n] = *o;
+    c->continuous[c->n] = c->owner->in_frame;
     c->timing[c->n] = *o->timing;
     memcpy(c->rgb[c->n], o->rgb24, (size_t)o->height * o->stride);
     c->n++;
 }
 
-static void pair_init(const uint8_t map[VGACAP_SIG_COUNT]) {
+// Fresh objects on both sides with a W x H buffer (at most BUF_W x BUF_H;
+// the arrays' unused tails stay equal and are compared too) and force_mode.
+static void pair_init(const uint8_t map[VGACAP_SIG_COUNT], uint16_t W, uint16_t H, const vgaframe_mode_t *force) {
     vgaframe_config_t c; memset(&c, 0, sizeof c);
-    c.max_clocks_per_line = BUF_W; c.max_lines = BUF_H;
+    c.max_clocks_per_line = W; c.max_lines = H; c.force_mode = force;
     memcpy(c.signal_map, map, VGACAP_SIG_COUNT);
     c.on_frame = on_frame;
     memset(&lib, 0, sizeof lib); memset(&ref, 0, sizeof ref);
     // rgb starts non-zero, so a store past the end of a picture shows.
     memset(lib.rgb, 0xA5, sizeof lib.rgb); memset(ref.rgb, 0xA5, sizeof ref.rgb);
+    lib.cap.owner = &lib.f; ref.cap.owner = &ref.f;
     c.user = &lib.cap; vgaframe_init(&lib.f, &c, lib.raw, lib.rgb, lib.cover);
     c.user = &ref.cap; ref_vgaframe_init(&ref.f, &c, ref.raw, ref.rgb, ref.cover);
-    pushes = frames_compared = 0;
+    pushes = frames_compared = auto_locked_frames = 0;
     memset(reports, 0, sizeof reports);
 }
 
@@ -85,6 +97,8 @@ static int same_frames(const capture_t *a, const capture_t *b) {
         if (!same_timing(&a->timing[i], &b->timing[i])) return mismatch("frame timing");
         if (memcmp(a->rgb[i], b->rgb[i], (size_t)a->out[i].height * a->out[i].stride)) return mismatch("frame rgb24");
         frames_compared++;
+        SAME(continuous[i]);
+        if (a->continuous[i] && a->timing[i].locked && !a->timing[i].mode) auto_locked_frames++;
     }
     return 1;
 }
@@ -133,9 +147,9 @@ static int flush_both(void) {
     return same_state() && same_buffers();
 }
 
-static int frame_begin_both(uint32_t counter, uint16_t first, uint16_t count, uint32_t cpl, uint32_t samples) {
-    vgaframe_frame_begin(&lib.f, counter, first, count, cpl, samples);
-    ref_vgaframe_frame_begin(&ref.f, counter, first, count, cpl, samples);
+static int frame_begin_both(uint32_t counter, uint16_t first, uint16_t count, uint32_t line_clocks, uint32_t samples) {
+    vgaframe_frame_begin(&lib.f, counter, first, count, line_clocks, samples);
+    ref_vgaframe_frame_begin(&ref.f, counter, first, count, line_clocks, samples);
     return same_state();
 }
 
@@ -156,7 +170,7 @@ static int bench_profile(uint8_t (*pixel)(void *, uint16_t, uint16_t)) {
     const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
     size_t n = synth_frame(m, pixel, NULL, frame_buf, sizeof frame_buf / sizeof frame_buf[0]);
     if (n != 800u * 525u) return mismatch("synth_frame");
-    pair_init(tiny_map);
+    pair_init(tiny_map, BUF_W, BUF_H, NULL);
     for (int fr = 0; fr < 3; fr++) {
         size_t i = 0;
         while (i < n) {
@@ -179,22 +193,27 @@ static uint32_t rnd(void) {   // xorshift64*
 static uint32_t rnd_below(uint32_t n) { return rnd() % n; }
 
 #define NFRAMES 4
-static uint32_t stream[NFRAMES * 800u * 525u];
+static uint32_t stream[NFRAMES * 800u * 525u];   // room for four frames of up to 800 x 525 clocks
+static const vgaframe_mode_t *tm;                 // the stream's timing
+static uint32_t cpl, lpf;                         // its clocks per line and lines per frame
+static unsigned glitch_frames = 0x5;              // bit k: frame k carries hsync glitches
 
 // The stream in Tiny VGA layout (`tiny_map`) with random noise in bits 8-31
-// on a quarter of the frames. 640x480@60 timing, frames starting at the
-// vsync pulse as synth_frame's do. The active area takes a new random colour
+// on a quarter of the frames. Timing `m` (640x480@60 unless a case says
+// otherwise), frames starting at the vsync pulse as synth_frame's do. The active area takes a new random colour
 // on about a third of its clocks. A tenth of the lines of frames 0 and 2
-// carry an hsync glitch of 2 to 30 clocks at a random place (frames 1 and 3
-// have none, so they match the mode and are emitted). About one line in 1000
+// (`glitch_frames`) carry an hsync glitch of 2 to 30 clocks at a random place
+// (frames 1 and 3 have none, so they match the mode and are emitted). About one line in 1000
 // carries a vsync glitch, which leaves hsync alone and so has to pass through
 // the no-edge path untouched.
-static void make_stream(void) {
-    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
-    uint32_t cpl = 800, lpf = 525, i = 0, colour = 0;
+static void make_stream(const vgaframe_mode_t *m) {
+    tm = m;
+    cpl = (uint32_t)m->h_active + m->h_front + m->h_sync + m->h_back;
+    lpf = (uint32_t)m->v_active + m->v_front + m->v_sync + m->v_back;
+    uint32_t i = 0, colour = 0;
     for (uint32_t fr = 0; fr < NFRAMES; fr++)
         for (uint32_t y = 0; y < lpf; y++) {
-            uint32_t hglitch_at = (fr % 2 == 0 && rnd_below(10) == 0) ? rnd_below(cpl) : UINT32_MAX;
+            uint32_t hglitch_at = (((glitch_frames >> fr) & 1) && rnd_below(10) == 0) ? rnd_below(cpl) : UINT32_MAX;
             uint32_t hglitch_len = 2 + rnd_below(29);
             uint32_t vglitch_at = rnd_below(1000) == 0 ? rnd_below(cpl) : UINT32_MAX;
             uint32_t vglitch_len = 1 + rnd_below(40);
@@ -250,11 +269,15 @@ static int push_stream(size_t from, size_t to, const uint8_t map[VGACAP_SIG_COUN
     return 1;
 }
 
-static int random_stream(uint64_t seed, const uint8_t map[VGACAP_SIG_COUNT], int is_tiny) {
+// One case: a fresh pair with a W x H buffer and force_mode `force`, fed the
+// random stream with timing `m` under `map`.
+static int random_case(uint64_t seed, const uint8_t map[VGACAP_SIG_COUNT], int is_tiny,
+                       const vgaframe_mode_t *m, uint16_t W, uint16_t H, const vgaframe_mode_t *force) {
     rng_state = seed;
-    make_stream();
-    size_t n = sizeof stream / sizeof stream[0];
-    pair_init(map);   // fresh: the first push meets have_prev == 0
+    make_stream(m);
+    size_t n = (size_t)NFRAMES * cpl * lpf;
+    uint32_t a0 = (uint32_t)m->v_sync + m->v_back;   // first active line
+    pair_init(map, W, H, force);   // fresh: the first push meets have_prev == 0
     // Start anywhere, mid-line and mid-frame, so the learner bootstraps from
     // an arbitrary phase and the first frame is claimed retroactively.
     size_t start = rnd_below((uint32_t)(n / 2));
@@ -264,35 +287,35 @@ static int random_stream(uint64_t seed, const uint8_t map[VGACAP_SIG_COUNT], int
     if (!push_both(idle, 5000)) return 0;
     if (!push64_both(idle, 5000000000ull)) return 0;
     if (!push_stream(0, n / 2, map, is_tiny)) return 0;
-    // A 600-line frame (frame 1 with line 300 repeated 75 times), which
-    // matches no mode and so is not emitted, then frame 1 as it is, which is:
-    // that emit clears only its own 526 lines, and lines 526 to 599 keep the
-    // long frame's pixels until the FRAM picture below clears every line.
-    size_t f1 = 800u * 525u, l300 = f1 + 300u * 800u;
-    if (!push_stream(f1, l300, map, is_tiny)) return 0;
+    // A frame 75 lines too long (frame 1 with one line repeated 75 times),
+    // which matches no mode and so is not emitted, then frame 1 as it is,
+    // which is: that emit clears only its own lines, and the 75 below keep
+    // the long frame's pixels until the FRAM picture below clears every line.
+    size_t f1 = (size_t)cpl * lpf, lrep = f1 + (size_t)(lpf * 4 / 7) * cpl;
+    if (!push_stream(f1, lrep, map, is_tiny)) return 0;
     for (int k = 0; k < 75; k++)
-        if (!push_stream(l300, l300 + 800u, map, is_tiny)) return 0;
-    if (!push_stream(l300, f1 + 525u * 800u, map, is_tiny)) return 0;
-    if (!push_stream(f1, f1 + 525u * 800u, map, is_tiny)) return 0;
-    if (!push_stream(3u * f1, 3u * f1 + 10u * 800u, map, is_tiny)) return 0;   // its end: the frame start that emits it
+        if (!push_stream(lrep, lrep + cpl, map, is_tiny)) return 0;
+    if (!push_stream(lrep, 2 * f1, map, is_tiny)) return 0;
+    if (!push_stream(f1, 2 * f1, map, is_tiny)) return 0;
+    if (!push_stream(3 * f1, 3 * f1 + 10u * cpl, map, is_tiny)) return 0;   // its end: the frame start that emits it
     // FRAM windows of 25 lines each, two pictures' worth of a few windows,
     // some cut short, each starting at a line's hsync leading edge.
     for (uint32_t k = 0; k < 8; k++) {
-        uint16_t first = (uint16_t)(35 + 25 * rnd_below(19));
-        uint32_t samples = 25u * 800u - (rnd_below(3) == 0 ? rnd_below(800) : 0);
-        size_t at = 800u * 525u + (size_t)first * 800u;
-        if (!frame_begin_both(k / 4, first, 25, 800, samples)) return 0;
+        uint16_t first = (uint16_t)(a0 + 25 * rnd_below(m->v_active / 25u));
+        uint32_t samples = 25u * cpl - (rnd_below(3) == 0 ? rnd_below(cpl) : 0);
+        size_t at = f1 + (size_t)first * cpl;
+        if (!frame_begin_both(k / 4, first, 25, cpl, samples)) return 0;
         if (!push_stream(at, at + samples, map, is_tiny)) return 0;
     }
     // A FRAM picture whose windows cover every active line, so it is
-    // emitted complete-looking (partial_hint 0), but whose window at line
-    // 300 stops 300 clocks short, leaving the end of that line's active
+    // emitted complete-looking (partial_hint 0), but whose window at active
+    // line 250 stops 300 clocks short, leaving the end of that line's active
     // area unwritten: only the pixels themselves can mark it partial.
-    for (uint32_t first = 35; first < 515; first += 25) {
-        uint16_t count = (uint16_t)(first + 25 > 515 ? 515 - first : 25);
-        uint32_t samples = count * 800u - (first == 285 ? 300u : 0u);
-        size_t at = 800u * 525u + (size_t)first * 800u;
-        if (!frame_begin_both(9, (uint16_t)first, count, 800, samples)) return 0;
+    for (uint32_t first = a0; first < a0 + m->v_active; first += 25) {
+        uint16_t count = (uint16_t)(first + 25 > a0 + m->v_active ? a0 + m->v_active - first : 25);
+        uint32_t samples = count * cpl - (first == a0 + 250 ? 300u : 0u);
+        size_t at = f1 + (size_t)first * cpl;
+        if (!frame_begin_both(9, (uint16_t)first, count, cpl, samples)) return 0;
         if (!push_stream(at, at + samples, map, is_tiny)) return 0;
     }
     // Back to a continuous stream, long enough for the learner to settle
@@ -300,9 +323,14 @@ static int random_stream(uint64_t seed, const uint8_t map[VGACAP_SIG_COUNT], int
     for (int pass = 0; pass < 2; pass++)
         if (!push_stream(0, n, map, is_tiny)) return 0;
     if (!flush_both()) return 0;
-    fprintf(stderr, "  seed %llu: %lu pushes (reports 0/1/2/3: %lu/%lu/%lu/%lu), %lu frames compared\n",
-            (unsigned long long)seed, pushes, reports[0], reports[1], reports[2], reports[3], frames_compared);
+    fprintf(stderr, "  seed %llu, %s %ux%u%s%s: %lu pushes (reports 0/1/2/3: %lu/%lu/%lu/%lu), %lu frames compared, %lu locked auto-cropped\n",
+            (unsigned long long)seed, m->name, W, H, force ? ", forced " : "", force ? force->name : "",
+            pushes, reports[0], reports[1], reports[2], reports[3], frames_compared, auto_locked_frames);
     return frames_compared > 0;
+}
+
+static int random_stream(uint64_t seed, const uint8_t map[VGACAP_SIG_COUNT], int is_tiny) {
+    return random_case(seed, map, is_tiny, vgaframe_mode_match(800, 525), BUF_W, BUF_H, NULL);
 }
 
 TEST(fastpath_equivalent_busy) { ASSERT_TRUE(bench_profile(px_busy)); ASSERT_TRUE(frames_compared >= 2); }
@@ -338,6 +366,68 @@ TEST(fastpath_equivalent_random_no_hsync) {
     ASSERT_TRUE(random_stream(5, map, 0));
 }
 
+// ---- force_mode, buffers smaller than the line, and no table mode --------
+
+// Colour bits above 7: the per-sample colour has to be computed.
+static const uint8_t wide_map[VGACAP_SIG_COUNT] = { 30, 12, 8, 17, 22, 9, 31, 25 };
+
+// 700 x 500 clocks, which no table mode has (checked below), so frames are
+// emitted only once the learner locks, and cropped by the auto bounding box.
+static const vgaframe_mode_t odd_timing = { "odd700x500", 560, 20, 60, 60, 440, 10, 2, 48, 0, 0 };
+
+// Both maps; with `need_auto`, each run must also emit at least one locked
+// continuous frame through the auto-crop.
+static int both_maps(uint64_t seed, const vgaframe_mode_t *m, uint16_t W, uint16_t H, const vgaframe_mode_t *force,
+                     int need_auto) {
+    // A frame is locked only when it agrees with the one before, so for those
+    // runs only frame 0 is glitchy: frames 1 to 3 are clean, and 2 and 3 lock.
+    glitch_frames = need_auto ? 0x1 : 0x5;
+    int ok = random_case(seed, tiny_map, 1, m, W, H, force) && (!need_auto || auto_locked_frames);
+    ok = ok && random_case(seed + 1, wide_map, 0, m, W, H, force) && (!need_auto || auto_locked_frames);
+    glitch_frames = 0x5;
+    return ok;
+}
+
+TEST(fastpath_equivalent_forced_640x480) {
+    const vgaframe_mode_t *vga = vgaframe_mode_match(800, 525);
+    ASSERT_TRUE(both_maps(10, vga, BUF_W, BUF_H, vga, 0));
+}
+
+TEST(fastpath_equivalent_forced_larger_mode_clamped) {
+    // 1024x768's active area (from x 296, y 35) runs off a 1000 x 700
+    // buffer, so emit's w = W - x0 and h = max_lines - y0 clamps apply.
+    const vgaframe_mode_t *xga = vgaframe_mode_match(1344, 806);
+    ASSERT_TRUE(xga != NULL);
+    ASSERT_TRUE(both_maps(20, vgaframe_mode_match(800, 525), BUF_W, BUF_H, xga, 0));
+}
+
+TEST(fastpath_equivalent_buffer_narrower_than_line) {
+    // 700 x 500 against 800 x 525 timing: every line is clipped at W (so the
+    // dirty box reaches W and the clear is one memset), lines past 500 are
+    // dropped, and the detected mode's crop is clamped on both axes.
+    ASSERT_TRUE(both_maps(30, vgaframe_mode_match(800, 525), 700, 500, NULL, 0));
+}
+
+TEST(fastpath_equivalent_tiny_buffer_forced) {
+    ASSERT_TRUE(both_maps(40, vgaframe_mode_match(800, 525), 300, 200, vgaframe_mode_match(800, 525), 0));
+}
+
+TEST(fastpath_equivalent_no_table_mode_auto_crop) {
+    ASSERT_TRUE(vgaframe_mode_match_cpl(700) == NULL);
+    ASSERT_TRUE(vgaframe_mode_match(700, 500) == NULL);
+    ASSERT_TRUE(both_maps(50, &odd_timing, BUF_W, BUF_H, NULL, 1));
+}
+
+TEST(fastpath_equivalent_no_table_mode_auto_crop_small_buffer) {
+    ASSERT_TRUE(both_maps(60, &odd_timing, 640, 450, NULL, 1));
+}
+
+TEST(fastpath_equivalent_no_table_mode_forced_800x600_56) {
+    const vgaframe_mode_t *svga56 = vgaframe_mode_match(1024, 625);
+    ASSERT_TRUE(svga56 != NULL);
+    ASSERT_TRUE(both_maps(70, &odd_timing, BUF_W, BUF_H, svga56, 0));
+}
+
 int main(void) {
     RUN(fastpath_equivalent_busy);
     RUN(fastpath_equivalent_bars);
@@ -347,5 +437,12 @@ int main(void) {
     RUN(fastpath_equivalent_random_wide);
     RUN(fastpath_equivalent_random_mixed);
     RUN(fastpath_equivalent_random_no_hsync);
+    RUN(fastpath_equivalent_forced_640x480);
+    RUN(fastpath_equivalent_forced_larger_mode_clamped);
+    RUN(fastpath_equivalent_buffer_narrower_than_line);
+    RUN(fastpath_equivalent_tiny_buffer_forced);
+    RUN(fastpath_equivalent_no_table_mode_auto_crop);
+    RUN(fastpath_equivalent_no_table_mode_auto_crop_small_buffer);
+    RUN(fastpath_equivalent_no_table_mode_forced_800x600_56);
     RUN_TESTS_END();
 }
