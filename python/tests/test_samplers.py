@@ -54,7 +54,7 @@ def parse_dump(text: str) -> dict:
     return out
 
 
-def run_tbv1(tmp_path, uo, rst_n, *, seconds: str = "60", calib_seconds: str = "0.1", name: str = "t"):
+def run_tbv1(tmp_path, uo, rst_n, *, seconds: str = "60", calib_seconds: str = "1", name: str = "t"):
     """Python reference and C on the same clocks; asserts they agree, frame
     for frame and byte for byte, and returns (Geometry, frames, C geometry
     text fields, Calibration)."""
@@ -188,7 +188,7 @@ def test_tbv1_no_sync(tmp_path):
     uo[:R] = 0
     rst = np.ones(clocks, dtype=np.uint8)
     rst[:R] = 0
-    geo, frames, g, _ = run_tbv1(tmp_path, uo, rst)
+    geo, frames, g, _ = run_tbv1(tmp_path, uo, rst, calib_seconds="0.1")
     assert not geo.ok and geo.status == "no-sync" and frames == []
 
 
