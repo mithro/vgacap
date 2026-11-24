@@ -304,6 +304,11 @@ static int parse_double(const char *s, double *out) {
     return errno || end == s || *end ? -1 : 0;
 }
 
+// A META seconds value: a number strtod reads whole, finite and >= 0.
+static int parse_seconds(const char *s, double *out) {
+    return parse_double(s, out) || !isfinite(*out) || *out < 0 ? -1 : 0;
+}
+
 // META's value for `key` into out; 0, or -1 if absent, empty or too long.
 static int meta_get(const char *meta, const char *key, char *out, size_t outlen) {
     size_t kl = strlen(key);
@@ -463,9 +468,17 @@ int main(int argc, char **argv) {
     double calib_seconds = 0;
     if (meta_get(info->open_meta, "project", project, sizeof project) ||
         meta_get(info->open_meta, "calib_seconds", csecs, sizeof csecs) ||
-        meta_get(info->open_meta, "seconds", secs, sizeof secs) ||
-        parse_double(csecs, &calib_seconds) || parse_double(secs, &t->seconds)) {
-        fprintf(stderr, PROG ": %s: META(open) needs project, and calib_seconds and seconds as numbers\n", trace);
+        meta_get(info->open_meta, "seconds", secs, sizeof secs)) {
+        fprintf(stderr, PROG ": %s: META(open) needs project, calib_seconds and seconds\n", trace);
+        vgacap_trace_close(r); return 1;
+    }
+    // Checked before the library casts them to uint64 (calib_limit, the
+    // frame target): a negative or non-finite value is undefined there.
+    const char *bad_key = parse_seconds(csecs, &calib_seconds) ? "calib_seconds"
+                        : parse_seconds(secs, &t->seconds) ? "seconds" : NULL;
+    if (bad_key) {
+        fprintf(stderr, PROG ": %s: META(open) %s '%s' is not a finite number >= 0\n", trace, bad_key,
+                bad_key[0] == 'c' ? csecs : secs);
         vgacap_trace_close(r); return 1;
     }
     if (!info->close_meta) snprintf(status, sizeof status, "truncated");

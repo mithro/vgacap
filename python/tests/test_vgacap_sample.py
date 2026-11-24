@@ -363,3 +363,39 @@ def test_sample_one_pass(changing_trace, tmp_path):
     proc = run_sample(trace, tmp_path / "quiet")
     assert "trace_passes" not in proc.stderr
 
+
+
+def test_sample_same_pixels_different_missing(tmp_path):
+    """A black design with an 800-clock vsync glitch at line 300 of design
+    frame 5: centre-v1 emits two short frames with rows never received
+    (missing > 0) and then whole ones, all black. They share one distinct
+    frame (pixels are the identity); missing is kept per frame, so the runs
+    split on it."""
+    g = R + 5 * FRAME + 300 * M640.cpl + 656
+    uo, rst = synthtrace.build(M640, R + 8 * FRAME, pixel=None, v_glitches=[(g, 800)])
+    trace = write_trace(tmp_path, uo, rst)
+    proc = run_sample(trace, tmp_path / "out")
+    assert proc.returncode == 0, proc.stderr
+    check_outputs(tmp_path / "out", reference(tmp_path, uo, rst))
+    f = ff.read_frames_txt(tmp_path / "out" / "centre-v1" / "frames.txt")
+    assert len(f.distinct) == 1
+    assert [x.distinct for x in f.frames] == [0] * len(f.frames)
+    missing = [x.missing for x in f.frames]
+    assert missing[0] > 0 and missing[-1] == 0 and len(set(missing)) >= 2
+    rs = ff.runs(f.frames)
+    assert len(rs) >= 2 and all(r[2] == 0 for r in rs)
+
+
+@pytest.mark.parametrize("key,value", [("seconds", "1e400"), ("seconds", "-1"),
+                                       ("calib_seconds", "-0.5"), ("calib_seconds", "-1e999")])
+def test_sample_rejects_bad_seconds(tmp_path, key, value):
+    """Negative, or too large for a double (strtod gives inf; the stream
+    format already refuses the words inf and nan): exit 1 before sampling."""
+    uo, rst = synthtrace.build(M640, 50_000, pixel=diag)
+    kw = {"calib_seconds": "1", "seconds": "60", key: value}
+    trace = write_trace(tmp_path, uo, rst, **kw)
+    proc = run_sample(trace, tmp_path / "out")
+    assert proc.returncode == 1
+    assert proc.stderr == (f"vgacap-sample: {trace}: META(open) {key} '{value}' "
+                           "is not a finite number >= 0\n")
+    assert not (tmp_path / "out").exists()
