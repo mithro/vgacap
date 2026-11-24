@@ -67,7 +67,11 @@ class VgacapRawFramer(Module):
         self.dropped = Signal(32, name="dropped")
 
         # -- input side: pack, admit or drop whole chunks ---------------------
-        fifo = SyncFIFO(32, fifo_words, fwft=True)
+        # Synchronous read (fwft=False): an asynchronous-read RAM cannot be
+        # block RAM, and on an iCE40UP5K the 128-word FIFO then took 157% of
+        # the logic cells and 0 of the 30 block RAMs. The FSM below absorbs
+        # the one-clock read latency.
+        fifo = SyncFIFO(32, fifo_words, fwft=False)
         self.submodules.fifo = fifo
         pack = Signal(24)
         slot = Signal(2)
@@ -116,6 +120,7 @@ class VgacapRawFramer(Module):
         words_left = Signal(max=words + 1)
         word_buf = Signal(32)
         byte_n = Signal(2)
+        prefetched = Signal()  # the next word was read while this one went out
         snap = Signal(32)  # the dropped total this TIME chunk reports
         hdr_rom = Array(Constant(b, 8) for b in raw_header)
         tfix_rom = Array(Constant(b, 8) for b in time_fixed)
@@ -153,21 +158,30 @@ class VgacapRawFramer(Module):
                 ).Else(NextState("IDLE")),
             ).Elif(fifo.readable,
                 fifo.re.eq(1),
-                NextValue(word_buf, fifo.dout),
-                NextValue(byte_n, 0),
-                NextState("WORD_BYTES"),
+                NextState("WORD_WAIT"),
             ),
+        )
+        fsm.act("WORD_WAIT",  # dout is valid the clock after re
+            NextValue(word_buf, fifo.dout),
+            NextValue(byte_n, 0),
+            NextState("WORD_BYTES"),
         )
         fsm.act("WORD_BYTES",
             self.out_valid.eq(1),
             Case(byte_n, {i: self.out_data.eq(word_buf[8 * i:8 * i + 8]) for i in range(4)}),
             If(self.out_ready,
-                If(byte_n == 3,
-                    NextValue(words_left, words_left - 1),
-                    # The next word straight away when it is there: one byte
-                    # a clock, with no bubble between words.
+                If(byte_n == 2,
+                    # Read the next word now, so it is in dout by the time
+                    # this one's last byte goes: one byte a clock, no bubble.
                     If((words_left > 1) & fifo.readable,
                         fifo.re.eq(1),
+                        NextValue(prefetched, 1),
+                    ),
+                    NextValue(byte_n, 3),
+                ).Elif(byte_n == 3,
+                    NextValue(words_left, words_left - 1),
+                    NextValue(prefetched, 0),
+                    If(prefetched,
                         NextValue(word_buf, fifo.dout),
                         NextValue(byte_n, 0),
                     ).Else(NextState("WORD_LOAD")),

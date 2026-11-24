@@ -30,6 +30,7 @@ wire [31:0] vgacaprawframer_syncfifo_memory3;
 wire vgacaprawframer_syncfifo4;
 wire [6:0] vgacaprawframer_syncfifo_memory4;
 wire [31:0] vgacaprawframer_syncfifo_memory5;
+wire vgacaprawframer_syncfifo_memory6;
 reg [23:0] vgacaprawframer0 = 24'd0;
 reg [1:0] vgacaprawframer1 = 2'd0;
 reg [5:0] vgacaprawframer2 = 6'd0;
@@ -48,21 +49,24 @@ reg [4:0] vgacaprawframer14 = 5'd0;
 reg [6:0] vgacaprawframer15 = 7'd0;
 reg [31:0] vgacaprawframer16 = 32'd0;
 reg [1:0] vgacaprawframer17 = 2'd0;
-reg [31:0] vgacaprawframer18 = 32'd0;
-reg [2:0] vgacaprawframer_fsm0 = 3'd0;
-reg [2:0] vgacaprawframer_fsm1;
-reg [4:0] vgacaprawframer14_lowernext0;
-reg vgacaprawframer14_lowernext1;
-reg [31:0] vgacaprawframer18_lowernext_lowernext0;
-reg vgacaprawframer18_lowernext_lowernext1;
-reg [6:0] vgacaprawframer15_lowernext_lowernext2;
-reg vgacaprawframer15_lowernext_lowernext3;
-reg [31:0] vgacaprawframer16_lowernext_lowernext4;
-reg vgacaprawframer16_lowernext_lowernext5;
-reg [1:0] vgacaprawframer17_lowernext_lowernext6;
-reg vgacaprawframer17_lowernext_lowernext7;
-reg [31:0] vgacaprawframer12_lowernext_lowernext8;
-reg vgacaprawframer12_lowernext_lowernext9;
+reg vgacaprawframer18 = 1'd0;
+reg [31:0] vgacaprawframer19 = 32'd0;
+reg [3:0] vgacaprawframer_fsm0 = 4'd0;
+reg [3:0] vgacaprawframer_fsm1;
+reg [4:0] vgacaprawframer14_lowernext_lowernext0;
+reg vgacaprawframer14_lowernext_lowernext1;
+reg [31:0] vgacaprawframer19_lowernext_lowernext_lowernext0;
+reg vgacaprawframer19_lowernext_lowernext_lowernext1;
+reg [6:0] vgacaprawframer15_lowernext_lowernext_lowernext2;
+reg vgacaprawframer15_lowernext_lowernext_lowernext3;
+reg [31:0] vgacaprawframer16_lowernext0;
+reg vgacaprawframer16_lowernext1;
+reg [1:0] vgacaprawframer17_lowernext2;
+reg vgacaprawframer17_lowernext3;
+reg vgacaprawframer18_lowernext_lowernext_lowernext_lowernext0;
+reg vgacaprawframer18_lowernext_lowernext_lowernext_lowernext1;
+reg [31:0] vgacaprawframer12_lowernext_lowernext_lowernext4;
+reg vgacaprawframer12_lowernext_lowernext_lowernext5;
 reg [7:0] basiclowerer0;
 reg [7:0] basiclowerer1;
 reg [7:0] basiclowerer2;
@@ -100,6 +104,7 @@ assign vgacaprawframer_syncfifo_memory2 = (vgacaprawframer_syncfifo_syncfifo0 & 
 assign vgacaprawframer_syncfifo4 = (vgacaprawframer_syncfifo_syncfifo3 & vgacaprawframer_syncfifo_syncfifo2);
 assign vgacaprawframer_syncfifo_memory4 = vgacaprawframer_syncfifo3;
 assign vgacaprawframer_syncfifo_syncfifo5 = vgacaprawframer_syncfifo_memory5;
+assign vgacaprawframer_syncfifo_memory6 = vgacaprawframer_syncfifo4;
 assign vgacaprawframer_syncfifo_syncfifo1 = (vgacaprawframer_syncfifo0 != 8'd128);
 assign vgacaprawframer_syncfifo_syncfifo3 = (vgacaprawframer_syncfifo0 != 1'd0);
 
@@ -111,19 +116,21 @@ always @(*) begin
 	out_valid <= 1'd0;
 	vgacaprawframer_syncfifo_syncfifo2 <= 1'd0;
 	vgacaprawframer10 <= 1'd0;
-	vgacaprawframer_fsm1 <= 3'd0;
-	vgacaprawframer14_lowernext0 <= 5'd0;
-	vgacaprawframer14_lowernext1 <= 1'd0;
-	vgacaprawframer18_lowernext_lowernext0 <= 32'd0;
-	vgacaprawframer18_lowernext_lowernext1 <= 1'd0;
-	vgacaprawframer15_lowernext_lowernext2 <= 7'd0;
-	vgacaprawframer15_lowernext_lowernext3 <= 1'd0;
-	vgacaprawframer16_lowernext_lowernext4 <= 32'd0;
-	vgacaprawframer16_lowernext_lowernext5 <= 1'd0;
-	vgacaprawframer17_lowernext_lowernext6 <= 2'd0;
-	vgacaprawframer17_lowernext_lowernext7 <= 1'd0;
-	vgacaprawframer12_lowernext_lowernext8 <= 32'd0;
-	vgacaprawframer12_lowernext_lowernext9 <= 1'd0;
+	vgacaprawframer_fsm1 <= 4'd0;
+	vgacaprawframer14_lowernext_lowernext0 <= 5'd0;
+	vgacaprawframer14_lowernext_lowernext1 <= 1'd0;
+	vgacaprawframer19_lowernext_lowernext_lowernext0 <= 32'd0;
+	vgacaprawframer19_lowernext_lowernext_lowernext1 <= 1'd0;
+	vgacaprawframer15_lowernext_lowernext_lowernext2 <= 7'd0;
+	vgacaprawframer15_lowernext_lowernext_lowernext3 <= 1'd0;
+	vgacaprawframer16_lowernext0 <= 32'd0;
+	vgacaprawframer16_lowernext1 <= 1'd0;
+	vgacaprawframer17_lowernext2 <= 2'd0;
+	vgacaprawframer17_lowernext3 <= 1'd0;
+	vgacaprawframer18_lowernext_lowernext_lowernext_lowernext0 <= 1'd0;
+	vgacaprawframer18_lowernext_lowernext_lowernext_lowernext1 <= 1'd0;
+	vgacaprawframer12_lowernext_lowernext_lowernext4 <= 32'd0;
+	vgacaprawframer12_lowernext_lowernext_lowernext5 <= 1'd0;
 	vgacaprawframer_fsm1 <= vgacaprawframer_fsm0;
 	case (vgacaprawframer_fsm0)
 		1'd1: begin
@@ -132,38 +139,41 @@ always @(*) begin
 			if (out_ready) begin
 				if ((vgacaprawframer14 == 4'd11)) begin
 					vgacaprawframer10 <= 1'd1;
-					vgacaprawframer15_lowernext_lowernext2 <= 7'd64;
-					vgacaprawframer15_lowernext_lowernext3 <= 1'd1;
+					vgacaprawframer15_lowernext_lowernext_lowernext2 <= 7'd64;
+					vgacaprawframer15_lowernext_lowernext_lowernext3 <= 1'd1;
 					vgacaprawframer_fsm1 <= 2'd2;
 				end else begin
-					vgacaprawframer14_lowernext0 <= (vgacaprawframer14 + 1'd1);
-					vgacaprawframer14_lowernext1 <= 1'd1;
+					vgacaprawframer14_lowernext_lowernext0 <= (vgacaprawframer14 + 1'd1);
+					vgacaprawframer14_lowernext_lowernext1 <= 1'd1;
 				end
 			end
 		end
 		2'd2: begin
 			if ((vgacaprawframer15 == 1'd0)) begin
 				if (vgacaprawframer13) begin
-					vgacaprawframer14_lowernext0 <= 1'd0;
-					vgacaprawframer14_lowernext1 <= 1'd1;
-					vgacaprawframer18_lowernext_lowernext0 <= dropped;
-					vgacaprawframer18_lowernext_lowernext1 <= 1'd1;
-					vgacaprawframer_fsm1 <= 3'd4;
+					vgacaprawframer14_lowernext_lowernext0 <= 1'd0;
+					vgacaprawframer14_lowernext_lowernext1 <= 1'd1;
+					vgacaprawframer19_lowernext_lowernext_lowernext0 <= dropped;
+					vgacaprawframer19_lowernext_lowernext_lowernext1 <= 1'd1;
+					vgacaprawframer_fsm1 <= 3'd5;
 				end else begin
 					vgacaprawframer_fsm1 <= 1'd0;
 				end
 			end else begin
 				if (vgacaprawframer_syncfifo_syncfifo3) begin
 					vgacaprawframer_syncfifo_syncfifo2 <= 1'd1;
-					vgacaprawframer16_lowernext_lowernext4 <= vgacaprawframer_syncfifo_syncfifo5;
-					vgacaprawframer16_lowernext_lowernext5 <= 1'd1;
-					vgacaprawframer17_lowernext_lowernext6 <= 1'd0;
-					vgacaprawframer17_lowernext_lowernext7 <= 1'd1;
 					vgacaprawframer_fsm1 <= 2'd3;
 				end
 			end
 		end
 		2'd3: begin
+			vgacaprawframer16_lowernext0 <= vgacaprawframer_syncfifo_syncfifo5;
+			vgacaprawframer16_lowernext1 <= 1'd1;
+			vgacaprawframer17_lowernext2 <= 1'd0;
+			vgacaprawframer17_lowernext3 <= 1'd1;
+			vgacaprawframer_fsm1 <= 3'd4;
+		end
+		3'd4: begin
 			out_valid <= 1'd1;
 			case (vgacaprawframer17)
 				1'd0: begin
@@ -180,105 +190,116 @@ always @(*) begin
 				end
 			endcase
 			if (out_ready) begin
-				if ((vgacaprawframer17 == 2'd3)) begin
-					vgacaprawframer15_lowernext_lowernext2 <= (vgacaprawframer15 - 1'd1);
-					vgacaprawframer15_lowernext_lowernext3 <= 1'd1;
+				if ((vgacaprawframer17 == 2'd2)) begin
 					if (((vgacaprawframer15 > 1'd1) & vgacaprawframer_syncfifo_syncfifo3)) begin
 						vgacaprawframer_syncfifo_syncfifo2 <= 1'd1;
-						vgacaprawframer16_lowernext_lowernext4 <= vgacaprawframer_syncfifo_syncfifo5;
-						vgacaprawframer16_lowernext_lowernext5 <= 1'd1;
-						vgacaprawframer17_lowernext_lowernext6 <= 1'd0;
-						vgacaprawframer17_lowernext_lowernext7 <= 1'd1;
-					end else begin
-						vgacaprawframer_fsm1 <= 2'd2;
+						vgacaprawframer18_lowernext_lowernext_lowernext_lowernext0 <= 1'd1;
+						vgacaprawframer18_lowernext_lowernext_lowernext_lowernext1 <= 1'd1;
 					end
+					vgacaprawframer17_lowernext2 <= 2'd3;
+					vgacaprawframer17_lowernext3 <= 1'd1;
 				end else begin
-					vgacaprawframer17_lowernext_lowernext6 <= (vgacaprawframer17 + 1'd1);
-					vgacaprawframer17_lowernext_lowernext7 <= 1'd1;
-				end
-			end
-		end
-		3'd4: begin
-			out_valid <= 1'd1;
-			out_data <= basiclowerer1;
-			if (out_ready) begin
-				if ((vgacaprawframer14 == 5'd19)) begin
-					vgacaprawframer14_lowernext0 <= 1'd0;
-					vgacaprawframer14_lowernext1 <= 1'd1;
-					vgacaprawframer_fsm1 <= 3'd5;
-				end else begin
-					vgacaprawframer14_lowernext0 <= (vgacaprawframer14 + 1'd1);
-					vgacaprawframer14_lowernext1 <= 1'd1;
+					if ((vgacaprawframer17 == 2'd3)) begin
+						vgacaprawframer15_lowernext_lowernext_lowernext2 <= (vgacaprawframer15 - 1'd1);
+						vgacaprawframer15_lowernext_lowernext_lowernext3 <= 1'd1;
+						vgacaprawframer18_lowernext_lowernext_lowernext_lowernext0 <= 1'd0;
+						vgacaprawframer18_lowernext_lowernext_lowernext_lowernext1 <= 1'd1;
+						if (vgacaprawframer18) begin
+							vgacaprawframer16_lowernext0 <= vgacaprawframer_syncfifo_syncfifo5;
+							vgacaprawframer16_lowernext1 <= 1'd1;
+							vgacaprawframer17_lowernext2 <= 1'd0;
+							vgacaprawframer17_lowernext3 <= 1'd1;
+						end else begin
+							vgacaprawframer_fsm1 <= 2'd2;
+						end
+					end else begin
+						vgacaprawframer17_lowernext2 <= (vgacaprawframer17 + 1'd1);
+						vgacaprawframer17_lowernext3 <= 1'd1;
+					end
 				end
 			end
 		end
 		3'd5: begin
 			out_valid <= 1'd1;
-			case (vgacaprawframer14)
-				1'd0: begin
-					out_data <= vgacaprawframer18[7:0];
-				end
-				1'd1: begin
-					out_data <= vgacaprawframer18[15:8];
-				end
-				2'd2: begin
-					out_data <= vgacaprawframer18[23:16];
-				end
-				2'd3: begin
-					out_data <= vgacaprawframer18[31:24];
-				end
-			endcase
+			out_data <= basiclowerer1;
 			if (out_ready) begin
-				if ((vgacaprawframer14 == 2'd3)) begin
-					vgacaprawframer14_lowernext0 <= 1'd0;
-					vgacaprawframer14_lowernext1 <= 1'd1;
+				if ((vgacaprawframer14 == 5'd19)) begin
+					vgacaprawframer14_lowernext_lowernext0 <= 1'd0;
+					vgacaprawframer14_lowernext_lowernext1 <= 1'd1;
 					vgacaprawframer_fsm1 <= 3'd6;
 				end else begin
-					vgacaprawframer14_lowernext0 <= (vgacaprawframer14 + 1'd1);
-					vgacaprawframer14_lowernext1 <= 1'd1;
+					vgacaprawframer14_lowernext_lowernext0 <= (vgacaprawframer14 + 1'd1);
+					vgacaprawframer14_lowernext_lowernext1 <= 1'd1;
 				end
 			end
 		end
 		3'd6: begin
 			out_valid <= 1'd1;
-			out_data <= ((vgacaprawframer14 == 1'd0) ? 3'd7 : 1'd0);
+			case (vgacaprawframer14)
+				1'd0: begin
+					out_data <= vgacaprawframer19[7:0];
+				end
+				1'd1: begin
+					out_data <= vgacaprawframer19[15:8];
+				end
+				2'd2: begin
+					out_data <= vgacaprawframer19[23:16];
+				end
+				2'd3: begin
+					out_data <= vgacaprawframer19[31:24];
+				end
+			endcase
 			if (out_ready) begin
-				if ((vgacaprawframer14 == 1'd1)) begin
-					vgacaprawframer14_lowernext0 <= 1'd0;
-					vgacaprawframer14_lowernext1 <= 1'd1;
+				if ((vgacaprawframer14 == 2'd3)) begin
+					vgacaprawframer14_lowernext_lowernext0 <= 1'd0;
+					vgacaprawframer14_lowernext_lowernext1 <= 1'd1;
 					vgacaprawframer_fsm1 <= 3'd7;
 				end else begin
-					vgacaprawframer14_lowernext0 <= (vgacaprawframer14 + 1'd1);
-					vgacaprawframer14_lowernext1 <= 1'd1;
+					vgacaprawframer14_lowernext_lowernext0 <= (vgacaprawframer14 + 1'd1);
+					vgacaprawframer14_lowernext_lowernext1 <= 1'd1;
 				end
 			end
 		end
 		3'd7: begin
 			out_valid <= 1'd1;
+			out_data <= ((vgacaprawframer14 == 1'd0) ? 3'd7 : 1'd0);
+			if (out_ready) begin
+				if ((vgacaprawframer14 == 1'd1)) begin
+					vgacaprawframer14_lowernext_lowernext0 <= 1'd0;
+					vgacaprawframer14_lowernext_lowernext1 <= 1'd1;
+					vgacaprawframer_fsm1 <= 4'd8;
+				end else begin
+					vgacaprawframer14_lowernext_lowernext0 <= (vgacaprawframer14 + 1'd1);
+					vgacaprawframer14_lowernext_lowernext1 <= 1'd1;
+				end
+			end
+		end
+		4'd8: begin
+			out_valid <= 1'd1;
 			out_data <= basiclowerer2;
 			if (out_ready) begin
 				if ((vgacaprawframer14 == 3'd6)) begin
-					vgacaprawframer12_lowernext_lowernext8 <= vgacaprawframer18;
-					vgacaprawframer12_lowernext_lowernext9 <= 1'd1;
+					vgacaprawframer12_lowernext_lowernext_lowernext4 <= vgacaprawframer19;
+					vgacaprawframer12_lowernext_lowernext_lowernext5 <= 1'd1;
 					vgacaprawframer_fsm1 <= 1'd0;
 				end else begin
-					vgacaprawframer14_lowernext0 <= (vgacaprawframer14 + 1'd1);
-					vgacaprawframer14_lowernext1 <= 1'd1;
+					vgacaprawframer14_lowernext_lowernext0 <= (vgacaprawframer14 + 1'd1);
+					vgacaprawframer14_lowernext_lowernext1 <= 1'd1;
 				end
 			end
 		end
 		default: begin
 			if ((vgacaprawframer4 != 1'd0)) begin
-				vgacaprawframer14_lowernext0 <= 1'd0;
-				vgacaprawframer14_lowernext1 <= 1'd1;
+				vgacaprawframer14_lowernext_lowernext0 <= 1'd0;
+				vgacaprawframer14_lowernext_lowernext1 <= 1'd1;
 				vgacaprawframer_fsm1 <= 1'd1;
 			end else begin
 				if (vgacaprawframer13) begin
-					vgacaprawframer14_lowernext0 <= 1'd0;
-					vgacaprawframer14_lowernext1 <= 1'd1;
-					vgacaprawframer18_lowernext_lowernext0 <= dropped;
-					vgacaprawframer18_lowernext_lowernext1 <= 1'd1;
-					vgacaprawframer_fsm1 <= 3'd4;
+					vgacaprawframer14_lowernext_lowernext0 <= 1'd0;
+					vgacaprawframer14_lowernext_lowernext1 <= 1'd1;
+					vgacaprawframer19_lowernext_lowernext_lowernext0 <= dropped;
+					vgacaprawframer19_lowernext_lowernext_lowernext1 <= 1'd1;
+					vgacaprawframer_fsm1 <= 3'd5;
 				end
 			end
 		end
@@ -477,23 +498,26 @@ always @(posedge sys_clk) begin
 		end
 	end
 	vgacaprawframer_fsm0 <= vgacaprawframer_fsm1;
-	if (vgacaprawframer14_lowernext1) begin
-		vgacaprawframer14 <= vgacaprawframer14_lowernext0;
+	if (vgacaprawframer14_lowernext_lowernext1) begin
+		vgacaprawframer14 <= vgacaprawframer14_lowernext_lowernext0;
 	end
-	if (vgacaprawframer18_lowernext_lowernext1) begin
-		vgacaprawframer18 <= vgacaprawframer18_lowernext_lowernext0;
+	if (vgacaprawframer19_lowernext_lowernext_lowernext1) begin
+		vgacaprawframer19 <= vgacaprawframer19_lowernext_lowernext_lowernext0;
 	end
-	if (vgacaprawframer15_lowernext_lowernext3) begin
-		vgacaprawframer15 <= vgacaprawframer15_lowernext_lowernext2;
+	if (vgacaprawframer15_lowernext_lowernext_lowernext3) begin
+		vgacaprawframer15 <= vgacaprawframer15_lowernext_lowernext_lowernext2;
 	end
-	if (vgacaprawframer16_lowernext_lowernext5) begin
-		vgacaprawframer16 <= vgacaprawframer16_lowernext_lowernext4;
+	if (vgacaprawframer16_lowernext1) begin
+		vgacaprawframer16 <= vgacaprawframer16_lowernext0;
 	end
-	if (vgacaprawframer17_lowernext_lowernext7) begin
-		vgacaprawframer17 <= vgacaprawframer17_lowernext_lowernext6;
+	if (vgacaprawframer17_lowernext3) begin
+		vgacaprawframer17 <= vgacaprawframer17_lowernext2;
 	end
-	if (vgacaprawframer12_lowernext_lowernext9) begin
-		vgacaprawframer12 <= vgacaprawframer12_lowernext_lowernext8;
+	if (vgacaprawframer18_lowernext_lowernext_lowernext_lowernext1) begin
+		vgacaprawframer18 <= vgacaprawframer18_lowernext_lowernext_lowernext_lowernext0;
+	end
+	if (vgacaprawframer12_lowernext_lowernext_lowernext5) begin
+		vgacaprawframer12 <= vgacaprawframer12_lowernext_lowernext_lowernext4;
 	end
 	if (sys_rst) begin
 		dropped <= 32'd0;
@@ -511,13 +535,15 @@ always @(posedge sys_clk) begin
 		vgacaprawframer15 <= 7'd0;
 		vgacaprawframer16 <= 32'd0;
 		vgacaprawframer17 <= 2'd0;
-		vgacaprawframer18 <= 32'd0;
-		vgacaprawframer_fsm0 <= 3'd0;
+		vgacaprawframer18 <= 1'd0;
+		vgacaprawframer19 <= 32'd0;
+		vgacaprawframer_fsm0 <= 4'd0;
 	end
 end
 
 reg [31:0] mem[0:127];
 reg [31:0] memdat;
+reg [31:0] memdat_1;
 always @(posedge sys_clk) begin
 	if (vgacaprawframer_syncfifo_memory2)
 		mem[vgacaprawframer_syncfifo_memory0] <= vgacaprawframer_syncfifo_memory3;
@@ -525,10 +551,12 @@ always @(posedge sys_clk) begin
 end
 
 always @(posedge sys_clk) begin
+	if (vgacaprawframer_syncfifo_memory6)
+		memdat_1 <= mem[vgacaprawframer_syncfifo_memory4];
 end
 
 assign vgacaprawframer_syncfifo_memory1 = memdat;
-assign vgacaprawframer_syncfifo_memory5 = mem[vgacaprawframer_syncfifo_memory4];
+assign vgacaprawframer_syncfifo_memory5 = memdat_1;
 
 endmodule
 
