@@ -25,7 +25,7 @@ jobs:
       # to CMake; nothing else in the build uses pkg-config.
       PKG_CONFIG_LIBDIR: /var/empty
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: configure
         # pipefail because the default shell has none, and `tee` would
         # otherwise hide a failing cmake.
@@ -44,8 +44,8 @@ jobs:
     name: Python suite, no GStreamer
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
       # build/vgacap-frames is the reference renderer several Python tests
       # compare against; the plugin tests skip without a plugin to load.
       - run: cmake -S . -B build && cmake --build build -j
@@ -59,8 +59,8 @@ jobs:
     name: GStreamer plugin
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
       - name: install GStreamer
         run: |
           sudo apt-get update
