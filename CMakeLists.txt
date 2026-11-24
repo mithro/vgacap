@@ -65,6 +65,10 @@ if(VGACAP_HOST_EXTRAS)
   # raw clock-resolution frames and diagnostics of a trace.
   add_executable(vgacap-centre-dump tests/centre_dump.c)
   target_link_libraries(vgacap-centre-dump PRIVATE vgacap_sample)
+  # Test-only helper for python/tests/test_vgacap_sample.py: rewrites a plain
+  # stream as a zstd trace through the writer (its block boundaries).
+  add_executable(trace-recode tests/trace_recode.c)
+  target_link_libraries(trace-recode PRIVATE vgacap_trace)
 endif()
 
 function(vgacap_add_test name)
