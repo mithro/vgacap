@@ -101,6 +101,8 @@ def test_every_check_passes_against_the_stub(workspace):
         assert result[name] == "PASS", (name, proc.stdout)
     # No calibration design was named, so there is nothing to compare with.
     assert result["reference"] == "SKIP"
+    assert result["frame"] == "SKIP"
+    assert "no reference to hold whole frames to" in proc.stdout
     report = workspace["report"].read_text()
     assert "| verdict | **PASS** |" in report
     assert "MJPEG part(s)" in report and "SIGTERM -> exit 0" in report
@@ -276,6 +278,7 @@ def test_the_report_says_a_calibration_design_was_not_available(workspace,
                    *workspace["common"], str(workspace["report"]))
     assert statuses(proc.stdout)["reference"] == "SKIP"
     assert "tt-vga-testpatterns is not next door" in proc.stdout
+    assert statuses(proc.stdout)["frame"] == "SKIP"
 
 
 @needs_frames_tool
