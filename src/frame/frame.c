@@ -33,10 +33,22 @@ void vgaframe_reset(vgaframe_t *f) {
     memset(f->cover, 0, f->cfg.max_lines);
 }
 
+// See vgaframe_t.pixel_table: a lookup by the sample's low 8 bits, valid
+// when no colour signal sits at bit 8 or above.
+static void build_pixel_table(vgaframe_t *f) {
+    const uint8_t *m = f->cfg.signal_map;
+    f->pixel_table_ok = 0;
+    for (int sig = VGACAP_SIG_R1; sig <= VGACAP_SIG_B0; sig++)
+        if (m[sig] != VGACAP_SIG_ABSENT && m[sig] >= 8) return;
+    for (uint32_t s = 0; s < 256; s++) f->pixel_table[s] = (uint8_t)(vgaframe_colour(m, s) | 0x80);
+    f->pixel_table_ok = 1;
+}
+
 int vgaframe_init(vgaframe_t *f, const vgaframe_config_t *cfg, uint8_t *raw, uint8_t *rgb, uint8_t *cover) {
     if (!cfg->max_clocks_per_line || !cfg->max_lines || !raw || !rgb || !cover) return -1;
     memset(f, 0, sizeof *f);
     f->cfg = *cfg; f->raw = raw; f->rgb = rgb; f->cover = cover;
+    build_pixel_table(f);
     vgaframe_reset(f);
     return 0;
 }
@@ -260,7 +272,9 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
         // against it directly instead of f->x + run, which can itself wrap
         // for a large run and defeat the clip entirely.
         uint32_t n = run > (W - f->x) ? (W - f->x) : run;
-        memset(f->raw + f->y * W + f->x, vgaframe_colour(f->cfg.signal_map, sample) | 0x80, n);
+        uint8_t px = f->pixel_table_ok ? f->pixel_table[sample & 0xFF]
+                                       : (uint8_t)(vgaframe_colour(f->cfg.signal_map, sample) | 0x80);
+        memset(f->raw + f->y * W + f->x, px, n);
         f->cover[f->y] = 1;
     }
     f->x = vgaframe_sat_add32(f->x, run);

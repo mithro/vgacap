@@ -178,6 +178,14 @@ typedef struct vgaframe {
     // (force_mode, or a FRAM clocks-per-line table match) - see emit() in
     // frame.c. vgaframe_output_t.timing always points here.
     vgaframe_timing_t out_timing;
+    // The raw byte (colour | 0x80 "written") for each value of a sample's
+    // low 8 bits, built by vgaframe_init from cfg.signal_map when every
+    // colour signal is at a bit below 8 or absent (Tiny VGA's are), which
+    // is what pixel_table_ok says. The colour then depends on those 8 bits
+    // alone, so one lookup replaces vgaframe_colour per push. A wider map
+    // leaves pixel_table_ok at 0 and keeps vgaframe_colour.
+    uint8_t pixel_table_ok;
+    uint8_t pixel_table[256];
 } vgaframe_t;
 
 // Binds the caller's buffers and puts the object in its starting state; see
