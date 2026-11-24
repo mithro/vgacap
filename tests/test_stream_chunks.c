@@ -37,6 +37,21 @@ TEST(frame_roundtrip) {
     for (int i = 0; i < 10; i++) { ASSERT_EQ_U(evs[2 + i].type, VGACAP_EV_RUN); ASSERT_EQ_U(evs[2 + i].u.run.value, (unsigned)(i + 1)); }
 }
 
+TEST(frame_in_pieces_is_the_same_chunk) {
+    // Chained capture buffers: one head, then each buffer's words.
+    vgacap_writer_t w; start(8, 4, &w);
+    uint32_t words[6] = { 0x01020304u, 0x05060708u, 0x090a0b0cu, 0x0d0e0f10u, 0x11121314u, 0x15161718u };
+    ASSERT_EQ_U(vgacap_writer_frame(&w, 7, 34, 3, 8, words, 24), 0);
+    size_t whole_len = outlen; uint8_t whole[256]; memcpy(whole, outbuf, outlen);
+    start(8, 4, &w);
+    ASSERT_EQ_U(vgacap_writer_frame_begin(&w, 7, 34, 3, 8, 24), 0);
+    ASSERT_EQ_U(vgacap_writer_frame_words(&w, words, 2), 0);
+    ASSERT_EQ_U(vgacap_writer_frame_words(&w, words + 2, 3), 0);
+    ASSERT_EQ_U(vgacap_writer_frame_words(&w, words + 5, 1), 0);
+    ASSERT_EQ_U(outlen, whole_len);
+    ASSERT_TRUE(memcmp(outbuf, whole, whole_len) == 0);
+}
+
 TEST(events_expand_to_runs) {
     vgacap_writer_t w; start(8, 1, &w);
     uint64_t c[4] = { 0, 10, 15, 100 }; uint32_t v[4] = { 0x80, 0x00, 0x80, 0x3F };
@@ -189,7 +204,7 @@ TEST(oversized_length_is_rejected) {
     ASSERT_EQ_U(evs[2].u.run.value, 3); ASSERT_EQ_U(evs[2].u.run.run, 6);
 }
 
-int main(void) { RUN(rle_roundtrip); RUN(frame_roundtrip); RUN(events_expand_to_runs); RUN(attach_writes_no_header_and_continues_a_stream); RUN(time_roundtrip); RUN(unknown_chunk_is_skipped);
+int main(void) { RUN(rle_roundtrip); RUN(frame_roundtrip); RUN(frame_in_pieces_is_the_same_chunk); RUN(events_expand_to_runs); RUN(attach_writes_no_header_and_continues_a_stream); RUN(time_roundtrip); RUN(unknown_chunk_is_skipped);
     RUN(dropped_byte_resyncs_and_keeps_going); RUN(time_msg_len_beyond_payload_is_rejected);
     RUN(rle_pair_count_mismatch_is_rejected); RUN(raw_sample_count_mismatch_is_rejected);
     RUN(oversized_length_is_rejected); RUN_TESTS_END(); }
