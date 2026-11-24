@@ -11,7 +11,7 @@ enable_testing()
 
 # Libraries. Each section is owned by one component; add sources in place.
 # --- stream: chunked capture stream encoder/decoder (src/stream) ---
-add_library(vgacap_stream STATIC src/stream/writer.c src/stream/reader.c)
+add_library(vgacap_stream STATIC src/stream/writer.c src/stream/reader.c src/stream/time.c)
 # --- frame: VGA picture reconstruction (src/frame) ---
 add_library(vgacap_frame STATIC src/frame/modes.c src/frame/timing.c src/frame/frame.c)
 # --- tools: command-line utilities (src/tools) ---
@@ -73,3 +73,10 @@ target_link_libraries(test_fw_units PRIVATE vgacap_fw_core)
 vgacap_add_test(test_fw_core firmware/sim/hal_sim.c)
 target_include_directories(test_fw_core PRIVATE firmware/sim)
 target_link_libraries(test_fw_core PRIVATE vgacap_fw_core m)
+
+# --- time: sample-to-ps rule and shortest round-trip double formatting
+# (src/stream/time.c is host-only: the board builds compile writer.c alone).
+vgacap_add_test(test_time)
+# Test-only helper for python/tests/test_timebase.py; includes time.c to reach
+# its static 128-bit helpers, so it links no library.
+add_executable(test_time_dump tests/test_time_dump.c)
