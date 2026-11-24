@@ -21,3 +21,5 @@ def test_c_dump_agrees_with_python(tmp_path):
     expanded = samples + [0x800] * 100 + [0x1] * 5 + [0x2]
     assert f"total_samples={len(expanded)} crc32={fnv1a(expanded):08x}" in out
     assert "VGCH bits=12 spw=2 flags=1 clock=25000000" in out
+    # A version 1 stream keeps its 32-bit checksum line; crc64 is v2's.
+    assert "crc64=" not in out and "VGCH v2" not in out

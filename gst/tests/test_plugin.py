@@ -356,3 +356,20 @@ def test_force_mode_accepts_a_table_name(tmp_path, synth_stream):
     assert pngs
     got = np.asarray(Image.open(pngs[-1]).convert("RGB"))
     assert got.shape == (480, 640, 3)
+
+
+def test_simulation_trace_is_refused(tmp_path):
+    # Like vgacap-frames, vgadecode counts every sample as a pixel clock, so it
+    # refuses a stream with two samples a clock (a simulation trace) and says
+    # which tool reads one.
+    import io
+    fp = io.BytesIO()
+    w = Writer(fp, Header(version=2, sample_bits=43, samples_per_word=0, mode=2,
+                          samples_per_clock=2, clock_bit=42))
+    w.block(0); w.runs([(1, 10), (2, 5)])
+    stream = tmp_path / "trace.vgacap"; stream.write_bytes(fp.getvalue())
+    proc, pngs = decode_with_gst(stream, tmp_path / "png", timeout=60)
+    assert proc.returncode != 0
+    assert ("a simulation trace (samples_per_clock 2) is read with vgacap-sample, "
+            "not vgacap-frames") in proc.stdout + proc.stderr
+    assert not pngs

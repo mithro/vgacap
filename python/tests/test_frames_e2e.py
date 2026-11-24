@@ -59,3 +59,46 @@ def test_12bit_two_per_word_msb(tmp_path):
     write_stream(stream, m, img, frames=3, sample_bits=12, samples_per_word=2, flags=1)
     _, files = run_frames(stream, tmp_path / "f")
     np.testing.assert_array_equal(read_ppm(files[-1]), colour6_to_rgb(img))
+
+
+SIM_TRACE_REFUSAL = ("vgacap-frames: a simulation trace (samples_per_clock 2) is read with "
+                     "vgacap-sample, not vgacap-frames")
+
+
+@pytest.mark.parametrize("header", [
+    dict(sample_bits=43, samples_per_word=0, samples_per_clock=2, clock_bit=42),
+    dict(sample_bits=43, samples_per_word=0),                      # wide, no clock bit
+    dict(sample_bits=8, samples_per_word=1, samples_per_clock=2, clock_bit=7),
+])
+def test_refuses_a_simulation_trace(tmp_path, header):
+    # vgacap-frames counts every sample as a pixel clock, so a stream with two
+    # samples a clock, or samples wider than 32 bits, is not its input.
+    import io
+    from vgacap.stream import Header, Writer
+    fp = io.BytesIO()
+    w = Writer(fp, Header(version=2, mode=2, **header))
+    w.block(0); w.runs([(1, 10), (2, 5)])
+    stream = tmp_path / "trace.vgacap"; stream.write_bytes(fp.getvalue())
+    proc = subprocess.run([str(FRAMES), str(stream), str(tmp_path / "f")], capture_output=True, text=True)
+    assert proc.returncode == 1, proc
+    assert SIM_TRACE_REFUSAL in proc.stderr
+    assert not list(tmp_path.glob("f-*.ppm"))
+
+
+def test_v2_narrow_runs_stream_decodes(tmp_path):
+    # A v2 board-style stream (8 bits, one sample a clock) of RUNS decodes
+    # exactly as the same samples in a v1 RLE stream do.
+    import io
+    from vgacap.stream import Header, Writer
+    m = MODES["640x480@60"]; img = grid(640, 480)
+    s = frame_samples(m, img)
+    change = np.flatnonzero(np.diff(s)) + 1
+    starts = np.concatenate([[0], change]); ends = np.concatenate([change, [len(s)]])
+    pairs = [(int(s[a]), int(b - a)) for a, b in zip(starts, ends)]
+    fp = io.BytesIO(); w = Writer(fp, Header(version=2, sample_bits=8, samples_per_word=1, mode=3))
+    for _ in range(3):
+        w.runs(pairs)
+    stream = tmp_path / "v2.vgacap"; stream.write_bytes(fp.getvalue())
+    out, files = run_frames(stream, tmp_path / "f")
+    assert files, out
+    np.testing.assert_array_equal(read_ppm(files[-1]), colour6_to_rgb(img))
