@@ -37,6 +37,11 @@ if(VGACAP_HOST_EXTRAS)
   find_package(Threads REQUIRED)
   add_library(vgacap_trace STATIC src/trace/trace_write.c src/trace/blocks.c)
   target_link_libraries(vgacap_trace PUBLIC vgacap_stream vgacap_zstd Threads::Threads)
+  # The slow path reads fields the inline push has just stored one by one;
+  # SLP vectorisation would read two of them as one 16-byte load, which
+  # cannot be forwarded from those stores and stalls on every call.
+  set_source_files_properties(src/trace/trace_write.c PROPERTIES COMPILE_OPTIONS
+    "$<$<C_COMPILER_ID:GNU>:-fno-tree-slp-vectorize>;$<$<C_COMPILER_ID:Clang,AppleClang>:-fno-slp-vectorize>")
 endif()
 
 function(vgacap_add_test name)

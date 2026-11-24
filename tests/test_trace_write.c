@@ -261,16 +261,23 @@ TEST(test_trace_blocks_by_bytes) {
     trace_rm(path);
 }
 
+// Every trace's META(open) carries layout=tt-um-43 (the only layout), which
+// requires the 43-bit header with its clock bit, so the brief's 1-bit
+// header is not a valid trace (the format note wins): the same check runs
+// on the 43-bit layout, where a block is 2^25 samples.
 TEST(test_trace_long_static_run) {
     char path[256]; tmp_path(path, sizeof path, "trace_long_static_run.vgct.zst");
-    vgacap_header_t h; vgacap_header_init_v2(&h, 1, 1, VGACAP_CLOCK_BIT_NONE, 0);
+    vgacap_header_t h; header43(&h);
     char err[256] = "";
     vgacap_trace_writer_t *t = vgacap_trace_create(path, &h, OPEN_META, 3, err, sizeof err);
     if (!t) fprintf(stderr, "  create: %s\n", err);
     ASSERT_TRUE(t != NULL);
-    uint64_t total = (1ull << 32) + 10;
+    uint64_t total = (1ull << 32) + 10, per_block = 2 * VGACAP_TRACE_BLOCK_CLOCKS;
     int bad = 0;
-    for (uint64_t s = 0; s < total; s++) bad |= vgacap_trace_push(t, 1);
+    for (uint64_t s = 0; s < total; s += 2) {
+        bad |= vgacap_trace_push(t, BASE43 | 1);
+        bad |= vgacap_trace_push(t, BASE43 | 1 | CLK42);
+    }
     ASSERT_EQ_U(bad, 0);
     ASSERT_EQ_U(vgacap_trace_finish(t, CLOSE_META, err, sizeof err), 0);
 
@@ -278,12 +285,12 @@ TEST(test_trace_long_static_run) {
     ASSERT_TRUE(read_back(path, rb) == 0);
     ASSERT_EQ_U(rb->resyncs + rb->errors, 0);
     ASSERT_EQ_U(rb->samples, total);
-    ASSERT_EQ_U(rb->nblkh, 257);
-    ASSERT_EQ_U(rb->nblocks, 257);
+    ASSERT_EQ_U(rb->nblkh, 129);
+    ASSERT_EQ_U(rb->nblocks, 129);
     for (unsigned b = 0; b < rb->nblkh; b++) {
-        ASSERT_EQ_U(rb->blkh_first[b], (uint64_t)b << 24);
+        ASSERT_EQ_U(rb->blkh_first[b], (uint64_t)b * per_block);
         ASSERT_EQ_U(rb->pairs_in_block[b], 1);   // so no run crosses a BLKH
-        ASSERT_EQ_U(rb->block_samples[b], b + 1 < rb->nblkh ? (1ull << 24) : 10);
+        ASSERT_EQ_U(rb->block_samples[b], b + 1 < rb->nblkh ? per_block : 10);
     }
     free(rb);
     trace_rm(path);
@@ -304,6 +311,54 @@ TEST(test_trace_clock_rule_violation) {
     trace_rm(path);
 }
 
+// An I/O error (here /dev/full: every write fails with ENOSPC) fails a
+// later push, every push after it, and finish.
+TEST(test_trace_io_error) {
+    vgacap_header_t h; header43(&h);
+    char err[256] = "";
+    vgacap_trace_writer_t *t = vgacap_trace_create("/dev/full", &h, OPEN_META, 1, err, sizeof err);
+    if (!t) fprintf(stderr, "  create: %s\n", err);
+    ASSERT_TRUE(t != NULL);
+    // Values from an LCG barely compress, so each block's frame is several
+    // MiB, more than the file buffer: the compressor's fwrite fails.
+    uint64_t x = 1, s;
+    for (s = 0; s < 20000000; s++) {
+        x = x * 6364136223846793005ull + 1442695040888963407ull;
+        uint64_t v = (x >> 22) & (CLK42 - 1);   // 42 random bits, then the clock
+        if (vgacap_trace_push(t, v | ((s & 1) ? CLK42 : 0))) break;
+    }
+    ASSERT_TRUE(s < 20000000);
+    ASSERT_EQ_U((unsigned)(vgacap_trace_push(t, 0) + 1), 0);
+    ASSERT_EQ_U((unsigned)(vgacap_trace_push(t, 0) + 1), 0);
+    ASSERT_EQ_U((unsigned)(vgacap_trace_finish(t, CLOSE_META, err, sizeof err) + 1), 0);
+    if (!strstr(err, "write")) fprintf(stderr, "  err: %s\n", err);
+    ASSERT_TRUE(strstr(err, "write") != NULL);
+}
+
+TEST(test_trace_abandon) {
+    char path[256]; tmp_path(path, sizeof path, "trace_abandon.vgct.zst");
+    vgacap_header_t h; header43(&h);
+    char err[256] = "";
+    vgacap_trace_writer_t *t = vgacap_trace_create(path, &h, OPEN_META, 3, err, sizeof err);
+    ASSERT_TRUE(t != NULL);
+    // One full block by clock count, and part of a second.
+    for (uint64_t c = 0; c < VGACAP_TRACE_BLOCK_CLOCKS + 100; c++) {
+        vgacap_trace_push(t, BASE43);
+        vgacap_trace_push(t, BASE43 | CLK42);
+    }
+    vgacap_trace_abandon(t);
+    // What a kill leaves: the finished block, no META(close), no seek table.
+    struct readback *rb = calloc(1, sizeof *rb);
+    ASSERT_TRUE(read_back(path, rb) == 0);
+    ASSERT_EQ_U(rb->resyncs + rb->errors, 0);
+    ASSERT_EQ_U(rb->nblocks, 1);
+    ASSERT_EQ_U(rb->skippable_frames, 0);
+    ASSERT_EQ_U(rb->nmeta, 1);
+    ASSERT_EQ_U(rb->samples, 2 * VGACAP_TRACE_BLOCK_CLOCKS);
+    free(rb);
+    trace_rm(path);
+}
+
 TEST(test_trace_bad_meta) {
     char path[256]; tmp_path(path, sizeof path, "trace_bad_meta.vgct.zst");
     vgacap_header_t h; header43(&h);
@@ -313,6 +368,11 @@ TEST(test_trace_bad_meta) {
         path, &h, "meta=open\nproject=x\ncalib_seconds=1\nseconds=2\n", 3, err, sizeof err);
     ASSERT_TRUE(t == NULL);
     ASSERT_TRUE(strstr(err, "META") != NULL);
+    // layout=tt-um-43 with a header that is not that layout's.
+    vgacap_header_t h1; vgacap_header_init_v2(&h1, 1, 1, VGACAP_CLOCK_BIT_NONE, 0);
+    t = vgacap_trace_create(path, &h1, OPEN_META, 3, err, sizeof err);
+    ASSERT_TRUE(t == NULL);
+    ASSERT_TRUE(strstr(err, "layout") != NULL);
     // A close META given as the open one.
     t = vgacap_trace_create(path, &h, CLOSE_META, 3, err, sizeof err);
     ASSERT_TRUE(t == NULL);
@@ -373,10 +433,12 @@ TEST(test_trace_seek_table) {
 
 // ---- speed (perf label; run by hand, not in CI) -----------------------------
 
-static double now_s(void) {
-    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+static double clock_s(clockid_t id) {
+    struct timespec ts; clock_gettime(id, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
+static double now_s(void) { return clock_s(CLOCK_MONOTONIC); }
+static double cpu_s(void) { return clock_s(CLOCK_THREAD_CPUTIME_ID); }
 
 // One profile: 1e8 clocks, two samples each; `every` is how many clocks
 // uo_out holds a value (1: a new value every clock, so one run a clock).
@@ -389,19 +451,21 @@ static double push_profile(const char *name, uint64_t every) {
     const uint64_t clocks = 100000000;
     int bad = 0;
     uint64_t uo = 0, left = every;
-    double t0 = now_s();
+    double t0 = now_s(), c0 = cpu_s();
     for (uint64_t c = 0; c < clocks; c++) {
         // uo_out changes just after the rising edge: in the clk = 1 sample.
         bad |= vgacap_trace_push(t, BASE43 | uo);
         if (--left == 0) { uo = (uo + 1) & 0xFF; left = every; }
         bad |= vgacap_trace_push(t, BASE43 | uo | CLK42);
     }
-    double t1 = now_s();
+    double t1 = now_s(), c1 = cpu_s();
     int frc = vgacap_trace_finish(t, CLOSE_META, err, sizeof err);
     double t2 = now_s();
     double ns = (t1 - t0) * 1e9 / (double)clocks;
-    fprintf(stderr, "  %-5s: %.2f ns/clock (%.2f ns/sample), push %.3f s, finish %.3f s%s\n",
-            name, ns, ns / 2, t1 - t0, t2 - t1, (bad || frc) ? " FAILED" : "");
+    double cpu_ns = (c1 - c0) * 1e9 / (double)clocks;
+    fprintf(stderr, "  %-5s: %.2f ns/clock wall (%.2f ns/sample), %.2f ns/clock caller CPU, "
+            "push %.3f s, finish %.3f s%s\n",
+            name, ns, ns / 2, cpu_ns, t1 - t0, t2 - t1, (bad || frc) ? " FAILED" : "");
     trace_rm(path);
     return (bad || frc) ? 1e9 : ns;
 }
@@ -423,6 +487,8 @@ int main(int argc, char **argv) {
     RUN(test_trace_blocks_by_bytes);
     RUN(test_trace_long_static_run);
     RUN(test_trace_clock_rule_violation);
+    RUN(test_trace_io_error);
+    RUN(test_trace_abandon);
     RUN(test_trace_bad_meta);
     RUN(test_trace_seek_table);
     RUN_TESTS_END();
