@@ -225,6 +225,19 @@ typedef struct centrev1_diag {
 void centrev1_finish(centrev1_t *s, centrev1_diag_t *d);
 void centrev1_free(centrev1_t *s);
 
+// ---- frame hash methods ----------------------------------------------------
+
+// Over a frame as rgb6 (R<<4 | G<<2 | B), n pixels, row-major, one byte each.
+// sha256-rgb6: SHA-256 of the bytes.
+void vgahash_sha256_rgb6(const uint8_t *rgb6, size_t n, uint8_t out[32]);
+// fnv1a64-tb2026-rgb888: FNV-1a 64 (prime 0x100000001b3, offset basis
+// 0x14650fb0739d0383, tb.cpp's constant) over the RGB888 bytes, each rgb6
+// channel times 85; hashed per pixel, no RGB888 buffer.
+uint64_t vgahash_fnv1a64_tb2026_rgb888(const uint8_t *rgb6, size_t n);
+// The method's definition lines, verbatim as written into hash files as "# "
+// lines, NULL-terminated; NULL for an unknown method.
+const char *const *vgahash_definition(const char *method);
+
 #ifdef __cplusplus
 }
 #endif
