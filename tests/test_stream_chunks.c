@@ -49,6 +49,31 @@ TEST(events_expand_to_runs) {
     ASSERT_EQ_U(evs[4].u.run.value, 0x3F); ASSERT_EQ_U(evs[4].u.run.run, 1);
 }
 
+TEST(attach_writes_no_header_and_continues_a_stream) {
+    // A board appends chunks to a header the host wrote: the bytes must be
+    // exactly what an initialised writer would have produced after its VGCH.
+    vgacap_header_t h; vgacap_header_init_tinyvga(&h, 8, 4, VGACAP_FLAG_FIRST_SAMPLE_MSB);
+    vgacap_writer_t full; outlen = 0; vgacap_writer_init(&full, capture_write, NULL, &h);
+    size_t header_len = outlen;
+    uint32_t words[3] = { 0x01020304u, 0x05060708u, 0x090a0b0cu };
+    ASSERT_EQ_U(vgacap_writer_raw(&full, words, 12), 0);
+    ASSERT_EQ_U(vgacap_writer_frame(&full, 3, 34, 1, 12, words, 12), 0);
+    ASSERT_EQ_U(vgacap_writer_time(&full, 0, 0, 5, "overrun"), 0);
+    static uint8_t want[4096]; size_t want_len = outlen - header_len;
+    memcpy(want, outbuf + header_len, want_len);
+
+    vgacap_writer_t att; outlen = 0; vgacap_writer_attach(&att, capture_write, NULL, &h);
+    ASSERT_EQ_U(outlen, 0);
+    ASSERT_EQ_U(vgacap_writer_raw(&att, words, 12), 0);
+    ASSERT_EQ_U(vgacap_writer_frame(&att, 3, 34, 1, 12, words, 12), 0);
+    ASSERT_EQ_U(vgacap_writer_time(&att, 0, 0, 5, "overrun"), 0);
+    ASSERT_EQ_U(outlen, want_len);
+    ASSERT_EQ_MEM(outbuf, want, want_len);
+    // Words go out little-endian whatever the host: 0x01020304 is 04 03 02 01.
+    const uint8_t first_word[4] = { 0x04, 0x03, 0x02, 0x01 };
+    ASSERT_EQ_MEM(outbuf + 12, first_word, 4);
+}
+
 TEST(time_roundtrip) {
     vgacap_writer_t w; start(8, 4, &w);
     ASSERT_EQ_U(vgacap_writer_time(&w, 1234567890123ull, 500000, 7, "fifo overrun"), 0);
@@ -164,7 +189,7 @@ TEST(oversized_length_is_rejected) {
     ASSERT_EQ_U(evs[2].u.run.value, 3); ASSERT_EQ_U(evs[2].u.run.run, 6);
 }
 
-int main(void) { RUN(rle_roundtrip); RUN(frame_roundtrip); RUN(events_expand_to_runs); RUN(time_roundtrip); RUN(unknown_chunk_is_skipped);
+int main(void) { RUN(rle_roundtrip); RUN(frame_roundtrip); RUN(events_expand_to_runs); RUN(attach_writes_no_header_and_continues_a_stream); RUN(time_roundtrip); RUN(unknown_chunk_is_skipped);
     RUN(dropped_byte_resyncs_and_keeps_going); RUN(time_msg_len_beyond_payload_is_rejected);
     RUN(rle_pair_count_mismatch_is_rejected); RUN(raw_sample_count_mismatch_is_rejected);
     RUN(oversized_length_is_rejected); RUN_TESTS_END(); }
