@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define SHA64 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 static const uint8_t SHA[2][32] = {{0x00, 0x11, 0x22, 0x33}, {0xff, 0xee}};
 static const uint64_t FNV[2] = {0x009b538b2455c383ULL, 0x123456789abcdef0ULL};
 
@@ -15,7 +16,7 @@ static void base(vgaout_t *o, const vgaout_frame_t *fr, size_t n) {
     o->id = "tt07/x"; o->status = "ok"; o->sampler = "tb-v1"; o->sampler_status = "ok";
     o->mode = "640x480@60"; o->width = 640; o->height = 480; o->clock_hz = 25175000;
     o->clocks_per_pixel = 1.0; o->capture_after_clock = 1234;
-    o->store = "frames.bin"; o->store_length = 9876; o->store_sha256 = "ab";
+    o->store = "frames.bin"; o->store_length = 9876; o->store_sha256 = SHA64;
     o->n_distinct = 2; o->sha256 = SHA; o->fnv = FNV;
     o->n_frames = n; o->frames = fr;
 }
@@ -87,7 +88,7 @@ TEST(header_tb) {
     const char *want =
         "id: tt07/x\nstatus: ok\nsampler: tb-v1\nsampler_status: ok\npixel_format: rgb6\nwidth: 640\nheight: 480\n"
         "mode: 640x480@60\nclock_hz: 25175000\nclocks_per_pixel: 1\ncapture_after_clock: 1234\nframe_clocks: 0\n"
-        "frames: 1\ndistinct_frames: 2\nstore: frames.bin\nstore_length: 9876\nstore_sha256: ab\n"
+        "frames: 1\ndistinct_frames: 2\nstore: frames.bin\nstore_length: 9876\nstore_sha256: " SHA64 "\n"
         "distinct:\n00112233" "00000000000000000000000000000000000000000000000000000000\n"
         "ffee" "000000000000000000000000000000000000000000000000000000000000\n"
         "runs:\n0 1 0 1000 0\n";
@@ -102,7 +103,7 @@ TEST(header_centre) {
     o.suggest_dx = 1; o.suggest_dy = -3; o.colour_changes = 99; o.colour_changes_off_grid = UINT64_MAX;
     char *s = frames_txt(&o); ASSERT_TRUE(s);
     ASSERT_TRUE(strstr(s, "clocks_per_pixel: 2.5\n"));
-    ASSERT_TRUE(strstr(s, "store_sha256: ab\nwindow_offset: -1 2\nporches: 48 33\noutside: 7\n"
+    ASSERT_TRUE(strstr(s, "store_sha256: " SHA64 "\nwindow_offset: -1 2\nporches: 48 33\noutside: 7\n"
                           "suggested_offset: 1 -3\ncolour_changes: 99\ncolour_changes_off_grid: -\ndistinct:\n"));
     o.colour_changes_off_grid = 4;
     free(s); s = frames_txt(&o); ASSERT_TRUE(s);
@@ -163,9 +164,40 @@ TEST(hash_file_fnv_needs_list) {
     fclose(f);
 }
 
+static int rejects(const vgaout_t *o) {
+    FILE *f = tmpfile();
+    if (!f) return 0;
+    int a = vgaout_frames_txt(f, o) != 0, b = vgaout_hash_file(f, "sha256-rgb6", o) != 0;
+    fclose(f);
+    return a && b;
+}
+TEST(rejects_bad_strings) {
+    vgaout_frame_t fr[] = {F(0, 1000, 0)};
+    vgaout_t o;
+    base(&o, fr, 1); o.store_sha256 = "ab"; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); o.store_sha256 = "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); o.store_sha256 = "g123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); o.store_sha256 = NULL; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); o.store = ""; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); o.store = "a b"; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); o.store = "d/frames.bin"; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); o.store = "d\\frames.bin"; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); o.id = "a\nb"; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); o.id = ""; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); o.mode = ""; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); o.status = "x\ny"; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); o.sampler_status = "weird"; ASSERT_TRUE(rejects(&o));
+    base(&o, fr, 1); ASSERT_TRUE(!rejects(&o));
+}
+TEST(rejects_backwards_starts) {
+    vgaout_frame_t fr[] = {F(0, 2000, 0), F(-1, 0, 0), F(0, 1000, 0)};
+    vgaout_t o; base(&o, fr, 3);
+    ASSERT_TRUE(rejects(&o));
+}
+
 int main(void) {
     RUN(runs_grouping); RUN(runs_break_on_late_start); RUN(runs_break_on_missing);
     RUN(frame_clocks_is_median_across_gaps); RUN(header_tb); RUN(header_centre); RUN(no_frames);
-    RUN(bad_distinct_rejected); RUN(hash_file_lines); RUN(hash_file_fnv_needs_list);
+    RUN(bad_distinct_rejected); RUN(hash_file_lines); RUN(hash_file_fnv_needs_list); RUN(rejects_bad_strings); RUN(rejects_backwards_starts);
     RUN_TESTS_END();
 }

@@ -4,6 +4,7 @@
 // reference writer and the reader.
 #include "vgacap/outputs.h"
 
+#include <ctype.h>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,12 +41,35 @@ uint64_t vgaout_frame_clocks(const vgaout_t *o) {
     return r;
 }
 
+static int line_ok(const char *s) {   // one non-empty line
+    return s && *s && !strpbrk(s, "\r\n");
+}
+static int store_name_ok(const char *s) {   // a bare file name: no whitespace, '/' or '\'
+    if (!s || !*s) return 0;
+    for (; *s; s++) if (isspace((unsigned char)*s) || *s == '/' || *s == '\\') return 0;
+    return 1;
+}
+static int hex64_ok(const char *s) {   // exactly 64 lowercase hex digits
+    if (!s || strlen(s) != 64) return 0;
+    for (; *s; s++) if (!((*s >= '0' && *s <= '9') || (*s >= 'a' && *s <= 'f'))) return 0;
+    return 1;
+}
+
 static int valid(const vgaout_t *o) {
+    if (!line_ok(o->id) || !line_ok(o->status) || !line_ok(o->sampler) || !line_ok(o->sampler_status) ||
+        !line_ok(o->mode)) return 0;
+    if (strcmp(o->sampler_status, "ok") && strcmp(o->sampler_status, "no-sync") &&
+        strcmp(o->sampler_status, "bad-timing") && strcmp(o->sampler_status, "bad-window")) return 0;
+    if (!store_name_ok(o->store) || !hex64_ok(o->store_sha256)) return 0;
     if (!!o->has_centre != (strcmp(o->sampler, "centre-v1") == 0)) return 0;   // the centre keys belong to centre-v1
     if (o->n_distinct && !o->sha256) return 0;
+    int have = 0; uint64_t prev = 0;
     for (size_t i = 0; i < o->n_frames; i++) {
         int64_t d = o->frames[i].distinct;
         if (d < -1 || d >= (int64_t)o->n_distinct) return 0;
+        if (d < 0) continue;
+        if (have && o->frames[i].start_clock < prev) return 0;   // starts never go backwards
+        prev = o->frames[i].start_clock; have = 1;
     }
     return 1;
 }

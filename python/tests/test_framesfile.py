@@ -18,6 +18,7 @@ DUMP = ROOT / "build" / "vgacap-outputs-dump"
 METHODS = ["sha256-rgb6", "fnv1a64-tb2026-rgb888"]
 VARIANTS = ["tb", "centre", "centre-fraction", "nosync"]
 FC = 420000
+SHA = "0123456789abcdef" * 4
 
 
 def c_files(tmp_path, variant) -> pathlib.Path:
@@ -197,13 +198,41 @@ def test_hash_reader_refuses(tmp_path):
 
 
 def test_writer_refuses():
-    f = ff.FramesFile("i", "ok", "centre-v1", "ok", 1, 1, "m", 1, 1.0, 0, "s", 0, "x")
+    f = ff.FramesFile("i", "ok", "centre-v1", "ok", 1, 1, "m", 1, 1.0, 0, "s", 0, SHA)
     with pytest.raises(ff.FormatError):
         ff.format_frames_txt(f)              # centre-v1 without its keys
-    f = ff.FramesFile("i", "ok", "tb-v1", "bad", 1, 1, "m", 1, 1.0, 0, "s", 0, "x")
+    f = ff.FramesFile("i", "ok", "tb-v1", "bad", 1, 1, "m", 1, 1.0, 0, "s", 0, SHA)
     with pytest.raises(ff.FormatError):
         ff.format_frames_txt(f)              # unknown sampler_status
 
 
 def test_fmt_double_is_the_shared_formatter():
     assert fmt_double(800.0 / 840.0) == "0.9523809523809523"
+
+
+@pytest.mark.parametrize("kw", [
+    dict(store_sha256="x"), dict(store_sha256="AB" * 32), dict(store_sha256="ab" * 31),
+    dict(store_sha256="gg" * 32), dict(store=""), dict(store="a b"), dict(store="d/f.bin"),
+    dict(store="d\\f.bin"), dict(store="a\nb"), dict(store_length=-1), dict(store_length="7"),
+    dict(id=""), dict(mode="a\nb"),
+])
+def test_writer_refuses_bad_store_and_strings(kw):
+    args = dict(id="i", status="ok", sampler="tb-v1", sampler_status="ok", width=1, height=1, mode="m",
+                clock_hz=1, clocks_per_pixel=1.0, capture_after_clock=0, store="frames.bin", store_length=0,
+                store_sha256=SHA)
+    ff.format_frames_txt(ff.FramesFile(**args))      # the unmodified one is fine
+    args.update(kw)
+    with pytest.raises(ff.FormatError):
+        ff.format_frames_txt(ff.FramesFile(**args))
+
+
+@pytest.mark.parametrize("key,new", [
+    ("store_sha256: " + "0123456789abcdef" * 4, "store_sha256: ab"),
+    ("store_sha256: " + "0123456789abcdef" * 4, "store_sha256: " + "0123456789ABCDEF" * 4),
+    ("store: frames.bin", "store: a/frames.bin"), ("store: frames.bin", "store: a frames.bin"),
+    ("store_length: 1234567", "store_length: 01234567"), ("store_length: 1234567", "store_length: -1"),
+])
+def test_reader_refuses_bad_store(tmp_path, tb_text, key, new):
+    assert key in tb_text
+    with pytest.raises(ff.FormatError):
+        read_text(tmp_path, tb_text.replace(key, new, 1))

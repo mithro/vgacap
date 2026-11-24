@@ -132,6 +132,16 @@ def _check_text(**kv: str) -> None:
             raise FormatError(f"{k}: not a one-line string: {v!r}")
 
 
+def _check_store(store: str, length: int, sha: str) -> None:
+    _check_text(store=store)
+    if re.search(r"[\s/\\]", store):
+        raise FormatError(f"store: not a bare file name: {store!r}")
+    if not isinstance(sha, str) or not _HEX64.match(sha):
+        raise FormatError(f"store_sha256: not 64 lowercase hex digits: {sha!r}")
+    if not isinstance(length, int) or isinstance(length, bool) or length < 0:
+        raise FormatError(f"store_length: not an unsigned integer: {length!r}")
+
+
 def _check_common(o) -> None:
     _check_text(id=o.id, status=o.status, sampler=o.sampler, sampler_status=o.sampler_status, mode=o.mode)
     if o.sampler_status not in SAMPLER_STATUSES:
@@ -140,7 +150,7 @@ def _check_common(o) -> None:
 
 def format_frames_txt(ff: FramesFile) -> str:
     _check_common(ff)
-    _check_text(store=ff.store, store_sha256=ff.store_sha256)
+    _check_store(ff.store, ff.store_length, ff.store_sha256)
     if (ff.sampler == "centre-v1") != (ff.centre is not None):
         raise FormatError("the centre-v1 keys belong to sampler centre-v1, and it always has them")
     for f in ff.frames:
@@ -290,6 +300,7 @@ def read_frames_txt(path: str | os.PathLike) -> FramesFile:
     store = ls.value("store")
     store_length = ls.uint("store_length")
     store_sha256 = ls.value("store_sha256")
+    _check_store(store, store_length, store_sha256)
     centre = None
     if sampler == "centre-v1":
         wo = ls.pair("window_offset")
