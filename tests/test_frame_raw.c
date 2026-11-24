@@ -254,7 +254,9 @@ TEST(no_on_frame_skips_conversion) {
     // to 5 are completed.
     push_all(&f, buf, synth_frames(m, bars, 6, 0) - (525u - 10u) * 800u);
     ASSERT_EQ_U(rl.n, 4);
-    ASSERT_TRUE(f.frames_seen >= 1);   // emit's bookkeeping still ran
+    // emit's bookkeeping still ran: frames 2 to 5 had a table mode at their
+    // boundaries (frame 1 was never claimed, so frame 2's start ends nothing).
+    ASSERT_EQ_U(f.frames_seen, 4);
     for (size_t i = 0; i < sizeof rgb; i++) if (rgb[i] != 0xAB) { ASSERT_EQ_U(rgb[i], 0xAB); }
     for (size_t i = 0; i < sizeof rgb6buf; i++) if (rgb6buf[i] != 0xAB) { ASSERT_EQ_U(rgb6buf[i], 0xAB); }
 }
@@ -282,6 +284,40 @@ TEST(boundary_clears_after_early_return) {
     ASSERT_TRUE(!any_written(rl.snap, 520, 525));
 }
 
+TEST(fram_early_return_then_continuous_is_clean) {
+    // A FRAM window of black lines 0..9 at 801 clocks a line (no table mode,
+    // nothing lit) completes its 10-line picture, whose emit returns early
+    // with nothing to show, so it stays pending. A continuous 801 x 525
+    // stream from line 100 then claims a frame retroactively, which flushes
+    // the pending picture - and that emit returns early too. The claimed
+    // frame's rows 0 .. vsync_lines - 1 are never received, so they must be
+    // unwritten in its on_raw, not the FRAM window's pixels.
+    vgaframe_config_t c; memset(&c, 0, sizeof c);
+    c.max_clocks_per_line = 1000; c.max_lines = 600;
+    memcpy(c.signal_map, tiny_map, 8);
+    c.on_frame = on_frame; c.on_raw = on_raw; c.raw_user = &rl;
+    memset(&rl, 0, sizeof rl); rl.snap_at = 1; nframes = 0;
+    vgaframe_t f; ASSERT_EQ_U(vgaframe_init(&f, &c, raw, rgb, cover), 0);
+    // Ten black lines from mid-frame (vsync idle throughout), as the
+    // window's lines 0..9.
+    size_t n = odd_frame(buf, 110, 100, 0);
+    vgaframe_frame_begin(&f, 1, 0, 10, 801, (uint32_t)n);
+    push_all(&f, buf, n);
+    ASSERT_EQ_U(nframes, 0);
+    n = 0;
+    n += odd_frame(buf + n, 525, 100, 0x2A);
+    n += odd_frame(buf + n, 525, 0, 0x2A);
+    n += odd_frame(buf + n, 10, 0, 0x2A);
+    push_all(&f, buf, n);
+    ASSERT_EQ_U(rl.n, 1);
+    ASSERT_EQ_U(rl.retro[0], 1);
+    ASSERT_EQ_U(rl.stride[0], 1000);
+    uint32_t written = 0;
+    for (uint32_t i = 0; i < (uint32_t)odd801.v_sync * 1000u; i++) written += (rl.snap[i] & 0x80) != 0;
+    ASSERT_EQ_U(written, 0);
+    ASSERT_EQ_U(rl.snap[(size_t)odd801.v_sync * 1000u + 800u], 0x80 | 0x2A);   // its own first row is there
+}
+
 int main(void) {
     RUN(raw_fires_without_lock);
     RUN(raw_fires_for_black);
@@ -290,5 +326,6 @@ int main(void) {
     RUN(rgb6_matches_rgb24);
     RUN(no_on_frame_skips_conversion);
     RUN(boundary_clears_after_early_return);
+    RUN(fram_early_return_then_continuous_is_clean);
     RUN_TESTS_END();
 }
