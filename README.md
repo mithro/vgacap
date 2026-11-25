@@ -14,13 +14,14 @@ reconstruction, video and comparison tools.
 
 <p align="center">
   <img src="docs/diagrams/overview.svg" width="100%"
-       alt="vgacap overview, flowing top to bottom. At the top, a photo of a Tiny Tapeout demo board (an ASIC or an FPGA breakout on top, the design driving VGA on uo_out) and, separately, the design's RTL. One uo_out[7:0] bus from the board feeds three capture sources: the demo board itself (its RP2040 or RP2350 chip: PIO, then DMA, then USB), a Raspberry Pi 5 (its RP1 chip: PIO, then DMA, then DRAM) and an FPGA (the FPGA chip: the project, then capture logic, then its link). The design's RTL feeds a simulator (Verilator or Icarus: the design, then a tracer, then a trace file). ttcap, on a laptop at the side, controls the demo board. All four sources write one vgacap stream, made of VGCH, RAW, RLE, FRAM, EVNT and TIME chunks. libvgaframe reads the stream and rebuilds every frame, which feeds pictures and video, and pixel-exact checks. A legend shows signals in blue, stream bytes in orange, pictures in green and control as violet dashed lines.">
+       alt="vgacap overview. In the center, a Tiny Tapeout demo board (shown as a render of the board): your design is on a breakout plugged into the board, and the board's own microcontroller captures its uo_out. It shows two kinds of breakout. An ASIC or FPGA breakout carrying your design sends uo_out[7:0] down; an FPGA breakout (iCE40UP5K) running your design and capture logic sends framed bytes on uo_out and uio down. Both go to the board's RP2040 or RP2350, whose PIO samples the pins on every project clock, then DMA, then USB, to ttcap on your computer. On the left, a Raspberry Pi 5 has uo_out from the board's header wired to its GPIO; its RP1 chip runs PIO, then DMA, into DRAM. On the right, the design's RTL goes into a simulator (Verilator or Icarus: the design, then a tracer, then a trace file). All of these feed one vgacap stream, one file format for every source, which records what uo_out was on each clock: every clock, compressed into runs, or just whole frames. A strip of samples shows a line of pixels followed by blanking and sync. Below, libvgaframe rebuilds every frame, which feeds pictures and video, and pixel-exact checks against references. A legend shows signals in blue, captured data in orange and pictures in green.">
 </p>
 
-*Figure 1: the design's `uo_out` (or its RTL, in a simulator) flows down
-through a capture source into one vgacap stream, which libvgaframe turns
-into pictures, video and pixel-exact checks. Blue is the design's signals,
-orange the stream's bytes, green pictures, and violet dashed control.
+*Figure 1: the demo board's own microcontroller (helped, on an FPGA
+breakout, by capture logic in the FPGA), a Raspberry Pi 5 or a simulator
+captures the design's `uo_out`. Every source writes one vgacap stream,
+which libvgaframe turns into pictures, video and pixel-exact checks. Blue is the
+design's signals, orange captured data, green pictures.
 [`docs/diagrams/overview.py`](docs/diagrams/overview.py) draws the figure.*
 
 The design, research notes, measurements, work log and task list live in
@@ -54,7 +55,7 @@ carrying an FPGA that stands in for the chip.
 | demo board (RP2350), vgacap firmware | `firmware/`: a pico-sdk firmware loaded into RAM in place of the stock one (`ttcap --firmware picosdk`) | USB serial, with its own protocol (`firmware/PROTOCOL.md`) | frame, window and stream capture pixel-exact on FPGA and ASIC boards |
 | demo board (RP2350), MicroPython C module | `mpy/`: the same capture engines built into a custom MicroPython firmware (`import vgacap`, `ttcap --firmware mpy-module`) | as for the stock firmware | pixel-exact on an FPGA board |
 | Raspberry Pi 5 | `capture-rp1/` (`vgacap-rp1`): the PIO in the Pi 5's own RP1 I/O chip, via piolib, with the board's `uo_out` wired to the Pi's GPIO header | runs on the Pi itself | proven by loopback; waiting for a Pi 5 wired to a Tiny Tapeout board |
-| FPGA | `rtl/`: capture logic to build into an FPGA design (Migen source and generated Verilog) | whatever link the FPGA design has | exact on an iCE40 at 250 kHz and 25 MHz |
+| FPGA | `rtl/`: capture logic to build into an FPGA design (Migen source and generated Verilog), such as a design on the demo board's FPGA breakout (iCE40UP5K) | on the FPGA breakout, framed bytes on `uo_out` and `uio` to the board's RP2350 and on over USB; elsewhere, whatever link the FPGA design has | exact on an iCE40 FPGA breakout at 250 kHz and 25 MHz |
 | simulators | `vgacap-bin2stream` today; full simulation traces are being added | files | in use by the tests |
 | BIO (the I/O coprocessor on bunnie's Baochip) | research in tt-vga-capture | -- | simulator only |
 
