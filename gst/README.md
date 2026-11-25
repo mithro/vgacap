@@ -23,11 +23,11 @@ gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! \
 # ...or straight off a board, through either link. The URI is quoted twice:
 # once for the shell, once for GStreamer's pipeline parser.
 gst-launch-1.0 vgacapbin \
-    'uri="tt-ws://127.0.0.1:18007/serial?project=tt_um_rejunity_vga&clock-hz=60000"' ! \
+    'uri="tt-ws://127.0.0.1:18034/serial?design=tt_um_vga_pattern&clock-hz=60000"' ! \
     videoconvert ! autovideosink
 ```
 
-`127.0.0.1:18007` is an SSH tunnel to tt07
+`127.0.0.1:18034` is an SSH tunnel to fpga-1
 ([Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board)).
 On quoting, see [`vgacapbin`](#vgacapbin-a-uri-in-video-out).
 
@@ -133,7 +133,7 @@ silent end of stream. The rest of its stderr is logged at `INFO` under the
 
 ```sh
 gst-launch-1.0 vgacapbin 'uri="tt-serial:///dev/ttyACM0?project=tt_um_x&clock-hz=60000"' ! ...
-gst-launch-1.0 vgacapbin 'uri="tt-ws://127.0.0.1:18007/serial?clock-hz=60000"' ! ...   # or tt-wss://
+gst-launch-1.0 vgacapbin 'uri="tt-ws://127.0.0.1:18034/serial?clock-hz=60000"' ! ...   # or tt-wss://
 gst-launch-1.0 vgacapbin 'uri="file:///captures/tt08.vgacap"' ! ...
 ```
 
