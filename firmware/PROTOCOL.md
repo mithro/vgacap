@@ -52,7 +52,10 @@ fields, or `err` followed by a message for a person.
   MicroPython's PWM settings at it. `actual_hz` is what the PWM makes;
   `period` is system clocks per project clock if that is a whole 2..32
   (what frame capture needs), else 0. `hz=0` stops the clock and releases
-  the pin.
+  the pin. A clock the firmware cannot plan gets `err`, and the clock stays
+  as it was; if setting the system clock fails after the PWM has stopped,
+  the reply is `err`, the clock stays stopped and `status` reports
+  `clock_hz=0`.
 * `reset hold=1` drives the project's `rst_n` (GPIO 14) low, `hold=0` high.
   Until the first `reset` the pin is left alone (the board pulls it up).
 * `ui_in value=V` drives `ui_in` (GPIO 17..24) with V; `value=-1` releases
