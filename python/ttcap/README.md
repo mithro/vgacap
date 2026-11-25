@@ -30,10 +30,10 @@ mkdir -p out && uv run ttcap png capture.vgacap out/frame   # out/frame-0000.png
 `--profile` defaults to `auto`, which reads the board's `GPIOMap` and picks
 the RP2040 or RP2350 layout from it.
 
-Stop the capture by time (`--seconds`) or by size (`--max-bytes N`, or
-`--frames N`). `--frames N` captures N + 2 frame periods at 640x480@60
-timing ([When frames appear](../../src/tools/README.md#when-frames-appear)).
-`--seconds 0` runs until the byte limit.
+The capture stops at the first of `--seconds` (default 5; 0 for no limit),
+`--max-bytes N` or `--frames N`. `--frames N` captures N + 2 frame periods
+at 640x480@60 timing
+([When frames appear](../../src/tools/README.md#when-frames-appear)).
 
 The board has very little heap (about 80 KB on the RP2040 demo board), so
 `ttcap capture` clears the previous run's names and collects garbage before
@@ -45,7 +45,7 @@ that fails to compile on the board does not always say so, and can halt the
 firmware outright.
 
 `ttcap png` needs [Pillow](https://github.com/python-pillow/Pillow), so it wants the `synth` extra
-(`uv sync --extra synth`) and a built `build/vgacap-frames`.
+(`uv sync --extra synth`) and [a built `build/vgacap-frames`](../../docs/development.md).
 
 For a board on the Welland bench, see
 [Reaching a Welland board](#reaching-a-welland-board).
