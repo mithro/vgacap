@@ -15,7 +15,10 @@ RP1 I/O chip has a PIO block like the RP2040's and RP2350's, and
    chunk).
 
 ```sh
-git clone --depth 1 https://github.com/raspberrypi/utils.git
+git init -q utils
+git -C utils remote add origin https://github.com/raspberrypi/utils.git
+git -C utils fetch -q --depth 1 origin 05e8808e84ed99b168b14a4025dddb9118fa1c17
+git -C utils checkout -q FETCH_HEAD
 make -C capture-rp1 PIOLIB=$PWD/utils/piolib
 ./capture-rp1/vgacap-rp1 --out run.vgacap --samples 1310720 \
     --data-base 4 --clk 12 --edge rising --clock-hz 500000
