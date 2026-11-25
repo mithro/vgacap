@@ -29,11 +29,18 @@ uv run ttcap png capture.vgacap out/frame       # out/frame-0000.png ...
 the RP2040 or RP2350 layout from it.
 
 Stop the capture by time (`--seconds`) or by size (`--max-bytes N`, or
-`--frames N`). `--frames` works out the bytes from 640x480@60 timing and
-the board's packing, and adds two frame periods of margin because
-reconstruction needs them before the first picture (see
-[When frames appear](../../src/tools/README.md#when-frames-appear)).
-`--seconds 0` runs until the byte limit.
+`--frames N`). `--frames N` asks the board for N + 2 frame periods of
+samples at 640x480@60 timing (800x525 clocks a frame), packed as the board
+packs them, plus the 12 non-sample bytes of each `RAW` chunk, because the
+board's byte limit counts whole chunks. The two extra periods are there
+because a capture starts mid-frame: the tail of that first frame is
+unusable, the next frame boundary only tells the reconstruction where
+frames begin, and the first frame that can be rendered is the whole one
+after it (see
+[When frames appear](../../src/tools/README.md#when-frames-appear)). With
+only one extra period, a `--frames 1` capture on tt07 gave
+`vgacap-frames` zero frames. A design at another resolution needs
+`--max-bytes` worked out by hand. `--seconds 0` runs until the byte limit.
 
 The board has very little heap (about 80 KB on the RP2040 demo board), so
 `ttcap capture` clears the previous run's names and collects garbage before
@@ -153,7 +160,7 @@ counted.
 ### Stopping
 
 Ctrl-C ends the run cleanly. The demo forwards the signal once to
-`gst-launch -e`, which turns it into an end-of-stream, so the board winds
+`gst-launch-1.0 -e`, which turns it into an end-of-stream, so the board winds
 down through `vgacapttsrc`'s cooperative stop and the Matroska file is
 finalized rather than truncated. Allow one DMA buffer for that: 2.2 s at a
 60 kHz project clock. `SIGTERM`, `SIGHUP` and `SIGQUIT` do the same.
@@ -181,8 +188,10 @@ see the comment on `WELLAND`) and resolves it to a link:
 * **on the board's own Pi**, `serial:/dev/ttboard`. Stop the fpgas.online
   bridge first (`sudo systemctl stop fpgas-tt`), since it holds the device
   open;
-* **anywhere else**, the bridge at `ws://10.21.2.<port>:8765/serial`, which
-  is on the bench network. From a workstation that means an SSH tunnel:
+* **anywhere else**, the bridge at `ws://10.21.2.<octet>:8765/serial`, which
+  is on the bench network. The octet is the board's bench port number
+  (7 for tt07, 34 for fpga-1). From a workstation that means an SSH
+  tunnel:
 
 ```sh
 ssh -N -L 18007:10.21.2.7:8765 tweed.welland.mithis.com   # tt07; 18000 + the octet
