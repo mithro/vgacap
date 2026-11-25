@@ -115,7 +115,9 @@ command layer, so it neither offers nor needs them.
 ## Building
 
 For the demo board, build MicroPython's rp2 port (RP2350B, board
-definition `psychogenic/tinytapeout_rp2350b`) with the module:
+definition `psychogenic/tinytapeout_rp2350b`, checked out into a directory
+named `tt_rp2350_board`, which is the MicroPython `BOARD` name) with the
+module:
 
     make -C micropython/ports/rp2 BOARD=tt_rp2350_board \
         USER_C_MODULES=<vgacap>/mpy/micropython.cmake
