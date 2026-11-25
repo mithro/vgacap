@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from vgacap.stream import (Header, Writer, leb128_decode, leb128_encode, read_chunks,
+from vgacap.stream import (Header, Writer, leb128_decode, leb128_encode, parse_header, read_chunks,
                            read_stream, TINYVGA_MAP)
 
 DUMP = pathlib.Path(__file__).resolve().parents[2] / "build" / "vgacap-dump"
@@ -379,3 +379,11 @@ def test_c_dump_bad_meta_keeps_n_known(tmp_path):
     out = subprocess.run([str(DUMP), str(f)], capture_output=True, text=True, check=True).stdout
     assert "reason=bad META text" in out
     assert "total_samples=21 crc64=" in out
+
+
+def test_parse_header_v2_keeps_clock_hz_and_clock_fields():
+    h = parse_header(stream(trace_header())[8:8 + 24])
+    assert h.clock_hz == 25_175_000
+    assert type(h.clock_hz) is int
+    assert (h.samples_per_clock, h.clock_bit, h.clock_first) == (2, 42, 0)
+    assert h.has_clock
