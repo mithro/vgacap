@@ -1,12 +1,12 @@
 # tools/
 
-Scripts that work against real Tiny Tapeout demo boards:
+Scripts that work against real [Tiny Tapeout](https://tinytapeout.com) demo boards:
 
-- `board_exec.py` runs a MicroPython file on a board through ttcap's raw
+- [`board_exec.py`](board_exec.py) runs a MicroPython file on a board through [ttcap](../python/ttcap/README.md)'s raw
   REPL.
-- `board_restart.py` puts a demo board back to the SDK's start state
+- [`board_restart.py`](board_restart.py) puts a demo board back to the [SDK](https://github.com/TinyTapeout/tt-micropython-firmware)'s start state
   (Ctrl-B, Ctrl-D).
-- `hil.py` is the hardware-in-the-loop check, described next.
+- [`hil.py`](hil.py) is the hardware-in-the-loop check, described next.
 
 ## Hardware-in-the-loop check
 
@@ -18,7 +18,7 @@ board can settle and writes a dated Markdown report. The checks are:
   [`rxstall`](../firmware/PROTOCOL.md#capture-output), from the closing
   `TIME` chunk;
 - `reconstruct`: frame count against the project clock;
-- `reference`: pixel-exact against a `tt-vga-testpatterns` calibration
+- `reference`: pixel-exact against a [`tt-vga-testpatterns`](https://github.com/mithro/tt-vga-testpatterns) calibration
   render;
 - `frame`: whole frames at the design's real clock, each one pixel-exact;
 - `demo-frames`, `video` and `serve`;
@@ -39,7 +39,7 @@ tools/hil.sh --board fpga-1 --design tt_um_vgacal_bars --clock-hz 500000 \
     --link ws://127.0.0.1:18034/serial docs/results/
 ```
 
-`tools/hil.sh` only runs `hil.py` in this checkout's uv environment;
+[`tools/hil.sh`](hil.sh) only runs `hil.py` in this checkout's uv environment;
 `tools/hil.py --help` lists every option. Useful ones:
 
 - `--no-demo` for a host without GStreamer (the pipeline checks then SKIP,
@@ -66,5 +66,5 @@ them:
   report).
 
 Before running against a bench board, check its page on
-tinytapeout.fpgas.online (`/board/<slug>/status.json`) for other clients,
+[tinytapeout.fpgas.online](https://tinytapeout.fpgas.online) (`/board/<slug>/status.json`) for other clients,
 and confirm the board's USB serial: boards move between ports.
