@@ -15,7 +15,7 @@ stream format, which vgacap's C and Python readers check.
 |---|---|---|
 | `vgacap_raw_framer` | 8-bit samples in; `RAW ` chunks (fixed size, header first) and overrun `TIME` chunks out, as a valid/ready byte stream | here, tested |
 | `UoSampler` | `uo_out` registered on the design clock | in tt-harness-handheld-vga, to be contributed |
-| RLE chunk writer | for byte-limited links | waits on the compact-chunk decision |
+| RLE chunk writer | for byte-limited links | waits on the [compact-chunk decision](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-11-24-board-rle-throughput.md) |
 
 ## vgacap_raw_framer
 
