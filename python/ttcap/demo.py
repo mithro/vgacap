@@ -51,6 +51,7 @@ import socket
 import subprocess
 import sys
 import threading
+import ipaddress
 import time
 import urllib.parse
 from dataclasses import dataclass, field
@@ -406,8 +407,34 @@ def board_of_this_pi(hostname: str | None = None) -> str | None:
     return None
 
 
-#: Host names a tunnel's near end is reached by (`tunnel_hint`).
-LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+def _is_loopback(host: str) -> bool:
+    """127.0.0.0/8, ::1 or localhost: this machine."""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def link_is_this_machine(url: str | None) -> bool:
+    """True for a ws:// link to this machine that is not a tunnel's near end.
+
+    On a bench Pi, ws://127.0.0.1:8765/serial is the Pi's own bridge to its
+    own board, so the board is the one `board_of_this_pi` names. A loopback
+    port that is some board's `tunnel_port` is a tunnel to that board
+    instead (`board_of_link`).
+    """
+    if not url or not (url.startswith("ws://") or url.startswith("wss://")):
+        return False
+    parsed = urllib.parse.urlsplit(url)
+    if not _is_loopback((parsed.hostname or "").lower()):
+        return False
+    try:
+        port = parsed.port
+    except ValueError:
+        return True
+    return port not in {tunnel_port(slug) for slug in WELLAND}
 
 
 def board_of_link(url: str | None) -> str | None:
@@ -429,7 +456,7 @@ def board_of_link(url: str | None) -> str | None:
     for slug in sorted(WELLAND):
         if host == bridge_host(slug) or host.split(".", 1)[0] == pi_hostname(slug).lower():
             return slug
-        if host in LOOPBACK_HOSTS and port == tunnel_port(slug):
+        if _is_loopback(host) and port == tunnel_port(slug):
             return slug
     return None
 
@@ -448,8 +475,9 @@ def check_asic_index(
     host refuses it here, as `check_board_wants` refuses --project, by the
     slug -- from every source that names one: `--board`, the link
     (`board_of_link`: a bridge address, a Pi name or a tunnel port), and,
-    for a `serial:` link (or none), the bench Pi this runs on, whose board
-    that serial port is. Refused when any of them is an FPGA board, or when
+    for a `serial:` link, a loopback ws:// link that is not a tunnel port
+    (the Pi's own bridge, `link_is_this_machine`) or no link, the bench Pi
+    this runs on, whose board that is. Refused when any of them is an FPGA board, or when
     they disagree (which board is it?). With none of them there is no
     knowing what is on the other end, and nothing is refused.
 
@@ -464,7 +492,7 @@ def check_asic_index(
     from_link = board_of_link(link)
     if from_link is not None:
         named["the link"] = from_link
-    if link is None or link.startswith("serial:"):
+    if link is None or link.startswith("serial:") or link_is_this_machine(link):
         here = board_of_this_pi(hostname)
         if here is not None:
             named["this Pi"] = here
