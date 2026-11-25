@@ -47,6 +47,15 @@ about 0.5 M samples/s. The driver re-arms its DMA for each buffer, and the
 FIFO covers that gap only up to that rate. The way past it is a cyclic-DMA
 kernel module ([`mithro/rpi5-rp1-pio-bench`](https://github.com/mithro/rpi5-rp1-pio-bench), 45-56 MB/s).
 
+Those losses are not counted, so `vgacap-rp1` refuses a `--clock-hz` above
+500000 unless `--unproven-rate` is given. A capture above that rate, or one
+with no `--clock-hz`, warns and writes its closing `TIME` chunk with
+`dropped=unknown` in the message and `dropped_samples` = 0xFFFFFFFF, so a
+check for nothing dropped fails rather than passes. Only a declared rate of
+500000 or less records `dropped_samples` = 0. The tool does not measure the
+clock: it trusts the declared `--clock-hz`, and `--gen` and `--gen-counter`
+run at whatever `--gen-div` and `--gen-delay` make them.
+
 ## What the driver needed
 
 - Transfer sizes are `uint16_t` in the ioctl, so 64 KB is 0.

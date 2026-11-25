@@ -89,9 +89,12 @@ the `VGCH` header, as on the other two paths.
 
 **Errors during a capture:** nothing MicroPython raises unwinds through an
 engine (they hold the PIO and DMA). A failed write ends the capture with
-nothing more written; an exception from MicroPython's event handling (a
-scheduled callback) ends it at the next chunk, with the summary written.
-Either way the exception is raised once the hardware has been given back.
+nothing more written; a pending exception raised by MicroPython's event
+handling (`mp_sched_exception()`, say) ends it at the next chunk, with the
+summary written. Either way the exception is raised once the hardware has
+been given back. An exception in a scheduled callback (`micropython.schedule`,
+a soft timer) is not one of these: MicroPython prints it to stdout -- into
+the chunk stream -- and carries on.
 
 ### What it borrows from MicroPython
 
