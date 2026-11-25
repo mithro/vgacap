@@ -72,8 +72,9 @@ one, else blocks of 64, 16, 4 and 1 lines, biggest first, at most 128
 blocks, with 4 KB held back while planning. The capture's DMA walks the
 blocks in order through control blocks (as `frame_rp2.py` does; see
 `firmware/pico/hal_rp2.c`), so even a fragmented heap gives one captured
-frame the whole region. On `fpga-1`, an FPGA demo board on the Welland
-bench whose largest free block held 188 lines, all 481 lines of 640x480
+frame the whole region. On `fpga-1`, a demo board with an FPGA breakout
+on the Welland bench whose largest free block held 188 lines, all 481
+lines of 640x480
 fitted in a handful of blocks. Only a heap with less free memory in total
 than the region sweeps a picture in several windows.
 
@@ -82,9 +83,8 @@ window takes and in how many blocks. The FRAM chunks are the firmware's
 (one chunk per window, whatever N is); the firmware's own `buffers` is
 always 1 (its 440 KB static arena).
 
-**Output:** vgacap chunks only, `RAW`/`FRAM`/`TIME` (the `RAW` chunk's
-four-byte tag is "RAW" followed by a space), exactly as the firmware
-writes them after its `ok` (PROTOCOL.md, "Capture output"), and no `DONE`
+**Output:** vgacap chunks only, `RAW`/`FRAM`/`TIME`, exactly as the firmware
+writes them after its `ok` ([PROTOCOL.md, "Capture output"](../firmware/PROTOCOL.md#capture-output)), and no `DONE`
 marker: the raw REPL's own end of output ends a capture. The host writes
 the `VGCH` header, as on the other two paths.
 
@@ -152,7 +152,7 @@ ttcap. It checks:
 * a heap fragmented into ~144 KB holes giving all 481 lines in one
   captured frame through chained buffers;
 * streams of the design's consecutive samples;
-* stops between chunks, overruns, rxstall, refusals and a caller's buffer;
+* stops between chunks, overruns, refusals and a caller's buffer;
 * `ttcap capture --firmware mpy-module`.
 
 The tests skip without `build/mpy-unix/micropython` unless
