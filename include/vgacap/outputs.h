@@ -66,6 +66,40 @@ uint64_t vgaout_frame_clocks(const vgaout_t *o);
 int vgaout_frames_txt(FILE *f, const vgaout_t *o);
 int vgaout_hash_file(FILE *f, const char *method, const vgaout_t *o);
 
+// ---- reading frames.txt's runs --------------------------------------------
+//
+// What vgacap-export needs from a frames.txt: which sampler wrote it, and
+// when each frame started. Only these keys are read: `sampler`,
+// `frame_clocks` (frame first + i of a run starts at its start clock + i *
+// frame_clocks), `frames` (a cross-check: the runs cover exactly frames 0 to
+// frames - 1) and the `runs:` section to the end of the file; every other
+// line before `runs:` is skipped unchecked (python/vgacap/framesfile.py is
+// the full reader).
+
+typedef struct vgaout_frame_run {
+    uint64_t first, count;    // frames first .. first + count - 1, count >= 1
+    int64_t distinct;         // the distinct frame, or -1 for a gap run
+    uint64_t start_clock;     // frame `first`'s start clock; 0 for a gap
+    uint32_t missing;         // 0 for a gap
+} vgaout_frame_run_t;
+
+typedef struct vgaout_frame_runs {
+    char sampler[64];         // the `sampler` value, e.g. "centre-v1"
+    uint64_t frame_clocks;
+    uint64_t frames;
+    size_t n_runs;
+    vgaout_frame_run_t *runs; // malloc'ed; vgaout_frame_runs_free releases it
+} vgaout_frame_runs_t;
+
+// Reads `f` from where it is to its end. Returns 0 with `out` filled, or -1
+// with `err` set (and nothing to free): a missing or malformed key, a run
+// line that is not "<first> <count> <distinct> <start> <missing>" or
+// "<first> <count> - - -" in plain decimal, runs that do not follow on from
+// each other from frame 0 or do not add up to `frames`, frame starts that go
+// backwards, or a read error.
+int vgaout_read_frame_runs(FILE *f, vgaout_frame_runs_t *out, char *err, size_t errlen);
+void vgaout_frame_runs_free(vgaout_frame_runs_t *r);
+
 #ifdef __cplusplus
 }
 #endif
