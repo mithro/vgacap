@@ -36,6 +36,13 @@ typedef struct sim_config {
     size_t uo_len;
     double seconds_per_byte;  // USB cost of each byte sent to the host
     size_t arena_bytes;       // the capture buffer (the firmware's is ~440 KB)
+    // A host that stops reading once: the first write at or after
+    // `stall_at` seconds waits `stall_seconds` first (0: never).
+    double stall_at, stall_seconds;
+    // A host that drops DTR (closes the port) at `host_gone_at` seconds (0:
+    // never): from then on hal_host_gone() is true and writes fail, as
+    // tud_cdc_connected() makes them on the board.
+    double host_gone_at;
 } sim_config_t;
 
 // (Re)start the simulated board: boot state, time 0, empty I/O.
@@ -57,6 +64,9 @@ int sim_input_closed(void);
 double sim_now(void);
 // Force the next frame capture's RXSTALL (tests of the rxstall reports).
 void sim_force_rxstall(int on);
+// Make hal_clock() fail, as set_sys_clock_hz() can, for any plan that
+// needs a different system clock.
+void sim_refuse_sysclk(int on);
 
 #ifdef __cplusplus
 }

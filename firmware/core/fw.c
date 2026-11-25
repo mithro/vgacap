@@ -162,7 +162,12 @@ static void cmd_clock(const char *args) {
         return;
     }
     fw_clock_plan_t plan;
-    if (fw_clock_plan((uint32_t)v[0], &plan, &why) || hal_clock(&plan, &why)) {
+    if (fw_clock_plan((uint32_t)v[0], &plan, &why)) {
+        reply("err clock %lu: %s", (unsigned long)v[0], why);  // the clock runs on as it was
+        return;
+    }
+    if (hal_clock(&plan, &why)) {
+        S.clock_on = 0;  // hal_clock() stopped the PWM before it failed
         reply("err clock %lu: %s", (unsigned long)v[0], why);
         return;
     }
@@ -258,7 +263,6 @@ static void cmd_stream(const char *args) {
 
     out_t o;
     out_init(&o);
-    uint32_t reported = 0;
     int index = 0, stopping = 0;
     for (;;) {
         while (!hal_stream_full(index)) {
@@ -271,12 +275,13 @@ static void cmd_stream(const char *args) {
         if (stopping) break;
         vgacap_writer_raw(&o.w, bufs[index], spc);
         hal_flush();  // a whole chunk reaches the host now, not with the next one
+        // Released first: once the buffer is not full no fill can tear it,
+        // so a tear during the send above cannot be missed here. A torn
+        // chunk is never followed by another without its report.
         hal_stream_release(index);
-        uint32_t overruns = hal_stream_overruns();
-        if (overruns > reported) {
+        if (hal_stream_take_torn(index)) {
             // Cumulative, never an increment: see prelude.py write_time_chunk().
-            out_time(&o, overruns * spc, "overrun");
-            reported = overruns;
+            out_time(&o, hal_stream_overruns() * spc, "overrun");
         }
         index = 1 - index;
         // Both stop checks between whole chunks: max_bytes so the board
@@ -465,7 +470,15 @@ void fw_poll(void) {
             S.overlong = 0;
             continue;
         }
-        // '\r', and a stop byte that arrives between captures, are dropped.
+        // A stop byte between captures discards the line so far: a host
+        // resyncing with "\x03\nhello\n" gets a clean line whatever an
+        // earlier host left half-sent (PROTOCOL.md, "known state").
+        if (c == FW_STOP_BYTE) {
+            S.len = 0;
+            S.overlong = 0;
+            continue;
+        }
+        // '\r' and the other control characters are dropped.
         if (c < 0x20 || c == 0x7F) continue;
         if (S.len < FW_LINE_MAX) S.line[S.len++] = (char)c;
         else S.overlong = 1;

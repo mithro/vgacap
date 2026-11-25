@@ -8,13 +8,23 @@ The serial settings do not matter (it is USB CDC), but the host must assert
 DTR, as pyserial does when it opens a port: the firmware only writes while
 DTR is set, and a capture whose host drops DTR stops.
 
+A bridge that keeps the port open keeps DTR set for as long as it does.
+The fpgas.online-tt daemon (`fpgas_tt/bridge.py`) opens the port through
+pyserial-asyncio, so DTR is asserted, and holds it open whether or not a
+ws:// client is connected: a client that leaves mid-capture does not drop
+DTR, and the capture runs on to `max_bytes` or the next host's `0x03`. (Its
+udev rule makes `/dev/ttboard` only for the stock firmware's 2e8a:0005 and
+2e8a:000f, so it bridges this firmware's 2e8a:0009 port only if started
+with `--device` pointing at it.)
+
 ## Commands and replies
 
 A command is one line of ASCII: a command word, then `key=value` arguments
-separated by spaces, ending in `\n`. `\r` and other control characters are
-ignored, an empty line does nothing, and a line over 256 bytes is refused
-whole. Every argument a command takes must be given exactly once; an
-unknown or repeated key is an error, and so is a value outside its range.
+separated by spaces, ending in `\n`. `0x03` discards the line so far;
+`\r` and other control characters are ignored, an empty line does
+nothing, and a line over 256 bytes is refused whole. Every argument a
+command takes must be given exactly once; an unknown or repeated key is
+an error, and so is a value outside its range.
 There are no defaults: the host always says what it wants.
 
 Each command gets exactly one reply line: `ok` followed by `key=value`
@@ -53,10 +63,20 @@ fields, or `err` followed by a message for a person.
 * `reboot` returns the board to the firmware in its flash (the stock
   firmware); `bootsel` is for loading another UF2 without it.
 
+At boot the firmware drives one pin, GPIO 1 (`ctrl_sel_nrst`: the iCE40's
+`CRESET_B` on an FPGA breakout, the mux controller's reset on an ASIC
+carrier), high -- the level the stock firmware leaves it at, without a
+glitch low -- and makes `uo_out` (GPIO 33..40) inputs. Every other pin,
+GPIO 0 and 2 (`ctrl_ena`, `ctrl_sel_inc`) included, stays as the
+bootloader left it until a command drives it (README.md, "Hardware
+notes").
+
 A host can always get the firmware into a known state by sending
 `\x03\nhello\n` and discarding everything before the `ok vgacap-fw` reply:
-the stop byte ends a capture left running by a host that went away, an
-idle firmware ignores it, and the empty line ends any half-sent command.
+the stop byte ends a capture left running by a host that went away, and
+an idle firmware discards the line received so far on it, so a half-sent
+command (say `reboo`) is never completed by what follows; the empty line
+then does nothing.
 
 ## Captures
 
@@ -67,10 +87,15 @@ idle firmware ignores it, and the empty line ends any half-sent command.
 Continuous capture, `python/ttcap/mp/capture_rp2.py`'s semantics: one sample
 of `uo_out` on every chosen edge of the project clock, into two DMA
 buffers of `buf_words` 32-bit words (4 samples each) that alternate. Each
-full buffer is sent as a `RAW ` chunk. A buffer the DMA comes back to
-before it was sent is an *overrun*: a `TIME` chunk with the message
-`overrun` follows the next `RAW `, its `dropped_samples` the cumulative
-total so far. `max_bytes` stops the capture once the chunks sent (RAW and
+full buffer is sent as a `RAW ` chunk, read from the live buffer. The DMA
+starts rewriting a buffer as soon as the other one fills, so a fill that
+starts on a buffer not yet completely sent is an *overrun*: that buffer
+is torn, and its `RAW ` chunk (sent before, during or after the rewrite)
+mixes two fills. A `TIME` chunk with the message `overrun` follows that
+very `RAW ` chunk, before any other, its `dropped_samples` the cumulative
+total so far (an upper bound: a rewrite that started during the send but
+never overtook it counts too). vgacap-frames and vgadecode drop the
+picture in progress there. `max_bytes` stops the capture once the chunks sent (RAW and
 overrun TIME, headers included) reach it; 0 means only a stop byte ends it.
 The project clock must be running.
 
