@@ -40,7 +40,7 @@ and `tt09` is a demo board with an ASIC breakout (a TT09 chip) at Welland.
 | [`sim/sim_main.c`](sim/sim_main.c) | `vgacap-fw-sim` | no | no |
 | [`CMakeLists.txt`](CMakeLists.txt) | pico-sdk firmware build | no | no |
 
-The root [`CMakeLists.txt`](../CMakeLists.txt) builds `core/` and `sim/` for the host (no ARM
+The root [`CMakeLists.txt`](../CMakeLists.txt) builds [`core/`](core/) and [`sim/`](sim/) for the host (no ARM
 toolchain): `vgacap-fw-sim` and the C tests [`test_fw_units`](../tests/test_fw_units.c) and
 [`test_fw_core`](../tests/test_fw_core.c). The Python tests in [`python/tests/test_fw_sim.py`](../python/tests/test_fw_sim.py) drive
 `vgacap-fw-sim` through ttcap's firmware transport.
@@ -51,7 +51,7 @@ Toolchain (Debian/Ubuntu): `sudo apt-get install gcc-arm-none-eabi
 libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib ninja-build`, plus a host C/C++
 compiler and CMake for
 [pioasm](https://github.com/raspberrypi/pico-sdk/tree/a1438dff1d38bd9c65dbd693f0e5db4b9ae91779/tools/pioasm)
-and picotool, which the SDK builds itself.
+and [picotool](https://github.com/raspberrypi/picotool), which the SDK builds itself.
 
 The SDK is pinned to [**pico-sdk 2.2.0**](https://github.com/raspberrypi/pico-sdk/releases/tag/2.2.0), commit
 [`a1438dff1d38bd9c65dbd693f0e5db4b9ae91779`](https://github.com/raspberrypi/pico-sdk/tree/a1438dff1d38bd9c65dbd693f0e5db4b9ae91779), with `lib/tinyusb` at its
@@ -64,12 +64,12 @@ any other SDK version.
     cmake --build firmware/build
 
 The result is `firmware/build/vgacap_fw.uf2` (family `rp2350-arm-s`,
-loaded at `0x20000000`). The first configure fetches [picotool](https://github.com/raspberrypi/picotool) 2.2.0 and
+loaded at `0x20000000`). The first configure fetches picotool 2.2.0 and
 builds it; `-DPICOTOOL_FETCH_FROM_GIT_PATH=<dir>` shares that between
 builds.
 
 The build also assembles `pio/*.pio` with pioasm and fails if the output
-differs from the checked-in `pio/*.hex` (which the host tests read). After
+differs from the checked-in [`pio/*.hex`](pio/) (which the host tests read). After
 changing a `.pio` file, copy `firmware/build/<name>.hex` into `pio/`.
 
 Our sources compile with `-Wall -Wextra -Werror` (the SDK's are not ours
@@ -118,10 +118,8 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
 * **ASIC breakouts lose their project across the switch.** On tt09
   (2026-11-24) the stock firmware's frame capture of
   `tt_um_rejunity_vga_logo` was clean, but this firmware's, after the
-  switch, saw no sync at all. Nothing drives the mux lines while the
-  RP2350 is in reset and in its bootloader (pad pull-downs), so the mux
-  comes back with nothing selected, and driving GPIO 1 high at boot does
-  not select anything. So this firmware selects the project itself with
+  switch, saw no sync at all: the mux comes back with nothing selected.
+  So this firmware selects the project itself with
   `asic_select index=N`, using the stock SDK's sequence
   ([PROTOCOL.md](PROTOCOL.md)); `ttcap capture --firmware picosdk
   --asic-index N` sends it. N is `tt.shuttle.<name>.count` under the stock
@@ -130,8 +128,8 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   `ttcap` refuses `--asic-index` for a bench demo board with an FPGA
   breakout, and when these disagree about which board it is:
   - `--board` (`ttcap capture --board SLUG`);
-  - a `ws://` or `wss://` link: the fpgas.online bridge's (`fpgas-tt`)
-    address, the Pi's name, or a loopback address (127.0.0.0/8,
+  - a `ws://` or `wss://` link: the address of the fpgas.online bridge
+    (`fpgas-tt`), the Pi's name, or a loopback address (127.0.0.0/8,
     `localhost`, `::1`) on a tunnel's `18000 + octet` port, which names
     the tunnel's board;
   - for a `serial:` link, or a loopback link on any other port (the Pi's
