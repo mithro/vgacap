@@ -21,7 +21,7 @@ REPL. The other capture sources have their own READMEs:
 uv run ttcap probe serial:/dev/ttyACM0          # sys.version and the GPIO map
 uv run ttcap throughput serial:/dev/ttyACM0     # what clock the link can keep up with
 uv run ttcap capture serial:/dev/ttyACM0 \
-    --project tt_um_rejunity_vga --clock-hz 100000 --seconds 1 --out capture.vgacap
+    --project tt_um_rejunity_vga --clock-hz 60000 --seconds 1 --out capture.vgacap
 uv run ttcap png capture.vgacap out/frame       # out/frame-0000.png ...
 ```
 
@@ -29,18 +29,9 @@ uv run ttcap png capture.vgacap out/frame       # out/frame-0000.png ...
 the RP2040 or RP2350 layout from it.
 
 Stop the capture by time (`--seconds`) or by size (`--max-bytes N`, or
-`--frames N`). `--frames N` asks the board for N + 2 frame periods of
-samples at 640x480@60 timing (800x525 clocks a frame), packed as the board
-packs them, plus the 12 non-sample bytes of each `RAW` chunk, because the
-board's byte limit counts whole chunks. The two extra periods are there
-because a capture starts mid-frame: the tail of that first frame is
-unusable, the next frame boundary only tells the reconstruction where
-frames begin, and the first frame that can be rendered is the whole one
-after it (see
-[When frames appear](../../src/tools/README.md#when-frames-appear)). With
-only one extra period, a `--frames 1` capture on tt07 gave
-`vgacap-frames` zero frames. A design at another resolution needs
-`--max-bytes` worked out by hand. `--seconds 0` runs until the byte limit.
+`--frames N`). `--frames N` captures N + 2 frame periods at 640x480@60
+timing ([When frames appear](../../src/tools/README.md#when-frames-appear)).
+`--seconds 0` runs until the byte limit.
 
 The board has very little heap (about 80 KB on the RP2040 demo board), so
 `ttcap capture` clears the previous run's names and collects garbage before
@@ -129,11 +120,7 @@ is for.
 ### Checked arguments
 
 Every numeric argument is range-checked before the board is contacted, and
-a bad one is refused with the range it takes. GObject answers an
-out-of-range property with a `CRITICAL` on stderr and then *ignores* it, so
-`--seconds -5` used to leave `seconds` at its default of 0, which means
-"capture until stopped": a typo started an unbounded capture on a shared
-board. `--seconds 0` still means exactly that when you ask for it.
+a bad one is refused with the range it takes.
 
 A `--clock-hz` above what the demo board has been measured to keep up with
 *at the default buffer size* (60 kHz on an RP2040 demo board, 750 kHz on an
@@ -146,7 +133,7 @@ legitimate thing to want, the closing `TIME` chunk reports it, and a larger
 `--outdir` belongs to one run alone. A directory that already holds a
 `frame-*.png` or a `capture.mkv` is **refused**, because a shorter capture
 would overwrite the first frames and leave the rest: two runs mixed
-together, which is the worst thing to find in `docs/results/` later.
+together.
 `--force` first deletes every `frame-*.png` and `capture.mkv` in it (the
 refusal names them, so nothing goes unseen) and leaves everything else
 alone.
@@ -172,8 +159,7 @@ cannot be covered, since nothing in the process runs after it.
 
 Because every one of those is a *graceful* stop, the demo then exits with
 the pipeline's own status: a `kill` on a run that captured successfully
-exits **0**, not 143. A supervisor reading the exit status should treat
-that as the success it is.
+exits **0**, not 143.
 
 ## Reaching a Welland board
 

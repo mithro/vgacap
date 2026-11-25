@@ -14,13 +14,11 @@ uv run vgacap-bin2stream dump.bin out.vgacap  # (Python) wrap a one-byte-per-clo
 ## When frames appear
 
 A frame is emitted at the frame boundary that closes it, once the timing is
-known. A capture that starts mid-frame (the normal case) claims
-the frame that its first vsync pulse begins, so two frame periods are
-enough for the first picture, and each further period adds one. A capture
-that happens to start exactly on a vsync pulse cannot measure that pulse
-and waits for the next one, so capture at least three frame periods to be
-sure. `ttcap capture --frames N` sizes its capture by the same rule: N + 2
-frame periods, so three for one frame and one more for each further frame.
+known. A capture starts mid-frame: the tail of that frame is unusable, the
+next boundary only tells the reconstruction where frames begin, and the
+whole frame after it is the first that can be rendered. So capture at
+least three frame periods for one picture; `ttcap capture --frames N`
+captures N + 2.
 
 ## Glitches
 
