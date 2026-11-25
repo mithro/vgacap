@@ -29,3 +29,9 @@ Spurious sync pulses are tolerated: a capture whose hsync carries the odd
 glitch of 2 to 30 clocks ([real silicon does](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-tt08-tiny-logo-glitch-tolerance)) still reconstructs.
 `vgacap-frames` reports `glitches=N` per frame, counting the pulses rejected
 since the previous frame, and `glitches_total=N` for the whole stream.
+
+## Overruns
+
+An overrun (a `TIME` chunk with the message `overrun`, or a rise in its
+dropped count) discards the picture in progress, so no frame is built
+across the gap; `vgacap-frames` reports each one on stderr.
