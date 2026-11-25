@@ -190,6 +190,70 @@ def test_more_pairs_than_the_link_carries_are_reported_as_overruns(bars_uo):
     assert dropped[-1] == overruns * 4096 // 2
 
 
+#: A counting design (test_emu_board.py's): it changes every clock, so
+#: every pair is one sample, and its period, 251, divides no buffer -- a
+#: chunk that does not continue the one before it shows as a jump.
+COUNT = 251
+
+
+def damaged_and_reported(stream: bytes) -> list[tuple[bool, bool]]:
+    """(damaged, reported) per `RLE ` chunk of the counting design:
+    damaged if a run is not 1, the values jump inside it or it does not
+    continue the chunk before; reported if an `overrun` TIME chunk is
+    next."""
+    items = list(read_chunks(stream))
+    result, last = [], None
+    for i, (tag, payload) in enumerate(items):
+        if tag != "RLE ":
+            continue
+        words = np.frombuffer(payload[4:], dtype="<u4")
+        values, runs = words[0::2].astype(np.int64), words[1::2]
+        damaged = bool(np.any(runs != 1) or np.any(np.diff(values) % COUNT != 1))
+        damaged |= last is not None and (values[0] - last) % COUNT != 1
+        last = values[-1]
+        after = items[i + 1] if i + 1 < len(items) else ("", b"")
+        result.append((damaged, after[0] == "TIME" and after[1][18:] == b"overrun"))
+    return result
+
+
+def counting_capture(usb_stalls=(), stop_bytes=6 * 16_400, patch=None):
+    """The counting design at 1.33 MHz (edge style, a buffer of 2048 pairs
+    in 204,800 cycles) over a link twice as fast as its pairs."""
+    profile = RP2350_DBV3
+    wave = Waveform(bytes(range(COUNT)), profile.uo_gpios, profile.clk_gpio, period=100)
+    board = Board(wave, sysclk_hz=133_000_000, cycles_per_byte=100 / 16)
+    board.usb_stalls = list(usb_stalls)
+    board.stop_after_bytes = stop_bytes
+    script = mp.build(rle_cfg(profile, clock_hz=1_330_000), "rle_rp2.py")
+    if patch:
+        script = patch(script)
+    return board.run_script(script)
+
+
+def test_a_chunk_the_dma_rewrote_while_it_was_sent_is_reported():
+    # capture_rp2.py's torn send, under RLE: halfway through the second
+    # chunk the host stops reading for 1.36 fills. The chain starts B on
+    # that buffer while it is still being sent, and the send ends before B
+    # completes, so a completion-time check never sees it -- yet the rest
+    # of the chunk is new pairs, one short and spliced onto old ones.
+    first = 8 + 18 + len("rle style=edge period=100 mask=1")
+    stream = counting_capture(usb_stalls=[(first + 16_396 + 8_000, int(1.36 * 204_800))])
+
+    chunks = damaged_and_reported(stream)
+    assert chunks[1] == (True, True)
+    assert all(reported for damaged, reported in chunks if damaged)
+    summary = messages(stream)[-1]
+    assert not summary.startswith("overruns=0 ")
+
+
+def test_a_counting_capture_that_keeps_up_damages_and_reports_nothing():
+    stream = counting_capture()
+
+    chunks = damaged_and_reported(stream)
+    assert len(chunks) >= 4 and not any(d or r for d, r in chunks)
+    assert messages(stream)[-1].startswith("overruns=0 rxstall=0 ")
+
+
 @pytest.mark.parametrize("oneshot", [False, True], ids=["stream", "oneshot"])
 def test_a_stopped_rle_capture_leaves_no_dma_channel_running(bars_uo, oneshot):
     # A and B chain to each other, so on RP2350 aborting one re-triggers

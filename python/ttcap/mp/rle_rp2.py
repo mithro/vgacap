@@ -79,9 +79,13 @@ summary reports -- a nonzero rxstall means the stream is wrong.
 
 DMA, overruns, the cooperative stop and the hard-IRQ rules are
 capture_rp2.py's, repeated here rather than shared so that neither script
-grows by the other's code on a board that compiles each in ~80 KB. An
-overrun's lost samples cannot be counted from pairs, so `dropped_samples`
-is a lower bound: one sample per lost pair.
+grows by the other's code on a board that compiles each in ~80 KB. So an
+overrun is counted when the chain starts on a buffer still FULL, which is
+marked TORN, and the `overrun` TIME chunk follows the torn chunk itself --
+under RLE a torn chunk is worse than a gap: the new pairs in it are one
+short (fix_runs has already run) and spliced onto old ones. An overrun's
+lost samples cannot be counted from pairs, so `dropped_samples` is a
+lower bound: one sample per lost pair.
 """
 
 BUF_WORDS = CFG["buf_words"]  # noqa: F821 - CFG is prepended by the host
@@ -220,22 +224,25 @@ TC_B = 0
 ADDR_A = 0
 ADDR_B = 0
 FULL = [False, False]
+TORN = [False, False]
 OVERRUNS = [0]
 
 
 def on_a(_channel):
     MEM[WR_A] = ADDR_A
     MEM[TC_A] = BUF_WORDS
-    if FULL[0]:
+    if FULL[1]:  # A's chain has just started B on buffer 1
         OVERRUNS[0] += 1
+        TORN[1] = True
     FULL[0] = True
 
 
 def on_b(_channel):
     MEM[WR_B] = ADDR_B
     MEM[TC_B] = BUF_WORDS
-    if FULL[1]:
+    if FULL[0] and not ONESHOT:  # a oneshot's B chains to the stopper
         OVERRUNS[0] += 1
+        TORN[0] = True
     FULL[1] = True
 
 
@@ -288,8 +295,7 @@ def main(out):
     global WR_A, WR_B, TC_A, TC_B, ADDR_A, ADDR_B
 
     bufs = [bytearray(BUF_BYTES), bytearray(BUF_BYTES)]
-    FULL[0] = False
-    FULL[1] = False
+    FULL[0] = FULL[1] = TORN[0] = TORN[1] = False
     OVERRUNS[0] = 0
     dma_a = None
     dma_b = None
@@ -343,7 +349,6 @@ def main(out):
         dma_a.active(1)
         sm.active(1)
 
-        reported = 0
         index = 0
         stopping = False
         while True:
@@ -361,10 +366,10 @@ def main(out):
                 sent += write_pairs(out, buf)
             else:
                 sent += write_rle_chunk(out, buf, PAIRS_PER_BUF)
-            FULL[index] = False
-            if OVERRUNS[0] > reported:
+            FULL[index] = False  # first, so a tear in the send is seen below
+            if TORN[index]:
+                TORN[index] = False
                 sent += write_time_chunk(out, OVERRUNS[0] * PAIRS_PER_BUF, b"overrun")  # noqa: F821
-                reported = OVERRUNS[0]
             index = 1 - index
             if ONESHOT and index == 0:
                 break
