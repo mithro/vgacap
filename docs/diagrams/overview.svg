@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1146" height="650" viewBox="0 0 1146 650" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+<title id="t">vgacap overview</title>
+<desc id="d">Capture sources on the left write one vgacap stream in the middle; reconstruction and the tools on the right turn it into pictures, video and checks.</desc>
+<style>
+  .title { font-size: 14px; font-weight: 600; fill: #1d2433; }
+  .detail { font-size: 12.5px; fill: #5b6577; }
+  .net { font-size: 11.5px; font-weight: 600; }
+  .tag { font-size: 12px; font-weight: 600; }
+  .pad { font-size: 12px; font-weight: 600; fill: #1d2433; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .legend { font-size: 12.5px; fill: #1d2433; }
+</style>
+<defs>
+<marker id="arrow-sig" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="3.4" markerHeight="3.4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#1c64d4"/></marker>
+<marker id="arrow-str" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="3.0" markerHeight="3.0" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#f2620c"/></marker>
+<marker id="arrow-pic" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="3.4" markerHeight="3.4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#14845a"/></marker>
+<marker id="arrow-ctl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4.1" markerHeight="4.1" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6b46d6"/></marker>
+</defs>
+<rect x="0" y="0" width="1146" height="650" fill="#ffffff"/>
+<text x="110.0" y="24" class="tag" text-anchor="middle" fill="#5b6577">UNDER CAPTURE</text>
+<text x="421.0" y="24" class="tag" text-anchor="middle" fill="#5b6577">CAPTURE SOURCES</text>
+<text x="814.0" y="24" class="tag" text-anchor="middle" fill="#5b6577">ONE FORMAT</text>
+<text x="1044.0" y="24" class="tag" text-anchor="middle" fill="#5b6577">CONSUMERS</text>
+<rect x="20" y="130.0" width="180" height="410.0" rx="4" fill="#ffffff" stroke="#1d2433" stroke-width="1.5"/>
+<text x="34" y="156.0" class="title" text-anchor="start">Tiny Tapeout design</text>
+<text x="34" y="178.0" class="detail" text-anchor="start">on an ASIC, an FPGA</text>
+<text x="34" y="195.0" class="detail" text-anchor="start">or in a simulator</text>
+<text x="34" y="212.0" class="detail" text-anchor="start"></text>
+<text x="34" y="229.0" class="detail" text-anchor="start">VGA on the Tiny VGA</text>
+<text x="34" y="246.0" class="detail" text-anchor="start">Pmod: uo_out[7:0]</text>
+<text x="34" y="263.0" class="detail" text-anchor="start"></text>
+<text x="34" y="280.0" class="detail" text-anchor="start">project clock</text>
+<text x="34" y="297.0" class="detail" text-anchor="start">25.175 MHz typical</text>
+<rect x="296" y="44" width="250" height="36" rx="8" fill="#f2eefd" stroke="#c2b2f0" stroke-width="1.25"/>
+<text x="308" y="66" class="title" text-anchor="start" fill="#1d2433">ttcap on a host computer</text>
+<path d="M336 80 L336 128.0" fill="none" stroke="#6b46d6" stroke-width="1.75" stroke-dasharray="5 4" marker-end="url(#arrow-ctl)"/>
+<text x="346" y="105" class="net" text-anchor="start" fill="#6b46d6">clock, reset, start, stop</text>
+<rect x="296" y="130.0" width="250" height="92" rx="8" fill="#eaf1fd" stroke="#9dbcef" stroke-width="1.25"/>
+<text x="308" y="152.0" class="title" text-anchor="start" fill="#1d2433">Tiny Tapeout demo board</text>
+<text x="308" y="171.0" class="detail" text-anchor="start">its RP2040 or RP2350 samples</text>
+<text x="308" y="188.0" class="detail" text-anchor="start">uo_out with PIO, once a clock;</text>
+<text x="308" y="205.0" class="detail" text-anchor="start">stock firmware or vgacap's own</text>
+<path d="M200 176 L294 176" fill="none" stroke="#1c64d4" stroke-width="3" marker-end="url(#arrow-sig)"/>
+<text x="248.0" y="168" class="net" text-anchor="middle" fill="#1c64d4">uo_out[7:0]</text>
+<path d="M546 176 L714 176" fill="none" stroke="#f2620c" stroke-width="4.5" marker-end="url(#arrow-str)"/>
+<text x="631.0" y="167" class="net" text-anchor="middle" fill="#f2620c">USB serial or websocket</text>
+<text x="631.0" y="195" class="detail" text-anchor="middle">up to ~0.7 MB/s</text>
+<rect x="296" y="236.0" width="250" height="92" rx="8" fill="#eaf1fd" stroke="#9dbcef" stroke-width="1.25"/>
+<text x="308" y="258.0" class="title" text-anchor="start" fill="#1d2433">Raspberry Pi 5</text>
+<text x="308" y="277.0" class="detail" text-anchor="start">its RP1 I/O chip samples</text>
+<text x="308" y="294.0" class="detail" text-anchor="start">uo_out on the GPIO header</text>
+<path d="M200 282 L294 282" fill="none" stroke="#1c64d4" stroke-width="3" marker-end="url(#arrow-sig)"/>
+<text x="248.0" y="274" class="net" text-anchor="middle" fill="#1c64d4">uo_out[7:0]</text>
+<path d="M546 282 L714 282" fill="none" stroke="#f2620c" stroke-width="4.5" marker-end="url(#arrow-str)"/>
+<text x="631.0" y="273" class="net" text-anchor="middle" fill="#f2620c">on the Pi itself</text>
+<text x="631.0" y="301" class="detail" text-anchor="middle">DMA to DRAM</text>
+<rect x="296" y="342.0" width="250" height="92" rx="8" fill="#eaf1fd" stroke="#9dbcef" stroke-width="1.25"/>
+<text x="308" y="364.0" class="title" text-anchor="start" fill="#1d2433">FPGA capture logic</text>
+<text x="308" y="383.0" class="detail" text-anchor="start">rtl/: built into the FPGA</text>
+<text x="308" y="400.0" class="detail" text-anchor="start">design next to the project</text>
+<path d="M200 388 L294 388" fill="none" stroke="#1c64d4" stroke-width="3" marker-end="url(#arrow-sig)"/>
+<text x="248.0" y="380" class="net" text-anchor="middle" fill="#1c64d4">uo_out[7:0]</text>
+<path d="M546 388 L714 388" fill="none" stroke="#f2620c" stroke-width="4.5" marker-end="url(#arrow-str)"/>
+<text x="631.0" y="379" class="net" text-anchor="middle" fill="#f2620c">the FPGA's own link</text>
+<text x="631.0" y="407" class="detail" text-anchor="middle">one byte a clock</text>
+<rect x="296" y="448.0" width="250" height="92" rx="8" fill="#eaf1fd" stroke="#9dbcef" stroke-width="1.25"/>
+<text x="308" y="470.0" class="title" text-anchor="start" fill="#1d2433">Simulators</text>
+<text x="308" y="489.0" class="detail" text-anchor="start">the design's RTL, run in</text>
+<text x="308" y="506.0" class="detail" text-anchor="start">Verilator or Icarus</text>
+<path d="M200 494 L294 494" fill="none" stroke="#1c64d4" stroke-width="3" marker-end="url(#arrow-sig)"/>
+<text x="248.0" y="486" class="net" text-anchor="middle" fill="#1c64d4">RTL</text>
+<path d="M546 494 L714 494" fill="none" stroke="#f2620c" stroke-width="4.5" marker-end="url(#arrow-str)"/>
+<text x="631.0" y="485" class="net" text-anchor="middle" fill="#f2620c">trace files</text>
+<text x="631.0" y="513" class="detail" text-anchor="middle">every clock</text>
+<rect x="716" y="130.0" width="196" height="410.0" rx="6" fill="#f7f8fb" stroke="#2b3445" stroke-width="2.5"/>
+<text x="814.0" y="156.0" class="title" text-anchor="middle">vgacap stream</text>
+<text x="814.0" y="174.0" class="detail" text-anchor="middle">include/vgacap/stream.h</text>
+<rect x="730" y="194.0" width="54" height="24" rx="3" fill="#ffffff" stroke="#2b3445" stroke-width="1.5"/>
+<text x="757" y="210.5" class="pad" text-anchor="middle">VGCH</text>
+<text x="794" y="210.5" class="detail" text-anchor="start">header</text>
+<rect x="730" y="244.0" width="54" height="24" rx="3" fill="#ffffff" stroke="#f2620c" stroke-width="1.5"/>
+<text x="757" y="260.5" class="pad" text-anchor="middle">RAW</text>
+<text x="794" y="260.5" class="detail" text-anchor="start">every sample</text>
+<rect x="730" y="294.0" width="54" height="24" rx="3" fill="#ffffff" stroke="#f2620c" stroke-width="1.5"/>
+<text x="757" y="310.5" class="pad" text-anchor="middle">RLE</text>
+<text x="794" y="310.5" class="detail" text-anchor="start">value + run</text>
+<rect x="730" y="344.0" width="54" height="24" rx="3" fill="#ffffff" stroke="#f2620c" stroke-width="1.5"/>
+<text x="757" y="360.5" class="pad" text-anchor="middle">FRAM</text>
+<text x="794" y="360.5" class="detail" text-anchor="start">frame or window</text>
+<rect x="730" y="394.0" width="54" height="24" rx="3" fill="#ffffff" stroke="#f2620c" stroke-width="1.5"/>
+<text x="757" y="410.5" class="pad" text-anchor="middle">EVNT</text>
+<text x="794" y="410.5" class="detail" text-anchor="start">timed changes</text>
+<rect x="730" y="444.0" width="54" height="24" rx="3" fill="#ffffff" stroke="#5b6577" stroke-width="1.5"/>
+<text x="757" y="460.5" class="pad" text-anchor="middle">TIME</text>
+<text x="794" y="460.5" class="detail" text-anchor="start">notes, overruns</text>
+<rect x="956" y="130.0" width="176" height="100" rx="8" fill="#fff2e8" stroke="#f8b48a" stroke-width="1.25"/>
+<text x="968" y="152.0" class="title" text-anchor="start" fill="#1d2433">libvgaframe</text>
+<text x="968" y="171.0" class="detail" text-anchor="start">learns sync and mode</text>
+<text x="968" y="188.0" class="detail" text-anchor="start">from the signal, then</text>
+<text x="968" y="205.0" class="detail" text-anchor="start">rebuilds each frame</text>
+<path d="M912 176 L954 176" fill="none" stroke="#f2620c" stroke-width="4.5" marker-end="url(#arrow-str)"/>
+<path d="M956 206.0 L936 206.0 L936 490.0" fill="none" stroke="#14845a" stroke-width="3"/>
+<rect x="956" y="260.0" width="176" height="76" rx="8" fill="#e7f6ef" stroke="#93d3b6" stroke-width="1.25"/>
+<text x="968" y="282.0" class="title" text-anchor="start" fill="#1d2433">Pictures</text>
+<text x="968" y="301.0" class="detail" text-anchor="start">PNG and PPM</text>
+<text x="968" y="318.0" class="detail" text-anchor="start">(vgacap-frames, ttcap png)</text>
+<path d="M936 298.0 L954 298.0" fill="none" stroke="#14845a" stroke-width="3" marker-end="url(#arrow-pic)"/>
+<rect x="956" y="356.0" width="176" height="76" rx="8" fill="#e7f6ef" stroke="#93d3b6" stroke-width="1.25"/>
+<text x="968" y="378.0" class="title" text-anchor="start" fill="#1d2433">Video</text>
+<text x="968" y="397.0" class="detail" text-anchor="start">GStreamer: MKV, a window,</text>
+<text x="968" y="414.0" class="detail" text-anchor="start">MJPEG (ttcap demo)</text>
+<path d="M936 394.0 L954 394.0" fill="none" stroke="#14845a" stroke-width="3" marker-end="url(#arrow-pic)"/>
+<rect x="956" y="452.0" width="176" height="76" rx="8" fill="#e7f6ef" stroke="#93d3b6" stroke-width="1.25"/>
+<text x="968" y="474.0" class="title" text-anchor="start" fill="#1d2433">Checks</text>
+<text x="968" y="493.0" class="detail" text-anchor="start">pixel-exact against</text>
+<text x="968" y="510.0" class="detail" text-anchor="start">reference renders</text>
+<path d="M936 490.0 L954 490.0" fill="none" stroke="#14845a" stroke-width="3" marker-end="url(#arrow-pic)"/>
+<rect x="296" y="582" width="834" height="54" rx="6" fill="#ffffff" stroke="#cfd5df" stroke-width="1.25"/>
+<path d="M314 609 L358 609" fill="none" stroke="#1c64d4" stroke-width="3" marker-end="url(#arrow-sig)"/>
+<text x="368" y="613.5" class="legend" text-anchor="start">the design's signals</text>
+<path d="M542.0 609 L586.0 609" fill="none" stroke="#f2620c" stroke-width="4.5" marker-end="url(#arrow-str)"/>
+<text x="596.0" y="613.5" class="legend" text-anchor="start">vgacap stream bytes</text>
+<path d="M763.0 609 L807.0 609" fill="none" stroke="#14845a" stroke-width="3" marker-end="url(#arrow-pic)"/>
+<text x="817.0" y="613.5" class="legend" text-anchor="start">pictures</text>
+<path d="M907.0 609 L951.0 609" fill="none" stroke="#6b46d6" stroke-width="1.75" stroke-dasharray="5 4" marker-end="url(#arrow-ctl)"/>
+<text x="961.0" y="613.5" class="legend" text-anchor="start">control</text>
+</svg>

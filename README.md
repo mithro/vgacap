@@ -11,16 +11,15 @@ source reads only that stream, so a capture from a demo board, an FPGA, a
 Raspberry Pi 5 or a simulator goes through the same reconstruction, video
 and comparison tools.
 
-```
- capture sources                 the stream              consumers
- ---------------                 ----------              ---------
- TT demo board      ─┐                                ┌─ vgacap-frames, ttcap png (PPM/PNG)
- Raspberry Pi 5     ─┤                                ├─ GStreamer: vgadecode, vgacapbin
- FPGA design        ─┼──▶  VGCH header + RAW / RLE ──▶├─ ttcap demo (PNG, MKV, window, MJPEG)
- simulator dumps    ─┤     / FRAM / EVNT / TIME       ├─ vgacap-dump (chunks, checksum)
- (BIO, research)    ─┘     chunks (include/vgacap/    └─ pixel-exact checks against
-                           stream.h)                     tt-vga-testpatterns references
-```
+<p align="center">
+  <img src="docs/diagrams/overview.svg" width="100%"
+       alt="vgacap overview. On the left, a Tiny Tapeout design (on an ASIC, an FPGA or in a simulator) drives its VGA signals, uo_out[7:0], into four capture sources: the Tiny Tapeout demo board, whose RP2040 or RP2350 samples uo_out with PIO and reaches the host over USB serial or a websocket at up to about 0.7 MB/s; a Raspberry Pi 5, whose RP1 chip samples uo_out on its GPIO header; FPGA capture logic built into the design; and simulators, which run the design's RTL and write trace files. ttcap on a host computer controls the demo board (clock, reset, start, stop). Every source writes the same vgacap stream, a VGCH header followed by RAW, RLE, FRAM, EVNT and TIME chunks. On the right, libvgaframe learns the sync and mode from the stream and rebuilds each frame, which feed pictures (PNG and PPM), video (GStreamer) and pixel-exact checks against reference renders.">
+</p>
+
+*Figure 1: every capture source writes one vgacap stream, and every
+consumer reads only that stream. Blue lines are the design's signals,
+orange the stream's bytes, green pictures, and violet dashed control.
+The figure is drawn by [`docs/diagrams/overview.py`](docs/diagrams/overview.py).*
 
 The design, research notes, measurements, work log and task list live in
 [mithro/tt-vga-capture](https://github.com/mithro/tt-vga-capture); the
