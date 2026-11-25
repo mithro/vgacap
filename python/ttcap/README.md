@@ -38,10 +38,10 @@ The board has very little heap (about 80 KB on the RP2040 demo board), so
 `ttcap capture` clears the previous run's names and collects garbage before
 it sends anything. It refuses to start unless the free heap covers the two
 DMA buffers plus room to compile the script: `8 * --buf-words + 24000`
-bytes, so ~56 KB at the default and ~90 KB at `--buf-words 8192`, which no
-demo board has. If it refuses, reset the board: a script that fails to
-compile on the board does not always say so, and can halt the firmware
-outright.
+bytes, so ~56 KB at the default and ~90 KB at `--buf-words 8192`, which an
+RP2040 demo board does not have. If it refuses, reset the board: a script
+that fails to compile on the board does not always say so, and can halt the
+firmware outright.
 
 `ttcap png` needs [Pillow](https://github.com/python-pillow/Pillow), so it wants the `synth` extra
 (`uv sync --extra synth`) and a built `build/vgacap-frames`.
@@ -66,13 +66,13 @@ uv run --no-sync ttcap probe ws://127.0.0.1:8765/serial
 ## `ttcap demo`: a board in, video out
 
 ```sh
-uv run ttcap demo --board tt07 --project tt_um_rejunity_vga \
+uv run ttcap demo --board fpga-1 --design tt_um_vga_pattern \
     --clock-hz 60000 --seconds 60 --outdir out            # PNGs + out/capture.mkv
-uv run ttcap demo --board tt07 --clock-hz 60000 --outdir out --window --serve 8080
-uv run ttcap demo --board tt07 --clock-hz 60000 --outdir out --dry-run   # just the pipeline
+uv run ttcap demo --board fpga-1 --clock-hz 60000 --outdir out --window --serve 8080
+uv run ttcap demo --board fpga-1 --clock-hz 60000 --outdir out --dry-run   # just the pipeline
 ```
 
-`--board tt07` names a board on the Welland bench; see
+`--board fpga-1` names a board on the Welland bench; see
 [Reaching a Welland board](#reaching-a-welland-board), or use `--link` for
 a board of your own.
 
@@ -105,19 +105,10 @@ decoder, so every output shares the one cadence.
 
 `--dry-run` prints the `gst-launch-1.0` command and exits without touching
 the board, the outdir or the port. It is the same command a real run
-prints before it starts, so you can copy, edit and run it by hand. The demo
-drives `gst-launch-1.0` as a child process rather than building the
-pipeline in-process, because the [GStreamer](https://gstreamer.freedesktop.org) Python bindings (`python3-gi`)
-are an OS package and `ttcap` runs under `uv`. The pipeline text is the
-same either way, and [`ttcap.demo.use_gst_python()`](demo.py) is the check.
+prints before it starts, so you can copy, edit and run it by hand.
 
-The pipeline builds the source ([`vgacapttsrc`](../../gst/README.md#vgacapttsrc-capturing-from-a-board)) by name, with its settings
-as element properties, and never as a `vgacapbin` URI. One of those
-settings is `ttcap-command`, which names the program that talks to the
-board, and a URI query is not allowed to set it (see
-[`vgacapbin`](../../gst/README.md#vgacapbin-a-uri-in-video-out)); a command
-that publishes a stream to a browser is exactly the place that restriction
-is for.
+The pipeline builds `vgacapttsrc` by name, never as a `vgacapbin` URI
+([why](../../gst/README.md#vgacapbin-a-uri-in-video-out)).
 
 ### Checked arguments
 
@@ -182,12 +173,12 @@ see the comment on `WELLAND`) and resolves it to a link:
   tunnel:
 
 ```sh
-ssh -N -L 18007:10.21.2.7:8765 tweed.welland.mithis.com   # tt07; 18000 + the octet
-uv run ttcap demo --link ws://127.0.0.1:18007/serial --clock-hz 60000 --outdir out
+ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com   # fpga-1; 18000 + the octet
+uv run ttcap demo --link ws://127.0.0.1:18034/serial --design tt_um_vga_pattern --clock-hz 60000 --outdir out
 ```
 
 Any free local port works, and one per board keeps two tunnels from
-colliding. Do not use the octet on its own (`-L 7:…`): every Welland slug's
+colliding. Do not use the octet on its own (`-L 34:…`): every Welland slug's
 octet is below 1024, and ssh refuses to forward those without root.
 
 `--link` overrides the board entirely. A run over the bridge that fails to
