@@ -56,7 +56,7 @@ import time
 import urllib.parse
 from dataclasses import dataclass, field
 
-from .boards import WELLAND, bridge_ws_url
+from .boards import RP2350_DBV3, WELLAND, bridge_ws_url
 # Same package, and the octet is the one part of a Welland address the tunnel
 # hint has to spell out; `bridge_ws_url` hands back a whole URL.
 from .boards import _welland_host_octet as welland_octet
@@ -372,6 +372,22 @@ def asic_slugs() -> str:
     return ", ".join(sorted(s for s in WELLAND if not s.startswith(FPGA_SLUG_PREFIX)))
 
 
+def asic_select_boards() -> str:
+    """The bench boards `--asic-index` is for, from `WELLAND`, in words.
+
+    ASIC carriers (not `board_takes_a_design`) on an RP2350 demo board,
+    the only one the capture firmware runs on. Computed, never written
+    out, so it follows the table; the table may have none yet.
+    """
+    slugs = sorted(
+        s for s, (_, profile) in WELLAND.items()
+        if not board_takes_a_design(s) and profile.chip == RP2350_DBV3.chip
+    )
+    if not slugs:
+        return "an RP2350 ASIC carrier; none is in the bench table (boards.WELLAND) yet"
+    return "the RP2350 ASIC carriers: %s" % ", ".join(slugs)
+
+
 def check_board_wants(board: str | None, project: str | None, design: str | None) -> None:
     """Refuse `--project` on an FPGA board, and `--design` on an ASIC.
 
@@ -499,9 +515,9 @@ def check_asic_index(
     fpgas = sorted({s for s in named.values() if board_takes_a_design(s)})
     if fpgas:
         raise CaptureError(
-            "--asic-index is for the ASIC shuttles (%s); %s is an FPGA board, "
-            "where asic_select pulls GPIO 1 -- the iCE40's CRESET_B -- low and "
-            "erases the FPGA" % (asic_slugs(), " and ".join(fpgas))
+            "--asic-index is for %s; %s is an FPGA board, where asic_select "
+            "pulls GPIO 1 -- the iCE40's CRESET_B -- low and erases the FPGA"
+            % (asic_select_boards(), " and ".join(fpgas))
         )
     if len(set(named.values())) > 1:
         raise CaptureError(

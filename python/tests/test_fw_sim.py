@@ -729,3 +729,17 @@ def test_a_loopback_tunnel_port_is_the_tunnels_board_not_this_pi(monkeypatch):
     demo.check_asic_index(None, 3, link="ws://127.0.0.1:8765/serial", hostname="pi-sw2-p7")
     with pytest.raises(CaptureError, match="disagree: --board says tt08, this Pi says tt07"):
         demo.check_asic_index("tt08", 3, link="ws://localhost:8765/serial", hostname="pi-sw2-p7")
+
+
+def test_the_asic_index_refusal_names_the_boards_from_the_table(monkeypatch):
+    # The boards --asic-index is for come from boards.WELLAND, never a
+    # written-out list: RP2350 ASIC carriers, which today's table has none of.
+    monkeypatch.setattr(demo, "_address_is_local", lambda address: False)
+    with pytest.raises(CaptureError) as e:
+        demo.check_asic_index("fpga-4", 3, hostname="workstation")
+    assert "none is in the bench table" in str(e.value)
+    assert "tt07" not in str(e.value)  # an RP2040 board: the firmware cannot run there
+    monkeypatch.setitem(demo.WELLAND, "tt09", ("pi-sw2-p10", RP2350_DBV3))
+    with pytest.raises(CaptureError) as e:
+        demo.check_asic_index("fpga-4", 3, hostname="workstation")
+    assert "for the RP2350 ASIC carriers: tt09; fpga-4 is an FPGA board" in str(e.value)
