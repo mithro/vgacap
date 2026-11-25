@@ -38,17 +38,24 @@ import time
 from typing import Callable, Iterator, Sequence
 
 from .boards import RP2040_TT06, RP2350_DBV3, profile_from_gpio_map
+from vgacap.modes import MODES
+
 from .capture import (
+    CAPTURE_MODES,
     DEFAULT_BUF_WORDS,
     DEFAULT_PIO,
+    DEFAULT_VGA_MODE,
+    DEFAULT_WINDOW_LINES,
+    FRAME_EDGE,
     CaptureError,
     CaptureRequest,
     CaptureSession,
     CaptureStats,
+    frame_note,
     frames_to_max_bytes,
     run_capture,
     select_project,
-    stop_clock,
+    undo_selection,
 )
 from .demo import add_parser as add_demo_parser, demo
 from .repl import LinkClosed, RawRepl, ReplFramingError, ReplLink, SerialLink, WebSocketLink
@@ -84,6 +91,8 @@ CAPTURE_FAILURES = (
 def _failed(what: str, exc: BaseException) -> int:
     """Report a subcommand's failure the way `main`'s contract promises."""
     print("%s failed: %s: %s" % (what, type(exc).__name__, exc), file=sys.stderr)
+    for note in getattr(exc, "__notes__", ()):
+        print("  %s" % note, file=sys.stderr)
     return 1
 
 
@@ -450,12 +459,23 @@ def capture(
     max_bytes: int = 0,
     frames: int | None = None,
     buf_words: int = DEFAULT_BUF_WORDS,
-    edge: str = "falling",
+    edge: str | None = None,
     desc: str = "",
     pio: int = DEFAULT_PIO,
     stop_clock_after: bool = True,
+    mode: str = "stream",
+    vga_mode: str = DEFAULT_VGA_MODE,
+    window_lines: int = 0,
+    sample_delay: int = 0,
+    ui_in: int | None = None,
 ) -> CaptureStats:
     """Run one capture to `out_path` and print what happened.
+
+    `mode` picks the board program: "stream" (every sample, at a clock the
+    link can carry), "frame" (whole frames at the project's real clock,
+    swept in as many windows as the board's heap needs) or "window" (the
+    same with `window_lines` lines per frame). In the frame modes `frames`
+    counts pictures and the board stops itself after that many.
 
     The stream file is opened only once the board has accepted every setup
     command, and is removed again if the run fails before a single byte is
@@ -484,7 +504,18 @@ def capture(
         repl.enter()
         try:
             board = resolve_profile(repl, profile)
-            if frames is not None:
+            if mode not in CAPTURE_MODES:
+                raise ValueError(f"mode must be one of {sorted(CAPTURE_MODES)}, got {mode!r}")
+            script = CAPTURE_MODES[mode]
+            framed = script == "frame_rp2.py"
+            if edge is None:
+                edge = FRAME_EDGE if framed else "falling"
+            if mode == "window" and not window_lines:
+                window_lines = DEFAULT_WINDOW_LINES
+            max_frames = 0
+            if framed and frames is not None:
+                max_frames = frames
+            elif frames is not None:
                 # `buf_words` sizes the chunks, and the byte budget has to
                 # allow for each chunk's 12 non-sample bytes.
                 max_bytes = frames_to_max_bytes(board, frames, buf_words=buf_words)
@@ -510,37 +541,52 @@ def capture(
                     desc=desc,
                     pio=pio,
                     stop=stop,
+                    script=script,
+                    vga_mode=vga_mode,
+                    window_lines=window_lines if framed else 0,
+                    max_frames=max_frames,
+                    sample_delay=sample_delay,
+                    ui_in=ui_in,
                 )
                 selection = select_project(repl, request)
-                print(
-                    "profile=%s project=%s enable=%s"
-                    % (board.name, selection["project"], selection["enable"]),
-                    file=say,
-                )
-                # `run_capture()` writes nothing until the board has been
-                # cleaned up and has the heap for the script, so a run
-                # refused there (or one that dies before the first chunk)
-                # must not leave an empty file behind pretending to be a
-                # capture. Anything that did get written is a valid, if
-                # short, stream and is kept.
-                with _open_output(
-                    out_path, on_consumer_close=flag.set if to_stdout else None
-                ) as fp:
-                    try:
-                        if to_stdout:
-                            stats = _stream_capture(repl, request, fp, flag)
-                        else:
-                            stats = run_capture(repl, request, fp)
-                    except BaseException:
-                        if not to_stdout and fp.tell() == 0:
-                            _discard_empty(out_path)
-                        raise
+                try:
+                    print(
+                        "profile=%s project=%s enable=%s"
+                        % (board.name, selection["project"], selection["enable"]),
+                        file=say,
+                    )
+                    # `run_capture()` writes nothing until the board has been
+                    # cleaned up and has the heap for the script, so a run
+                    # refused there (or one that dies before the first chunk)
+                    # must not leave an empty file behind pretending to be a
+                    # capture. Anything that did get written is a valid, if
+                    # short, stream and is kept.
+                    with _open_output(
+                        out_path, on_consumer_close=flag.set if to_stdout else None
+                    ) as fp:
+                        try:
+                            if to_stdout:
+                                stats = _stream_capture(repl, request, fp, flag)
+                            else:
+                                stats = run_capture(repl, request, fp)
+                        except BaseException:
+                            if not to_stdout and fp.tell() == 0:
+                                _discard_empty(out_path)
+                            raise
+                except BaseException as exc:
+                    # Whatever went wrong, a shared board is not left in the
+                    # mode `--ui-in` switched it to, nor (by default) clocked.
+                    undo_selection(repl, selection, stop=stop_clock_after, error=exc)
+                    raise
             # Reported before anything can be raised about how it ended: a
             # consumer that walked away still produced a real capture, and
             # its stats are the only overruns/rxstall report there is.
             _report(stats, "stdout" if to_stdout else out_path, stream=say)
-            if stop_clock_after:
-                stop_clock(repl)
+            if framed:
+                note = frame_note(stats.messages, request.cfg()["region_lines"])
+                if note:
+                    print(note, file=say)
+            undo_selection(repl, selection, stop=stop_clock_after)
             if to_stdout and fp.consumer_closed:
                 raise ConsumerClosed()
         finally:
@@ -718,8 +764,9 @@ def build_parser() -> argparse.ArgumentParser:
     capture_limit.add_argument(
         "--frames",
         type=int,
-        help="stop after enough bytes for N frames, assuming 640x480@60 "
-        "timing (800x525 clocks) plus one frame of margin",
+        help="stream mode: stop after enough bytes for N frames, assuming "
+        "640x480@60 timing (800x525 clocks) plus two frames of margin; frame "
+        "and window modes: stop after N complete pictures",
     )
     capture_parser.add_argument(
         "--out",
@@ -736,10 +783,50 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"words per DMA buffer, two are allocated (default {DEFAULT_BUF_WORDS})",
     )
     capture_parser.add_argument(
-        "--edge", choices=["falling", "rising"], default="falling",
-        help="project-clock edge to sample (default falling: outputs have settled)",
+        "--edge", choices=["falling", "rising"], default=None,
+        help="project-clock edge to sample (default: falling in stream mode, "
+        f"where outputs have long settled; {FRAME_EDGE} in frame/window modes, "
+        "measured at 25 MHz)",
     )
     capture_parser.add_argument("--desc", default="", help="note to store in the header")
+    capture_parser.add_argument(
+        "--mode",
+        choices=sorted(CAPTURE_MODES),
+        default="stream",
+        help="stream: every sample, at a clock the USB link can carry "
+        "(~750 kHz RP2350, ~60 kHz RP2040); frame: whole frames at the "
+        "project's real clock, sent between frames; window: the same, "
+        "--window-lines lines per frame (default stream)",
+    )
+    capture_parser.add_argument(
+        "--vga-mode",
+        choices=sorted(MODES),
+        default=DEFAULT_VGA_MODE,
+        help=f"frame/window modes: the VGA timing to expect (default {DEFAULT_VGA_MODE})",
+    )
+    capture_parser.add_argument(
+        "--ui-in",
+        type=lambda s: int(s, 0),
+        default=None,
+        help="drive the design's ui_in with this value (the SDK is switched "
+        "to ASIC_RP_CONTROL for the capture and put back however it ends); "
+        "default: leave the board's inputs alone",
+    )
+    capture_parser.add_argument(
+        "--sample-delay",
+        type=int,
+        default=0,
+        help="frame/window modes: system clocks to wait after --edge before "
+        "reading uo_out, to sample where it is stable at a real VGA clock "
+        "(default 0)",
+    )
+    capture_parser.add_argument(
+        "--window-lines",
+        type=int,
+        default=0,
+        help="frame/window modes: most lines per capture; 0 = as many as the "
+        f"board's heap holds (window mode default {DEFAULT_WINDOW_LINES})",
+    )
     capture_parser.add_argument(
         "--pio",
         type=int,
@@ -803,6 +890,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 desc=args.desc,
                 pio=args.pio,
                 stop_clock_after=args.stop_clock,
+                mode=args.mode,
+                vga_mode=args.vga_mode,
+                window_lines=args.window_lines,
+                sample_delay=args.sample_delay,
+                ui_in=args.ui_in,
             )
         except ConsumerClosed:
             # The normal end of a pull: the pipeline stopped reading. The

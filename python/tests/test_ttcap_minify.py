@@ -136,7 +136,7 @@ def test_minify_keeps_blank_lines_inside_a_multiline_string():
 def test_minify_removes_module_and_function_docstrings():
     source = '"""Module."""\n\n\ndef f():\n    """Doc."""\n    return 1\n'
 
-    assert mp.minify(source) == "\n\n\ndef f():\n\n    return 1\n"
+    assert mp.minify(source) == "\n\n\ndef f():\n\n return 1\n"
 
 
 def test_minify_keeps_a_docstring_that_is_the_whole_body():
@@ -144,8 +144,37 @@ def test_minify_keeps_a_docstring_that_is_the_whole_body():
     source = 'def f():\n    """Only this."""\n'
 
     minified = mp.minify(source)
-    assert minified == source
+    assert minified == 'def f():\n """Only this."""\n'
     compile(minified, "<test>", "exec")
+
+
+def test_minify_indents_one_space_a_level_and_drops_continuation_indent():
+    source = (
+        "def f(a,\n"
+        "      b):\n"
+        "    if a:\n"
+        "        x = (1 +\n"
+        "             2)\n"
+        "        return x\n"
+        "    y = 3 + \\\n"
+        "        4\n"
+        "    return y\n"
+    )
+
+    minified = mp.minify(source)
+
+    assert minified == (
+        "def f(a,\n"
+        "b):\n"
+        " if a:\n"
+        "  x = (1 +\n"
+        "2)\n"
+        "  return x\n"
+        " y = 3 + \\\n"
+        "4\n"
+        " return y\n"
+    )
+    assert ast.dump(ast.parse(minified)) == ast.dump(ast.parse(source))
 
 
 # -- module_level_names ---------------------------------------------------
@@ -177,10 +206,11 @@ def test_build_is_cfg_then_the_prelude_then_the_body():
     lines = script.split("\n")
 
     assert lines[0].startswith("CFG = {")
-    # Exactly the two minified parts after the CFG line, in order.
-    assert "\n".join(lines[1:]) == mp.minify(mp.load("prelude.py")) + mp.minify(
-        mp.load("capture_rp2.py")
-    )
+    # Exactly the two minified parts after the CFG line, in order, less
+    # their blank lines.
+    parts = mp.minify(mp.load("prelude.py")) + mp.minify(mp.load("capture_rp2.py"))
+    assert [line for line in lines[1:] if line] == [line for line in parts.split("\n") if line]
+    assert "" not in lines[1:-1]
     compile(script, "<stdin>", "exec")
 
 
@@ -193,10 +223,14 @@ def test_build_strips_the_body_docstring_too():
     assert "Board-side code shared" not in script
 
 
-def test_source_has_the_same_layout_as_build_without_the_cfg_line():
-    built = mp.build(capture_cfg(RP2040_TT06), "capture_rp2.py")
+def test_build_keeps_blank_lines_that_are_inside_a_string(monkeypatch):
+    sources = {"prelude.py": "X = 1\n", "body.py": 'T = """a\n\nb"""\n\n\nY = 2\n'}
+    monkeypatch.setattr(mp, "load", lambda name: sources[name])
 
-    assert mp.source("capture_rp2.py").count("\n") == built.count("\n") - 1
+    script = mp.build({}, "body.py")
+
+    assert script == 'CFG = {}\nX = 1\nT = """a\n\nb"""\nY = 2\n'
+    assert mp.locate(6, "body.py") == ("body.py", 6)
 
 
 def test_build_wants_a_body_and_never_a_second_prelude():
@@ -207,12 +241,15 @@ def test_build_wants_a_body_and_never_a_second_prelude():
 
 
 def test_locate_maps_each_part():
-    prelude_lines = mp.load("prelude.py").count("\n")
+    built = mp.build(capture_cfg(RP2040_TT06), "capture_rp2.py").split("\n")
 
     assert mp.locate(1, "capture_rp2.py") == ("CFG", 1)
-    assert mp.locate(2, "capture_rp2.py") == ("prelude.py", 1)
-    assert mp.locate(1 + prelude_lines, "capture_rp2.py") == ("prelude.py", prelude_lines)
-    assert mp.locate(2 + prelude_lines, "capture_rp2.py") == ("capture_rp2.py", 1)
+    # Every built line maps to the very line it came from.
+    for number, text in enumerate(built[1:-1], 2):
+        name, line = mp.locate(number, "capture_rp2.py")
+        assert mp.minify(mp.load(name)).split("\n")[line - 1] == text
+    files = [mp.locate(n, "capture_rp2.py")[0] for n in range(2, len(built))]
+    assert files == sorted(files, key=["prelude.py", "capture_rp2.py"].index)
     with pytest.raises(ValueError):
         mp.locate(10**6, "capture_rp2.py")
     with pytest.raises(ValueError):

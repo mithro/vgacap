@@ -15,6 +15,7 @@ answer:
 | `capture` | the closing `TIME` chunk is the *only* `overruns`/`rxstall` report there is, and no host fake can produce a real overrun. |
 | `reconstruct` | that the sample count corresponds to the project clock, and that `libvgaframe` finds sync in a real signal with real glitches. |
 | `reference` | pixel-exact agreement with the calibration design's reference render. The only check that says the path is *correct* rather than self-consistent. |
+| `frame` | whole frames at the design's real clock (`ttcap capture --mode frame`, 25 MHz by default): the trigger, the control-block DMA over a fragmented heap, and the sample point (swept on fpga-4: two system clocks of a four-clock pixel are right) are only real on a board. Every picture must be pixel-exact. |
 | `demo-frames` | `ttcap demo`'s "nothing was captured" verdict (exit 3) and its `--fps` re-timing were both built and re-worked against a fake. |
 | `video` | Task 3's PTS bug made `matroskamux` produce a file with no usable duration; only a real clock rate exercises the timeline. |
 | `serve` | the MJPEG view drops frames for a viewer that falls behind, which needs a producer running at the board's own rate. |
@@ -91,8 +92,11 @@ PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
 #: so that a run cut short still produces a complete report: a check that is
 #: missing from the table because the board died is indistinguishable from
 #: one that was never written.
-ALL_CHECKS = ("probe", "capture", "reconstruct", "reference", "demo-frames",
-              "video", "serve", "stop", "board-usable")
+ALL_CHECKS = ("probe", "capture", "reconstruct", "reference", "frame",
+              "demo-frames", "video", "serve", "stop", "board-usable")
+
+#: Pictures the `frame` check takes; each must match the reference.
+FRAME_PICTURES = 2
 
 #: The checks that need a GStreamer pipeline, and so the plugin.
 PIPELINE_CHECKS = ("demo-frames", "video", "serve", "stop")
@@ -396,6 +400,66 @@ class Hil:
                                       _tail(proc.stdout, 1) or "no output"),
                     shlex.join(argv), _tail(proc.stdout), _tail(proc.stderr))
 
+    def check_frame(self) -> None:
+        """Whole frames at the design's real clock, each one pixel-exact."""
+        design = self.args.design or self.args.project or ""
+        tool = pathlib.Path(self.args.testpatterns) / "tools" / "compare_capture.py"
+        if not design.startswith(CALIBRATION_PREFIX):
+            self.skip("frame", "not a calibration design (%s), so there is no "
+                      "reference to hold whole frames to" % (design or "no --design/--project"))
+            return
+        if not self.args.frame_clock_hz:
+            self.skip("frame", "--frame-clock-hz 0")
+            return
+        if not tool.exists():
+            self.skip("frame", "tt-vga-testpatterns is not next door: no %s" % tool)
+            return
+        stream = self.workdir / "frame.vgacap"
+        with contextlib.suppress(FileNotFoundError):
+            stream.unlink()
+        argv = self.board_argv("capture", self.args.link,
+                               "--clock-hz", self.args.frame_clock_hz,
+                               "--mode", "frame", "--vga-mode", self.args.frame_vga_mode,
+                               "--frames", FRAME_PICTURES, "--seconds", 60,
+                               "--profile", self.args.profile, "--out", stream)
+        if self.args.ui_in:
+            argv += ["--ui-in", str(self.args.ui_in)]
+        if self.args.pio is not None:
+            argv += ["--pio", str(self.args.pio)]
+        ran = self.run(argv, self.args.timeout + 60)
+        board = [line.strip()[len("board: "):] for line in ran.stdout.splitlines()
+                 if line.strip().startswith("board: ")]
+        summary = board[-1] if board else "no board summary"
+        prefix = self.workdir / "frame-frames" / "f"
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        for stale in prefix.parent.glob("f-*.ppm"):
+            stale.unlink()
+        ppms: list[pathlib.Path] = []
+        if ran.returncode == 0 and stream.exists():
+            subprocess.run([str(self.args.vgacap_frames), str(stream), str(prefix)],
+                           capture_output=True, text=True, check=False, timeout=300)
+            ppms = sorted(prefix.parent.glob("f-*.ppm"))
+        exact = 0
+        verdicts = []
+        for ppm in ppms:
+            cmp = subprocess.run(
+                ["uv", "run", "--no-project", "--with", "numpy", "--with", "pillow",
+                 "python", "tools/compare_capture.py", design, str(ppm.resolve()),
+                 "--ui-in", str(self.args.ui_in)],
+                capture_output=True, text=True, check=False,
+                cwd=self.args.testpatterns, timeout=600)
+            exact += cmp.returncode == 0
+            verdicts.append("%s: %s" % (ppm.name, _tail(cmp.stdout, 1) or "no output"))
+        ok = (ran.returncode == 0 and len(ppms) == FRAME_PICTURES and exact == len(ppms)
+              and "stalls=0" in summary and "rxstall=0" in summary)
+        self.record(
+            "frame", ok,
+            "%d of %d picture(s) pixel-exact at %d Hz (%s); board: %s"
+            % (exact, FRAME_PICTURES, self.args.frame_clock_hz,
+               self.args.frame_vga_mode, summary),
+            shlex.join(ran.argv), "\n".join(board), "\n".join(verdicts),
+            _tail(ran.stderr))
+
     @staticmethod
     def fresh_outdir(outdir: pathlib.Path) -> None:
         """Remove what an earlier run left, so nothing on disk can answer for
@@ -581,6 +645,7 @@ class Hil:
             ppms = []
             self.skip("reconstruct", "not run: the capture failed")
         self.check_reference(ppms)
+        self.check_frame()
         why = self.no_pipeline_reason()
         if why:
             for name in PIPELINE_CHECKS:
@@ -872,6 +937,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ui-in", type=int, default=0,
                         help="ui_in the board drives, for the tt_um_vgacal_modes "
                              "reference comparison")
+    parser.add_argument("--frame-clock-hz", type=int, default=25_000_000,
+                        help="project clock for the `frame` check: the design's "
+                             "real one (default 25 MHz; 0 skips the check)")
+    parser.add_argument("--frame-vga-mode", default="640x480@60",
+                        help="VGA timing the `frame` check expects (default 640x480@60)")
     parser.add_argument("--serve-port", type=int, default=8099)
     parser.add_argument("--timeout", type=float, default=60.0,
                         help="how long a board command may take before its own "
@@ -900,6 +970,8 @@ def build_parser() -> argparse.ArgumentParser:
 def validate(args: argparse.Namespace) -> None:
     if args.clock_hz <= 0:
         raise Fatal("--clock-hz must be positive, not %d" % args.clock_hz)
+    if args.frame_clock_hz < 0:
+        raise Fatal("--frame-clock-hz must be positive, or 0 to skip the frame check")
     if args.seconds <= 0:
         raise Fatal("--seconds must be positive: this script never starts an "
                     "unbounded capture it is not going to stop")

@@ -100,7 +100,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="fake_ttcap")
     # How this fake behaves. These come before the subcommand, so they sit in
     # the `ttcap-command` property and the capture arguments follow.
-    parser.add_argument("--mode", choices=["normal", "fail", "garbage"], default="normal")
+    # Not --mode: that is ttcap capture's own option (stream/frame/window).
+    parser.add_argument("--fake-mode", choices=["normal", "fail", "garbage"], default="normal")
     parser.add_argument("--frames", type=int, default=0,
                         help="frames to emit; 0 runs until stopped")
     parser.add_argument("--chunk-delay", type=float, default=0.0,
@@ -139,6 +140,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--profile", default="auto")
     parser.add_argument("--pio", type=int)
     parser.add_argument("--buf-words", type=int)
+    parser.add_argument("--mode")
+    parser.add_argument("--vga-mode")
+    parser.add_argument("--window-lines", type=int)
     parser.add_argument("--edge", choices=["falling", "rising"], default="falling")
     parser.add_argument("--desc", default="")
     parser.add_argument("--max-bytes", type=int, default=0)
@@ -242,7 +246,7 @@ def main(argv: list[str]) -> int:
     if args.startup_delay:
         time.sleep(args.startup_delay)
 
-    if args.mode == "fail":
+    if args.fake_mode == "fail":
         # A board that never answered: a few lines of context and a non-zero
         # status, which is what has to reach the pipeline as an ERROR.
         print("fake ttcap: opening %s" % args.link, file=sys.stderr)
@@ -252,7 +256,7 @@ def main(argv: list[str]) -> int:
 
     sink = Tee(args.copy_to, deaf=args.deaf)
     try:
-        if args.mode == "garbage":
+        if args.fake_mode == "garbage":
             return emit_garbage(sink, args)
         return emit_stream(sink, args)
     except BrokenPipeError:

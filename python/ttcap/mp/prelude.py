@@ -56,8 +56,8 @@ globals: `rp2.asm_pio` clears the decorated function's `__globals__` for the
 duration of its two assembly passes and installs only the instruction
 mnemonics (micropython v1.24.0 ports/rp2/modules/rp2.py:257-259), so a
 `LOAD_GLOBAL` of a CFG-derived name raises NameError on the board. Hence
-`make_sampler()` below: its parameters become cells, which `LOAD_DEREF`
-reaches regardless of the globals swap.
+each program's `make_*()` builder takes its operands as parameters: they
+become cells, which `LOAD_DEREF` reaches regardless of the globals swap.
 
 Registers (pico-sdk `addressmap.h`, `hardware/structs/pio.h`, `dreq.h`,
 `hardware/structs/dma.h`; the host mirrors the PIO arithmetic in
@@ -76,8 +76,9 @@ Registers (pico-sdk `addressmap.h`, `hardware/structs/pio.h`, `dreq.h`,
                                                               STARTS the
                                                               channel)
     CHn_AL1_CTRL     + 0x10 ... CHn_AL1_TRANS_COUNT_TRIG + 0x1c
-    Only the two non-trigger aliases at +0x04 and +0x08 are named here, so
-    a re-arm through them never starts a channel.
+    The DMA constants live with the program that re-arms channels through
+    them (`capture_rp2.py`); only the two non-trigger aliases at +0x04 and
+    +0x08 are ever written that way, so a re-arm never starts a channel.
 
 Stopping is COOPERATIVE, and that is load-bearing. `micropython.kbd_intr(-1)`
 turns Ctrl-C back into an ordinary byte for the duration of a capture, and
@@ -158,11 +159,6 @@ FDEBUG_ADDR = PIO_BASE + 0x8
 RXSTALL_BIT = 1 << SM_NUM
 DREQ = 8 * PIO_NUM + 4 + SM_NUM
 
-DMA_BASE = 0x50000000
-DMA_CH_STRIDE = 0x40
-DMA_CH_WRITE_ADDR = 0x04
-DMA_CH_TRANS_COUNT = 0x08
-
 
 def _le32(value):
     """Pack `value` as a little-endian uint32."""
@@ -188,12 +184,6 @@ def _write_all(out, data):
     return n
 
 
-def write_raw_chunk(out, buf, sample_count):
-    """Emit one `RAW ` chunk and return the number of bytes written."""
-    written = _write_all(out, b"RAW " + _le32(4 + len(buf)) + _le32(sample_count))
-    return written + _write_all(out, buf)
-
-
 def write_time_chunk(out, dropped_samples, msg):
     """Emit one `TIME` chunk and return the number of bytes written.
 
@@ -206,19 +196,12 @@ def write_time_chunk(out, dropped_samples, msg):
     the host already recorded the project clock in the stream header.
     """
     payload = (
-        _le32(0)
-        + _le32(0)  # u64 host_time_ns = 0
-        + _le32(0)  # u32 clock_hz = 0
+        bytes(12)  # u64 host_time_ns = 0, u32 clock_hz = 0
         + _le32(dropped_samples)
         + bytes((len(msg) & 0xFF, (len(msg) >> 8) & 0xFF))
         + msg
     )
     return _write_all(out, b"TIME" + _le32(len(payload)) + payload)
-
-
-def dma_reg(channel, offset):
-    """Absolute address of one register of DMA channel `channel`."""
-    return DMA_BASE + DMA_CH_STRIDE * channel + offset
 
 
 def init_input_pins(pin_cls, gpios):
@@ -251,51 +234,6 @@ def init_input_pins(pin_cls, gpios):
     """
     for gpio in gpios:
         pin_cls(gpio, pin_cls.IN)
-
-
-def make_sampler(clk_gpio, in_count, push, rising):
-    """Assemble the sampler program with its operands as closure cells.
-
-    `clk_gpio` is the *absolute* GPIO number of the project clock, which is
-    what `wait ... gpio` wants even on a relocated RP2350 window -- see the
-    CLK_WAIT_GPIO note above.
-
-    `clk_gpio` and `in_count` are read inside the program body, so they
-    must be cells (`LOAD_DEREF`) rather than module globals: `asm_pio`
-    clears `__globals__` while it assembles. `push` is only a decorator
-    argument, evaluated before that happens.
-    """
-    if rising:
-
-        @rp2.asm_pio(
-            in_shiftdir=rp2.PIO.SHIFT_LEFT,
-            autopush=True,
-            push_thresh=push,
-            fifo_join=rp2.PIO.JOIN_RX,
-        )
-        def sampler():
-            wrap_target()  # noqa: F821 - PIO assembler directives
-            wait(0, gpio, clk_gpio)  # noqa: F821
-            wait(1, gpio, clk_gpio)  # noqa: F821 - rising edge
-            in_(pins, in_count)  # noqa: F821
-            wrap()  # noqa: F821
-
-    else:
-
-        @rp2.asm_pio(
-            in_shiftdir=rp2.PIO.SHIFT_LEFT,
-            autopush=True,
-            push_thresh=push,
-            fifo_join=rp2.PIO.JOIN_RX,
-        )
-        def sampler():
-            wrap_target()  # noqa: F821
-            wait(1, gpio, clk_gpio)  # noqa: F821
-            wait(0, gpio, clk_gpio)  # noqa: F821 - falling: outputs settled
-            in_(pins, in_count)  # noqa: F821
-            wrap()  # noqa: F821
-
-    return sampler
 
 
 #: Bytes the host can send to ask for a clean stop. 0x03 is Ctrl-C, which
@@ -387,6 +325,65 @@ def set_gpio_base(pio, num, want):
     except Exception:
         pass
     return gpio_base_is(pio, want)
+
+
+def claim_pio(out):
+    """Point PIO_NUM's pin window at the pads and bring the pads up.
+
+    Returns False, having written an `error=` TIME chunk, when the window
+    cannot be moved (see `set_gpio_base()`): the caller just returns.
+    """
+    if GPIO_BASE and not set_gpio_base(rp2.PIO(PIO_NUM), PIO_NUM, GPIO_BASE):
+        msg = "error=PIO%d gpio_base is not %d and could not be moved; try another pio block"
+        write_time_chunk(out, 0, (msg % (PIO_NUM, GPIO_BASE)).encode())
+        return False
+    init_input_pins(machine.Pin, UO_GPIOS)
+    return True
+
+
+def new_state_machine(program):
+    """The state machine for `program`, on a block cleared of old programs.
+
+    Defensively drops any MicroPython-managed programs left in this block
+    by an earlier capture: a program's `finally` removes its own on a clean
+    exit, but a board that was reset between runs or lost that cleanup
+    some other way accumulates programs until the block's 32-slot
+    instruction memory is full, and `StateMachine()` then fails with
+    `OSError: [Errno 12] ENOMEM` (measured on tt07 after about ten
+    captures). Only PIO_NUM != 0: PIO0 holds the stock firmware's own
+    program (the FPGA loader) on FPGA boards, so it must be left alone.
+    `in_base` is the absolute pin; see CLK_WAIT_GPIO above.
+    """
+    if PIO_NUM != 0:
+        try:
+            rp2.PIO(PIO_NUM).remove_program()
+        except Exception:
+            pass
+    return rp2.StateMachine(PIO_NUM * 4 + SM_NUM, program, in_base=machine.Pin(IN_BASE))
+
+
+def stop_dma(dmas):
+    """Stop and close the `rp2.DMA` channels in `dmas` (None entries are
+    skipped), so that none can write into a buffer about to be freed.
+
+    `DMA.active(0)` aborts the channel (rp2_dma.c calls
+    `dma_channel_abort()`, which waits for BUSY to clear; checked in v1.22,
+    v1.24 and master), and v1.24's `close()` only unclaims it. The abort is
+    not enough on its own for channels that chain to each other: RP2350-E5 (pico-sdk's
+    `dma_channel_abort()` notes) -- an abort can re-trigger the chained
+    channel unless EN is clear on it and on the aborted one first, and a
+    re-triggered channel goes on filling a freed buffer. So EN is cleared on
+    every channel, through the non-triggering AL1_CTRL alias (+0x10, from
+    CTRL_TRIG at +0x0c), before any is aborted. Harmless on RP2040.
+    """
+    for dma in dmas:
+        if dma is not None:
+            at = 0x50000000 + 0x40 * dma.channel
+            machine.mem32[at + 16] = machine.mem32[at + 12] & ~1
+    for dma in dmas:
+        if dma is not None:
+            dma.active(0)
+            dma.close()
 
 
 def firmware_problem():

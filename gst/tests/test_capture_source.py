@@ -53,7 +53,8 @@ TIMEOUT = 120
 
 #: The properties `vgacapbin` mirrors from `vgacapttsrc`.
 MIRRORED = ("link", "project", "design", "clock-hz", "profile", "pio", "buf-words",
-            "seconds", "ttcap-command", "stop-timeout")
+            "seconds", "ttcap-command", "stop-timeout", "capture-mode", "vga-mode",
+            "window-lines")
 
 
 def gst_env() -> dict:
@@ -84,6 +85,9 @@ def inspect_properties(element: str) -> dict[str, str]:
     proc = run(["gst-inspect-1.0", element])
     assert proc.returncode == 0, proc.stderr
     body = proc.stdout.split("Element Properties:", 1)[1]
+    # A bin lists its children after its properties; that is not part of the
+    # last property's block.
+    body = body.split("\nChildren:", 1)[0]
     blocks: dict[str, list[str]] = {}
     name = None
     for line in body.splitlines():
@@ -192,6 +196,32 @@ def test_the_element_builds_the_capture_command_it_promises(tmp_path):
     assert argv[argv.index("--seconds") + 1] == "2.5"
 
 
+def test_frame_capture_settings_reach_ttcap(tmp_path):
+    # Whole frames at the design's real clock (ttcap --mode frame/window) are
+    # chosen on the element and must arrive on ttcap's command line.
+    argv_file = tmp_path / "argv.json"
+    proc = run(["gst-launch-1.0", "-q", "vgacapttsrc",
+                f"ttcap-command={fake_command('--frames', '1', '--argv-file', str(argv_file))}",
+                "link=stub://board", "clock-hz=40000000", "capture-mode=window",
+                "vga-mode=800x600@60", "window-lines=64", "!", "fakesink", "sync=false"])
+    assert proc.returncode == 0, proc.stderr
+    argv = json.loads(argv_file.read_text())
+    assert argv[argv.index("--mode") + 1] == "window"
+    assert argv[argv.index("--vga-mode") + 1] == "800x600@60"
+    assert argv[argv.index("--window-lines") + 1] == "64"
+
+
+def test_stream_mode_is_the_default_and_frame_options_are_left_out(tmp_path):
+    argv_file = tmp_path / "argv.json"
+    proc = run(["gst-launch-1.0", "-q", "vgacapttsrc",
+                f"ttcap-command={fake_command('--frames', '1', '--argv-file', str(argv_file))}",
+                "link=stub://board", "clock-hz=60000", "!", "fakesink", "sync=false"])
+    assert proc.returncode == 0, proc.stderr
+    argv = json.loads(argv_file.read_text())
+    assert "--mode" not in argv  # ttcap's own default: stream
+    assert "--vga-mode" not in argv and "--window-lines" not in argv
+
+
 def test_the_board_tuning_defaults_are_left_to_ttcap(tmp_path):
     argv_file = tmp_path / "argv.json"
     proc = run(["gst-launch-1.0", "vgacapttsrc",
@@ -222,7 +252,7 @@ def test_the_source_refuses_to_start_without_what_it_needs(missing, expected):
 
 def test_a_child_that_fails_is_a_pipeline_error_quoting_its_stderr():
     proc = run(["gst-launch-1.0", "vgacapttsrc",
-                f"ttcap-command={fake_command('--mode', 'fail', '--exit-code', '3')}",
+                f"ttcap-command={fake_command('--fake-mode', 'fail', '--exit-code', '3')}",
                 "link=serial:/dev/nope", "clock-hz=60000", "!", "vgadecode", "!",
                 "fakesink", "sync=false"])
     text = proc.stdout + proc.stderr
@@ -237,7 +267,7 @@ def test_a_child_that_fails_is_a_pipeline_error_quoting_its_stderr():
 def test_garbage_from_the_child_does_not_hang_the_pipeline():
     began = time.monotonic()
     proc = run(["gst-launch-1.0", "vgacapttsrc",
-                f"ttcap-command={fake_command('--mode', 'garbage')}",
+                f"ttcap-command={fake_command('--fake-mode', 'garbage')}",
                 "link=serial:/dev/fake", "clock-hz=60000", "!", "vgadecode", "!",
                 "fakesink", "sync=false"], timeout=60)
     took = time.monotonic() - began

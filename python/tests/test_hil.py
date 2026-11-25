@@ -101,6 +101,8 @@ def test_every_check_passes_against_the_stub(workspace):
         assert result[name] == "PASS", (name, proc.stdout)
     # No calibration design was named, so there is nothing to compare with.
     assert result["reference"] == "SKIP"
+    assert result["frame"] == "SKIP"
+    assert "no reference to hold whole frames to" in proc.stdout
     report = workspace["report"].read_text()
     assert "| verdict | **PASS** |" in report
     assert "MJPEG part(s)" in report and "SIGTERM -> exit 0" in report
@@ -178,6 +180,7 @@ def test_two_runs_cannot_share_a_board(workspace, tmp_path):
     refused while the first holds the lock."""
     lock_dir = tmp_path / "lock"
     lock_dir.mkdir(parents=True)
+    mark = "lock-%d" % os.getpid()
     held = subprocess.Popen(
         [sys.executable, str(HIL), "--ttcap", "%s %s" % (sys.executable, STUB),
          "--board", "fpga-1", "--no-demo", "--timeout", "30",
@@ -185,7 +188,7 @@ def test_two_runs_cannot_share_a_board(workspace, tmp_path):
          "--workdir", str(tmp_path / "w1"), "--lock-dir", str(lock_dir),
          str(tmp_path / "first.md")],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env={**os.environ, "HIL_STUB": "probe-hangs"})
+        env={**os.environ, "HIL_STUB": "probe-hangs", "HIL_TEST_MARK": mark})
     try:
         # Wait for the lock file to appear: the first run has it by then.
         deadline = 60
@@ -200,8 +203,20 @@ def test_two_runs_cannot_share_a_board(workspace, tmp_path):
         assert "already holds" in second.stderr
         assert "vgacap-hil-fpga-1.lock" in second.stderr
     finally:
-        held.kill()
+        # SIGTERM, as a person's `kill` would send: hil.py then stops the
+        # board command it started. SIGKILL (this test's old ending) gives
+        # it no chance, and left one hanging stub per run, orphaned.
+        held.terminate()
         held.communicate(timeout=30)
+        leftover = []
+        for _ in range(50):
+            leftover = _processes_marked(mark)
+            if not leftover:
+                break
+            time.sleep(0.1)
+        for pid in leftover:
+            os.kill(pid, signal.SIGKILL)
+    assert leftover == [], "hil.py left board commands running: %s" % leftover
 
 
 def test_a_capture_too_short_to_contain_a_frame_is_refused(workspace, tmp_path):
@@ -263,6 +278,7 @@ def test_the_report_says_a_calibration_design_was_not_available(workspace,
                    *workspace["common"], str(workspace["report"]))
     assert statuses(proc.stdout)["reference"] == "SKIP"
     assert "tt-vga-testpatterns is not next door" in proc.stdout
+    assert statuses(proc.stdout)["frame"] == "SKIP"
 
 
 @needs_frames_tool

@@ -33,15 +33,32 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
+from vgacap.modes import MODES
 from vgacap.stream import Header, Writer
 
 from . import mp
-from .boards import BoardProfile
+from .boards import BoardProfile, pwm_slice_addr
 from .repl import CHUNK_HEADER_LEN, RawRepl, ReplFramingError
 
 EDGES = ("falling", "rising")
 #: Board-side program bodies a `CaptureRequest` may name (`ttcap/mp/`).
-CAPTURE_SCRIPTS = ("capture_rp2.py",)
+CAPTURE_SCRIPTS = ("capture_rp2.py", "frame_rp2.py")
+#: `ttcap capture --mode` names: continuous streaming at a reduced clock,
+#: or whole frames / windows of frames at the project's real clock.
+CAPTURE_MODES = {"stream": "capture_rp2.py", "frame": "frame_rp2.py", "window": "frame_rp2.py"}
+#: The timing `frame_rp2.py` is told to expect unless asked otherwise.
+DEFAULT_VGA_MODE = "640x480@60"
+#: The sample point frame capture uses unless told otherwise: the rising
+#: edge, read at once. Swept on fpga-4 at 25 MHz, 2026-11-24 (frame_rp2.py,
+#: SAMPLE POINT): the middle of a two-point window where uo_out is stable.
+FRAME_EDGE = "rising"
+#: Lines per window when `--mode window` is asked for without a size.
+DEFAULT_WINDOW_LINES = 48
+#: Most buffers one frame capture may fill. They cost no DMA channels
+#: (control blocks: two channels whatever the count), only 16 bytes of
+#: table each. The board plans in chunks of 64, 16, 4 and 1 lines (fast;
+#: see frame_rp2.plan_buffers), so a fragmented heap takes many of them.
+FRAME_MAX_BUFFERS = 128
 
 #: Informational only, and only a guess: the rp2 port boots RP2040 at
 #: 133 MHz but RP2350 at 150 MHz, and the capture never changes the system
@@ -78,6 +95,91 @@ CLOCKS_PER_FRAME_640X480 = 800 * 525
 #: then leaves in the REPL's globals. Measured on tt07, where the script
 #: compiles with 84,208 bytes free and 32 KB of that goes to the buffers.
 COMPILE_HEADROOM_BYTES = 24_000
+
+
+def frame_cfg(
+    profile: BoardProfile,
+    vga_mode: str = DEFAULT_VGA_MODE,
+    window_lines: int = 0,
+    max_frames: int = 0,
+    max_bytes: int = 0,
+    pio: int = DEFAULT_PIO,
+    sm: int = 0,
+    margin_lines: int = 1,
+    hsync_active: int = -1,
+    vsync_active: int = -1,
+    edge: str = "falling",
+    sample_delay: int = 0,
+    clock_hz: int = 25_000_000,
+) -> dict:
+    """Build the `CFG` dict for `frame_rp2.py` (whole-frame/windowed capture).
+
+    The region is the mode's active lines plus `margin_lines` above them:
+    a window can start a sample late (see the body's docstring), and the
+    margin keeps that off the first line of the picture. Line 0 is the
+    first line of the vsync pulse, as libvgaframe counts. `window_lines`
+    0 lets the board take as many lines as its heap holds; `hsync_active`
+    and `vsync_active` -1 have it measure the sync polarities itself.
+    `edge` and `sample_delay` (system clocks after that edge) place the
+    sample point; see SAMPLE POINT in frame_rp2.py.
+    """
+    if not 0 <= sample_delay <= 31:
+        raise ValueError(f"sample_delay must be 0..31 system clocks, got {sample_delay}")
+    if vga_mode not in MODES:
+        raise ValueError(f"unknown VGA mode {vga_mode!r}; known: {', '.join(MODES)}")
+    mode = MODES[vga_mode]
+    if mode.cpl % profile.samples_per_word:
+        raise ValueError(
+            f"{vga_mode}: {mode.cpl} clocks per line is not a whole number of "
+            f"{profile.samples_per_word}-sample words"
+        )
+    if window_lines < 0 or max_frames < 0:
+        raise ValueError("window_lines and max_frames must not be negative")
+    if not 0 <= margin_lines <= mode.v_sync + mode.v_back:
+        raise ValueError(f"margin_lines must be 0..{mode.v_sync + mode.v_back}")
+    for name, value in (("hsync_active", hsync_active), ("vsync_active", vsync_active)):
+        if value not in (-1, 0, 1):
+            raise ValueError(f"{name} must be -1 (measure), 0 or 1")
+    cfg = capture_cfg(profile, max_bytes=max_bytes, edge=edge, pio=pio, sm=sm)
+    del cfg["buf_words"]  # capture_rp2.py's; the frame body sizes its own
+    cfg.update(
+        cpl=mode.cpl,
+        region_first=mode.v_sync + mode.v_back - margin_lines,
+        region_lines=mode.v_active + margin_lines,
+        window_lines=window_lines,
+        hsync_active=hsync_active,
+        vsync_active=vsync_active,
+        max_buffers=FRAME_MAX_BUFFERS,
+        max_frames=max_frames,
+        sample_delay=sample_delay,
+        clock_hz=clock_hz,
+        clk_pwm=pwm_slice_addr(profile, profile.clk_gpio),
+    )
+    return cfg
+
+
+def frame_note(messages: tuple[str, ...] | list[str], region_lines: int) -> str:
+    """What a frame/window capture's pictures are made of, if it matters.
+
+    The board's opening TIME message says how many lines one capture takes
+    (`frame window=N ...`). When that is less than the picture region,
+    each picture is swept from several *consecutive captured* frames:
+    exact for a static or frame-periodic design, torn for anything that
+    changes between them (tt_um_vgacal_counter in window mode, measured on
+    fpga-4: 1,040 pixels). Returns "" when every picture is one frame.
+    """
+    for msg in messages:
+        if msg.startswith("frame window="):
+            window = int(msg.split()[1].split("=")[1])
+            if window >= region_lines:
+                return ""
+            frames = -(-region_lines // window)
+            return (
+                "note: each picture is assembled from %d captured frames (%d of its "
+                "%d lines per frame): exact for a static design, torn for one "
+                "that changes from frame to frame" % (frames, window, region_lines)
+            )
+    return ""
 
 
 def min_free_bytes(buf_words: int) -> int:
@@ -284,6 +386,23 @@ class CaptureRequest:
     #: prelude: `capture_rp2.py` streams continuously; Milestone 6 adds the
     #: whole-frame and windowed programs alongside it.
     script: str = "capture_rp2.py"
+    #: `frame_rp2.py` only: the VGA timing to expect (a `vgacap.modes`
+    #: name), the most lines per capture (0 = what the heap holds), and
+    #: how many pictures to take before stopping (0 = no limit).
+    vga_mode: str = DEFAULT_VGA_MODE
+    window_lines: int = 0
+    max_frames: int = 0
+    #: `frame_rp2.py` only: system clocks between the sampled edge and the
+    #: read (SAMPLE POINT in frame_rp2.py).
+    sample_delay: int = 0
+    #: The design's `ui_in`, driven by the RP2 (None leaves the board's
+    #: inputs alone) -- e.g. tt_um_vgacal_modes takes its mode there.
+    ui_in: int | None = None
+
+    @property
+    def is_frame(self) -> bool:
+        """Whole-frame/windowed capture rather than streaming."""
+        return self.script == "frame_rp2.py"
 
     def __post_init__(self) -> None:
         if self.project and self.design:
@@ -294,17 +413,24 @@ class CaptureRequest:
             raise ValueError(
                 f"script must be one of {CAPTURE_SCRIPTS}, got {self.script!r}"
             )
+        if self.ui_in is not None and not 0 <= self.ui_in <= 255:
+            raise ValueError(f"ui_in must be 0..255, got {self.ui_in}")
         if self.edge not in EDGES:
             raise ValueError(f"edge must be one of {EDGES}, got {self.edge!r}")
         if self.clock_hz <= 0:
             raise ValueError(f"clock_hz must be positive, got {self.clock_hz}")
         if self.seconds < 0:
             raise ValueError(f"seconds must not be negative, got {self.seconds}")
-        if self.seconds == 0 and self.max_bytes == 0 and self.stop is None:
+        if self.seconds == 0 and self.max_bytes == 0 and self.stop is None and not (
+            self.is_frame and self.max_frames
+        ):
             raise ValueError(
                 "seconds and max_bytes are both 0 and no stop callable was "
                 "given: the capture would never stop"
             )
+        # Every check the CFG makes (e.g. sample_delay's range) fails here,
+        # before `select_project()` has sent the board a single command.
+        self.cfg()
 
     @property
     def selection(self) -> str | None:
@@ -313,6 +439,19 @@ class CaptureRequest:
 
     def cfg(self) -> dict:
         """The `CFG` dict for the board-side script."""
+        if self.is_frame:
+            return frame_cfg(
+                self.profile,
+                vga_mode=self.vga_mode,
+                window_lines=self.window_lines,
+                max_frames=self.max_frames,
+                max_bytes=self.max_bytes,
+                pio=self.pio,
+                sm=self.sm,
+                edge=self.edge,
+                sample_delay=self.sample_delay,
+                clock_hz=self.clock_hz,
+            )
         return capture_cfg(
             self.profile,
             buf_words=self.buf_words,
@@ -321,6 +460,19 @@ class CaptureRequest:
             pio=self.pio,
             sm=self.sm,
         )
+
+    def min_free(self) -> int:
+        """Free heap the board needs before this capture is worth sending.
+
+        Streaming allocates its two DMA buffers up front (`min_free_bytes`).
+        A frame capture sizes its buffers to whatever the heap holds, so it
+        needs the compile headroom plus one line -- less than that and it
+        could not capture anything at all.
+        """
+        if self.is_frame:
+            line_bytes = MODES[self.vga_mode].cpl // self.profile.samples_per_word * 4
+            return COMPILE_HEADROOM_BYTES + line_bytes
+        return min_free_bytes(self.buf_words)
 
 
 @dataclass(frozen=True)
@@ -454,22 +606,55 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
                         "first") from None
     _exec_checked(repl, "tt.clock_project_stop()")
     _exec_checked(repl, "tt.reset_project(True)")
-    # `clock_project_PWM(freqHz, duty_u16=0xffff/2, quiet=False,
-    # max_rp2040_freq=...)` in both SDK 2.x and 3.x; only the
-    # `max_rp2040_freq` default differs between them, and this passes
-    # neither it nor any other optional argument.
-    _exec_checked(repl, f"tt.clock_project_PWM({int(req.clock_hz)})")
-    _exec_checked(repl, "tt.reset_project(False)")
+    if req.ui_in is not None:
+        # The design's inputs, set while it is held in reset so it starts in
+        # the mode they select. The RP2 only drives ui_in in ASIC_RP_CONTROL;
+        # the fpgas.online boards sit in ASIC_MANUAL_INPUTS (2), where
+        # writing tt.ui_in changes nothing -- measured on fpga-4. The mode it
+        # was in is returned so the caller can put it back (`restore_mode`).
+        out = _exec_checked(repl, "print(int(tt.mode))")
+        did["mode_before"] = int(out.strip().splitlines()[-1])
+    try:
+        if req.ui_in is not None:
+            _exec_checked(
+                repl,
+                "from ttboard.mode import RPMode\n"
+                "tt.mode = RPMode.ASIC_RP_CONTROL\n"
+                "tt.ui_in.value = %d" % req.ui_in,
+            )
+            did["ui_in"] = req.ui_in
+        # `clock_project_PWM(freqHz, duty_u16=0xffff/2, quiet=False,
+        # max_rp2040_freq=...)` in both SDK 2.x and 3.x; only the
+        # `max_rp2040_freq` default differs between them, and this passes
+        # neither it nor any other optional argument.
+        _exec_checked(repl, f"tt.clock_project_PWM({int(req.clock_hz)})")
+        _exec_checked(repl, "tt.reset_project(False)")
+    except BaseException as exc:
+        # The caller never sees `did`, so it cannot put the mode back: a
+        # shared board must not be left in ASIC_RP_CONTROL by a failed setup.
+        if "mode_before" in did:
+            undo_selection(repl, did, stop=True, error=exc)
+        raise
     return did
+
+
+def cleanup_names(cfg: dict) -> list[str]:
+    """What `prepare_board` deletes: the module-level names of EVERY capture
+    program, not just the next one, so switching between stream and frame
+    mode does not leave the other program's globals holding the heap."""
+    names: set[str] = set()
+    for script in CAPTURE_SCRIPTS:
+        names.update(mp.module_level_names(mp.build(cfg, script)))
+    return sorted(names)
 
 
 def prepare_board(repl: RawRepl, names: list[str], timeout: float = 10.0) -> int:
     """Clear a previous run's leftovers and return the free heap in bytes.
 
-    Deletes every module-level name the script is about to define, collects,
-    and reads `gc.mem_free()`. On tt07 that recovered about 5 KB (79,296 ->
-    84,208 free), which was the difference between a capture script that
-    compiled and one that did not.
+    Deletes `names` (every capture program's module-level names, from
+    `cleanup_names`), collects, and reads `gc.mem_free()`. On tt07 that
+    recovered about 5 KB (79,296 -> 84,208 free), which was the difference
+    between a capture script that compiled and one that did not.
     """
     stdout, stderr = repl.exec(_CLEANUP % (names,), timeout=timeout)
     if stderr.strip():
@@ -487,6 +672,39 @@ def stop_clock(repl: RawRepl) -> None:
     _exec_checked(repl, "tt.clock_project_stop()")
 
 
+def restore_mode(repl: RawRepl, mode: int) -> None:
+    """Put the SDK's RPMode back to what `select_project` found (`--ui-in`)."""
+    _exec_checked(repl, "tt.mode = %d" % int(mode))
+
+
+def undo_selection(
+    repl: RawRepl, did: dict, stop: bool, error: BaseException | None = None
+) -> None:
+    """Undo what `select_project` returned in `did`: stop the clock when
+    `stop`, and put back the RPMode it changed.
+
+    Both steps are tried even if one fails. With `error` -- the exception
+    a failed capture is already raising -- a failure here becomes a note on
+    it rather than replacing it; without one, the first failure is raised.
+    """
+    steps = []
+    if stop:
+        steps.append(lambda: stop_clock(repl))
+    if "mode_before" in did:
+        steps.append(lambda: restore_mode(repl, did["mode_before"]))
+    first = None
+    for step in steps:
+        try:
+            step()
+        except Exception as exc:  # noqa: BLE001 - reported below
+            if error is not None:
+                error.add_note(f"putting the board back failed too: {exc}")
+            elif first is None:
+                first = exc
+    if first is not None:
+        raise first
+
+
 def _describe(req: CaptureRequest) -> str:
     """The header `desc` line: what the host knows and the board does not.
 
@@ -501,10 +719,17 @@ def _describe(req: CaptureRequest) -> str:
         parts.append(req.desc)
     if req.selection:
         parts.append("project=%s" % req.selection)
+    if req.ui_in is not None:
+        parts.append("ui_in=%d" % req.ui_in)
     parts.append(
         "clock=%d mode=extclk edge=%s profile=%s"
         % (req.clock_hz, req.edge, req.profile.name)
     )
+    if req.is_frame:
+        parts.append(
+            "capture=%s vga_mode=%s sample_delay=%d"
+            % ("window" if req.window_lines else "frame", req.vga_mode, req.sample_delay)
+        )
     return " ".join(parts)
 
 
@@ -870,22 +1095,28 @@ class CaptureSession:
             req, repl = self._req, self._repl
             script = mp.build(req.cfg(), req.script)
 
-            needed = min_free_bytes(req.buf_words)
-            self._mem_free = prepare_board(repl, mp.module_level_names(script))
+            needed = req.min_free()
+            self._mem_free = prepare_board(repl, cleanup_names(req.cfg()))
             if self._mem_free < needed:
+                if req.is_frame:
+                    why = "one line of frame buffer plus %d to compile the script" % (
+                        COMPILE_HEADROOM_BYTES
+                    )
+                else:
+                    why = (
+                        "2 x %d bytes of DMA buffer for --buf-words %d, plus %d to "
+                        "compile the script" % (4 * req.buf_words, req.buf_words, COMPILE_HEADROOM_BYTES)
+                    )
                 raise CaptureError(
                     "board has only %d bytes of free heap after a collect, "
-                    "need %d (2 x %d bytes of DMA buffer for --buf-words %d, "
-                    "plus %d to compile the script); compiling it there can "
-                    "fail without a clean error (tt07 printed 'FATAL: "
-                    "uncaught exception' and halted). Reset the board, or "
-                    "ask for fewer buffer words, and try again."
+                    "need %d (%s); compiling it there can fail without a "
+                    "clean error (tt07 printed 'FATAL: uncaught exception' "
+                    "and halted). Reset the board%s, and try again."
                     % (
                         self._mem_free,
                         needed,
-                        4 * req.buf_words,
-                        req.buf_words,
-                        COMPILE_HEADROOM_BYTES,
+                        why,
+                        "" if req.is_frame else ", or ask for fewer buffer words",
                     )
                 )
 

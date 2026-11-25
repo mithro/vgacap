@@ -112,13 +112,20 @@ enum {
     PROP_BUF_WORDS,
     PROP_SECONDS,
     PROP_TTCAP_COMMAND,
-    PROP_STOP_TIMEOUT
+    PROP_STOP_TIMEOUT,
+    PROP_CAPTURE_MODE,
+    PROP_VGA_MODE,
+    PROP_WINDOW_LINES
 };
 
 #define DEFAULT_TTCAP_COMMAND "uv run --no-sync ttcap"
 #define DEFAULT_PROFILE "auto"
 #define DEFAULT_SECONDS 0.0
 #define DEFAULT_STOP_TIMEOUT 15.0
+/* ttcap capture --mode: "stream" samples every clock at a rate the link can
+ * carry; "frame"/"window" capture whole frames at the design's real clock
+ * and send them between frames (ttcap/mp/frame_rp2.py). */
+#define DEFAULT_CAPTURE_MODE "stream"
 /* -1 on the two board-tuning integers means "say nothing and let ttcap pick",
  * so its defaults are not copied into C where they would quietly drift. */
 #define DEFAULT_PIO (-1)
@@ -159,6 +166,9 @@ struct _GstVgaCapTtSrc {
     gchar *design;
     gchar *profile;
     gchar *ttcap_command;
+    gchar *capture_mode;
+    gchar *vga_mode;
+    gint window_lines;
     guint clock_hz;
     gint pio;
     gint buf_words;
@@ -508,6 +518,15 @@ static gchar **build_argv(GstVgaCapTtSrc *self, GError **error)
         argv_add_int(argv, "--pio", self->pio);
     if (self->buf_words > 0)
         argv_add_int(argv, "--buf-words", self->buf_words);
+    /* Only a non-default mode is passed, like the tuning options above:
+     * streaming stays ttcap's own default rather than a copy of it here. */
+    if (self->capture_mode && *self->capture_mode &&
+        g_strcmp0(self->capture_mode, DEFAULT_CAPTURE_MODE) != 0)
+        argv_add(argv, "--mode", self->capture_mode);
+    if (self->vga_mode && *self->vga_mode)
+        argv_add(argv, "--vga-mode", self->vga_mode);
+    if (self->window_lines > 0)
+        argv_add_int(argv, "--window-lines", self->window_lines);
     /* Always passed: 0 is meaningful (run until stopped) and is not ttcap's
      * own default. g_ascii_formatd, because a locale with a decimal comma
      * would otherwise hand argparse something it cannot parse. */
@@ -1131,6 +1150,17 @@ static void gst_vgacapttsrc_set_property(GObject *object, guint prop_id,
     case PROP_STOP_TIMEOUT:
         self->stop_timeout = g_value_get_double(value);
         break;
+    case PROP_CAPTURE_MODE:
+        g_free(self->capture_mode);
+        self->capture_mode = g_value_dup_string(value);
+        break;
+    case PROP_VGA_MODE:
+        g_free(self->vga_mode);
+        self->vga_mode = g_value_dup_string(value);
+        break;
+    case PROP_WINDOW_LINES:
+        self->window_lines = g_value_get_int(value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
         break;
@@ -1175,6 +1205,15 @@ static void gst_vgacapttsrc_get_property(GObject *object, guint prop_id, GValue 
     case PROP_STOP_TIMEOUT:
         g_value_set_double(value, self->stop_timeout);
         break;
+    case PROP_CAPTURE_MODE:
+        g_value_set_string(value, self->capture_mode);
+        break;
+    case PROP_VGA_MODE:
+        g_value_set_string(value, self->vga_mode);
+        break;
+    case PROP_WINDOW_LINES:
+        g_value_set_int(value, self->window_lines);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
         break;
@@ -1191,6 +1230,8 @@ static void gst_vgacapttsrc_finalize(GObject *object)
     g_clear_pointer(&self->design, g_free);
     g_clear_pointer(&self->profile, g_free);
     g_clear_pointer(&self->ttcap_command, g_free);
+    g_clear_pointer(&self->capture_mode, g_free);
+    g_clear_pointer(&self->vga_mode, g_free);
     g_clear_pointer(&self->cmdline, g_free);
     if (self->err_reader) {
         err_reader_unref(self->err_reader);
@@ -1257,6 +1298,22 @@ static void gst_vgacapttsrc_class_init(GstVgaCapTtSrcClass *klass)
                             "least one DMA buffer for the board to wind down",
                             0.0, 600.0, DEFAULT_STOP_TIMEOUT, rw));
 
+    g_object_class_install_property(gobject_class, PROP_CAPTURE_MODE,
+        g_param_spec_string("capture-mode", "Capture mode",
+                            "ttcap capture --mode: stream (every clock, at a rate the "
+                            "link carries), frame (whole frames at the design's real "
+                            "clock) or window (frames swept in window-lines windows)",
+                            DEFAULT_CAPTURE_MODE, rw));
+    g_object_class_install_property(gobject_class, PROP_VGA_MODE,
+        g_param_spec_string("vga-mode", "VGA mode",
+                            "frame/window modes: the VGA timing to expect, e.g. "
+                            "800x600@60; empty leaves ttcap's default (640x480@60)",
+                            "", rw));
+    g_object_class_install_property(gobject_class, PROP_WINDOW_LINES,
+        g_param_spec_int("window-lines", "Window lines",
+                         "frame/window modes: most lines per captured frame; 0 "
+                         "leaves ttcap's default", 0, 4096, 0, rw));
+
     basesrc_class->start = GST_DEBUG_FUNCPTR(gst_vgacapttsrc_start);
     basesrc_class->stop = GST_DEBUG_FUNCPTR(gst_vgacapttsrc_stop);
     basesrc_class->unlock = GST_DEBUG_FUNCPTR(gst_vgacapttsrc_unlock);
@@ -1280,6 +1337,9 @@ static void gst_vgacapttsrc_init(GstVgaCapTtSrc *self)
     self->design = g_strdup("");
     self->profile = g_strdup(DEFAULT_PROFILE);
     self->ttcap_command = g_strdup(DEFAULT_TTCAP_COMMAND);
+    self->capture_mode = g_strdup(DEFAULT_CAPTURE_MODE);
+    self->vga_mode = g_strdup("");
+    self->window_lines = 0;
     self->clock_hz = 0;
     self->pio = DEFAULT_PIO;
     self->buf_words = DEFAULT_BUF_WORDS;

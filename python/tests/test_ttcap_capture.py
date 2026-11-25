@@ -836,3 +836,109 @@ def test_a_short_raw_payload_stops_the_board_too():
 
     assert board.interrupts == 1
     assert repl.exec("print(1)") == ("1\r\n", "")
+
+
+# -- frame / window capture (frame_rp2.py) --------------------------------
+
+
+def test_frame_cfg_covers_the_active_lines_plus_a_margin():
+    from ttcap.capture import frame_cfg
+
+    cfg = frame_cfg(RP2350_DBV3)
+
+    # 640x480@60: vsync 2 + back porch 33 lines, so active starts at 35;
+    # the region starts one line above it.
+    assert (cfg["cpl"], cfg["region_first"], cfg["region_lines"]) == (800, 34, 481)
+    assert (cfg["hsync_active"], cfg["vsync_active"]) == (-1, -1)
+    assert cfg["window_lines"] == 0 and cfg["max_frames"] == 0
+    assert "buf_words" not in cfg
+    assert cfg["edge"] == "falling"  # the prelude reads it
+
+
+def test_frame_cfg_refuses_what_the_board_could_not_do():
+    from ttcap.capture import frame_cfg
+
+    with pytest.raises(ValueError, match="unknown VGA mode"):
+        frame_cfg(RP2350_DBV3, vga_mode="1x1@1")
+    with pytest.raises(ValueError, match="hsync_active"):
+        frame_cfg(RP2350_DBV3, hsync_active=2)
+    with pytest.raises(ValueError, match="must not be negative"):
+        frame_cfg(RP2350_DBV3, window_lines=-1)
+
+
+def test_a_frame_request_builds_the_frame_cfg_and_may_end_on_a_picture_count():
+    req = request(RP2350_DBV3, script="frame_rp2.py", seconds=0, max_bytes=0, max_frames=3,
+                  window_lines=40, vga_mode="800x600@60")
+
+    cfg = req.cfg()
+
+    assert cfg["max_frames"] == 3 and cfg["window_lines"] == 40 and cfg["cpl"] == 1056
+    # Compile room plus one line of 1056 one-byte samples, not two DMA
+    # buffers: the board sizes its frame buffers to its own heap.
+    assert req.min_free() == capture.COMPILE_HEADROOM_BYTES + 1056
+    assert "capture=window vga_mode=800x600@60" in capture.stream_header_bytes(req).decode("latin-1")
+
+
+def test_a_frame_request_carries_its_sample_point_to_the_board():
+    cfg = request(RP2350_DBV3, script="frame_rp2.py", edge="rising", sample_delay=2).cfg()
+
+    assert (cfg["edge"], cfg["sample_delay"]) == ("rising", 2)
+    with pytest.raises(ValueError, match="sample_delay"):
+        request(RP2350_DBV3, script="frame_rp2.py", sample_delay=32).cfg()
+
+
+def test_a_frame_request_with_no_limit_at_all_is_refused():
+    with pytest.raises(ValueError, match="never stop"):
+        request(RP2350_DBV3, script="frame_rp2.py", seconds=0, max_bytes=0, max_frames=0)
+
+
+def test_a_picture_swept_from_several_frames_says_so():
+    from ttcap.capture import frame_note
+
+    swept = frame_note(["frame window=48 buffers=1 hsync_active=0 vsync_active=0"], 481)
+    whole = frame_note(["frame window=481 buffers=23 hsync_active=0 vsync_active=0"], 481)
+
+    assert swept.startswith("note: each picture is assembled from 11 captured frames")
+    assert "torn for one that changes" in swept
+    assert whole == ""
+    assert frame_note(["overruns=0 rxstall=0"], 481) == ""
+
+
+# -- select_project undoes its own mode change --------------------------------
+
+
+def test_a_setup_failure_after_the_mode_switch_puts_the_mode_back():
+    board = FakeChunkBoard(
+        [],
+        replies={"print(int(tt.mode))": "2\r\n"},
+        errors={"tt.clock_project_PWM(100000)": "AttributeError: no clock\r\n"},
+    )
+    repl = connect(board)
+
+    with pytest.raises(CaptureError, match="no clock"):
+        select_project(repl, request(ui_in=3))
+
+    assert board.commands[-2:] == ["tt.clock_project_stop()", "tt.mode = 2"]
+    assert "tt.reset_project(False)" not in board.commands
+
+
+def test_a_request_with_a_bad_cfg_is_refused_when_it_is_built():
+    with pytest.raises(ValueError, match="sample_delay"):
+        request(script="frame_rp2.py", sample_delay=40, ui_in=3)
+
+
+def test_the_cleanup_clears_the_other_programs_names_too():
+    # Stream then frame (or back) on one board: the names the previous
+    # program left must go, not only those the next one is about to define.
+    board = FakeChunkBoard([], mem_free=120_000)
+    repl = connect(board)
+    req = request(script="frame_rp2.py", max_frames=1, max_bytes=0)
+
+    run_capture(repl, req, io.BytesIO())
+
+    cleanup = board.commands[0]
+    assert cleanup.startswith("for _n in ")
+    for stream_only in ("on_a", "FULL", "OVERRUNS"):
+        assert repr(stream_only) in cleanup
+    for frame_only in ("plan_buffers", "make_trigger", "DONE"):
+        assert repr(frame_only) in cleanup
