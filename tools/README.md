@@ -44,7 +44,7 @@ tools/hil.sh --board fpga-1 --design tt_um_vgacal_bars --clock-hz 500000 \
 ```
 
 [`tools/hil.sh`](hil.sh) only runs `hil.py` in this checkout's uv environment;
-`tools/hil.py --help` lists every option. Useful ones:
+`tools/hil.sh --help` lists every option. Useful ones:
 
 - `--no-demo` for a host without GStreamer (the pipeline checks then SKIP,
   with the reason);
