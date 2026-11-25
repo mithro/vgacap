@@ -78,9 +78,10 @@ a value or a run, which puts every later pair out of step; and the next
 value's autopush stalls the state machine anyway, so the locked phase is
 lost too. Either sets FDEBUG.RXSTALL (RP2040 datasheet, FDEBUG). So the
 main loop polls it, and at the first stall sends an `error=rxstall` TIME
-chunk instead of the buffer it may have hit and stops; every chunk before
-it was complete, and checked, before it was sent. The summary's rxstall=1
-makes `ttcap capture --mode rle` exit non-zero.
+chunk and stops without sending the buffer in hand -- even one that was
+complete before the stall, which the loop cannot tell apart; every chunk
+before it was complete, and checked, before it was sent. The summary's
+rxstall=1 makes `ttcap capture --mode rle` exit non-zero.
 
 DMA, overruns, the cooperative stop and the hard-IRQ rules are
 capture_rp2.py's, repeated here rather than shared so that neither script
@@ -89,7 +90,12 @@ overrun is counted when the chain starts on a buffer still FULL, which is
 marked TORN, and the `overrun` TIME chunk follows the torn chunk itself --
 under RLE a torn chunk is worse than a gap: the new pairs in it are one
 short (fix_runs has already run) and spliced onto old ones; vgacap-frames
-and vgadecode drop the picture in progress at the marker. An overrun's
+and vgadecode drop the picture in progress at the marker. fix_runs works
+in place, so a tear that began before or during it may have added 1 to
+new run words, which the next fill's fix adds 1 to again: a buffer torn
+by the time its fix is done keeps TORN past its send, so that next chunk
+gets a marker too. (Copying before the fix needs a third buffer the heap
+cannot spare, and fixing on the host would change the wire format.) An overrun's
 lost samples cannot be counted from pairs, so `dropped_samples` is only
 an estimate, one sample per pair of each counted buffer: a pair is often
 many samples, and a tear that never overtook the send lost none.
@@ -125,7 +131,6 @@ def make_rle(clk_gpio, clk_act, delay, period, masked, in_count, locked):
     the prelude on asm_pio's globals swap). `period` is P for "locked";
     "edge" ignores it. `clk_gpio` is taken mod 32 as frame_rp2.py does."""
     clk_gpio &= 31
-    clk_idle = 1 - clk_act
     # Padding so each path is P cycles in "locked"; 0 in "edge". Path
     # lengths (cycles from S to the next S, without padding): equal 5,
     # change 6, saturation 6, entry 4 -- one more each when not masked.
@@ -136,7 +141,7 @@ def make_rle(clk_gpio, clk_act, delay, period, masked, in_count, locked):
     # Both run inside rle() while asm_pio has swapped the globals, so
     # the mnemonics resolve there, as rle()'s own do.
     def edge():
-        wait(clk_idle, gpio, clk_gpio)  # noqa: F821
+        wait(1 - clk_act, gpio, clk_gpio)  # noqa: F821 - the idle level
         wait(clk_act, gpio, clk_gpio)[delay]  # noqa: F821
 
     def sample():
@@ -205,8 +210,7 @@ def write_rle_chunk(out, buf, pairs):
 def write_pairs(out, buf):
     """Emit one fixed buffer, splitting each 2^32 run into two of 2^31."""
     view = memoryview(buf)
-    sent = 0
-    start = 0
+    sent = start = 0
     for pair in range(PAIRS_PER_BUF):
         at = 8 * pair
         if any(buf[at + 4 : at + 8]):
@@ -276,7 +280,7 @@ def main(out):
     masked = MASK if MASK >= 0 else int(hasattr(rp2.PIO, "gpio_base"))  # noqa: F821
     picked = choose(sysclk, masked)
     if picked is None:
-        msg = "error=no exact rle style for sysclk %d clock %d style=%s mask=%d delay=%d"
+        msg = "error=no exact rle style: sysclk %d clock %d style=%s mask=%d delay=%d"
         write_time_chunk(out, 0, (msg % (sysclk, CLOCK_HZ, STYLE, masked, SAMPLE_DELAY)).encode())  # noqa: F821
         return
     locked, period = picked
@@ -364,6 +368,7 @@ def main(out):
                 break
             buf = bufs[index]
             zeros = fix_runs(buf, BUF_WORDS)
+            torn = TORN[index]  # already torn: the fix may have hit new words
             if zeros:
                 saturated += zeros
                 sent += write_pairs(out, buf)
@@ -371,7 +376,7 @@ def main(out):
                 sent += write_rle_chunk(out, buf, PAIRS_PER_BUF)
             FULL[index] = False  # first, so a tear in the send is seen below
             if TORN[index]:
-                TORN[index] = False
+                TORN[index] = torn  # set: the next chunk is fixed twice, mark it too
                 sent += write_time_chunk(out, OVERRUNS[0] * PAIRS_PER_BUF, b"overrun")  # noqa: F821
             index = 1 - index
             if ONESHOT and index == 0:

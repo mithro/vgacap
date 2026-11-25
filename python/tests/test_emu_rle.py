@@ -246,6 +246,39 @@ def test_a_chunk_the_dma_rewrote_while_it_was_sent_is_reported():
     assert not summary.startswith("overruns=0 ")
 
 
+def _tear_before_the_fix(script: str) -> str:
+    # The emulator runs fix_runs() in no time, so stand in for a slow one:
+    # the first time main() takes buffer 1, wait (before the fix) until A
+    # has completed and B has rewritten the head of that buffer. fix_runs()
+    # then adds 1 to those new run words too, and the next fill of buffer 1
+    # adds 1 again: its chunk has runs of 2 where the tear began.
+    lines = script.split("\n")
+    (at,) = [i for i, line in enumerate(lines) if line.strip() == "zeros = fix_runs(buf, BUF_WORDS)"]
+    pad = lines[at][: len(lines[at]) - len(lines[at].lstrip())]
+    lines[at:at] = [
+        pad + "if index and not _SLOW:",
+        pad + " _SLOW.append(1)",
+        pad + " while not TORN[1]:",
+        pad + "  machine.idle()",
+        pad + " for _ in range(5):",
+        pad + "  machine.idle()",
+    ]
+    (top,) = [i for i, line in enumerate(lines) if line.startswith("def main(out):")]
+    lines.insert(top, "_SLOW = []")
+    return "\n".join(lines)
+
+
+def test_a_tear_that_began_before_the_fix_marks_the_next_chunk_too():
+    stream = counting_capture(stop_bytes=8 * 16_400, patch=_tear_before_the_fix)
+
+    chunks = damaged_and_reported(stream)
+    # The torn chunk itself, and the next one from that buffer (two runs
+    # of 2 in it); both carry an overrun marker.
+    assert chunks[1] == (True, True)
+    assert chunks[3][0], "the emulator no longer double-fixes the tear"
+    assert all(reported for damaged, reported in chunks if damaged)
+
+
 def test_a_counting_capture_that_keeps_up_damages_and_reports_nothing():
     stream = counting_capture()
 
@@ -320,6 +353,10 @@ def test_a_stopped_rle_capture_leaves_no_dma_channel_running(bars_uo, oneshot):
 @pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
 def test_the_uploaded_rle_script_fits_in_the_board(profile):
     assert len(mp.build(rle_cfg(profile, clock_hz=25_000_000), "rle_rp2.py")) < 10_000
+    # And with the longest CFG line the host can send.
+    worst = rle_cfg(profile, clock_hz=100_000_000, buf_words=16384, max_bytes=4_000_000_000,
+                    sample_delay=31, style="locked", oneshot=True, pio=1, sm=3, edge="falling")
+    assert len(mp.build(worst, "rle_rp2.py")) < 10_000
 
 
 def test_the_request_builds_the_rle_cfg():
