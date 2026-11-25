@@ -124,10 +124,14 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   `ttcap` refuses `--asic-index` for a bench demo board with an FPGA
   breakout, and when these disagree about which board it is:
   - `--board` (`ttcap capture --board SLUG`);
-  - a `ws://` link: the bridge's address, the Pi's name, or a tunnel's
-    `18000 + octet` port;
-  - for a `serial:` link, the Pi it runs on.
+  - a `ws://` or `wss://` link: the bridge's address, the Pi's name, or a
+    loopback address (127.0.0.0/8, `localhost`, `::1`) on a tunnel's
+    `18000 + octet` port, which names the tunnel's board;
+  - for a `serial:` link, or a loopback link on any other port (the Pi's
+    own bridge), the Pi it runs on.
 
+  The refusal names the boards with an ASIC breakout in the board table
+  that can run this firmware (RP2350 only), or says that none is listed.
   `ttcap.firmware.setup()` called directly does not check; its caller must
   (`ttcap.demo.check_asic_index()`).
 * `ui_in` and `rst_n` are left untouched until `ui_in` / `reset` commands

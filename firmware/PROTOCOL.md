@@ -75,7 +75,8 @@ fields, or `err` followed by a message for a person.
   only thing that ever drives it low. The reply comes after about 20 ms +
   2 ms per index. The firmware cannot tell the breakouts apart;
   `ttcap capture` refuses `--asic-index` for a bench demo board with an
-  FPGA breakout (named by `--board`, the ws:// link or the Pi it runs on),
+  FPGA breakout (named by `--board`, the ws:// link or the Pi it runs on,
+  the Pi also for its own bridge on loopback),
   and when those disagree.
 * `program_stream` / `program_frame` print the PIO program a capture with
   those operands would load, in hex, with its configuration -- for

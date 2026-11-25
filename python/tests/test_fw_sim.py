@@ -698,3 +698,48 @@ def test_cli_reboot_with_firmware_given_does_not_probe(monkeypatch, capsys):
     assert "the board runs" not in capsys.readouterr().out
     assert not any(b"hello" in w for w in writes)
     assert board.commands == ["import machine\nmachine.reset()"]
+
+
+def test_asic_index_is_refused_through_an_fpga_pis_own_bridge(monkeypatch, tmp_path):
+    # On fpga-4's Pi the natural link is the Pi's own bridge on loopback:
+    # that is fpga-4, and asic_select would erase its FPGA.
+    monkeypatch.setattr(demo, "_address_is_local", lambda address: False)
+    monkeypatch.setattr(demo.socket, "gethostname", lambda: "pi-sw2-p35")
+    monkeypatch.setattr(cli, "link_from_url", _no_link)
+    for url in ("ws://127.0.0.1:8765/serial", "ws://localhost:8765/serial",
+                "ws://127.1.2.3:8765/serial", "ws://[::1]:8765/serial"):
+        assert demo.link_is_this_machine(url)
+        with pytest.raises(CaptureError, match="fpga-4 is an FPGA board"):
+            cli.capture(url, tmp_path / "x.vgacap", clock_hz=100_000, seconds=1, max_bytes=0,
+                        firmware="picosdk", asic_index=3)
+    assert cli.main(["capture", "ws://127.0.0.1:8765/serial", "--firmware", "picosdk",
+                     "--asic-index", "3", "--clock-hz", "100000", "--seconds", "1",
+                     "--out", str(tmp_path / "y.vgacap")]) == 1
+    assert not list(tmp_path.iterdir())
+
+
+def test_a_loopback_tunnel_port_is_the_tunnels_board_not_this_pi(monkeypatch):
+    monkeypatch.setattr(demo, "_address_is_local", lambda address: False)
+    assert not demo.link_is_this_machine("ws://127.0.0.1:18007/serial")
+    assert not demo.link_is_this_machine("ws://10.21.2.7:8765/serial")
+    assert not demo.link_is_this_machine("serial:/dev/ttyACM0")
+    # From fpga-4's Pi, a tunnel to tt07 is tt07: not refused.
+    demo.check_asic_index(None, 3, link="ws://127.0.0.1:18007/serial", hostname="pi-sw2-p35")
+    # On tt07's Pi its own bridge is tt07; --board saying tt08 disagrees.
+    demo.check_asic_index(None, 3, link="ws://127.0.0.1:8765/serial", hostname="pi-sw2-p7")
+    with pytest.raises(CaptureError, match="disagree: --board says tt08, this Pi says tt07"):
+        demo.check_asic_index("tt08", 3, link="ws://localhost:8765/serial", hostname="pi-sw2-p7")
+
+
+def test_the_asic_index_refusal_names_the_boards_from_the_table(monkeypatch):
+    # The boards --asic-index is for come from boards.WELLAND, never a
+    # written-out list: RP2350 ASIC carriers, which today's table has none of.
+    monkeypatch.setattr(demo, "_address_is_local", lambda address: False)
+    with pytest.raises(CaptureError) as e:
+        demo.check_asic_index("fpga-4", 3, hostname="workstation")
+    assert "none is in the bench table" in str(e.value)
+    assert "tt07" not in str(e.value)  # an RP2040 board: the firmware cannot run there
+    monkeypatch.setitem(demo.WELLAND, "tt09", ("pi-sw2-p10", RP2350_DBV3))
+    with pytest.raises(CaptureError) as e:
+        demo.check_asic_index("fpga-4", 3, hostname="workstation")
+    assert "for the RP2350 ASIC carriers: tt09; fpga-4 is an FPGA board" in str(e.value)
