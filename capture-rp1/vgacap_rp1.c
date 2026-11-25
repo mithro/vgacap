@@ -223,12 +223,33 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    // The pattern is read before anything is claimed, so a bad file costs
-    // no teardown.
+    // The pattern is read, and the capture buffer allocated, before anything
+    // is claimed, so neither failing costs a teardown.
     size_t gen_len = 0;
     uint8_t *gen_data = NULL;
     if (o.gen && !(gen_data = read_file(o.gen, &gen_len)))
         return 1;
+    // The first DMA burst (8 words) of a capture is stale even after the
+    // FIFOs are cleared -- measured with the counter generator: the first 32
+    // samples broke the count, nothing after them did. So one burst more is
+    // captured and dropped.
+    const uint64_t skip_words = 8;
+    // Whole buffers of whole words. Sized in uint64_t, then refused before
+    // the size_t that malloc takes can wrap (a 32-bit userland's 4 GB).
+    uint64_t words = o.samples / 4 + (o.samples % 4 != 0);
+    if (words > SIZE_MAX / 4u - skip_words - CHUNK_WORDS) {
+        fprintf(stderr, "vgacap-rp1: --samples %llu is more than this process can hold\n",
+                (unsigned long long)o.samples);
+        return 1;
+    }
+    words += skip_words;
+    uint64_t chunks = (words + CHUNK_WORDS - 1) / CHUNK_WORDS;
+    size_t buf_bytes = (size_t)chunks * CHUNK_BYTES;
+    uint32_t *buf = malloc(buf_bytes);
+    if (!buf) {
+        fprintf(stderr, "vgacap-rp1: cannot allocate %zu bytes\n", buf_bytes);
+        return 1;
+    }
 
     PIO pio = pio0;
     if (PIO_IS_ERR(pio)) {
@@ -253,15 +274,9 @@ int main(int argc, char **argv)
     uint cap_off = 0, gen_off = 0, cnt_off = 0;
     struct generator gen = {0};
     pthread_t gen_thread;
-    uint32_t *buf = NULL;
     uint16_t gen_insns[2], cnt_insns[2];
     pio_program_t gen_prog = {.instructions = gen_insns, .length = 2, .origin = -1};
     pio_program_t cnt_prog = {.instructions = cnt_insns, .length = 2, .origin = -1};
-    // The first DMA burst (8 words) of a capture is stale even after the
-    // FIFOs are cleared -- measured with the counter generator: the first 32
-    // samples broke the count, nothing after them did. So one burst more is
-    // captured and dropped.
-    const uint64_t skip_words = 8;
 
     // ---- the sampler: the RP2's program, word for word ------------------
     uint16_t cap_insns[3] = {
@@ -391,13 +406,6 @@ int main(int argc, char **argv)
     }
 
     // ---- capture --------------------------------------------------------
-    uint64_t words = (o.samples + 3) / 4 + skip_words;
-    uint64_t chunks = (words + CHUNK_WORDS - 1) / CHUNK_WORDS;
-    buf = malloc(chunks * CHUNK_BYTES);
-    if (!buf) {
-        fprintf(stderr, "vgacap-rp1: cannot allocate %llu bytes\n", (unsigned long long)(chunks * CHUNK_BYTES));
-        goto teardown;
-    }
     // Nothing captured before this run may lead it: words left in the FIFO
     // came out as the first 8 of the stream (pi-sw2-p4, 2026-11-24).
     pio_sm_clear_fifos(pio, (uint)cap_sm);
