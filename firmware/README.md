@@ -1,7 +1,7 @@
 # vgacap capture firmware (pico-sdk)
 
-A C firmware for the Tiny Tapeout demo board v3 (RP2350B) that captures a
-design's VGA output on `uo_out` without MicroPython underneath. It does
+A C firmware for the [Tiny Tapeout](https://tinytapeout.com) demo board v3 (RP2350B) that captures a
+design's VGA output on `uo_out` without [MicroPython](https://micropython.org) underneath. It does
 what the MicroPython capture programs ([`python/ttcap/mp/`](../python/ttcap/mp/)) do: streaming
 capture, whole-frame capture and windowed capture. The host drives it with
 `ttcap capture --firmware picosdk` over the protocol in
@@ -130,9 +130,10 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   `ttcap` refuses `--asic-index` for a bench demo board with an FPGA
   breakout, and when these disagree about which board it is:
   - `--board` (`ttcap capture --board SLUG`);
-  - a `ws://` or `wss://` link: the bridge's address, the Pi's name, or a
-    loopback address (127.0.0.0/8, `localhost`, `::1`) on a tunnel's
-    `18000 + octet` port, which names the tunnel's board;
+  - a `ws://` or `wss://` link: the fpgas.online bridge's (`fpgas-tt`)
+    address, the Pi's name, or a loopback address (127.0.0.0/8,
+    `localhost`, `::1`) on a tunnel's `18000 + octet` port, which names
+    the tunnel's board;
   - for a `serial:` link, or a loopback link on any other port (the Pi's
     own bridge), the Pi it runs on.
 
@@ -214,7 +215,7 @@ and the UF2 copied there. `<dev>` is the stock firmware's serial port
 (`/dev/ttboard` on the fpgas.online Pis).
 
 1. With the stock firmware, enable the design to capture
-   (`/designs/<name>/enable` on the fpgas.online bridge (`fpgas-tt`), or
+   (`/designs/<name>/enable` on the bridge, or
    `ttcap capture`'s `--design`), and take a reference capture the usual
    way if wanted.
 2. Stop anything else that owns the port, such as the bridge
