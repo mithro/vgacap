@@ -244,6 +244,11 @@ def setup(link: FirmwareLink, req: CaptureRequest) -> dict:
     released last. The firmware cannot select a design: it runs in place of
     the stock firmware, which is what knows the shuttle, so `--project` /
     `--design` are refused rather than ignored.
+
+    `req.asic_index` is sent as is: nothing here knows which board is on
+    the link, and on an FPGA breakout `asic_select` erases the FPGA. A
+    caller other than `ttcap capture` must call
+    `ttcap.demo.check_asic_index()` first (as `cli.capture()` does).
     """
     if req.selection:
         raise CaptureError(
@@ -254,8 +259,9 @@ def setup(link: FirmwareLink, req: CaptureRequest) -> dict:
     link.command("clock hz=0")
     link.command("reset hold=1")
     if req.asic_index is not None:
-        # The mux lines float while the RP2350 is in its bootloader, so an
-        # ASIC board comes back with no project selected (tt09, 2026-11-24).
+        # Nothing drives the mux lines while the RP2350 is in its
+        # bootloader, so an ASIC board comes back with no project selected
+        # (tt09, 2026-11-24).
         link.command("asic_select index=%d" % req.asic_index, timeout=30.0)
         did["asic_index"] = req.asic_index
     if req.ui_in is not None:
