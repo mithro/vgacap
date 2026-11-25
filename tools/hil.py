@@ -149,7 +149,7 @@ def bridge_state() -> str:
     try:
         proc = subprocess.run(["systemctl", "is-active", "fpgas-tt"],
                               capture_output=True, text=True, check=False,
-                              timeout=60)
+                              timeout=60, start_new_session=True)
     except (OSError, subprocess.SubprocessError) as exc:
         return "unknown (%s: %s)" % (type(exc).__name__, exc)
     if proc.returncode == 0:
@@ -193,6 +193,11 @@ def _tail(text: str, lines: int = 12) -> str:
     return "\n".join(kept)
 
 
+#: `ps` is local and quick; one that takes longer than this is stuck, and
+#: cleanup -- deaf to signals -- must not wait on it for ever.
+PS_TIMEOUT_S = 30.0
+
+
 def _survivors(sid: int) -> list[str]:
     """Processes still alive in session `sid`, as `pid args` strings.
 
@@ -202,7 +207,8 @@ def _survivors(sid: int) -> list[str]:
     actually holds the board. The session does.
     """
     proc = subprocess.run(["ps", "-eo", "pid=,sid=,args="],
-                          capture_output=True, text=True, check=False)
+                          capture_output=True, text=True, check=False,
+                          timeout=PS_TIMEOUT_S)
     found = []
     for line in proc.stdout.splitlines():
         fields = line.split(None, 2)
@@ -656,23 +662,23 @@ class Hil:
             if clients != 0:
                 raise Fatal("--stop-bridge refused: the bridge at %s has %s "
                             "client(s) connected" % (self.args.bridge_health, clients))
+        # Marked before the attempt: however it ends -- a failure, a
+        # timeout, a signal, systemd finishing a stop job sudo was killed
+        # after queueing -- cleanup must then look. That is safe for a stop
+        # that never took effect: restore_bridge resets the board only when
+        # systemd says fpgas-tt is down, and `systemctl start` on an active
+        # unit does nothing.
+        self.bridge_stopped = True
         try:
-            subprocess.run(["sudo", "-n", "systemctl", "stop", "fpgas-tt"],
-                           check=True, timeout=120)
-        except BaseException as exc:
-            # However the attempt ended -- a failure, a timeout, a stop
-            # signal -- a stop that took effect must still be undone, and
-            # one that did not must not be "undone" by restarting the board
-            # under the running daemon.
-            after = bridge_state()
-            if after != "active":
-                self.bridge_stopped = True
-            if not isinstance(exc, (OSError, subprocess.SubprocessError)):
-                raise
+            # Deaf to signals for its (bounded) length, and in a session of
+            # its own so a terminal Ctrl-C cannot reach sudo or systemctl.
+            with signals_ignored():
+                subprocess.run(["sudo", "-n", "systemctl", "stop", "fpgas-tt"],
+                               check=True, timeout=120, start_new_session=True)
+        except (OSError, subprocess.SubprocessError) as exc:
             raise Fatal("--stop-bridge: `sudo -n systemctl stop fpgas-tt` failed "
                         "(%s: %s); fpgas-tt is now %s"
-                        % (type(exc).__name__, exc, after)) from None
-        self.bridge_stopped = True
+                        % (type(exc).__name__, exc, bridge_state())) from None
         self.notes.append("fpgas-tt stopped for this run, and started again after.")
 
     def restore_bridge(self) -> None:
@@ -695,13 +701,16 @@ class Hil:
         finally:
             # In a `finally`: a restart that raises, or anything that gets
             # past cleanup's signal guard, must not leave the bridge down.
-            self.bridge_stopped = False
+            # The gate is cleared only after the start, so a cleanup cut
+            # short before it is retried in full.
             self.start_bridge()
+            self.bridge_stopped = False
 
     def start_bridge(self) -> None:
         try:
             code = subprocess.run(["sudo", "-n", "systemctl", "start", "fpgas-tt"],
-                                  check=False, timeout=120).returncode
+                                  check=False, timeout=120,
+                                  start_new_session=True).returncode
         except (OSError, subprocess.SubprocessError) as exc:
             code, why = -1, str(exc)
         else:
@@ -782,12 +791,20 @@ class Hil:
 
         Deaf to SIGINT and the stop signals while it runs: a second Ctrl-C
         or a SIGHUP here would otherwise leave board commands running, or
-        the bridge stopped, with no warning and no report.
+        the bridge stopped, with no warning and no report. Idempotent, so
+        main() can run it again if a signal lands before that guard is up.
         """
         with signals_ignored():
-            for sid in self.sessions:
-                _reap(sid)
-            self.restore_bridge()
+            try:
+                for sid in self.sessions:
+                    try:
+                        _reap(sid)
+                    except Exception as exc:  # noqa: BLE001 - reported, then the rest
+                        self.notes.append(
+                            "WARNING: could not check session %d for leftover "
+                            "board commands (%s: %s)." % (sid, type(exc).__name__, exc))
+            finally:
+                self.restore_bridge()
 
 
 # ------------------------------------------------------------- measurements
@@ -1168,7 +1185,15 @@ def main(argv: list[str] | None = None) -> int:
                 hil.notes.append("Run interrupted by %s; everything it "
                                  "started was stopped." % why)
             finally:
-                hil.cleanup()
+                # A signal between this `finally` starting and cleanup()'s
+                # guard going up would skip it; cleanup() is idempotent, so
+                # run it until it completes.
+                while True:
+                    try:
+                        hil.cleanup()
+                        break
+                    except (Interrupted, KeyboardInterrupt):
+                        continue
     except Fatal as exc:
         print("hil: %s" % exc, file=sys.stderr)
         return 2

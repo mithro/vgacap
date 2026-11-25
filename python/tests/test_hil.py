@@ -509,13 +509,25 @@ class FakeSystemd:
         #: "ok", "fails" (exit 1, still running), "times-out-stopped"
         #: (TimeoutExpired, but it did stop) or "interrupted".
         self.stop = stop
+        #: Raised, once each, by the next is-active / start / ps.
+        self.raise_from = {}
+        #: The keyword arguments each systemctl verb was run with.
+        self.kwargs = {}
 
     real_run = staticmethod(subprocess.run)
 
     def __call__(self, argv, check=False, **kw):
         argv = list(argv)
+        if argv[0] == "ps":
+            assert kw.get("timeout"), "ps must be bounded"
+            if "ps" in self.raise_from:
+                raise self.raise_from.pop("ps")
         if "systemctl" not in argv:
             return self.real_run(argv, check=check, **kw)  # git describe, say
+        verb = argv[argv.index("systemctl") + 1]
+        self.kwargs[verb] = dict(kw, sigint=signal.getsignal(signal.SIGINT))
+        if verb in self.raise_from:
+            raise self.raise_from.pop(verb)
         if argv[:2] == ["systemctl", "is-active"]:
             code = 0 if self.state == "active" else 3
             return subprocess.CompletedProcess(argv, code, stdout=self.state + "\n")
@@ -601,22 +613,107 @@ def test_a_failed_stop_is_a_clean_error_and_no_board_restart(bridge_run):
     systemd.stop = "fails"
     with pytest.raises(hil.Fatal, match="systemctl stop fpgas-tt. failed.*now active"):
         run.stop_bridge()
-    assert not run.bridge_stopped
     run.cleanup()
-    # The daemon never stopped: the board must not be reset under it.
-    assert events == [("systemctl", "stop")]
+    # The daemon never stopped: the board must not be reset under it. The
+    # start is a no-op on an active unit, and harmless.
+    assert events == [("systemctl", "stop"), ("systemctl", "start")]
+    assert systemd.state == "active" and not run.bridge_stopped
 
 
-@pytest.mark.parametrize("how", ["times-out-stopped", "interrupted"])
-def test_a_stop_that_took_effect_is_still_undone(bridge_run, how):
+def test_the_stop_cannot_be_interrupted_from_the_terminal(bridge_run):
+    """Ctrl-C reaches the whole foreground process group: sudo and systemctl
+    run in a session of their own, with this process deaf to SIGINT."""
+    _hil, run, systemd, _events = bridge_run
+    run.stop_bridge()
+    assert systemd.kwargs["stop"]["start_new_session"] is True
+    assert systemd.kwargs["stop"]["sigint"] is signal.SIG_IGN
+    assert signal.getsignal(signal.SIGINT) is not signal.SIG_IGN  # put back
+    run.cleanup()
+    assert systemd.kwargs["start"]["start_new_session"] is True
+
+
+def test_ctrl_c_while_checking_a_failed_stop_still_undoes_it(bridge_run, monkeypatch):
+    """The stop took effect and then timed out; a second Ctrl-C lands in
+    the is-active that follows. The bridge must still be started."""
+    _hil, _run, systemd, _events = bridge_run
+    systemd.stop = "times-out-stopped"
+    real_call = systemd.__call__
+    is_active_calls = []
+
+    def run_(argv, **kw):
+        if list(argv)[:2] == ["systemctl", "is-active"]:
+            is_active_calls.append(1)
+            if len(is_active_calls) == 2:  # the one after the stop
+                raise KeyboardInterrupt
+        return real_call(argv, **kw)
+
     hil, run, systemd, events = bridge_run
-    systemd.stop = how
-    with pytest.raises((hil.Fatal, KeyboardInterrupt)):
+    monkeypatch.setattr(hil.subprocess, "run", run_)
+    with pytest.raises(KeyboardInterrupt):
         run.stop_bridge()
     assert run.bridge_stopped
+    monkeypatch.setattr(hil.subprocess, "run", systemd)
     run.cleanup()
-    assert systemd.state == "active"
+    assert ("board", b"\x04") in events
+    assert systemd.state == "active" and events[-1] == ("systemctl", "start")
+
+
+@pytest.mark.parametrize("error", [subprocess.TimeoutExpired(["ps"], 30),
+                                   OSError("no ps")])
+def test_a_stuck_or_missing_ps_cannot_keep_the_bridge_down(bridge_run, error):
+    _hil, run, systemd, events = _stopped(bridge_run)
+    run.sessions = [999999]
+    systemd.raise_from["ps"] = error
+    run.cleanup()
+    assert systemd.state == "active" and events[-1] == ("systemctl", "start")
+    assert any("could not check session 999999" in n for n in run.notes), run.notes
+
+
+def test_a_cleanup_cut_short_before_the_start_is_retried_in_full(bridge_run):
+    """The gate is cleared only once the start has been attempted."""
+    _hil, run, systemd, events = _stopped(bridge_run)
+    systemd.raise_from["start"] = KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt):
+        run.cleanup()
+    assert run.bridge_stopped and systemd.state == "inactive"
+    run.cleanup()
+    assert systemd.state == "active" and not run.bridge_stopped
+    run.cleanup()  # and once it is done, again is nothing
+    # The interrupted start never reached systemctl; the retry's did, once.
+    assert events.count(("systemctl", "start")) == 1
     assert events[-1] == ("systemctl", "start")
+
+
+def test_main_runs_cleanup_again_when_interrupted(tmp_path, bridge_run, monkeypatch):
+    """A second signal before cleanup()'s guard is up must not skip it."""
+    hil, run, systemd, events = bridge_run
+    systemd.stop = "fails"
+    real_cleanup = hil.Hil.cleanup
+    tries = []
+
+    def cleanup(self):
+        tries.append(1)
+        if len(tries) == 1:
+            raise hil.Interrupted("SIGHUP")
+        real_cleanup(self)
+
+    monkeypatch.setattr(hil.Hil, "cleanup", cleanup)
+    frames = tmp_path / "vgacap-frames"
+    frames.write_text("")
+    saved = {sig: signal.getsignal(sig) for sig in hil.STOP_SIGNALS}
+    try:
+        code = hil.main([str(tmp_path / "r.md"), "--clock-hz", "500000",
+                         "--seconds", "4", "--link", "serial:/dev/null",
+                         "--stop-bridge", "--bridge-health", run.args.bridge_health,
+                         "--vgacap-frames", str(frames),
+                         "--workdir", str(tmp_path / "work"),
+                         "--lock-dir", str(tmp_path / "lock")])
+    finally:
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
+    assert code == 1 and len(tries) == 2
+    assert events[-1] == ("systemctl", "start")
+    assert (tmp_path / "r.md").exists()
 
 
 def test_failed_stop_through_main_writes_a_report(tmp_path, monkeypatch, bridge_run):
