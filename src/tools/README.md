@@ -4,7 +4,7 @@ The C command-line tools for inspecting a
 [vgacap stream](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-09-15-stream-format.md)
 and turning it into pictures, and the Python
 [`vgacap-bin2stream`](../../python/vgacap/bin2stream.py) that makes one from a
-simulator dump. CMake builds the C tools into `build/`.
+simulator dump. [CMake builds the C tools into `build/`](../../docs/development.md).
 
 ## Usage
 
