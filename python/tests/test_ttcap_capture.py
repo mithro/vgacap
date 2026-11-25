@@ -902,3 +902,43 @@ def test_a_picture_swept_from_several_frames_says_so():
     assert "torn for one that changes" in swept
     assert whole == ""
     assert frame_note(["overruns=0 rxstall=0"], 481) == ""
+
+
+# -- select_project undoes its own mode change --------------------------------
+
+
+def test_a_setup_failure_after_the_mode_switch_puts_the_mode_back():
+    board = FakeChunkBoard(
+        [],
+        replies={"print(int(tt.mode))": "2\r\n"},
+        errors={"tt.clock_project_PWM(100000)": "AttributeError: no clock\r\n"},
+    )
+    repl = connect(board)
+
+    with pytest.raises(CaptureError, match="no clock"):
+        select_project(repl, request(ui_in=3))
+
+    assert board.commands[-2:] == ["tt.clock_project_stop()", "tt.mode = 2"]
+    assert "tt.reset_project(False)" not in board.commands
+
+
+def test_a_request_with_a_bad_cfg_is_refused_when_it_is_built():
+    with pytest.raises(ValueError, match="sample_delay"):
+        request(script="frame_rp2.py", sample_delay=40, ui_in=3)
+
+
+def test_the_cleanup_clears_the_other_programs_names_too():
+    # Stream then frame (or back) on one board: the names the previous
+    # program left must go, not only those the next one is about to define.
+    board = FakeChunkBoard([], mem_free=120_000)
+    repl = connect(board)
+    req = request(script="frame_rp2.py", max_frames=1, max_bytes=0)
+
+    run_capture(repl, req, io.BytesIO())
+
+    cleanup = board.commands[0]
+    assert cleanup.startswith("for _n in ")
+    for stream_only in ("on_a", "FULL", "OVERRUNS"):
+        assert repr(stream_only) in cleanup
+    for frame_only in ("plan_buffers", "make_trigger", "DONE"):
+        assert repr(frame_only) in cleanup

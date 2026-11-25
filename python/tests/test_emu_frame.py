@@ -30,7 +30,7 @@ VGA = MODES["640x480@60"]
 
 
 def run_frame(profile, uo, *, period=5, high=2, delay=1, chip="rp2350", heap=None,
-              stop_after_bytes=None, **cfg_kwargs):
+              stop_after_bytes=None, pwm=None, script=None, **cfg_kwargs):
     # The SDK's jitter-free clocking: the project clock is the system clock
     # over a whole number, so the CFG's clock_hz is exactly sysclk / period.
     cfg_kwargs.setdefault("clock_hz", 133_000_000 // period)
@@ -43,10 +43,12 @@ def run_frame(profile, uo, *, period=5, high=2, delay=1, chip="rp2350", heap=Non
                  constants={9: 0, 10: 0, 11: 0, 12: 0}),
         chip=chip,
         max_cycles=20_000_000_000,
+        pwm=pwm,
         **kwargs,
     )
     board.stop_after_bytes = stop_after_bytes
-    return board, board.run_script(mp.build(cfg, "frame_rp2.py"))
+    built = mp.build(cfg, "frame_rp2.py")
+    return board, board.run_script(script(built) if script else built)
 
 
 def chunks(out: bytes):
@@ -224,16 +226,77 @@ def test_the_measured_default_sample_point_is_exact(tmp_path, bars_uo):
     assert_pictures_exact(frames, bars(640, 480))
 
 
-@pytest.mark.parametrize("clock_hz", [25_000_000, 133_000_000 // 40, 133_000_000])
-def test_a_clock_the_sampler_cannot_lock_to_is_refused(bars_uo, clock_hz):
-    # 133 MHz / 25 MHz is 5.32 (a fractional PWM would drift past the
-    # free-running sampler), / 3.325 MHz is 40 (past the delay field), and
-    # 133 MHz is 1. Each is refused with a reason, not captured wrong.
-    board, out = run_frame(RP2350_DBV3, bars_uo, clock_hz=clock_hz, max_frames=1)
+@pytest.mark.parametrize("clock_hz,pwm", [
+    # What MicroPython's PWM makes for 25 MHz at 133 MHz: DIV 1, TOP 4 --
+    # a whole 5 clocks, but 26.6 MHz, 6.4% from what the header says.
+    (25_000_000, (1, 0x10, 4)),
+    (133_000_000 // 5, (1, 0x11, 4)),  # a fractional divider would drift
+    (133_000_000 // 40, (1, 0x10, 39)),  # 40 clocks: past the delay field
+    (133_000_000, (1, 0x10, 0)),  # 1 clock
+    (133_000_000 // 5, (0x11, 0x10, 4)),  # whole, but DIVMODE gated by pin B
+    (133_000_000 // 5, (0, 0x10, 4)),  # whole, but the slice is off
+    (20_000_000, (1, 0x10, 4)),  # whole, but not the clock that was asked for
+], ids=["25MHz", "fractional", "40", "1", "divmode", "off", "not-asked"])
+def test_a_clock_the_sampler_cannot_lock_to_is_refused(bars_uo, clock_hz, pwm):
+    # The check reads the clock pin's PWM slice: what was actually made,
+    # not what was asked for. Each is refused with a reason.
+    board, out = run_frame(RP2350_DBV3, bars_uo, clock_hz=clock_hz, pwm=pwm, max_frames=1)
 
     frams, times = chunks(out)
     assert frams == []
-    assert times == ["error=sysclk 133000000 is not 2..32 whole project clocks of %d" % clock_hz]
+    assert times == [
+        "error=project clock is not 2..32 whole system clocks of 133000000 for %d Hz: "
+        "pwm csr=%x div=%x" % (clock_hz, pwm[0], pwm[1])
+    ]
+
+
+@pytest.mark.parametrize("pwm", [(1, 0x10, 3), (1, 0x20, 1), (3, 0x10, 1)],
+                         ids=["top", "div", "phase-correct"])
+def test_a_whole_pwm_period_however_it_is_made_is_exact(tmp_path, bars_uo, pwm):
+    # DIV_INT * (TOP + 1), doubled in phase-correct mode (CSR bit 1): all
+    # three make 4 system clocks.
+    board, out = run_frame(RP2350_DBV3, bars_uo, period=4, high=2, delay=0, edge="rising",
+                           pwm=pwm, max_frames=1)
+
+    _, frames = pictures(tmp_path, RP2350_DBV3, out)
+    assert_pictures_exact(frames, bars(640, 480))
+
+
+def test_the_rp2040_pwm_slice_is_read_at_its_own_address(tmp_path, bars_uo):
+    # PWM is at 0x40050000 on RP2040 (0x400a8000 on RP2350); a fractional
+    # divider there is refused like on the RP2350.
+    board, out = run_frame(RP2040_TT06, bars_uo, chip="rp2040", pwm=(1, 0x11, 4),
+                           heap=(48_000, 20_000), max_frames=1)
+
+    assert board.pwm_base == 0x40050000
+    assert chunks(out)[1][0].startswith("error=project clock is not 2..32")
+
+
+def _old_dma_teardown(script: str) -> str:
+    # The teardown before stop_dma(): abort and close each channel in turn.
+    new = "stop_dma((ctl, data))"
+    assert new in script
+    return script.replace(
+        new, "for dma in (ctl, data):\n   if dma is not None:\n    dma.active(0)\n    dma.close()"
+    )
+
+
+@pytest.mark.parametrize("teardown", ["stop_dma", "old"])
+def test_a_stop_mid_window_leaves_no_dma_channel_running(bars_uo, teardown):
+    # Stopped while the data channel is filling a buffer: on RP2350 an
+    # abort re-triggers the chained control channel (RP2350-E5), which
+    # starts the data channel on the next buffer -- one about to be freed.
+    # Clearing EN on both first is what stops that.
+    board, out = run_frame(RP2350_DBV3, bars_uo, stop_after_bytes=1,
+                           script=_old_dma_teardown if teardown == "old" else None)
+
+    frams, times = chunks(out)
+    assert frams == [] and times[-1].startswith("frames=0 ")
+    busy = [ch.num for ch in board.channels if ch.busy]
+    if teardown == "old":
+        assert busy, "the emulator no longer models the re-trigger"
+    else:
+        assert busy == []
 
 
 @pytest.mark.parametrize("period,high", [(2, 1), (3, 1), (4, 2)])

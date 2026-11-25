@@ -13,7 +13,9 @@
 // (vgacap_link_end() hands it back) and turned into what the engine
 // understands: a failed write is a host that went away (nothing more is
 // written), anything else is a stop request (the engine finishes the chunk
-// it is on and writes its summary, as the scripts' `finally` does).
+// it is on and writes its summary, as the scripts' `finally` does). Idling
+// raises only a pending exception: one from a scheduled callback never
+// reaches here, as mp_sched_run_pending() prints it to stdout and drops it.
 #include "hal_mpy.h"
 
 #include "fw_capture.h"

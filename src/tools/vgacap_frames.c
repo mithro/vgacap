@@ -30,6 +30,8 @@ typedef struct {
     uint32_t glitches_seen;   // lifetime total as of the last reported frame
     int have_frame;
     int failed;
+    uint64_t samples;         // samples pushed so far, for the overrun warning
+    uint32_t dropped;         // the last TIME chunk's cumulative dropped count
 } app_t;
 
 // PPM rows are packed at exactly width * 3, so copy row by row from the
@@ -99,6 +101,7 @@ static void on_event(void *user, const vgacap_event_t *ev) {
         break;
     }
     case VGACAP_EV_RUN:
+        app->samples += ev->u.run.run;
         vgaframe_push(&app->frame, ev->u.run.value, ev->u.run.run);
         break;
     case VGACAP_EV_FRAME_BEGIN:
@@ -107,6 +110,18 @@ static void on_event(void *user, const vgacap_event_t *ev) {
                              ev->u.frame.sample_count);
         break;
     case VGACAP_EV_TIME:
+        // An overrun (the board's "overrun" chunk, or a rise in the
+        // cumulative dropped count) means the samples before it do not
+        // continue into the ones after: drop the picture in progress rather
+        // than build one across the gap. The board can only send the marker
+        // after the damaged chunk, so that chunk's own samples are already in.
+        if (ev->u.time.dropped_samples > app->dropped ||
+            (ev->u.time.msg_len == 7 && memcmp(ev->u.time.msg, "overrun", 7) == 0)) {
+            fprintf(stderr, "vgacap-frames: overrun after sample %llu (dropped=%u): picture reset\n",
+                    (unsigned long long)app->samples, (unsigned)ev->u.time.dropped_samples);
+            vgaframe_reset(&app->frame);
+        }
+        if (ev->u.time.dropped_samples > app->dropped) app->dropped = ev->u.time.dropped_samples;
         break;
     case VGACAP_EV_RESYNC:
         // Not fatal: the frame layer re-derives timing from the sync bits, so
