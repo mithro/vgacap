@@ -7,7 +7,8 @@ How to build and test vgacap, and what CI checks. The
 
 The core libraries are C99 with no dependencies beyond libc. The
 [GStreamer plugin](../gst/README.md) is optional: CMake builds it only when
-the GStreamer development files are present.
+the GStreamer development files are present. The Python side runs under
+[uv](https://docs.astral.sh/uv/).
 
 ```sh
 cmake -S . -B build && cmake --build build
@@ -28,8 +29,8 @@ every push and pull request, on a pinned `ubuntu-24.04` image:
 | [`vgacap_fw.uf2`](../firmware/README.md) for the RP2350 | no | yes | no | no | no |
 | MicroPython unix port with the module | no | no | yes | no | no |
 | MicroPython rp2 port with the module | no | no | yes | no | no |
-| GStreamer | absent | -- | -- | absent | installed |
-| plugin | skipped | -- | -- | skipped | built |
+| GStreamer installed | no | no | no | no | yes |
+| plugin built | no | no | no | no | yes |
 | Icarus (`iverilog`) for the RTL test | no | no | no | no | yes |
 | `ctest` | yes | no | no | no | yes |
 | `pytest` | no | no | [`test_mpy_module.py`](../python/tests/test_mpy_module.py) | all | all |
