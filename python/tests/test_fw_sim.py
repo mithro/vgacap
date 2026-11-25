@@ -584,3 +584,42 @@ def test_asic_index_needs_the_capture_firmware(tmp_path):
     with pytest.raises(ValueError, match="--asic-index is for --firmware picosdk"):
         cli.capture("serial:/dev/null", tmp_path / "x.vgacap", clock_hz=100_000,
                     seconds=1, max_bytes=0, asic_index=3)
+
+
+def test_cli_reboot_finds_the_capture_firmware(monkeypatch, bars_uo, capsys):
+    # A board left on the capture firmware: a plain `ttcap reboot` asks it
+    # and reboots it, no --firmware needed.
+    link = SimLink(bars_uo[0])
+    monkeypatch.setattr(cli, "link_from_url", lambda url: link)
+    assert cli.main(["reboot", "serial:/dev/ttyACM0"]) == 0
+    out = capsys.readouterr().out
+    assert "the board runs picosdk" in out
+    assert "rebooting to flash" in out
+    assert link.proc.wait(timeout=10) == 0  # the simulated board is gone
+
+
+def test_cli_reboot_falls_back_to_the_raw_repl(monkeypatch, capsys):
+    # The stock firmware never answers hello: after the probe, the raw REPL.
+    from fake_repl import FakeBinaryBoard
+
+    board = FakeBinaryBoard()
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+    monkeypatch.setattr(cli, "FIRMWARE_PROBE_S", 0.2)
+    assert cli.main(["reboot", "serial:/dev/ttboard", "--to", "bootsel"]) == 0
+    assert "the board runs micropython" in capsys.readouterr().out
+    assert board.commands == ["import machine\nmachine.bootloader()"]
+    assert board.closed
+
+
+def test_cli_reboot_with_firmware_given_does_not_probe(monkeypatch, capsys):
+    from fake_repl import FakeBinaryBoard
+
+    board = FakeBinaryBoard()
+    writes = []
+    real_write = board.write
+    board.write = lambda data: (writes.append(bytes(data)), real_write(data))[1]
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+    assert cli.main(["reboot", "serial:/dev/ttboard", "--firmware", "micropython"]) == 0
+    assert "the board runs" not in capsys.readouterr().out
+    assert not any(b"hello" in w for w in writes)
+    assert board.commands == ["import machine\nmachine.reset()"]

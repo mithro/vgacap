@@ -99,8 +99,8 @@ class FirmwareLink:
 
         A stop byte first, in case a capture is still running from a host
         that went away; that capture then finishes its chunk, writes its
-        trailer and goes idle, and a stray 0x03 to an idle firmware is
-        ignored. Then an empty line (ends any half-sent command) and
+        trailer and goes idle; to an idle firmware the 0x03 discards any
+        half-sent command. Then an empty line (which does nothing) and
         `hello`, and everything before the hello reply is discarded.
         """
         self._buf = b""

@@ -692,7 +692,29 @@ def _report(stats: CaptureStats, out_path: str, stream=None) -> None:
 REBOOT_TARGETS = ("flash", "bootsel")
 
 
-def reboot(url: str, firmware: str = "micropython", to: str = "flash") -> None:
+#: How long `reboot` without `--firmware` waits for the capture firmware's
+#: `hello` reply before taking the board for MicroPython.
+FIRMWARE_PROBE_S = 2.0
+
+
+def detect_firmware(link: ReplLink, timeout: float | None = None) -> str:
+    """Which of `FIRMWARES` runs on the board at the end of `link`.
+
+    The capture firmware's resync first (`FirmwareLink.sync`: 0x03, an empty
+    line, `hello`), because it is harmless to MicroPython: the Ctrl-C
+    interrupts whatever runs (as entering the raw REPL does anyway), and at
+    the friendly REPL `hello` is a NameError; in the raw REPL the Ctrl-C
+    that `RawRepl.enter()` sends next discards it. The other order would
+    make the capture firmware wait out the raw REPL banner's timeout.
+    """
+    try:
+        FirmwareLink(link).sync(timeout=FIRMWARE_PROBE_S if timeout is None else timeout)
+    except TimeoutError:
+        return "micropython"
+    return "picosdk"
+
+
+def reboot(url: str, firmware: str | None = None, to: str = "flash") -> None:
     """Restart the board: into its flash firmware, or its USB bootloader.
 
     `bootsel` from the stock firmware is how the capture firmware is loaded
@@ -701,11 +723,19 @@ def reboot(url: str, firmware: str = "micropython", to: str = "flash") -> None:
     stock firmware comes back, without a power cycle. Either way the USB
     device goes away, so nothing waits for the board after it has accepted
     the command.
+
+    `firmware` is what runs on the board now; None asks the board
+    (`detect_firmware`), so a board left on either firmware reboots.
     """
     if to not in REBOOT_TARGETS:
         raise ValueError(f"to must be one of {REBOOT_TARGETS}, got {to!r}")
+    if firmware is not None and firmware not in FIRMWARES:
+        raise ValueError(f"firmware must be one of {FIRMWARES}, got {firmware!r}")
     link = link_from_url(url)
     try:
+        if firmware is None:
+            firmware = detect_firmware(link)
+            print("the board runs %s" % firmware)
         if firmware == "picosdk":
             fw = FirmwareLink(link)
             fw.sync()
@@ -970,8 +1000,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reboot_parser.add_argument("link", help="serial:/dev/ttyACM0 or ws://host:8765/serial")
     reboot_parser.add_argument(
-        "--firmware", choices=FIRMWARES, default="micropython",
-        help="what runs on the board now (default micropython)",
+        "--firmware", choices=FIRMWARES, default=None,
+        help="what runs on the board now (default: ask it -- the capture "
+        "firmware's hello, then the raw REPL)",
     )
     reboot_parser.add_argument(
         "--to", choices=REBOOT_TARGETS, default="flash",
