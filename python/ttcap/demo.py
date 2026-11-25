@@ -583,7 +583,9 @@ def check_firmware_wants(firmware: str, project: str | None, design: str | None)
     Left to it, the refusal arrives several GStreamer ERROR blocks deep,
     after the board has been opened; the flags alone already say it will.
     """
-    if firmware == "micropython":
+    # Only the pico-sdk firmware: the MicroPython module (mpy-module) runs
+    # under the stock firmware, which selects the design as usual.
+    if firmware != "picosdk":
         return
     given = [flag for flag, value in (("--project", project), ("--design", design)) if value]
     if given:

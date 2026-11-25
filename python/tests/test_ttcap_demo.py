@@ -174,6 +174,9 @@ def test_the_capture_firmware_takes_a_run_without_a_selection():
     demo_mod.check_firmware_wants("picosdk", None, None)
     demo_mod.check_firmware_wants("micropython", "tt_um_x", None)
     demo_mod.check_firmware_wants("micropython", None, "bitstream")
+    # The module runs under the stock firmware, which selects the design.
+    demo_mod.check_firmware_wants("mpy-module", "tt_um_x", None)
+    demo_mod.check_firmware_wants("mpy-module", None, "bitstream")
 
 
 def test_a_selection_on_the_capture_firmware_fails_before_anything_starts(tmp_path, capsys):

@@ -368,3 +368,11 @@ def test_keys_cannot_carry_protocol_text(board):
         "import vgacap\nvgacap.stream(**{'buf_words': 64, 'max_bytes': 0, 'edge': 'falling', "
         "'pio=1 sm': 0})")
     assert stderr.strip().splitlines()[-1] == "ValueError: 'pio=1 sm' is not a key"
+
+
+def test_the_module_refuses_rle_rather_than_streaming():
+    # capture_args() is shared with the firmware, so an rle request is
+    # refused here too instead of quietly becoming a plain stream.
+    req = request(clock_hz=25_000_000, max_bytes=4096, script="rle_rp2.py")
+    with pytest.raises(CaptureError, match="no rle mode"):
+        capture_code(req)
