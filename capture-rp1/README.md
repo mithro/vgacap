@@ -1,10 +1,10 @@
 # vgacap-rp1: capture with the Raspberry Pi 5's RP1 PIO
 
-`vgacap-rp1` captures a Tiny Tapeout design's `uo_out` with a Raspberry
+`vgacap-rp1` captures a [Tiny Tapeout](https://tinytapeout.com) design's `uo_out` with a Raspberry
 Pi 5 whose GPIO header is wired to the board's pins. The Pi 5's
 RP1 I/O chip has a PIO block like the RP2040's and RP2350's, and
 `vgacap-rp1` runs the same PIO sampler on it that the demo board runs
-(`python/ttcap/mp/capture_rp2.py`):
+([`python/ttcap/mp/capture_rp2.py`](../python/ttcap/mp/capture_rp2.py)):
 
 1. wait for the project clock edge;
 2. `in pins, 8`, autopushing four samples a word (first sample in the top
@@ -30,19 +30,19 @@ board yet, so the pin assignment is a parameter, not a fact.
 `--gen FILE` adds a second state machine that drives FILE's samples (one
 byte each, looped) and a clock onto the same pins. `--gen-counter` drives a
 descending 8-bit counter instead, with no host involvement at all. Results
-on a Raspberry Pi 5 on the Welland bench with nothing on its GPIO header,
+on a Raspberry Pi 5 on the [Welland bench](../python/ttcap/README.md#reaching-a-welland-board) with nothing on its GPIO header,
 2026-11-24:
 
-| test | rate | result |
-|---|---|---|
-| counter, 4,194,304 samples | 500 k samples/s | every step exactly -1 |
-| 640x480@60 bars, 1,310,720 samples | 500 k samples/s | 2 pictures, pixel-identical |
-| counter | 1.25-5 M samples/s | ~150-320 samples lost at every 32 KB buffer boundary |
+| pattern | samples | rate (M samples/s) | samples lost per 32 KB buffer | check |
+|---|---|---|---|---|
+| counter | 4,194,304 | 0.5 | 0 | every step exactly -1 |
+| 640x480@60 bars | 1,310,720 | 0.5 | 0 | 2 pixel-identical pictures |
+| counter | -- | 1.25 to 5 | ~150 to 320 | -- |
 
 So with the stock `rp1-pio` driver, continuous capture is lossless up to
 about 0.5 M samples/s. The driver re-arms its DMA for each buffer, and the
 FIFO covers that gap only up to that rate. The way past it is a cyclic-DMA
-kernel module (`mithro/rpi5-rp1-pio-bench`, 45-56 MB/s).
+kernel module ([`mithro/rpi5-rp1-pio-bench`](https://github.com/mithro/rpi5-rp1-pio-bench), 45-56 MB/s).
 
 ## What the driver needed
 
