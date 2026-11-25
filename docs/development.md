@@ -24,10 +24,12 @@ every push and pull request, on a pinned `ubuntu-24.04` image:
 |---|---|---|---|---|---|
 | host CMake build | yes | no | yes | yes | yes |
 | [`vgacap-rp1`](../capture-rp1/README.md) against [piolib](https://github.com/raspberrypi/utils/tree/master/piolib) | yes | no | no | no | no |
+| piolib for the RP1 sampler test | no | no | no | yes | yes |
 | [`vgacap_fw.uf2`](../firmware/README.md) for the RP2350 | no | yes | no | no | no |
 | MicroPython unix port with the module | no | no | yes | no | no |
 | MicroPython rp2 port with the module | no | no | yes | no | no |
 | GStreamer | absent | -- | -- | absent | installed |
 | plugin | skipped | -- | -- | skipped | built |
+| Icarus (`iverilog`) for the RTL test | no | no | no | no | yes |
 | `ctest` | yes | no | no | no | yes |
 | `pytest` | no | no | [`test_mpy_module.py`](../python/tests/test_mpy_module.py) | all | all |
