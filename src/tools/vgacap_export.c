@@ -213,6 +213,13 @@ static void time_to(exporter_t *x, uint64_t n) {
     if (x->debug && !x->overflow && time_now(x) != vgacap_sample_time_ps(n, x->spc, x->hz)) x->time_bad = 1;
 }
 
+// BIN8[b]: the 8 binary digits of byte b, most significant first.
+static char BIN8[256][8];
+static void bin8_init(void) {
+    for (int b = 0; b < 256; b++)
+        for (int i = 0; i < 8; i++) BIN8[b][i] = (char)('0' + ((b >> (7 - i)) & 1));
+}
+
 // ---- output ------------------------------------------------------------------
 
 static void out_time(exporter_t *x, uint64_t t) {
@@ -238,7 +245,9 @@ static void out_value(exporter_t *x, const sig_t *s, uint64_t v) {
     if (s->width == 1) *p++ = (char)('0' + (v & 1));
     else {
         *p++ = 'b';
-        for (unsigned i = s->width; i-- > 0; ) *p++ = (char)('0' + ((v >> i) & 1));
+        unsigned w = s->width, r = w & 7u;   // the top r bits, then whole bytes, from a table
+        if (r) { memcpy(p, BIN8[(v >> (w - r)) & 0xFFu] + 8 - r, r); p += r; }
+        for (unsigned i = w - r; i; i -= 8) { memcpy(p, BIN8[(v >> (i - 8)) & 0xFFu], 8); p += 8; }
         *p++ = ' ';
     }
     for (const char *c = s->id; *c; c++) *p++ = *c;
@@ -513,6 +522,7 @@ int main(int argc, char **argv) {
     }
     if (!trace || !out || !format) return usage("TRACE, --format and --out are required");
 
+    bin8_init();
     char err[512] = "";
     vgacap_trace_reader_t *rd = vgacap_trace_open(trace, err, sizeof err);
     if (!rd) { fprintf(stderr, PROG ": %s\n", err); return 1; }
@@ -624,6 +634,7 @@ int main(int argc, char **argv) {
         x->ctx = fstWriterCreate(out, 1);
         if (!x->ctx) { fprintf(stderr, PROG ": cannot create %s\n", out); return 1; }
         fstWriterSetPackType(x->ctx, FST_WR_PT_LZ4);
+        fstWriterSetParallelMode(x->ctx, 1);   // compression on a thread of its own
         fstWriterSetTimescale(x->ctx, -12);
         fstWriterSetVersion(x->ctx, "vgacap-export");
         fstWriterSetDate(x->ctx, "");
