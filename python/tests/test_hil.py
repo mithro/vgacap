@@ -861,6 +861,95 @@ def test_a_second_ctrl_c_while_deferred_signals_are_put_back(monkeypatch):
             signal.signal(s, handler)
 
 
+@pytest.mark.parametrize("mode", ["restore", "pending"])
+def test_deferred_signals_survive_a_live_second_thread(monkeypatch, mode):
+    """Modelled on the re-review's repro: the mask in signals_deferred is
+    this thread's only, so a process-directed SIGINT can go to another
+    live thread (MjpegReader during check_demo) and its Python handler
+    then runs here, inside the restore. Every handler must still come
+    back, and every held signal still be delivered."""
+    import threading
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    stop = threading.Event()
+    other = threading.Thread(target=lambda: stop.wait(30), daemon=True)
+    other.start()
+    got = []
+
+    def record(signum, _frame):
+        got.append(signum)
+
+    saved = {s: signal.getsignal(s) for s in (signal.SIGINT, *hil.STOP_SIGNALS)}
+    real_signal = signal.signal
+    fired = []
+
+    def hook(sig, handler):
+        old = real_signal(sig, handler)
+        if (mode == "restore" and sig == signal.SIGINT
+                and handler is signal.default_int_handler and not fired):
+            fired.append(1)
+            os.kill(os.getpid(), signal.SIGINT)  # process-directed, like Ctrl-C
+            time.sleep(0.05)  # let the other thread take it
+        return old
+
+    raised = []
+    try:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        for s in hil.STOP_SIGNALS:
+            signal.signal(s, record)
+        monkeypatch.setattr(hil.signal, "signal", hook)
+        try:
+            try:
+                with hil.signals_deferred():
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    if mode == "pending":
+                        os.kill(os.getpid(), signal.SIGINT)
+                    time.sleep(0.05)
+                time.sleep(0.1)
+            except KeyboardInterrupt as exc:
+                raised.append(exc)
+            time.sleep(0.1)
+        except KeyboardInterrupt as exc:
+            raised.append(exc)
+        monkeypatch.undo()
+        for s in hil.STOP_SIGNALS:
+            assert signal.getsignal(s) is record, signal.Signals(s).name
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        assert got == [signal.SIGTERM]
+        assert raised, "the Ctrl-C was lost"
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == set()
+    finally:
+        stop.set()
+        monkeypatch.undo()
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+
+
+def test_the_mjpeg_reader_thread_leaves_signals_to_main():
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    import socket
+    with socket.socket() as sock:  # a port nothing listens on
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    reader = hil.MjpegReader(port, budget=2.0)
+    reader.start()
+    try:
+        time.sleep(0.3)
+        status = pathlib.Path("/proc/self/task/%d/status" % reader.native_id).read_text()
+        blocked = int(next(line.split()[1] for line in status.splitlines()
+                           if line.startswith("SigBlk:")), 16)
+        for sig in (signal.SIGINT, *hil.STOP_SIGNALS):
+            assert blocked & (1 << (sig - 1)), (signal.Signals(sig).name, hex(blocked))
+    finally:
+        reader.stop()
+    # and the main thread's own mask is untouched
+    assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == set()
+
+
 def test_a_restart_that_times_out_discards_unsent_output(bridge_run, monkeypatch):
     """So close() does not wait out the tty's closing_wait before the
     bridge starts."""

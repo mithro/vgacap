@@ -152,27 +152,55 @@ def signals_deferred():
             saved[sig] = signal.signal(sig, lambda signum, _f: pending.append(signum))
         yield
     finally:
-        # Blocked while the handlers go back (only here: a mask around the
-        # block's Popen would be inherited by the child). Unblocked, a
-        # second Ctrl-C would raise from the first handler restored and
-        # leave the rest -- and anything pending -- as the deferring
-        # lambda for good. Blocked, it waits in the kernel.
-        sigs = tuple(saved)
-        old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
+        _restore_deferred(saved, pending)
+
+
+#: Attempts at putting one handler back. `signal.signal()` runs any
+#: Python handler already due before it installs, and that one may raise;
+#: each raise consumes a signal, so a handful is plenty.
+_RESTORE_ATTEMPTS = 50
+
+
+def _restore_deferred(saved: dict, pending: list[int]) -> None:
+    """Put `saved` back and re-send `pending`, whatever arrives meanwhile.
+
+    The signals are blocked here, but only in this thread: another thread
+    can still take a process-directed one, and CPython then runs its
+    Python handler here at the next check -- inside `signal.signal()`
+    itself. So every handler is put back in its own attempt loop, every
+    pending signal is re-sent with its own catch, and the first exception
+    is raised only once all of that is done. (Threads hil.py starts block
+    these signals; this does not rely on it.)
+    """
+    sigs = tuple(saved)
+    first: BaseException | None = None
+    old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
+    try:
         try:
-            # A signal that arrived just before the block has tripped
-            # Python's flag; give it its (deferring) handler now, before
-            # any real one is back.
+            # A signal Python already knows about gets its (deferring)
+            # handler now, before any real one is back.
             _run_pending_signal_handlers()
-            for sig, handler in saved.items():
-                signal.signal(sig, handler)
-            # Queued while still blocked, so none can raise here and each
-            # is delivered once the mask is lifted -- to the real handlers.
-            for sig in dict.fromkeys(pending):
-                with contextlib.suppress(OSError):  # one cannot stop the rest
-                    os.kill(os.getpid(), sig)
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+        except BaseException as exc:  # noqa: BLE001 - raised after the restore
+            first = first or exc
+        for sig, handler in saved.items():
+            for _attempt in range(_RESTORE_ATTEMPTS):
+                try:
+                    signal.signal(sig, handler)
+                except BaseException as exc:  # noqa: BLE001 - raised after the restore
+                    first = first or exc
+                if signal.getsignal(sig) is handler:
+                    break
+        # To this thread, which has them blocked: each waits in the kernel
+        # until the mask is lifted, then goes to the real handler.
+        for sig in dict.fromkeys(list(pending)):
+            try:
+                signal.raise_signal(sig)
+            except BaseException as exc:  # noqa: BLE001 - one cannot stop the rest
+                first = first or exc
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+    if first is not None:
+        raise first
 
 
 def _run_pending_signal_handlers() -> None:
@@ -933,6 +961,9 @@ class MjpegReader(threading.Thread):
     PART_TIMEOUT_S = 5.0
 
     def run(self) -> None:
+        # Signals are the main thread's: a stop signal or Ctrl-C taken by
+        # this thread would land in the middle of whatever main is doing.
+        signal.pthread_sigmask(signal.SIG_BLOCK, (signal.SIGINT, *STOP_SIGNALS))
         deadline = time.monotonic() + self.budget
         conn, response, sock = None, None, None
         # The server does not exist until the demo has built its pipeline, so
