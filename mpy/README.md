@@ -132,7 +132,7 @@ simulated board ([`firmware/sim`](../firmware/sim/)):
     mpy/build-unix.sh [MICROPYTHON_DIR]     # -> build/mpy-unix/micropython
     cd python && uv run pytest -q tests/test_mpy_module.py
 
-Both pin MicroPython to [b006887db6](https://github.com/micropython/micropython/commit/b006887db6) (1.29.0-preview), what the demo boards
+Both pin MicroPython to [b006887db6](https://github.com/micropython/micropython/commit/b006887db6) (1.29.0-preview), what fpga-1 and fpga-4
 run. The unix build adds `vgacap.sim_board(path, *, bytes_per_s, rxstall)`,
 `vgacap.sim_clock(hz)`, `vgacap.sim_now()` and `vgacap.sim_frame_spans()`
 (the buffers the last frame window was captured into), to set up and
