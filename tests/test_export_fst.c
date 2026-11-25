@@ -203,6 +203,10 @@ static int compare(const char *fst, const char *vcd) {
         fprintf(stderr, "  end time FST %" PRIu64 " VCD %" PRIu64 "\n", a.end_time, b.end_time); goto out;
     }
     if (a.n != b.n) fprintf(stderr, "  FST %zu changes, VCD %zu\n", a.n, b.n);
+    if (getenv("TEST_EXPORT_FST_DUMP")) {   // both lists, sorted, for debugging
+        for (size_t i = 0; i < a.n; i++) fprintf(stderr, "FST %" PRIu64 " %s %s\n", a.c[i].t, a.c[i].name, a.c[i].value);
+        for (size_t i = 0; i < b.n; i++) fprintf(stderr, "VCD %" PRIu64 " %s %s\n", b.c[i].t, b.c[i].name, b.c[i].value);
+    }
     for (size_t i = 0; i < a.n && i < b.n; i++)
         if (a.c[i].t != b.c[i].t || strcmp(a.c[i].name, b.c[i].name) || strcmp(a.c[i].value, b.c[i].value)) {
             fprintf(stderr, "  change %zu: FST %" PRIu64 " %s %s, VCD %" PRIu64 " %s %s\n", i, a.c[i].t, a.c[i].name,
