@@ -173,20 +173,35 @@ def test_the_committed_verilog_is_what_the_source_generates():
 
 
 @pytest.mark.skipif(shutil.which("iverilog") is None, reason="needs Icarus Verilog")
-def test_the_generated_verilog_frames_the_same_stream_in_icarus(tmp_path):
+@pytest.mark.parametrize("n_chunks, gap, ready_pct, expect_drops", [
+    (6, 1, 100, False),   # always ready, a sample every other clock
+    (8, 3, 60, False),    # backpressure the FIFO absorbs
+    (12, 0, 30, True),    # a sample every clock into a slow sink: overruns
+    (48, 0, 100, True),   # every clock outruns even an always-ready sink,
+                          # once the 16-clock deficit a chunk fills the FIFO
+], ids=["ready", "backpressure", "slow-sink", "full-rate"])
+def test_the_generated_verilog_frames_the_same_stream_in_icarus(tmp_path, n_chunks, gap, ready_pct,
+                                                                 expect_drops):
     rng = random.Random(4)
-    samples = bytes(rng.randrange(256) for _ in range(256 * 6))
+    samples = bytes(rng.randrange(256) for _ in range(256 * n_chunks))
     (tmp_path / "samples.hex").write_text("\n".join("%02x" % s for s in samples) + "\n")
     tb = RTL / "tb_vgacap_raw_framer.v"
     vvp = tmp_path / "tb.vvp"
     subprocess.run(["iverilog", "-g2012", "-o", str(vvp), str(tb), str(RTL / "vgacap_raw_framer.v")],
                    check=True, capture_output=True, text=True)
+    # The testbench $fatal()s on a valid/ready hold violation: check=True.
     run = subprocess.run(["vvp", "-n", str(vvp), "+samples=%s" % (tmp_path / "samples.hex"),
-                          "+count=%d" % len(samples), "+out=%s" % (tmp_path / "out.hex")],
+                          "+count=%d" % len(samples), "+out=%s" % (tmp_path / "out.hex"),
+                          "+gap=%d" % gap, "+ready_pct=%d" % ready_pct, "+seed=7"],
                          capture_output=True, text=True, check=True, cwd=tmp_path)
     out = bytes(int(x, 16) for x in (tmp_path / "out.hex").read_text().split())
 
     raws, drops = parse(out)
 
-    assert drops == [], run.stdout
-    assert bytes(sum(raws, [])) == samples
+    assert "dropped=%d" % (drops[-1] if drops else 0) in run.stdout, run.stdout
+    if expect_drops:
+        assert raws and drops, run.stdout
+        check_whole_chunks(list(samples), raws, drops, chunk=256)
+    else:
+        assert drops == [], run.stdout
+        assert bytes(sum(raws, [])) == samples

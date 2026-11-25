@@ -41,6 +41,10 @@ Regenerate the Verilog after changing the source (a test fails otherwise):
     uv run python rtl/vgacap_raw_framer.py > rtl/vgacap_raw_framer.v
 
 Tests (`python/tests/test_rtl_raw_framer.py`): Migen simulation with an
-always-ready, a slow (drops whole chunks, reports them) and a gappy input;
-Icarus on the committed `.v` with `tb_vgacap_raw_framer.v`; every output
-parsed by `vgacap.stream.read_chunks`.
+always-ready, a slow (drops whole chunks, reports them), a gappy, runs of
+ready cycles and a random sink, checking the valid/ready hold rule every
+clock; Icarus on the committed `.v` with `tb_vgacap_raw_framer.v` (always
+ready, random backpressure, overruns from a slow sink and from full rate,
+with the same hold check); every output parsed by `vgacap.stream.read_chunks`.
+CI runs the Icarus test in the GStreamer job, which installs `iverilog` and
+fails if it is skipped.
