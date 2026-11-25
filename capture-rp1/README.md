@@ -1,7 +1,7 @@
 # vgacap-rp1: capture with the Raspberry Pi 5's RP1 PIO
 
 `vgacap-rp1` captures a Tiny Tapeout design's `uo_out` with a Raspberry
-Pi 5, with no Tiny Tapeout demo board microcontroller involved. The Pi 5's
+Pi 5 whose GPIO header is wired to the board's pins. The Pi 5's
 RP1 I/O chip has a PIO block like the RP2040's and RP2350's, and
 `vgacap-rp1` runs the same PIO sampler on it that the demo board runs
 (`python/ttcap/mp/capture_rp2.py`):
