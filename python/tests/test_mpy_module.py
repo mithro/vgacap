@@ -279,6 +279,31 @@ def test_request_stop_from_another_thread(board):
     assert session.stats().clean
 
 
+def test_a_stream_whose_first_buffer_never_fills_leaves_the_board_at_a_prompt(board):
+    req = request(clock_hz=100_000, buf_words=512, stop=lambda: False)
+    select_project(board, req)
+    board.exec("import vgacap\nvgacap.sim_clock(0)")  # the design never clocks
+    session = ModuleSession(board, req, chunk_timeout=1.0)
+    with pytest.raises(CaptureError, match="board went quiet before the first chunk"):
+        next(session.chunks())
+    assert board.exec("print(1 + 1)")[0].strip() == "2"
+
+
+def test_an_interrupt_waiting_for_the_first_chunk_leaves_the_board_at_a_prompt(board, monkeypatch):
+    req = request(clock_hz=100_000, buf_words=512, stop=lambda: False)
+    select_project(board, req)
+    board.exec("import vgacap\nvgacap.sim_clock(0)")
+
+    def interrupted(n, timeout):  # the operator's Ctrl-C, once the call is running
+        monkeypatch.undo()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(board, "read_exact", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        next(ModuleSession(board, req).chunks())
+    assert board.exec("print(1 + 1)")[0].strip() == "2"
+
+
 def test_consumer_closing_early_leaves_the_board_at_a_prompt(board):
     req = request(clock_hz=100_000, buf_words=512, stop=lambda: False)
     select_project(board, req)

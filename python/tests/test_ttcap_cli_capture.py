@@ -307,11 +307,9 @@ def test_a_run_that_wrote_something_keeps_its_file(monkeypatch, tmp_path):
 
 def cli_cleanup_command(profile) -> str:
     """The exact cleanup snippet `run_capture` will send for `profile`."""
-    from ttcap import mp
-    from ttcap.capture import _CLEANUP, capture_cfg
+    from ttcap.capture import _CLEANUP, capture_cfg, cleanup_names
 
-    script = mp.build(capture_cfg(profile), "capture_rp2.py")
-    return _CLEANUP % (mp.module_level_names(script),)
+    return _CLEANUP % (cleanup_names(capture_cfg(profile)),)
 
 
 def test_capture_reports_a_link_failure_without_a_traceback(monkeypatch, capsys, tmp_path):
@@ -474,3 +472,77 @@ def test_find_vgacap_frames_explains_itself_when_there_is_nothing(monkeypatch):
 
     with pytest.raises(CaptureError, match="VGACAP_FRAMES"):
         cli.find_vgacap_frames()
+
+
+# -- --ui-in leaves a shared board as it found it ---------------------------
+
+MODE_QUERY = "print(int(tt.mode))"
+
+
+def _ui_in_board(profile, **kwargs) -> FakeChunkBoard:
+    board = capture_board(profile, [], **kwargs)
+    board.replies[MODE_QUERY] = "2\r\n"  # ASIC_MANUAL_INPUTS, as fpgas.online
+    return board
+
+
+def _capture_with_ui_in(tmp_path, *extra) -> int:
+    return cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz", "1000",
+         "--seconds", "0.05", "--ui-in", "5", "--out", str(tmp_path / "s.vgacap"), *extra]
+    )
+
+
+def test_a_capture_that_fails_after_ui_in_puts_the_mode_back(monkeypatch, tmp_path):
+    profile = RP2350_DBV3
+    board = _ui_in_board(profile, mem_free=1000)  # refused: not enough heap
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    assert _capture_with_ui_in(tmp_path) == 1
+
+    switched = board.commands.index(
+        "from ttboard.mode import RPMode\ntt.mode = RPMode.ASIC_RP_CONTROL\ntt.ui_in.value = 5"
+    )
+    after = board.commands[switched + 1 :]
+    assert after[-2:] == ["tt.clock_project_stop()", "tt.mode = 2"]
+
+
+def test_an_interrupted_capture_after_ui_in_puts_the_mode_back(monkeypatch, tmp_path):
+    profile = RP2350_DBV3
+    board = _ui_in_board(profile)
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    def _interrupted(repl, req, out, chunk_timeout=0.3):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "run_capture", _interrupted)
+
+    with pytest.raises(KeyboardInterrupt):
+        _capture_with_ui_in(tmp_path, "--no-stop-clock")
+
+    # --no-stop-clock is still honoured; the mode is put back regardless.
+    assert board.commands[-1] == "tt.mode = 2"
+    assert board.commands.count("tt.clock_project_stop()") == 1
+
+
+def test_a_failed_restore_is_reported_with_the_capture_failure(monkeypatch, capsys, tmp_path):
+    profile = RP2350_DBV3
+    board = _ui_in_board(profile, mem_free=1000)
+    board.errors["tt.mode = 2"] = "OSError: link\r\n"
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    assert _capture_with_ui_in(tmp_path) == 1
+
+    err = capsys.readouterr().err
+    assert "free heap" in err
+    assert "putting the board back failed too" in err
+
+
+def test_a_bad_sample_delay_is_refused_before_the_board_is_touched(monkeypatch, capsys, tmp_path):
+    profile = RP2350_DBV3
+    board = _ui_in_board(profile)
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    assert _capture_with_ui_in(tmp_path, "--mode", "frame", "--sample-delay", "40") == 1
+
+    assert "sample_delay" in capsys.readouterr().err
+    assert not any(c.startswith("tt.") or "RPMode" in c for c in board.commands)
