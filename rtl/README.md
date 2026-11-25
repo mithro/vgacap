@@ -6,6 +6,13 @@ for an FPGA capture harness, written in Migen, with their generated Verilog
 committed alongside. The design note is tt-vga-capture
 `docs/design/2026-11-23-shared-rtl-capture.md`.
 
+On a Tiny Tapeout demo board with an FPGA breakout (iCE40UP5K), the
+capture logic sits beside your design in the FPGA, and its framed bytes
+leave on `uo_out` and `uio` for the board's RP2350 to capture. That is how
+the framer was proven: tt-vga-testpatterns' `tt_um_vgacal_framer` on the
+fpga-4 board, at 250 kHz and 25 MHz (tt-vga-capture
+`docs/results/2026-11-24-rtl-framer-fpga4/`).
+
 The modules import nothing from the rest of vgacap and need none of its
 build system: take the `.py` into a LiteX design, or the `.v` into a
 yosys, Verilator or Icarus flow. The contract between projects is the
