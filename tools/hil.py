@@ -945,7 +945,11 @@ def bridge_clients(url: str, timeout: float = 5.0) -> int | str:
             clients = json.load(resp).get("clients")
     except Exception as exc:  # noqa: BLE001 - every failure is a refusal
         return "unknown (%s: %s)" % (type(exc).__name__, exc)
-    return clients if isinstance(clients, int) else "unknown (%r)" % (clients,)
+    # `type() is int`, not isinstance: JSON `false` is a bool, which is an
+    # int, and would read as 0 clients.
+    if type(clients) is int and clients >= 0:
+        return clients
+    return "unknown (%r)" % (clients,)
 
 
 def parse_fps(text: str) -> tuple[float, str]:

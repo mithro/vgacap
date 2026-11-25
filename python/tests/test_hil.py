@@ -430,7 +430,9 @@ def test_bridge_clients_reads_the_daemons_count():
         server.shutdown()
 
 
-@pytest.mark.parametrize("body", [b"not json", b'{"kind": "fpga"}', b'{"clients": "1"}'])
+@pytest.mark.parametrize("body", [b"not json", b'{"kind": "fpga"}', b'{"clients": "1"}',
+                                  b'{"clients": false}', b'{"clients": -1}',
+                                  b'{"clients": 0.0}', b'[0]'])
 def test_bridge_clients_that_cannot_be_read_are_not_zero(body):
     sys.path.insert(0, str(ROOT / "tools"))
     import hil
