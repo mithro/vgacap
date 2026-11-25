@@ -89,6 +89,13 @@ typedef struct vgacap_writer {
 // Writes the VGCH chunk immediately. Returns 0 on success.
 int vgacap_writer_init(vgacap_writer_t *w, vgacap_write_fn write, void *user,
                        const vgacap_header_t *h);
+// The same writer for a stream whose VGCH chunk somebody else has written:
+// nothing is emitted, `h` only tells the chunk writers how samples pack.
+// This is the capture board's case -- the host knows the signal map, mode
+// and clock and writes the header, the board appends its chunks after it
+// (firmware/PROTOCOL.md).
+void vgacap_writer_attach(vgacap_writer_t *w, vgacap_write_fn write, void *user,
+                          const vgacap_header_t *h);
 // RAW chunk from already-packed words (ceil(sample_count / spw) of them).
 int vgacap_writer_raw(vgacap_writer_t *w, const uint32_t *words, uint32_t sample_count);
 // RAW chunk from unpacked samples; wordbuf is scratch, -1 if too small.

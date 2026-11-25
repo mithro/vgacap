@@ -43,3 +43,21 @@ vgacap_add_test(test_frame_partial tests/synth.c)
 vgacap_add_test(test_stream_header)
 vgacap_add_test(test_stream_raw)
 vgacap_add_test(test_stream_chunks)
+
+# --- firmware: the pico-sdk capture firmware's portable core (firmware/core),
+# built here for its host simulator and its tests. The firmware itself is
+# firmware/CMakeLists.txt, a separate pico-sdk project that needs the ARM
+# toolchain (firmware/README.md); nothing here does.
+add_library(vgacap_fw_core STATIC
+  firmware/core/fw.c firmware/core/fw_args.c firmware/core/fw_board.c
+  firmware/core/fw_clock.c firmware/core/fw_pio.c)
+target_include_directories(vgacap_fw_core PUBLIC firmware/core)
+target_link_libraries(vgacap_fw_core PUBLIC vgacap_stream)
+add_executable(vgacap-fw-sim firmware/sim/sim_main.c firmware/sim/hal_sim.c)
+target_include_directories(vgacap-fw-sim PRIVATE firmware/sim)
+target_link_libraries(vgacap-fw-sim PRIVATE vgacap_fw_core m)
+vgacap_add_test(test_fw_units)
+target_link_libraries(test_fw_units PRIVATE vgacap_fw_core)
+vgacap_add_test(test_fw_core firmware/sim/hal_sim.c)
+target_include_directories(test_fw_core PRIVATE firmware/sim)
+target_link_libraries(test_fw_core PRIVATE vgacap_fw_core m)

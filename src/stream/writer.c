@@ -20,8 +20,12 @@ static int write_chunk_head(vgacap_writer_t *w, const char tag[4], uint32_t leng
     return w->write(w->user, head, 8);
 }
 
-int vgacap_writer_init(vgacap_writer_t *w, vgacap_write_fn write, void *user, const vgacap_header_t *h) {
+void vgacap_writer_attach(vgacap_writer_t *w, vgacap_write_fn write, void *user, const vgacap_header_t *h) {
     memset(w, 0, sizeof *w); w->write = write; w->user = user; w->header = *h;
+}
+
+int vgacap_writer_init(vgacap_writer_t *w, vgacap_write_fn write, void *user, const vgacap_header_t *h) {
+    vgacap_writer_attach(w, write, user, h);
     uint8_t *p = w->scratch;
     put_u16(p + 0, h->version); p[2] = h->sample_bits; p[3] = h->mode; put_u32(p + 4, h->clock_hz);
     memcpy(p + 8, h->signal_map, VGACAP_SIG_COUNT); p[16] = h->samples_per_word; p[17] = h->flags;
@@ -32,6 +36,20 @@ int vgacap_writer_init(vgacap_writer_t *w, vgacap_write_fn write, void *user, co
     return 0;
 }
 
+// Packed words as little-endian bytes. On a little-endian machine (every
+// RP2 and every host this builds for) that is the words' own memory, sent in
+// one call -- a capture board writes 16 KB buffers through this, and a call
+// per word would cost it CPU time it needs for the USB link.
+static int write_words(vgacap_writer_t *w, const uint32_t *words, uint32_t nwords) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    return nwords ? w->write(w->user, (const uint8_t *)words, 4u * (size_t)nwords) : 0;
+#else
+    uint8_t c[4];
+    for (uint32_t i = 0; i < nwords; i++) { put_u32(c, words[i]); if (w->write(w->user, c, 4)) return -1; }
+    return 0;
+#endif
+}
+
 static uint32_t sample_mask(uint8_t bits) { return bits == 32 ? 0xFFFFFFFFu : ((1u << bits) - 1u); }
 
 int vgacap_writer_raw(vgacap_writer_t *w, const uint32_t *words, uint32_t sample_count) {
@@ -39,8 +57,7 @@ int vgacap_writer_raw(vgacap_writer_t *w, const uint32_t *words, uint32_t sample
     uint32_t nwords = (sample_count + spw - 1) / spw;
     if (write_chunk_head(w, VGACAP_TAG_RAW, 4u + 4u * nwords)) return -1;
     uint8_t c[4]; put_u32(c, sample_count); if (w->write(w->user, c, 4)) return -1;
-    for (uint32_t i = 0; i < nwords; i++) { put_u32(c, words[i]); if (w->write(w->user, c, 4)) return -1; }
-    return 0;
+    return write_words(w, words, nwords);
 }
 
 uint32_t vgacap_pack_samples(const vgacap_header_t *h, const uint32_t *samples, uint32_t n, uint32_t *words) {
@@ -78,8 +95,7 @@ int vgacap_writer_frame(vgacap_writer_t *w, uint32_t frame_counter, uint16_t fir
     uint8_t c[16]; put_u32(c, frame_counter); put_u16(c + 4, first_line); put_u16(c + 6, line_count);
     put_u32(c + 8, clocks_per_line); put_u32(c + 12, sample_count);
     if (w->write(w->user, c, 16)) return -1;
-    for (uint32_t i = 0; i < nwords; i++) { put_u32(c, words[i]); if (w->write(w->user, c, 4)) return -1; }
-    return 0;
+    return write_words(w, words, nwords);
 }
 
 static void put_u64(uint8_t *p, uint64_t v) { put_u32(p, (uint32_t)v); put_u32(p + 4, (uint32_t)(v >> 32)); }

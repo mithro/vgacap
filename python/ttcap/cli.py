@@ -11,6 +11,8 @@ Subcommands:
   to a file, or, with `--out -`, to stdout as it arrives, so a video
   pipeline can consume the capture live.
 * `png` renders a captured stream to PNG images via `vgacap-frames`.
+* `reboot` restarts the board: into its flash firmware, or into the USB
+  bootloader to load a UF2 such as the capture firmware (firmware/).
 * `demo` points the whole GStreamer pipeline at a board and writes PNGs, a
   video file, a window and a browser-viewable MJPEG stream (`ttcap.demo`).
 
@@ -56,9 +58,12 @@ from .capture import (
     frame_note,
     frames_to_max_bytes,
     run_capture,
+    run_session,
     select_project,
     undo_selection,
 )
+from .firmware import FIRMWARES, FirmwareLink, FirmwareSession
+from . import firmware as fwproto
 from .demo import add_parser as add_demo_parser, demo
 from .repl import LinkClosed, RawRepl, ReplFramingError, ReplLink, SerialLink, WebSocketLink
 from .throughput import DEFAULT_BLOCK, DEFAULT_TOTAL, ThroughputResult, measure_throughput
@@ -363,9 +368,7 @@ def _watch_for_stop(session: CaptureSession, flag: _StopFlag, poll: float = 0.02
         time.sleep(poll)
 
 
-def _stream_capture(
-    repl: RawRepl, request: CaptureRequest, fp, flag: _StopFlag
-) -> CaptureStats:
+def _stream_capture(session: CaptureSession, fp, flag: _StopFlag) -> CaptureStats:
     """`run_capture()` for `--out -`: same bytes, plus a prompt stop.
 
     Identical to `run_capture` -- the same `CaptureSession`, the same
@@ -375,7 +378,6 @@ def _stream_capture(
     needs the session handle to do that, and `run_capture`'s contract is
     "write to a file object" and should stay that way.
     """
-    session = CaptureSession(repl, request)
     watcher = threading.Thread(
         target=_watch_for_stop, args=(session, flag), daemon=True
     )
@@ -449,6 +451,67 @@ def _discard_empty(out_path: str) -> None:
         pass
 
 
+class _MicroPythonBoard:
+    """The stock firmware: everything through the raw REPL (`ttcap.mp`)."""
+
+    def __init__(self, link: ReplLink) -> None:
+        self.repl = RawRepl(link)
+        self.repl.enter()
+
+    def profile(self, name: str):
+        return resolve_profile(self.repl, name)
+
+    def setup(self, request: CaptureRequest) -> dict:
+        return select_project(self.repl, request)
+
+    def session(self, request: CaptureRequest) -> CaptureSession:
+        return CaptureSession(self.repl, request)
+
+    def run_to_file(self, request: CaptureRequest, fp) -> CaptureStats:
+        return run_capture(self.repl, request, fp)
+
+    def teardown(
+        self, selection: dict, stop_clock_after: bool, error: BaseException | None = None
+    ) -> None:
+        undo_selection(self.repl, selection, stop=stop_clock_after, error=error)
+
+    def close(self) -> None:
+        self.repl.exit()
+
+
+class _FirmwareBoard:
+    """The pico-sdk capture firmware (`firmware/`, `ttcap.firmware`)."""
+
+    def __init__(self, link: ReplLink) -> None:
+        self.link = FirmwareLink(link)
+        self.link.sync()
+
+    def profile(self, name: str):
+        return fwproto.profile_for(self.link, name)
+
+    def setup(self, request: CaptureRequest) -> dict:
+        return fwproto.setup(self.link, request)
+
+    def session(self, request: CaptureRequest) -> CaptureSession:
+        return FirmwareSession(self.link, request)
+
+    def run_to_file(self, request: CaptureRequest, fp) -> CaptureStats:
+        return run_session(self.session(request), fp)
+
+    def teardown(
+        self, selection: dict, stop_clock_after: bool, error: BaseException | None = None
+    ) -> None:
+        try:
+            fwproto.teardown(self.link, selection, stop_clock_after)
+        except Exception as exc:  # noqa: BLE001 - noted on the capture's own error
+            if error is None:
+                raise
+            error.add_note(f"putting the board back failed too: {exc}")
+
+    def close(self) -> None:
+        pass
+
+
 def capture(
     url: str,
     out_path: str,
@@ -472,8 +535,13 @@ def capture(
     ui_in: int | None = None,
     rle_mask: int = -1,
     rle_oneshot: bool = False,
+    firmware: str = "micropython",
 ) -> CaptureStats:
     """Run one capture to `out_path` and print what happened.
+
+    `firmware` is what runs on the board: "micropython", the stock firmware
+    driven through its raw REPL, or "picosdk", the capture firmware in
+    `firmware/` (PROTOCOL.md), which cannot select a design itself.
 
     `mode` picks the board program: "stream" (every sample, at a clock the
     link can carry), "frame" (whole frames at the project's real clock,
@@ -502,12 +570,13 @@ def capture(
     # stdout. There is no third option and no flag: a stream is either
     # parseable or it is not.
     say = sys.stderr if to_stdout else sys.stdout
+    if firmware not in FIRMWARES:
+        raise ValueError(f"firmware must be one of {FIRMWARES}, got {firmware!r}")
     link = link_from_url(url)
     try:
-        repl = RawRepl(link)
-        repl.enter()
+        driver = _FirmwareBoard(link) if firmware == "picosdk" else _MicroPythonBoard(link)
         try:
-            board = resolve_profile(repl, profile)
+            board = driver.profile(profile)
             if mode not in CAPTURE_MODES:
                 raise ValueError(f"mode must be one of {sorted(CAPTURE_MODES)}, got {mode!r}")
             script = CAPTURE_MODES[mode]
@@ -558,7 +627,7 @@ def capture(
                     rle_mask=rle_mask,
                     rle_oneshot=rle_oneshot,
                 )
-                selection = select_project(repl, request)
+                selection = driver.setup(request)
                 try:
                     print(
                         "profile=%s project=%s enable=%s"
@@ -576,9 +645,9 @@ def capture(
                     ) as fp:
                         try:
                             if to_stdout:
-                                stats = _stream_capture(repl, request, fp, flag)
+                                stats = _stream_capture(driver.session(request), fp, flag)
                             else:
-                                stats = run_capture(repl, request, fp)
+                                stats = driver.run_to_file(request, fp)
                         except BaseException:
                             if not to_stdout and fp.tell() == 0:
                                 _discard_empty(out_path)
@@ -586,7 +655,7 @@ def capture(
                 except BaseException as exc:
                     # Whatever went wrong, a shared board is not left in the
                     # mode `--ui-in` switched it to, nor (by default) clocked.
-                    undo_selection(repl, selection, stop=stop_clock_after, error=exc)
+                    driver.teardown(selection, stop_clock_after, error=exc)
                     raise
             # Reported before anything can be raised about how it ended: a
             # consumer that walked away still produced a real capture, and
@@ -596,11 +665,11 @@ def capture(
                 note = frame_note(stats.messages, request.cfg()["region_lines"])
                 if note:
                     print(note, file=say)
-            undo_selection(repl, selection, stop=stop_clock_after)
+            driver.teardown(selection, stop_clock_after)
             if to_stdout and fp.consumer_closed:
                 raise ConsumerClosed()
         finally:
-            repl.exit()
+            driver.close()
     finally:
         link.close()
 
@@ -622,6 +691,68 @@ def _report(stats: CaptureStats, out_path: str, stream=None) -> None:
         else:
             print("  board: %s" % message, file=stream)
     print("wrote %s" % out_path, file=stream)
+
+
+#: `ttcap reboot --to` values.
+REBOOT_TARGETS = ("flash", "bootsel")
+
+
+#: How long `reboot` without `--firmware` waits for the capture firmware's
+#: `hello` reply before taking the board for MicroPython.
+FIRMWARE_PROBE_S = 2.0
+
+
+def detect_firmware(link: ReplLink, timeout: float | None = None) -> str:
+    """Which of `FIRMWARES` runs on the board at the end of `link`.
+
+    The capture firmware's resync first (`FirmwareLink.sync`: 0x03, an empty
+    line, `hello`), because it is harmless to MicroPython: the Ctrl-C
+    interrupts whatever runs (as entering the raw REPL does anyway), and at
+    the friendly REPL `hello` is a NameError; in the raw REPL the Ctrl-C
+    that `RawRepl.enter()` sends next discards it. The other order would
+    make the capture firmware wait out the raw REPL banner's timeout.
+    """
+    try:
+        FirmwareLink(link).sync(timeout=FIRMWARE_PROBE_S if timeout is None else timeout)
+    except TimeoutError:
+        return "micropython"
+    return "picosdk"
+
+
+def reboot(url: str, firmware: str | None = None, to: str = "flash") -> None:
+    """Restart the board: into its flash firmware, or its USB bootloader.
+
+    `bootsel` from the stock firmware is how the capture firmware is loaded
+    (firmware/README.md): the board comes back as the RP2350's mass-storage
+    drive and takes a UF2. `flash` from the capture firmware is how the
+    stock firmware comes back, without a power cycle. Either way the USB
+    device goes away, so nothing waits for the board after it has accepted
+    the command.
+
+    `firmware` is what runs on the board now; None asks the board
+    (`detect_firmware`), so a board left on either firmware reboots.
+    """
+    if to not in REBOOT_TARGETS:
+        raise ValueError(f"to must be one of {REBOOT_TARGETS}, got {to!r}")
+    if firmware is not None and firmware not in FIRMWARES:
+        raise ValueError(f"firmware must be one of {FIRMWARES}, got {firmware!r}")
+    link = link_from_url(url)
+    try:
+        if firmware is None:
+            firmware = detect_firmware(link)
+            print("the board runs %s" % firmware)
+        if firmware == "picosdk":
+            fw = FirmwareLink(link)
+            fw.sync()
+            fw.command("reboot" if to == "flash" else "bootsel")
+        else:
+            repl = RawRepl(link)
+            repl.enter()
+            repl.start("import machine\nmachine.%s()" % ("reset" if to == "flash" else "bootloader"))
+        print("rebooting to %s" % to)
+    finally:
+        with contextlib.suppress(OSError, LinkClosed):
+            link.close()
 
 
 def find_vgacap_frames(explicit: str | None = None) -> str:
@@ -730,6 +861,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     capture_parser.add_argument(
         "link", help="serial:/dev/ttyACM0 or ws://host:8765/serial"
+    )
+    capture_parser.add_argument(
+        "--firmware",
+        choices=FIRMWARES,
+        default="micropython",
+        help="what runs on the board: micropython, the stock firmware driven "
+        "through its raw REPL (default), or picosdk, the vgacap capture "
+        "firmware (firmware/README.md), which keeps whatever design is "
+        "loaded and cannot take --project/--design",
     )
     capture_parser.add_argument(
         "--profile",
@@ -869,6 +1009,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="leave the project clock running after the capture",
     )
 
+    reboot_parser = subparsers.add_parser(
+        "reboot", help="restart the board into its flash firmware or its USB bootloader"
+    )
+    reboot_parser.add_argument("link", help="serial:/dev/ttyACM0 or ws://host:8765/serial")
+    reboot_parser.add_argument(
+        "--firmware", choices=FIRMWARES, default=None,
+        help="what runs on the board now (default: ask it -- the capture "
+        "firmware's hello, then the raw REPL)",
+    )
+    reboot_parser.add_argument(
+        "--to", choices=REBOOT_TARGETS, default="flash",
+        help="flash: the firmware in flash, i.e. the stock firmware (default); "
+        "bootsel: the RP2350's USB bootloader, which takes a UF2",
+    )
+
     png_parser = subparsers.add_parser(
         "png", help="render a .vgacap stream to PNG images"
     )
@@ -925,6 +1080,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ui_in=args.ui_in,
                 rle_mask=args.rle_mask,
                 rle_oneshot=args.rle_oneshot,
+                firmware=args.firmware,
             )
         except ConsumerClosed:
             # The normal end of a pull: the pipeline stopped reading. The
@@ -974,6 +1130,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 3
+        return 0
+    if args.command == "reboot":
+        try:
+            reboot(args.link, firmware=args.firmware, to=args.to)
+        except CAPTURE_FAILURES as exc:
+            return _failed("reboot", exc)
         return 0
     if args.command == "png":
         try:

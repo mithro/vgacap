@@ -44,6 +44,7 @@ enum {
     PROP_TTCAP_COMMAND,
     PROP_STOP_TIMEOUT,
     PROP_CAPTURE_MODE,
+    PROP_FIRMWARE,
     PROP_VGA_MODE,
     PROP_WINDOW_LINES
 };
@@ -83,6 +84,7 @@ static const gchar *forwarded_name(guint prop_id)
     case PROP_TTCAP_COMMAND: return "ttcap-command";
     case PROP_STOP_TIMEOUT: return "stop-timeout";
     case PROP_CAPTURE_MODE: return "capture-mode";
+    case PROP_FIRMWARE: return "firmware";
     case PROP_VGA_MODE: return "vga-mode";
     case PROP_WINDOW_LINES: return "window-lines";
     default: return NULL;
@@ -109,7 +111,7 @@ static const gchar *forwarded_name(guint prop_id)
  */
 static const gchar *const URI_SETTABLE[] = {
     "project", "design", "clock-hz", "profile", "pio", "buf-words", "seconds",
-    "stop-timeout", "capture-mode", "vga-mode", "window-lines", NULL
+    "stop-timeout", "capture-mode", "firmware", "vga-mode", "window-lines", NULL
 };
 
 static gboolean uri_may_set(const gchar *name)
@@ -433,6 +435,13 @@ static void gst_vgacapbin_class_init(GstVgaCapBinClass *klass)
                             "link carries), frame (whole frames at the design's real "
                             "clock) or window (frames swept in window-lines windows)",
                             "stream", rw));
+    g_object_class_install_property(gobject_class, PROP_FIRMWARE,
+        g_param_spec_string("firmware", "Board firmware",
+                            "ttcap capture --firmware: micropython (the stock firmware, "
+                            "through its raw REPL) or picosdk (vgacap's capture "
+                            "firmware, firmware/PROTOCOL.md, which cannot select a "
+                            "design itself)",
+                            "micropython", rw));
     g_object_class_install_property(gobject_class, PROP_VGA_MODE,
         g_param_spec_string("vga-mode", "VGA mode",
                             "frame/window modes: the VGA timing to expect, e.g. "
