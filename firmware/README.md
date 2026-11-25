@@ -44,9 +44,9 @@ reaches it with an explicit link (`serial:` or `ws://`) instead of
 | [`sim/sim_main.c`](sim/sim_main.c) | `vgacap-fw-sim` | no | no |
 | [`CMakeLists.txt`](CMakeLists.txt) | pico-sdk firmware build | no | no |
 
-The root `CMakeLists.txt` builds `core/` and `sim/` for the host (no ARM
-toolchain): `vgacap-fw-sim` and the C tests `test_fw_units` and
-`test_fw_core`. The Python tests in `python/tests/test_fw_sim.py` drive
+The root [`CMakeLists.txt`](../CMakeLists.txt) builds `core/` and `sim/` for the host (no ARM
+toolchain): `vgacap-fw-sim` and the C tests [`test_fw_units`](../tests/test_fw_units.c) and
+[`test_fw_core`](../tests/test_fw_core.c). The Python tests in [`python/tests/test_fw_sim.py`](../python/tests/test_fw_sim.py) drive
 `vgacap-fw-sim` through ttcap's firmware transport.
 
 ## Building
@@ -146,7 +146,7 @@ same order as the `.pio` source:
 The tests hold `fw_pio.c` to both: to pioasm's words for the `.pio` files
 (through the checked-in `.hex`) and to MicroPython's `rp2.asm_pio` words
 for every operand combination they try, configuration registers included
-([`python/tests/test_fw_sim.py`](../python/tests/test_fw_sim.py), [`tests/test_fw_units.c`](../tests/test_fw_units.c)). A MicroPython
+(`python/tests/test_fw_sim.py`, `tests/test_fw_units.c`). A MicroPython
 program could load the `.pio` files' words the same way.
 
 ## Off-hardware tests
@@ -186,7 +186,7 @@ and the UF2 copied there. `<dev>` is the stock firmware's serial port
    after checking the bridge has no clients).
 3. Into the bootloader:
    `uv run --no-sync ttcap reboot serial:<dev> --to bootsel`. The board
-   reappears as a USB drive labelled `RP2350`.
+   reappears as a USB drive labeled `RP2350`.
 4. Load the firmware:
 
        sudo mkdir -p /mnt/rp2350
@@ -201,7 +201,6 @@ and the UF2 copied there. `<dev>` is the stock firmware's serial port
        uv run --no-sync ttcap capture --firmware picosdk serial:$FW --clock-hz 25000000 --mode frame --frames 2 --out frame.vgacap
        uv run --no-sync ttcap capture --firmware picosdk serial:$FW --clock-hz 25000000 --mode window --frames 1 --out window.vgacap
        uv run --no-sync ttcap capture --firmware picosdk serial:$FW --clock-hz 750000 --seconds 4 --out stream.vgacap
-       uv run --no-sync ttcap png frame.vgacap frame
 
 6. Back to the stock firmware: `uv run --no-sync ttcap reboot serial:$FW --firmware picosdk`
    (or reset / power cycle the board), then restart `fpgas-tt`.
