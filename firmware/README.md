@@ -1,6 +1,7 @@
-# vgacap capture firmware (pico-sdk)
+# The vgacap firmware
 
-A C firmware for the [Tiny Tapeout](https://tinytapeout.com) demo board v3 (RP2350B) that captures a
+The vgacap firmware is a C firmware, built with the pico-sdk, for the
+[Tiny Tapeout](https://tinytapeout.com) demo board v3 (RP2350B) that captures a
 design's VGA output on `uo_out` without [MicroPython](https://micropython.org) underneath. It does
 what the MicroPython capture programs ([`python/ttcap/mp/`](../python/ttcap/mp/)) do: streaming
 capture, whole-frame capture and windowed capture. The host drives it with
@@ -159,7 +160,7 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   product `vgacap capture firmware`, serial number the chip's unique ID:
   `/dev/serial/by-id/usb-vgacap_vgacap_capture_firmware_<id>-if00`. A udev
   rule that names the stock firmware's port (`/dev/ttboard` on the
-  [fpgas.online](https://tinytapeout.fpgas.online) Pis) will not match it.
+  Welland Pis) will not match it.
 
 ## PIO programs
 
@@ -198,7 +199,7 @@ program could load the `.pio` files' words the same way.
   a synthetic VGA design: byte-exact streams, pixel-exact frames and
   windows through [`vgacap-frames`](../src/tools/README.md), stops,
   overruns, the CLI, and the same
-  FRAM chunks as `frame_rp2.py` on `ttcap.emu`.
+  FRAM chunks as `frame_rp2.py` on [`ttcap.emu`](../python/ttcap/emu/).
 
 The simulator models what the PIO and DMA deliver, not their cycles; see
 [`sim/sim.h`](sim/sim.h) for what that leaves out.
@@ -206,11 +207,11 @@ The simulator models what the PIO and DMA deliver, not their cycles; see
 ## Running it on a board
 
 These steps run on the Raspberry Pi the board is attached to (on the
-fpgas.online bench, the board's own Pi), with this repository checked out
+Welland bench, the board's own Pi), with this repository checked out
 there as in
 [Running on a Raspberry Pi](../python/ttcap/README.md#running-on-a-raspberry-pi)
 and the UF2 copied there. `<dev>` is the stock firmware's serial port
-(`/dev/ttboard` on the fpgas.online Pis).
+(`/dev/ttboard` on the Welland Pis).
 
 1. With the stock firmware, enable the design to capture
    (`/designs/<name>/enable` on the bridge, or
@@ -238,6 +239,6 @@ and the UF2 copied there. `<dev>` is the stock firmware's serial port
 
 6. Back to the stock firmware: `uv run --no-sync ttcap reboot serial:$FW`
    (or reset / power cycle the board), then restart the bridge.
-   `ttcap reboot` asks the board which firmware it runs (the capture
+   `ttcap reboot` asks the board which firmware it runs (the vgacap
    firmware's `hello`, then the raw REPL); `--firmware picosdk` skips the
    question.
