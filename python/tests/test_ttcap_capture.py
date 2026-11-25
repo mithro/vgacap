@@ -902,3 +902,27 @@ def test_a_picture_swept_from_several_frames_says_so():
     assert "torn for one that changes" in swept
     assert whole == ""
     assert frame_note(["overruns=0 rxstall=0"], 481) == ""
+
+
+# -- select_project undoes its own mode change --------------------------------
+
+
+def test_a_setup_failure_after_the_mode_switch_puts_the_mode_back():
+    board = FakeChunkBoard(
+        [],
+        replies={"print(int(tt.mode))": "2\r\n"},
+        errors={"tt.clock_project_PWM(100000)": "AttributeError: no clock\r\n"},
+    )
+    repl = connect(board)
+
+    with pytest.raises(CaptureError, match="no clock"):
+        select_project(repl, request(ui_in=3))
+
+    assert board.commands[-2:] == ["tt.clock_project_stop()", "tt.mode = 2"]
+    assert "tt.reset_project(False)" not in board.commands
+
+
+def test_a_request_with_a_bad_cfg_is_refused_when_it_is_built():
+    with pytest.raises(ValueError, match="sample_delay"):
+        request(script="frame_rp2.py", sample_delay=40, ui_in=3)
+
