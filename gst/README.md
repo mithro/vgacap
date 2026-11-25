@@ -68,8 +68,8 @@ carries `GST_BUFFER_FLAG_DISCONT`.
 `vgacapttsrc` runs `ttcap capture --out -` as
 a child process and pushes its stdout as 64 KiB `application/x-vgacap`
 buffers. The board protocol stays in Python ([`ttcap`](../python/ttcap/README.md)), and the same element works over
-USB serial or over the [fpgas.online](https://tinytapeout.fpgas.online)
-websocket bridge.
+USB serial or over the [fpgas.online bridge](https://tinytapeout.fpgas.online)
+(`fpgas-tt`).
 
 | property | default | default means | required | in a URI query | description |
 |---|---|---|---|---|---|
@@ -94,24 +94,10 @@ when the pipeline runs from elsewhere.
 
 ### Stopping matters
 
-The board samples into a DMA double buffer and can only stop at a buffer
-boundary. With the default `--buf-words`, one buffer is about 22 ms on an
-RP2350 at 750 kHz and about 137 ms on an RP2040 at 60 kHz, its measured
-project-clock ceiling (a larger `--buf-words` raises it). `ttcap` turns its
-first `SIGINT` into a cooperative stop that finishes the chunk, writes its
-closing `TIME` chunk (the only overrun report there is) and exits 0.
-
-So the element signals the child's process group and then waits *while
-draining its stdout*, because a child blocked writing into a full pipe never
-reaches the code that emits its trailer. Only when `stop-timeout` runs out
-does the element close the read end (`ttcap` reads the `EPIPE` as a clean
-end and still exits 0, but the trailer then has nowhere to go), and only
-after that does it send `SIGKILL`. Every path reaps the child.
-
-The default command makes `ttcap` a *grandchild*, with `uv run` in between.
-If the wrapper exits first, a `SIGKILL` also goes to the process group;
-otherwise the capture would carry on holding the board with nothing left to
-signal. No wait in the sequence is unbounded.
+On stop the element asks `ttcap` to finish its chunk and closing `TIME`
+chunk, waiting up to `stop-timeout` before closing the pipe and then
+killing the process group
+([how long a stop takes](../python/ttcap/README.md#stopping)).
 
 ### A live capture cannot be paused, only stopped
 
