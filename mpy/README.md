@@ -13,7 +13,7 @@ and [`firmware/pico/hal_rp2.c`](../firmware/pico/hal_rp2.c), not a reimplementat
 The module is built into the demo board's MicroPython firmware (the
 [`vgacap-module` branch of mithro/tt-micropython-firmware](https://github.com/mithro/tt-micropython-firmware/tree/vgacap-module), which pins this
 repository as a submodule). The board otherwise stays exactly as it was
-(the ttboard SDK, `tt.shuttle`, the FPGA loader, the REPL), and a capture
+(the [ttboard SDK](https://github.com/TinyTapeout/tt-micropython-firmware), `tt.shuttle`, the FPGA loader, the REPL), and a capture
 becomes one call instead of a script shipped over the REPL. The host side
 is `ttcap capture --firmware mpy-module`.
 
@@ -147,7 +147,7 @@ does the same. Our sources build with `-Wall -Wextra -Werror` (less
 Both pin MicroPython to [b006887db6](https://github.com/micropython/micropython/commit/b006887db6) (1.29.0-preview), what fpga-1 and fpga-4
 run. The unix build adds `vgacap.sim_board(path, *, bytes_per_s, rxstall)`,
 `vgacap.sim_clock(hz)`, `vgacap.sim_now()` and `vgacap.sim_frame_spans()`
-(the buffers the last frame window was captured into), to set up and
+(how many buffers the last frame window was captured into), to set up and
 inspect the simulated board; the rp2 build has none of them.
 
 ## Tests
@@ -157,7 +157,8 @@ inspect the simulated board; the rp2 build has none of them.
 ttcap. It checks:
 
 * frame and window captures byte-identical to the pico-sdk firmware's
-  (same engines, same simulator) and pixel-exact through `vgacap-frames`;
+  (same engines, same simulator) and pixel-exact through
+  [`vgacap-frames`](../src/tools/README.md);
 * a heap fragmented into ~144 KB holes giving all 481 lines in one
   captured frame through chained buffers;
 * streams of the design's consecutive samples;
