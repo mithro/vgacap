@@ -42,13 +42,17 @@ static struct {
     uint32_t *arena;
     size_t arena_bytes;
     int force_rxstall;
+    int stalled;  // the one host stall (sim_config_t) has happened
+    int refuse_sysclk;
     // streaming
     int streaming;
     uint32_t *bufs[2];
     uint32_t buf_words;
     uint64_t first_clock;
     uint64_t fills;
+    uint32_t written;  // words of fill `fills` already in its buffer
     volatile int full[2];
+    int torn[2];
     uint32_t overruns;
     // frame
     int framing;
@@ -106,6 +110,7 @@ int sim_input_closed(void) {
 
 double sim_now(void) { return S.now; }
 void sim_force_rxstall(int on) { S.force_rxstall = on; }
+void sim_refuse_sysclk(int on) { S.refuse_sysclk = on; }
 
 // ---- the design ---------------------------------------------------------------
 
@@ -134,22 +139,40 @@ static void pack(uint32_t *dst, uint32_t words, uint64_t c) {
     }
 }
 
-// DMA completions due by now: each ping-pong buffer is filled when its last
-// sample has been taken; one that is still unsent is overwritten and
-// counted, as capture_rp2.py's interrupt handlers count it.
+// The DMA as it runs: fill k writes buffer k & 1 word by word, as the
+// samples are taken, and completes with its last one; the chain then
+// starts fill k + 1 on the other buffer at once. A fill that starts on a
+// buffer still marked full (not yet sent, or being sent) is an overrun,
+// and that buffer is torn -- counted where hal_pico.c's completion
+// interrupt counts it, as capture_rp2.py's handlers do. Because the
+// buffer is written progressively and hal_write() sends in pieces, a
+// chunk being sent while the next fill overtakes it really is mixed.
 static double next_fill_time(void) {
     uint64_t samples = (uint64_t)S.buf_words * SPW;
     return time_of_clock(S.first_clock + (S.fills + 1u) * samples);
 }
 
 static void process(void) {
-    while (S.streaming && next_fill_time() <= S.now) {
-        uint64_t samples = (uint64_t)S.buf_words * SPW;
+    uint64_t samples = (uint64_t)S.buf_words * SPW;
+    while (S.streaming) {
+        uint64_t start = S.first_clock + S.fills * samples;
         int i = (int)(S.fills & 1u);
-        pack(S.bufs[i], S.buf_words, S.first_clock + S.fills * samples);
-        if (S.full[i]) S.overruns++;
+        int complete = next_fill_time() <= S.now;
+        uint64_t now_clock = clock_at(S.now);
+        uint64_t due = complete ? S.buf_words : now_clock > start ? (now_clock - start) / SPW : 0;
+        if (due > S.buf_words) due = S.buf_words;
+        if (due > S.written) {
+            pack(S.bufs[i] + S.written, (uint32_t)due - S.written, start + (uint64_t)S.written * SPW);
+            S.written = (uint32_t)due;
+        }
+        if (!complete) return;
         S.full[i] = 1;
         S.fills++;
+        S.written = 0;
+        if (S.full[1 - i]) {  // the next fill starts on a buffer still unsent
+            S.overruns++;
+            S.torn[1 - i] = 1;
+        }
     }
 }
 
@@ -203,7 +226,17 @@ void hal_wait_input(void) {
     if (S.in_pos < S.in_len && S.in[S.in_pos].at > S.now) advance(S.in[S.in_pos].at - S.now);
 }
 
-int hal_write(const uint8_t *buf, size_t len) {
+// The send reads `buf` a piece at a time as the link takes it, like the
+// TinyUSB FIFO copy on the board: a buffer the DMA starts rewriting part
+// way through its send goes out mixed.
+#define WRITE_PIECE 16u
+
+static int write_piece(const uint8_t *buf, size_t len) {
+    if (S.cfg.stall_seconds > 0 && !S.stalled && S.now >= S.cfg.stall_at) {
+        S.stalled = 1;
+        advance(S.cfg.stall_seconds);
+    }
+    if (hal_host_gone()) return -1;
     if (S.fds) {
         size_t done = 0;
         while (done < len) {
@@ -227,8 +260,18 @@ int hal_write(const uint8_t *buf, size_t len) {
     return 0;
 }
 
+int hal_write(const uint8_t *buf, size_t len) {
+    while (len) {
+        size_t n = len < WRITE_PIECE ? len : WRITE_PIECE;
+        if (write_piece(buf, n)) return -1;
+        buf += n;
+        len -= n;
+    }
+    return 0;
+}
+
 void hal_flush(void) {}
-int hal_host_gone(void) { return 0; }
+int hal_host_gone(void) { return S.cfg.host_gone_at > 0 && S.now >= S.cfg.host_gone_at; }
 #endif  // VGACAP_SIM_NO_LINK
 
 // ---- the board ------------------------------------------------------------------
@@ -237,10 +280,11 @@ const fw_board_t *hal_board(void) { return &fw_board_dbv3; }
 uint32_t hal_sysclk_hz(void) { return S.sysclk_hz; }
 
 int hal_clock(const fw_clock_plan_t *plan, const char **why) {
-    (void)why;
-    if (!plan) {
-        S.clock_on = 0;
-        return 0;
+    S.clock_on = 0;  // as on the board: the PWM stops first
+    if (!plan) return 0;
+    if (S.refuse_sysclk && plan->sysclk_hz != S.sysclk_hz) {
+        *why = "the system clock cannot be set to that frequency";
+        return -1;
     }
     S.sysclk_hz = plan->sysclk_hz;
     S.clock_hz = (double)plan->sysclk_hz * 16.0 / ((double)plan->div16 * (double)(plan->top + 1u));
@@ -268,12 +312,16 @@ int hal_gpio_get(unsigned gpio) {
 }
 
 void hal_delay_us(uint32_t us) { advance((double)us * 1e-6); }
+void hal_wait_us(uint32_t us) {
+    advance((double)us * 1e-6);
+}
 
 void hal_idle(void) {
     double next = INFINITY;
     if (S.streaming && S.clock_on) next = next_fill_time();
     if (S.framing && S.done_at < next) next = S.done_at;
     if (!S.fds && S.in_pos < S.in_len && S.in[S.in_pos].at < next) next = S.in[S.in_pos].at;
+    if (S.cfg.host_gone_at > S.now && S.cfg.host_gone_at < next) next = S.cfg.host_gone_at;
     if (!isinf(next)) {
         if (next > S.now) advance(next - S.now);
         return;
@@ -315,7 +363,9 @@ int hal_stream_start(const fw_pio_program_t *prog, unsigned pio, unsigned sm, ui
     S.buf_words = buf_words;
     S.first_clock = clock_at(S.now) + 1u;
     S.fills = 0;
+    S.written = 0;
     S.full[0] = S.full[1] = 0;
+    S.torn[0] = S.torn[1] = 0;
     S.overruns = 0;
     return 0;
 }
@@ -326,6 +376,12 @@ int hal_stream_full(int i) {
 }
 
 void hal_stream_release(int i) { S.full[i] = 0; }
+
+int hal_stream_take_torn(int i) {
+    int torn = S.torn[i];
+    S.torn[i] = 0;
+    return torn;
+}
 uint32_t hal_stream_overruns(void) { return S.overruns; }
 
 void hal_stream_stop(uint32_t *overruns, int *rxstall) {
