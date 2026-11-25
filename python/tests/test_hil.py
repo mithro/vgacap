@@ -62,12 +62,24 @@ def run_hil(*args: str, stub: str = "ok", timeout: int = 60,
         capture_output=True, text=True, env=env, timeout=timeout)
 
 
+def free_port() -> int:
+    """A TCP port nothing is listening on now. hil.py's default (8099) is
+    shared by every run on the host, and a run that finds it taken fails
+    its demo checks for a reason that has nothing to do with the code."""
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
 @pytest.fixture
 def workspace(tmp_path: pathlib.Path) -> dict:
-    """The arguments every run shares: its own workdir, lock and report."""
+    """The arguments every run shares: its own workdir, lock, report and
+    MJPEG port."""
     return {
         "common": ["--link", "stub://board", "--clock-hz", "500000",
-                   "--seconds", "4",
+                   "--seconds", "4", "--serve-port", str(free_port()),
                    "--workdir", str(tmp_path / "work"),
                    "--lock-dir", str(tmp_path / "lock")],
         "report": tmp_path / "report.md",
@@ -350,6 +362,7 @@ def _processes_marked(mark: str) -> list[int]:
     return found
 
 
+@needs_frames_tool
 @pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGHUP])
 def test_a_stop_signal_cleans_up_and_still_reports(workspace, sig):
     """A dropped ssh or a `kill` used to end hil.py with no cleanup at all,
