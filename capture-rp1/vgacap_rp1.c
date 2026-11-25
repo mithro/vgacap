@@ -223,6 +223,13 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    // The pattern is read before anything is claimed, so a bad file costs
+    // no teardown.
+    size_t gen_len = 0;
+    uint8_t *gen_data = NULL;
+    if (o.gen && !(gen_data = read_file(o.gen, &gen_len)))
+        return 1;
+
     PIO pio = pio0;
     if (PIO_IS_ERR(pio)) {
         fprintf(stderr, "vgacap-rp1: cannot open the RP1 PIO (/dev/pio0): %d\n", PIO_ERR_VAL(pio));
@@ -246,7 +253,6 @@ int main(int argc, char **argv)
     uint cap_off = 0, gen_off = 0, cnt_off = 0;
     struct generator gen = {0};
     pthread_t gen_thread;
-    uint8_t *gen_data = NULL;
     uint32_t *buf = NULL;
     uint16_t gen_insns[2], cnt_insns[2];
     pio_program_t gen_prog = {.instructions = gen_insns, .length = 2, .origin = -1};
@@ -301,10 +307,6 @@ int main(int argc, char **argv)
 
     // ---- the optional generator (test fixture) --------------------------
     if (o.gen) {
-        size_t len = 0;
-        gen_data = read_file(o.gen, &len);
-        if (!gen_data)
-            goto teardown;
         gen_insns[0] = (uint16_t)(pio_encode_out(pio_pins, 8) | pio_encode_sideset(1, 0) |
                                   pio_encode_delay(o.gen_delay));
         gen_insns[1] = (uint16_t)(pio_encode_nop() | pio_encode_sideset(1, 1) | pio_encode_delay(o.gen_delay));
@@ -334,7 +336,7 @@ int main(int argc, char **argv)
         // divides the pattern, and the pattern is sent in whole transfers.
         uint chunk = 0;
         for (uint c = GEN_CHUNK_BYTES; c >= 4; c -= 4)
-            if (len % c == 0) {
+            if (gen_len % c == 0) {
                 chunk = c;
                 break;
             }
@@ -344,7 +346,7 @@ int main(int argc, char **argv)
             goto teardown;
         }
         pio_sm_init(pio, (uint)gen_sm, gen_off, &gc);
-        gen = (struct generator){.pio = pio, .sm = (uint)gen_sm, .data = gen_data, .len = len, .chunk = chunk};
+        gen = (struct generator){.pio = pio, .sm = (uint)gen_sm, .data = gen_data, .len = gen_len, .chunk = chunk};
         int terr = pthread_create(&gen_thread, NULL, generator_thread, &gen);
         if (terr) {
             fprintf(stderr, "vgacap-rp1: cannot start the generator thread: %s\n", strerror(terr));
