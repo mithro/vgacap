@@ -8,8 +8,8 @@ stream, and what reads it.
 Hand-placed, not auto-laid-out. Few words: each capture source is drawn
 as the parts that do the work (the chip, and the PIO or logic inside it),
 and the colours carry the rest (see the legend). The board photo, the
-Tiny Tapeout and the Raspberry Pi logos are embedded from photos/ and
-logos/; logos/NOTICE.md says where each is from and under what terms.
+Tiny Tapeout and the Raspberry Pi logos are embedded from images/ and
+logos/; NOTICE.md says where each is from and under what terms.
 """
 from __future__ import annotations
 
@@ -161,31 +161,30 @@ add(f'<rect x="0" y="0" width="{W}" height="{H}" fill="#ffffff"/>')
 SRC_Y, SRC_W, SRC_H, GAP = 318, 232, 180, 22
 SRC_XS = [150 + i * (SRC_W + GAP) for i in range(4)]
 CX = [x + SRC_W / 2 for x in SRC_XS]          # centre of each source
-STREAM_Y, STREAM_H = SRC_Y + SRC_H + 64, 92
+STREAM_Y, STREAM_H = SRC_Y + SRC_H + 64, 106
 LIB_Y = STREAM_Y + STREAM_H + 52
 OUT_Y = LIB_Y + 76 + 52
 LEFT, RIGHT = SRC_XS[0], SRC_XS[3] + SRC_W
 
 # ---- the inputs: the board, and the design's source for the simulator ----------------------
-PH = 206
-PH_X, PH_Y = CX[1] - PH / 2 - 40, 22
-photo = base64.b64encode((HERE / "photos" / "etr-demoboard.jpg").read_bytes()).decode()
-cid = f"clip{next(_ids)}"
-add(f'<clipPath id="{cid}"><rect x="{PH_X}" y="{PH_Y}" width="{PH}" height="{PH}" rx="10"/></clipPath>')
-add(f'<image x="{PH_X}" y="{PH_Y}" width="{PH}" height="{PH}" clip-path="url(#{cid})" '
-    f'preserveAspectRatio="xMidYMid slice" href="data:image/jpeg;base64,{photo}"/>')
-rect(PH_X, PH_Y, PH, PH, "none", INK, rx=10, sw=1.5)
-text(PH_X + PH + 18, PH_Y + 92, "Tiny Tapeout demo board", "title")
-text(PH_X + PH + 18, PH_Y + 112, "an ASIC or an FPGA breakout on top;", "detail")
-text(PH_X + PH + 18, PH_Y + 128, "the design drives VGA on uo_out", "detail")
+# Tiny Tapeout's KiCad render of the ETR demo board, no breakout fitted (see NOTICE.md).
+PW, PHH = 200, 200 * 457 / 420
+PH_X, PH_Y = CX[1] - PW / 2 - 40, 16
+board = base64.b64encode((HERE / "images" / "tt-etr-dbv3p2.jpg").read_bytes()).decode()
+add(f'<image x="{PH_X}" y="{PH_Y}" width="{PW}" height="{PHH:.1f}" '
+    f'href="data:image/jpeg;base64,{board}"/>')
+text(PH_X + PW + 18, PH_Y + 92, "Tiny Tapeout demo board", "title")
+text(PH_X + PW + 18, PH_Y + 112, "an ASIC or an FPGA breakout on top;", "detail")
+text(PH_X + PW + 18, PH_Y + 128, "the design drives VGA on uo_out", "detail")
 
-# uo_out leaves the board once, on one bus that drops into three sources.
-TAP_X = PH_X + PH - 40               # the OUTPUT header, bottom right of the photo
+# uo_out leaves the board once, from its OUTPUT header, on one bus into three sources.
+TAP_X = PH_X + PW * 0.76
+TAP_Y = PH_Y + PHH - 4
 BUS_Y = SRC_Y - 40
-add(f'<path d="M{TAP_X} {PH_Y + PH} L{TAP_X} {BUS_Y}" fill="none" stroke="{SIG}" stroke-width="3"/>')
+add(f'<path d="M{TAP_X:.1f} {TAP_Y:.1f} L{TAP_X:.1f} {BUS_Y}" fill="none" stroke="{SIG}" stroke-width="3"/>')
 add(f'<path d="M{CX[0]} {BUS_Y} L{CX[2]} {BUS_Y}" fill="none" stroke="{SIG}" stroke-width="3"/>')
-add(f'<circle cx="{TAP_X}" cy="{BUS_Y}" r="4.5" fill="{SIG}"/>')
-text(TAP_X + 10, PH_Y + PH + 30, "uo_out[7:0]", "net", fill=SIG)
+add(f'<circle cx="{TAP_X:.1f}" cy="{BUS_Y}" r="4.5" fill="{SIG}"/>')
+text(TAP_X + 10, TAP_Y + 28, "uo_out[7:0]", "net", fill=SIG)
 for cx in CX[:3]:
     line([(cx, BUS_Y), (cx, SRC_Y - 2)], "sig")
 
@@ -224,7 +223,7 @@ container(SRC_XS[1], "Raspberry Pi 5", lambda x, y: nested_svg(
     HERE / "logos" / "raspberry-pi.svg", x - 12, y - 15, 24, 30))
 inner(SRC_XS[1], "chip", "RP1", (("PIO", 54), ("DMA", 54)), "DRAM")
 container(SRC_XS[2], "FPGA", lambda x, y: tt_badge(x, y, 14))
-inner(SRC_XS[2], "chip", "FPGA", (("project", 66), ("capture", 70)), "its link")
+inner(SRC_XS[2], "chip", "FPGA", (("project", 66), ("capture", 70)), "I/O pins")
 container(SRC_XS[3], "Simulator", lambda x, y: add(
     f'<path d="M{x - 11} {y + 4} L{x - 11} {y - 4} L{x - 4} {y - 4} L{x - 4} {y + 4} '
     f'L{x + 3} {y + 4} L{x + 3} {y - 4} L{x + 10} {y - 4}" fill="none" stroke="{SIG}" '
@@ -242,14 +241,16 @@ for cx in CX:
 
 # ---- the stream ----------------------------------------------------------------------------------
 rect(LEFT, STREAM_Y, RIGHT - LEFT, STREAM_H, "#f7f8fb", INK2, rx=6, sw=2.5)
-text(LEFT + 20, STREAM_Y + 52, "vgacap stream", "title")
-chunks = (("VGCH", INK2), ("RAW", STR), ("RLE", STR), ("FRAM", STR), ("EVNT", STR),
-          ("TIME", MUTED))
-pw, pg = 86, 18
+text(LEFT + 20, STREAM_Y + 50, "vgacap stream", "title")
+text(LEFT + 20, STREAM_Y + 70, "chunks of these types:", "detail")
+chunks = (("VGCH", "header"), ("RAW", "samples"), ("RLE", "runs"), ("FRAM", "whole frame"),
+          ("EVNT", "events"), ("TIME", "timing notes"))
+pw, pg = 90, 14
 px = RIGHT - 22 - len(chunks) * pw - (len(chunks) - 1) * pg
-for name, edge in chunks:
-    rect(px, STREAM_Y + 30, pw, 32, "#ffffff", edge, rx=4, sw=1.75)
-    text(px + pw / 2, STREAM_Y + 51, name, "pad", "middle")
+for name, meaning in chunks:
+    rect(px, STREAM_Y + 24, pw, 32, "#ffffff", STR, rx=4, sw=1.75)
+    text(px + pw / 2, STREAM_Y + 45, name, "pad", "middle")
+    text(px + pw / 2, STREAM_Y + 78, meaning, "detail", "middle")
     px += pw + pg
 
 # ---- reading it back ---------------------------------------------------------------------------
@@ -273,8 +274,9 @@ text(OX[0] + 108, OUT_Y + 40, "Pictures", "title")
 text(OX[0] + 108, OUT_Y + 60, "and video", "title")
 rect(OX[1], OUT_Y, OW, 90, PIC_FILL, PIC_EDGE)
 check(OX[1] + 54, OUT_Y + 45, 25)
-text(OX[1] + 108, OUT_Y + 40, "Pixel-exact", "title")
-text(OX[1] + 108, OUT_Y + 60, "checks", "title")
+text(OX[1] + 108, OUT_Y + 34, "Pixel-exact", "title")
+text(OX[1] + 108, OUT_Y + 54, "checks", "title")
+text(OX[1] + 108, OUT_Y + 74, "against references", "detail")
 
 # ---- legend --------------------------------------------------------------------------------------
 LY = OUT_Y + 90 + 46
