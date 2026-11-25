@@ -133,7 +133,8 @@ refusal names them, so nothing goes unseen) and leaves everything else
 alone.
 
 A run that finishes without producing any frames exits **3**, the same code
-`ttcap capture` uses for "no samples at all". The demo judges this on the
+`ttcap capture` uses when no samples arrived and the board reported no
+error (a board error exits 1). The demo judges this on the
 files, unless `--no-png`/`--no-video` switched them off, and otherwise on
 the decoder's own bus messages, since a window or a stream cannot be
 counted.
