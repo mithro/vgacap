@@ -84,7 +84,7 @@ boundary: about 82 ms at 750 kHz, but 2.2 s at 60 kHz, the RP2040's
 measured project-clock ceiling at the default buffer size (a larger
 `--buf-words` raises it). `ttcap` turns its first `SIGINT` into a cooperative
 stop that finishes the chunk, writes its closing `TIME` chunk (the only
-overrun and `rxstall` report there is) and exits 0.
+overrun report there is) and exits 0.
 
 So the element signals the child's process group and then waits *while
 draining its stdout*, because a child blocked writing into a full pipe never
@@ -96,9 +96,7 @@ after that does it send `SIGKILL`. Every path reaps the child.
 The default command makes `ttcap` a *grandchild*, with `uv run` in between.
 If the wrapper exits first, a `SIGKILL` also goes to the process group;
 otherwise the capture would carry on holding the board with nothing left to
-signal. No wait in the sequence is unbounded: it all runs inside a state
-change, and a state change that never returns is a pipeline nobody can shut
-down.
+signal. No wait in the sequence is unbounded.
 
 ### A live capture cannot be paused, only stopped
 
