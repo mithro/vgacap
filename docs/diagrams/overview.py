@@ -1,33 +1,36 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 """Draw docs/diagrams/overview.svg: vgacap's capture sources, the shared
-stream, and its consumers.
+stream, and what reads it.
 
     uv run --no-project python docs/diagrams/overview.py
 
-Hand-placed, not auto-laid-out: every box, line and label has a fixed
-position, so the figure is reviewed as drawn. Style follows one palette:
-blue for the design's signals, orange for vgacap stream bytes, green for
-pictures, violet dashed for control.
+Hand-placed, not auto-laid-out. Few words: each capture source is drawn
+as the parts that do the work (the chip, and the PIO or logic inside it),
+and the colours carry the rest (see the legend). The board photo, the
+Tiny Tapeout and the Raspberry Pi logos are embedded from photos/ and
+logos/; logos/NOTICE.md says where each is from and under what terms.
 """
 from __future__ import annotations
 
+import base64
 import pathlib
+import re
 from xml.sax.saxutils import escape
 
-W, H = 1146, 650
+HERE = pathlib.Path(__file__).resolve().parent
+W, H = 1154, 1000
 INK, INK2, MUTED = "#1d2433", "#2b3445", "#5b6577"
 SIG, SIG_FILL, SIG_EDGE = "#1c64d4", "#eaf1fd", "#9dbcef"
 STR, STR_FILL, STR_EDGE = "#f2620c", "#fff2e8", "#f8b48a"
 PIC, PIC_FILL, PIC_EDGE = "#14845a", "#e7f6ef", "#93d3b6"
 CTL, CTL_FILL, CTL_EDGE = "#6b46d6", "#f2eefd", "#c2b2f0"
-PAD = "#cfd5df"
+PART, PART_EDGE = "#ffffff", "#7d8799"
+BARS = ["#ffffff", "#ffff00", "#00ffff", "#00ff00", "#ff00ff", "#ff0000", "#0000ff", "#000000"]
 
 out: list[str] = []
-
-
-def add(s: str) -> None:
-    out.append(s)
+add = out.append
+_ids = iter(range(1000))
 
 
 def text(x, y, s, cls="detail", anchor="start", fill=None):
@@ -35,168 +38,254 @@ def text(x, y, s, cls="detail", anchor="start", fill=None):
     add(f'<text x="{x}" y="{y}" class="{cls}" text-anchor="{anchor}"{f}>{escape(s)}</text>')
 
 
-def box(x, y, w, h, fill, edge, title, lines=(), rx=8, sw=1.25, title_fill=INK):
+def rect(x, y, w, h, fill, edge, rx=8, sw=1.25, dash=None):
+    d = f' stroke-dasharray="{dash}"' if dash else ""
     add(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" fill="{fill}" '
-        f'stroke="{edge}" stroke-width="{sw}"/>')
-    text(x + 12, y + 22, title, "title", fill=title_fill)
-    for i, line in enumerate(lines):
-        text(x + 12, y + 41 + 17 * i, line)
+        f'stroke="{edge}" stroke-width="{sw}"{d}/>')
 
 
-def line(points, kind, both=False, dash=None):
-    colour, width, marker = {
-        "sig": (SIG, 3, "arrow-sig"),
-        "str": (STR, 4.5, "arrow-str"),
-        "pic": (PIC, 3, "arrow-pic"),
-        "ctl": (CTL, 1.75, "arrow-ctl"),
-    }[kind]
+def line(points, kind, head=True):
+    colour, width, marker = {"sig": (SIG, 3, "a-sig"), "str": (STR, 4.5, "a-str"),
+                             "pic": (PIC, 3, "a-pic"), "ctl": (CTL, 1.75, "a-ctl"),
+                             "thin": (SIG, 1.75, "a-thin")}[kind]
     d = "M" + " L".join(f"{x} {y}" for x, y in points)
-    extra = ' stroke-dasharray="5 4"' if kind == "ctl" else ""
-    start = f' marker-start="url(#{marker})"' if both else ""
-    add(f'<path d="{d}" fill="none" stroke="{colour}" stroke-width="{width}"{extra}'
-        f'{start} marker-end="url(#{marker})"/>')
+    dash = ' stroke-dasharray="5 4"' if kind == "ctl" else ""
+    end = f' marker-end="url(#{marker})"' if head else ""
+    add(f'<path d="{d}" fill="none" stroke="{colour}" stroke-width="{width}"{dash}{end}/>')
 
 
-def tag(x, y, s, dark=True):
-    w = 7.2 * len(s) + 18
-    if dark:
-        add(f'<rect x="{x}" y="{y}" width="{w:.0f}" height="22" rx="11" fill="{INK2}"/>')
-        text(x + w / 2, y + 15.5, s, "tag", "middle", fill="#ffffff")
-    else:
-        add(f'<rect x="{x}" y="{y}" width="{w:.0f}" height="22" rx="11" fill="#ffffff" '
-            f'stroke="{INK2}" stroke-width="1.25"/>')
-        text(x + w / 2, y + 15.5, s, "tag", "middle", fill=INK2)
+def nested_svg(path, x, y, w, h):
+    src = path.read_text()
+    src = re.sub(r"<\?xml[^>]*\?>|<!DOCTYPE[^>]*>|<!--.*?-->", "", src, flags=re.S)
+    src = re.sub(r"<sodipodi:namedview.*?/>", "", src, flags=re.S)
+    vb = re.search(r'viewBox="([^"]+)"', src).group(1)
+    inner = src[src.index(">", src.index("<svg")) + 1: src.rindex("</svg>")]
+    add(f'<svg x="{x}" y="{y}" width="{w}" height="{h}" viewBox="{vb}" '
+        f'preserveAspectRatio="xMidYMid meet">{inner}</svg>')
 
 
-# ---- canvas, style, markers ------------------------------------------------
+def tt_badge(cx, cy, r):
+    cid = f"clip{next(_ids)}"
+    add(f'<clipPath id="{cid}"><circle cx="{cx}" cy="{cy}" r="{r}"/></clipPath>')
+    add(f'<g clip-path="url(#{cid})">')
+    nested_svg(HERE / "logos" / "tinytapeout.svg", cx - r, cy - r, 2 * r, 2 * r)
+    add("</g>")
+
+
+def chip(x, y, w, h, name):
+    """A chip package: pins on top and bottom, its name in the corner."""
+    n = max(3, int(w // 16))
+    for i in range(n):
+        px = x + w * (i + 0.5) / n
+        for y1, y2 in ((y - 5, y), (y + h, y + h + 5)):
+            add(f'<line x1="{px:.1f}" y1="{y1}" x2="{px:.1f}" y2="{y2}" stroke="{INK2}" '
+                f'stroke-width="2" stroke-linecap="round"/>')
+    rect(x, y, w, h, INK2, INK2, rx=4, sw=1)
+    text(x + 8, y + 15, name, "chipname", fill="#ffffff")
+
+
+def part(x, y, w, h, name):
+    """A block inside a chip (PIO, DMA, capture logic)."""
+    rect(x, y, w, h, PART, PART_EDGE, rx=4, sw=1)
+    text(x + w / 2, y + h / 2 + 4.5, name, "part", "middle")
+
+
+def monitor(x, y, w, h):
+    rect(x, y, w, h, INK2, INK2, rx=4, sw=1)
+    bw = (w - 8) / len(BARS)
+    for i, c in enumerate(BARS):
+        add(f'<rect x="{x + 4 + i * bw:.1f}" y="{y + 4}" width="{bw + 0.2:.1f}" '
+            f'height="{h - 8}" fill="{c}"/>')
+    add(f'<rect x="{x + w / 2 - 6}" y="{y + h}" width="12" height="6" fill="{INK2}"/>')
+    add(f'<rect x="{x + w / 2 - 16}" y="{y + h + 6}" width="32" height="3" rx="1.5" '
+        f'fill="{INK2}"/>')
+
+
+def check(cx, cy, r):
+    add(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{PIC}"/>')
+    add(f'<path d="M{cx - r * .45} {cy} L{cx - r * .1} {cy + r * .38} L{cx + r * .5} '
+        f'{cy - r * .35}" fill="none" stroke="#ffffff" stroke-width="{r * .22:.1f}" '
+        f'stroke-linecap="round" stroke-linejoin="round"/>')
+
+
+def laptop(x, y, w, h):
+    rect(x + 6, y, w - 12, h, "#ffffff", CTL, rx=3, sw=1.75)
+    add(f'<path d="M{x} {y + h + 6} L{x + w} {y + h + 6} L{x + w - 6} {y + h} '
+        f'L{x + 6} {y + h} z" fill="{CTL}"/>')
+    text(x + w / 2, y + h / 2 + 4, ">_", "part", "middle", fill=CTL)
+
+
+def doc(x, y, w, h, label):
+    """A source file with a folded corner."""
+    f = 10
+    add(f'<path d="M{x} {y} L{x + w - f} {y} L{x + w} {y + f} L{x + w} {y + h} L{x} {y + h} z" '
+        f'fill="#ffffff" stroke="{SIG}" stroke-width="1.5"/>')
+    add(f'<path d="M{x + w - f} {y} L{x + w - f} {y + f} L{x + w} {y + f}" fill="none" '
+        f'stroke="{SIG}" stroke-width="1.5"/>')
+    for i in range(3):
+        add(f'<line x1="{x + 7}" y1="{y + 18 + 7 * i}" x2="{x + w - 9 - 6 * (i % 2)}" '
+            f'y2="{y + 18 + 7 * i}" stroke="{SIG_EDGE}" stroke-width="2"/>')
+    text(x + w / 2, y + h + 16, label, "net", "middle", fill=SIG)
+
+
+# ---- canvas ------------------------------------------------------------------------
 add(f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
     f'font-family="-apple-system, BlinkMacSystemFont, \'Segoe UI\', Helvetica, Arial, sans-serif" '
     f'role="img" aria-labelledby="t d">')
 add('<title id="t">vgacap overview</title>')
-add('<desc id="d">Capture sources on the left write one vgacap stream in the middle; '
-    'reconstruction and the tools on the right turn it into pictures, video and checks.</desc>')
+add('<desc id="d">A Tiny Tapeout demo board\'s uo_out is captured by the board\'s own '
+    'RP2040 or RP2350 (PIO and DMA), a Raspberry Pi 5 (RP1 PIO and DMA), capture logic in an '
+    'FPGA, or a simulator; all write one vgacap stream, which libvgaframe turns into pictures, '
+    'video and pixel-exact checks.</desc>')
 add(f"""<style>
-  .title {{ font-size: 14px; font-weight: 600; fill: {INK}; }}
+  .title {{ font-size: 15px; font-weight: 600; fill: {INK}; }}
   .detail {{ font-size: 12.5px; fill: {MUTED}; }}
-  .net {{ font-size: 11.5px; font-weight: 600; }}
-  .tag {{ font-size: 12px; font-weight: 600; }}
-  .pad {{ font-size: 12px; font-weight: 600; fill: {INK}; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
+  .net {{ font-size: 12px; font-weight: 600; }}
+  .head {{ font-size: 12px; font-weight: 700; letter-spacing: 0.08em; fill: {MUTED}; }}
+  .chipname {{ font-size: 11px; font-weight: 700; letter-spacing: 0.03em; }}
+  .part {{ font-size: 12px; font-weight: 700; fill: {INK}; }}
+  .pad {{ font-size: 12.5px; font-weight: 700; fill: {INK};
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
   .legend {{ font-size: 12.5px; fill: {INK}; }}
 </style>""")
 add("<defs>")
-for name, colour, mw in (("arrow-sig", SIG, 3.4), ("arrow-str", STR, 3.0),
-                         ("arrow-pic", PIC, 3.4), ("arrow-ctl", CTL, 4.1)):
+for name, colour, mw in (("a-sig", SIG, 3.4), ("a-str", STR, 3.0), ("a-pic", PIC, 3.4),
+                         ("a-ctl", CTL, 4.1), ("a-thin", SIG, 4.6)):
     add(f'<marker id="{name}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="{mw}" '
         f'markerHeight="{mw}" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" '
         f'fill="{colour}"/></marker>')
 add("</defs>")
 add(f'<rect x="0" y="0" width="{W}" height="{H}" fill="#ffffff"/>')
 
-# ---- geometry ------------------------------------------------------------------
-ROWS = [176, 282, 388, 494]          # centre line of each source row
-SRC_X, SRC_W, SRC_H = 296, 250, 92   # source boxes
-DES_X, DES_W = 20, 180               # the design under capture
-STREAM_X, STREAM_W = 716, 196        # the stream block
-CON_X, CON_W = 956, 176              # consumers
+# ---- geometry: data flows down the page ----------------------------------------------
+SRC_Y, SRC_W, SRC_H, GAP = 318, 232, 180, 22
+SRC_XS = [150 + i * (SRC_W + GAP) for i in range(4)]
+CX = [x + SRC_W / 2 for x in SRC_XS]          # centre of each source
+STREAM_Y, STREAM_H = SRC_Y + SRC_H + 64, 92
+LIB_Y = STREAM_Y + STREAM_H + 52
+OUT_Y = LIB_Y + 76 + 52
+LEFT, RIGHT = SRC_XS[0], SRC_XS[3] + SRC_W
 
-# ---- column headings ------------------------------------------------------------
-for x, w, s in ((DES_X, DES_W, "Under capture"), (SRC_X, SRC_W, "Capture sources"),
-                (STREAM_X, STREAM_W, "One format"), (CON_X, CON_W, "Consumers")):
-    text(x + w / 2, 24, s.upper(), "tag", "middle", fill=MUTED)
+# ---- the inputs: the board, and the design's source for the simulator ----------------------
+PH = 206
+PH_X, PH_Y = CX[1] - PH / 2 - 40, 22
+photo = base64.b64encode((HERE / "photos" / "etr-demoboard.jpg").read_bytes()).decode()
+cid = f"clip{next(_ids)}"
+add(f'<clipPath id="{cid}"><rect x="{PH_X}" y="{PH_Y}" width="{PH}" height="{PH}" rx="10"/></clipPath>')
+add(f'<image x="{PH_X}" y="{PH_Y}" width="{PH}" height="{PH}" clip-path="url(#{cid})" '
+    f'preserveAspectRatio="xMidYMid slice" href="data:image/jpeg;base64,{photo}"/>')
+rect(PH_X, PH_Y, PH, PH, "none", INK, rx=10, sw=1.5)
+text(PH_X + PH + 18, PH_Y + 92, "Tiny Tapeout demo board", "title")
+text(PH_X + PH + 18, PH_Y + 112, "an ASIC or an FPGA breakout on top;", "detail")
+text(PH_X + PH + 18, PH_Y + 128, "the design drives VGA on uo_out", "detail")
 
-# ---- the design ----------------------------------------------------------------------
-dy0, dy1 = ROWS[0] - SRC_H / 2, ROWS[3] + SRC_H / 2
-add(f'<rect x="{DES_X}" y="{dy0}" width="{DES_W}" height="{dy1 - dy0}" rx="4" fill="#ffffff" '
-    f'stroke="{INK}" stroke-width="1.5"/>')
-text(DES_X + 14, dy0 + 26, "Tiny Tapeout design", "title")
-for i, s in enumerate(("on an ASIC, an FPGA", "or in a simulator", "",
-                       "VGA on the Tiny VGA", "Pmod: uo_out[7:0]", "",
-                       "project clock", "25.175 MHz typical")):
-    text(DES_X + 14, dy0 + 48 + 17 * i, s)
+# uo_out leaves the board once, on one bus that drops into three sources.
+TAP_X = PH_X + PH - 40               # the OUTPUT header, bottom right of the photo
+BUS_Y = SRC_Y - 40
+add(f'<path d="M{TAP_X} {PH_Y + PH} L{TAP_X} {BUS_Y}" fill="none" stroke="{SIG}" stroke-width="3"/>')
+add(f'<path d="M{CX[0]} {BUS_Y} L{CX[2]} {BUS_Y}" fill="none" stroke="{SIG}" stroke-width="3"/>')
+add(f'<circle cx="{TAP_X}" cy="{BUS_Y}" r="4.5" fill="{SIG}"/>')
+text(TAP_X + 10, PH_Y + PH + 30, "uo_out[7:0]", "net", fill=SIG)
+for cx in CX[:3]:
+    line([(cx, BUS_Y), (cx, SRC_Y - 2)], "sig")
 
-# ---- the host (control) ------------------------------------------------------------
-HOST_Y = 44
-box(SRC_X, HOST_Y, SRC_W, 36, CTL_FILL, CTL_EDGE, "ttcap on a host computer")
-line([(SRC_X + 40, HOST_Y + 36), (SRC_X + 40, ROWS[0] - SRC_H / 2 - 2)], "ctl")
-text(SRC_X + 50, HOST_Y + 61, "clock, reset, start, stop", "net", fill=CTL)
+doc(CX[3] - 23, PH_Y + 112, 46, 58, "the design's RTL")
+line([(CX[3], PH_Y + 112 + 58 + 24), (CX[3], SRC_Y - 2)], "sig")
 
-# ---- the sources --------------------------------------------------------------------
-sources = [
-    ("Tiny Tapeout demo board", ["its RP2040 or RP2350 samples", "uo_out with PIO, once a clock;",
-                                 "stock firmware or vgacap's own"],
-     "USB serial or websocket", "up to ~0.7 MB/s"),
-    ("Raspberry Pi 5", ["its RP1 I/O chip samples", "uo_out on the GPIO header"],
-     "on the Pi itself", "DMA to DRAM"),
-    ("FPGA capture logic", ["rtl/: built into the FPGA", "design next to the project"],
-     "the FPGA's own link", "one byte a clock"),
-    ("Simulators", ["the design's RTL, run in", "Verilator or Icarus"],
-     "trace files", "every clock"),
-]
-for (title, lines_, link, rate), cy in zip(sources, ROWS):
-    y = cy - SRC_H / 2
-    box(SRC_X, y, SRC_W, SRC_H, SIG_FILL, SIG_EDGE, title, lines_)
-    # the design's signal into the source
-    if title == "Simulators":
-        line([(DES_X + DES_W, cy), (SRC_X - 2, cy)], "sig")
-        text((DES_X + DES_W + SRC_X) / 2, cy - 8, "RTL", "net", "middle", fill=SIG)
+# ---- the capture sources ---------------------------------------------------------------------
+def container(x, title, mark):
+    rect(x, SRC_Y, SRC_W, SRC_H, SIG_FILL, SIG_EDGE)
+    mark(x + 26, SRC_Y + 24)
+    text(x + 48, SRC_Y + 29, title, "title")
+
+
+def inner(x, kind, name, parts, sink):
+    """A chip (or a simulator box) holding two parts side by side, then down to `sink`."""
+    bx, by, bw, bh = x + 16, SRC_Y + 52, SRC_W - 32, 66
+    if kind == "chip":
+        chip(bx, by, bw, bh, name)
     else:
-        line([(DES_X + DES_W, cy), (SRC_X - 2, cy)], "sig")
-        text((DES_X + DES_W + SRC_X) / 2, cy - 8, "uo_out[7:0]", "net", "middle", fill=SIG)
-    # the source's stream into the format
-    line([(SRC_X + SRC_W, cy), (STREAM_X - 2, cy)], "str")
-    text((SRC_X + SRC_W + STREAM_X) / 2, cy - 9, link, "net", "middle", fill=STR)
-    text((SRC_X + SRC_W + STREAM_X) / 2, cy + 19, rate, "detail", "middle")
+        rect(bx, by, bw, bh, "#ffffff", PART_EDGE, rx=4, sw=1.25)
+        text(bx + 8, by + 15, name, "chipname", fill=MUTED)
+    (n1, w1), (n2, w2) = parts
+    px = bx + (bw - (w1 + 22 + w2)) / 2
+    part(px, by + 26, w1, 28, n1)
+    line([(px + w1, by + 40), (px + w1 + 20, by + 40)], "thin")
+    part(px + w1 + 22, by + 26, w2, 28, n2)
+    if sink:
+        sx = px + w1 + 22 + w2 / 2
+        line([(sx, by + 54), (sx, SRC_Y + SRC_H - 36)], "thin")
+        part(sx - 40, SRC_Y + SRC_H - 34, 80, 26, sink)
 
 
-# ---- the stream ----------------------------------------------------------------------
-sy0, sy1 = ROWS[0] - SRC_H / 2, ROWS[3] + SRC_H / 2
-add(f'<rect x="{STREAM_X}" y="{sy0}" width="{STREAM_W}" height="{sy1 - sy0}" rx="6" '
-    f'fill="#f7f8fb" stroke="{INK2}" stroke-width="2.5"/>')
-text(STREAM_X + STREAM_W / 2, sy0 + 26, "vgacap stream", "title", "middle")
-text(STREAM_X + STREAM_W / 2, sy0 + 44, "include/vgacap/stream.h", "detail", "middle")
-chunks = [("VGCH", "header", INK2),
-          ("RAW", "every sample", STR), ("RLE", "value + run", STR),
-          ("FRAM", "frame or window", STR), ("EVNT", "timed changes", STR),
-          ("TIME", "notes, overruns", MUTED)]
-for i, (name, what, colour) in enumerate(chunks):
-    py = sy0 + 64 + 50 * i
-    add(f'<rect x="{STREAM_X + 14}" y="{py}" width="54" height="24" rx="3" fill="#ffffff" '
-        f'stroke="{colour}" stroke-width="1.5"/>')
-    text(STREAM_X + 41, py + 16.5, name, "pad", "middle")
-    text(STREAM_X + 78, py + 16.5, what, "detail")
+container(SRC_XS[0], "Demo board", lambda x, y: tt_badge(x, y, 14))
+inner(SRC_XS[0], "chip", "RP2040 or RP2350", (("PIO", 54), ("DMA", 54)), "USB")
+container(SRC_XS[1], "Raspberry Pi 5", lambda x, y: nested_svg(
+    HERE / "logos" / "raspberry-pi.svg", x - 12, y - 15, 24, 30))
+inner(SRC_XS[1], "chip", "RP1", (("PIO", 54), ("DMA", 54)), "DRAM")
+container(SRC_XS[2], "FPGA", lambda x, y: tt_badge(x, y, 14))
+inner(SRC_XS[2], "chip", "FPGA", (("project", 66), ("capture", 70)), "its link")
+container(SRC_XS[3], "Simulator", lambda x, y: add(
+    f'<path d="M{x - 11} {y + 4} L{x - 11} {y - 4} L{x - 4} {y - 4} L{x - 4} {y + 4} '
+    f'L{x + 3} {y + 4} L{x + 3} {y - 4} L{x + 10} {y - 4}" fill="none" stroke="{SIG}" '
+    f'stroke-width="2.25" stroke-linejoin="round"/>'))
+inner(SRC_XS[3], "sim", "Verilator or Icarus", (("design", 66), ("tracer", 66)), "trace file")
 
-# ---- the consumers ---------------------------------------------------------------------
-LIB_Y = ROWS[0] - SRC_H / 2
-box(CON_X, LIB_Y, CON_W, 100, STR_FILL, STR_EDGE, "libvgaframe",
-    ["learns sync and mode", "from the signal, then", "rebuilds each frame"])
-line([(STREAM_X + STREAM_W, ROWS[0]), (CON_X - 2, ROWS[0])], "str")
+# ttcap drives the demo board from the side, clear of the bus.
+laptop(20, SRC_Y + 70, 58, 34)
+text(49, SRC_Y + 132, "ttcap", "title", "middle")
+line([(84, SRC_Y + 87), (SRC_XS[0] - 2, SRC_Y + 87)], "ctl")
 
-outputs = [
-    ("Pictures", ["PNG and PPM", "(vgacap-frames, ttcap png)"]),
-    ("Video", ["GStreamer: MKV, a window,", "MJPEG (ttcap demo)"]),
-    ("Checks", ["pixel-exact against", "reference renders"]),
-]
-oy = LIB_Y + 130
-trunk_x = CON_X - 20
-add(f'<path d="M{CON_X} {LIB_Y + 76} L{trunk_x} {LIB_Y + 76} L{trunk_x} {oy + 2 * 96 + 38}" '
-    f'fill="none" stroke="{PIC}" stroke-width="3"/>')
-for i, (title, lines_) in enumerate(outputs):
-    y = oy + 96 * i
-    box(CON_X, y, CON_W, 76, PIC_FILL, PIC_EDGE, title, lines_)
-    line([(trunk_x, y + 38), (CON_X - 2, y + 38)], "pic")
+# Every source writes the same stream.
+for cx in CX:
+    line([(cx, SRC_Y + SRC_H), (cx, STREAM_Y - 2)], "str")
 
-# ---- legend ------------------------------------------------------------------------------
-LY = 604
-add(f'<rect x="{SRC_X}" y="{LY - 22}" width="{W - SRC_X - 16}" height="54" rx="6" fill="#ffffff" '
-    f'stroke="{PAD}" stroke-width="1.25"/>')
-x = SRC_X + 18
-for kind, label in (("sig", "the design's signals"), ("str", "vgacap stream bytes"),
-                    ("pic", "pictures"), ("ctl", "control")):
-    line([(x, LY + 5), (x + 44, LY + 5)], kind)
-    text(x + 54, LY + 9.5, label, "legend")
-    x += 54 + 7.0 * len(label) + 34
+# ---- the stream ----------------------------------------------------------------------------------
+rect(LEFT, STREAM_Y, RIGHT - LEFT, STREAM_H, "#f7f8fb", INK2, rx=6, sw=2.5)
+text(LEFT + 20, STREAM_Y + 52, "vgacap stream", "title")
+chunks = (("VGCH", INK2), ("RAW", STR), ("RLE", STR), ("FRAM", STR), ("EVNT", STR),
+          ("TIME", MUTED))
+pw, pg = 86, 18
+px = RIGHT - 22 - len(chunks) * pw - (len(chunks) - 1) * pg
+for name, edge in chunks:
+    rect(px, STREAM_Y + 30, pw, 32, "#ffffff", edge, rx=4, sw=1.75)
+    text(px + pw / 2, STREAM_Y + 51, name, "pad", "middle")
+    px += pw + pg
+
+# ---- reading it back ---------------------------------------------------------------------------
+MID = (LEFT + RIGHT) / 2
+LW = 260
+line([(MID, STREAM_Y + STREAM_H), (MID, LIB_Y - 2)], "str")
+rect(MID - LW / 2, LIB_Y, LW, 76, STR_FILL, STR_EDGE)
+text(MID, LIB_Y + 32, "libvgaframe", "title", "middle")
+text(MID, LIB_Y + 54, "rebuilds every frame", "detail", "middle")
+
+OW = 250
+OX = (MID - 40 - OW, MID + 40)
+split = LIB_Y + 76 + 24
+add(f'<path d="M{MID} {LIB_Y + 76} L{MID} {split} M{OX[0] + OW / 2} {split} '
+    f'L{OX[1] + OW / 2} {split}" fill="none" stroke="{PIC}" stroke-width="3"/>')
+for ox in OX:
+    line([(ox + OW / 2, split), (ox + OW / 2, OUT_Y - 2)], "pic")
+rect(OX[0], OUT_Y, OW, 90, PIC_FILL, PIC_EDGE)
+monitor(OX[0] + 18, OUT_Y + 18, 72, 44)
+text(OX[0] + 108, OUT_Y + 40, "Pictures", "title")
+text(OX[0] + 108, OUT_Y + 60, "and video", "title")
+rect(OX[1], OUT_Y, OW, 90, PIC_FILL, PIC_EDGE)
+check(OX[1] + 54, OUT_Y + 45, 25)
+text(OX[1] + 108, OUT_Y + 40, "Pixel-exact", "title")
+text(OX[1] + 108, OUT_Y + 60, "checks", "title")
+
+# ---- legend --------------------------------------------------------------------------------------
+LY = OUT_Y + 90 + 46
+items = (("sig", "signals"), ("str", "stream bytes"), ("pic", "pictures"), ("ctl", "control"))
+total = sum(40 + 7.4 * len(label) + 26 for _, label in items) - 26
+x = MID - total / 2
+for kind, label in items:
+    line([(x, LY), (x + 32, LY)], kind)
+    text(x + 40, LY + 4.5, label, "legend")
+    x += 40 + 7.4 * len(label) + 26
 
 add("</svg>")
-here = pathlib.Path(__file__).resolve().parent
-(here / "overview.svg").write_text("\n".join(out) + "\n")
-print("wrote", here / "overview.svg")
+(HERE / "overview.svg").write_text("\n".join(out) + "\n")
+print("wrote", HERE / "overview.svg", (HERE / "overview.svg").stat().st_size, "bytes")
