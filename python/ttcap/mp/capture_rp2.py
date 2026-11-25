@@ -40,6 +40,12 @@ already on the wire by then; the report says it is not contiguous. Its
 `dropped_samples` is the CUMULATIVE total so far, `overruns * buf_words *
 samples_per_word` -- every `TIME` chunk here carries a running total, never
 an increment, so a reader takes the last value instead of summing.
+Every overwrite of an unsent buffer is counted, however far behind the
+main loop is, and one that started mid-send but never overtook it is
+counted too, so the total is an upper bound on what was lost.
+vgacap-frames and vgadecode drop the picture in progress at the marker;
+since it follows the damaged chunk, a picture completed inside that chunk
+is already out.
 `FDEBUG`'s RXSTALL bit is cleared at the start and read back at the end --
 if it is set, the RX FIFO overflowed and samples were lost regardless.
 
