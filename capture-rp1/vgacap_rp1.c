@@ -22,7 +22,8 @@
 //
 // Usage:
 //   vgacap-rp1 --out F --samples N [--data-base 4] [--clk 12] [--edge rising]
-//              [--clock-hz HZ] [--desc TEXT] [--gen FILE [--gen-div D] [--gen-delay K]]
+//              [--clock-hz HZ [--unproven-rate]] [--desc TEXT]
+//              [--gen FILE [--gen-div D] [--gen-delay K]]
 
 #include <errno.h>
 #include <pthread.h>
@@ -48,6 +49,16 @@
 #define RX_BUFFERS 4u                // queued DMA buffers: the rp1-pio driver refuses 8 (-EINVAL)
 #endif
 #define GEN_CHUNK_BYTES 32768u
+// The fastest project clock proven lossless with the stock rp1-pio driver:
+// the counter loopback stepped by exactly -1 for 4,194,304 samples at
+// 500 k samples/s, and lost ~150-320 samples at every 32 KB buffer boundary
+// from 1.25 M samples/s up (pi-sw2-p4, 2026-11-24; capture-rp1/README.md).
+// Nothing between the two was measured.
+#define PROVEN_MAX_HZ 500000u
+// TIME's dropped_samples when the capture cannot know it: the counter's
+// largest value, so that a check for "nothing dropped" fails rather than
+// passes. The stream format has no "unknown"; the message says it in words.
+#define DROPPED_UNKNOWN UINT32_MAX
 // RX DMACTRL: the rp1-pio driver's 0x80000101 (measured with rp1sm) with the
 // request threshold raised from 1 word to the DMA's burst of 8.
 #define RX_DMACTRL 0x80000108u
@@ -70,6 +81,7 @@ struct options {
     const char *gen;
     bool gen_counter;
     bool poll;
+    bool unproven_rate;      // allow --clock-hz above PROVEN_MAX_HZ
     float gen_div;
     uint gen_delay;
 };
@@ -165,6 +177,7 @@ static int parse(int argc, char **argv, struct options *o)
         else if (!strcmp(a, "--gen") && v) o->gen = argv[++i];
         else if (!strcmp(a, "--gen-counter")) o->gen_counter = true;
         else if (!strcmp(a, "--poll")) o->poll = true;
+        else if (!strcmp(a, "--unproven-rate")) o->unproven_rate = true;
         else if (!strcmp(a, "--gen-div") && v) o->gen_div = strtof(argv[++i], NULL);
         else if (!strcmp(a, "--gen-delay") && v) o->gen_delay = (uint)strtoul(argv[++i], NULL, 0);
         else return -1;
@@ -177,7 +190,10 @@ static int parse(int argc, char **argv, struct options *o)
 }
 
 // Writes the captured words as a vgacap stream; 0 on success.
-static int write_stream(const struct options *o, const uint32_t *buf, uint64_t skip_words, double secs)
+// rate_proven: whether the declared clock is one the capture is known to
+// keep up with; only then does the TIME chunk say nothing was dropped.
+static int write_stream(const struct options *o, const uint32_t *buf, uint64_t skip_words, double secs,
+                        bool rate_proven)
 {
     FILE *fp = fopen(o->out, "wb");
     if (!fp) {
@@ -200,9 +216,10 @@ static int write_stream(const struct options *o, const uint32_t *buf, uint64_t s
     }
     if (!bad) {
         char msg[128];
-        snprintf(msg, sizeof msg, "rp1 samples=%llu seconds=%.3f samples_per_s=%.0f",
-                 (unsigned long long)o->samples, secs, (double)o->samples / secs);
-        bad = vgacap_writer_time(&w, 0, o->clock_hz, 0, msg);
+        snprintf(msg, sizeof msg, "rp1 samples=%llu seconds=%.3f samples_per_s=%.0f dropped=%s",
+                 (unsigned long long)o->samples, secs, (double)o->samples / secs,
+                 rate_proven ? "0" : "unknown");
+        bad = vgacap_writer_time(&w, 0, o->clock_hz, rate_proven ? 0 : DROPPED_UNKNOWN, msg);
         printf("%s\n", msg);
     }
     if (fclose(fp) || bad) {
@@ -218,10 +235,29 @@ int main(int argc, char **argv)
     if (parse(argc, argv, &o)) {
         fprintf(stderr,
                 "usage: vgacap-rp1 --out F --samples N [--data-base 4] [--clk 12] "
-                "[--edge rising|falling] [--clock-hz HZ] [--desc TEXT]\n"
-                "                  [--gen FILE | --gen-counter] [--gen-div D] [--gen-delay K<=15]\n");
+                "[--edge rising|falling] [--clock-hz HZ [--unproven-rate]]\n"
+                "                  [--desc TEXT] [--gen FILE | --gen-counter] [--gen-div D] [--gen-delay K<=15]\n");
         return 2;
     }
+    // Above the proven rate samples are lost between buffers and nothing
+    // here counts them, so such a capture is refused unless asked for, and
+    // then its stream does not claim that nothing was dropped. The rate
+    // checked is the one declared: --clock-hz is not measured.
+    if (o.clock_hz > PROVEN_MAX_HZ && !o.unproven_rate) {
+        fprintf(stderr,
+                "vgacap-rp1: --clock-hz %u is above %u, the fastest rate proven lossless with the stock\n"
+                "  rp1-pio driver: above it ~150-320 samples were lost at every 32 KB buffer, uncounted\n"
+                "  (capture-rp1/README.md). --unproven-rate captures anyway, recording dropped as unknown.\n",
+                (unsigned)o.clock_hz, PROVEN_MAX_HZ);
+        return 2;
+    }
+    bool rate_proven = o.clock_hz && o.clock_hz <= PROVEN_MAX_HZ;
+    if (!rate_proven)
+        fprintf(stderr,
+                "vgacap-rp1: warning: %s, so samples may be lost between buffers uncounted;\n"
+                "  the stream records its dropped count as unknown\n",
+                o.clock_hz ? "--clock-hz is above the rate proven lossless"
+                           : "no --clock-hz: the rate is not known to be one proven lossless");
 
     // The pattern is read, and the capture buffer allocated, before anything
     // is claimed, so neither failing costs a teardown.
@@ -493,7 +529,7 @@ teardown:
 
     // ---- the vgacap stream ----------------------------------------------
     if (captured)
-        status = write_stream(&o, buf, skip_words, secs);
+        status = write_stream(&o, buf, skip_words, secs, rate_proven);
     free(buf);
     free(gen_data);
     return status;
