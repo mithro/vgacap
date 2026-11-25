@@ -251,7 +251,9 @@ static inline void cv_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64
     }
     s->next = first + clocks;
     const int was_in_frame = s->vf.in_frame;
-    vgaframe_push64(&s->vf, uo_out, clocks);
+    // vgaframe_push64 is this one push for a run that fits in 32 bits.
+    if (clocks <= UINT32_MAX) vgaframe_push(&s->vf, uo_out, (uint32_t)clocks);
+    else vgaframe_push64(&s->vf, uo_out, clocks);
     const int r = s->vf.last_report;
     if (!r) return;
     const vgaframe_timing_learner_t *l = &s->vf.learner;
