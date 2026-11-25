@@ -20,8 +20,7 @@ gst-inspect-1.0 vgadecode
 gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! \
     pngenc ! multifilesink location=frame-%04d.png
 
-# ...or straight off a board, through either link. The URI is quoted twice:
-# once for the shell, once for GStreamer's pipeline parser.
+# ...or straight off a board, through either link.
 gst-launch-1.0 vgacapbin \
     'uri="tt-ws://127.0.0.1:18034/serial?design=tt_um_vga_pattern&clock-hz=60000"' ! \
     videoconvert ! autovideosink
@@ -92,11 +91,11 @@ when the pipeline runs from elsewhere.
 ### Stopping matters
 
 The board samples into a DMA double buffer and can only stop at a buffer
-boundary: about 82 ms at 750 kHz, but 2.2 s at 60 kHz, the RP2040's
-measured project-clock ceiling at the default buffer size (a larger
-`--buf-words` raises it). `ttcap` turns its first `SIGINT` into a cooperative
-stop that finishes the chunk, writes its closing `TIME` chunk (the only
-overrun report there is) and exits 0.
+boundary. With the default `--buf-words`, one buffer is about 22 ms on an
+RP2350 at 750 kHz and about 137 ms on an RP2040 at 60 kHz, its measured
+project-clock ceiling (a larger `--buf-words` raises it). `ttcap` turns its
+first `SIGINT` into a cooperative stop that finishes the chunk, writes its
+closing `TIME` chunk (the only overrun report there is) and exits 0.
 
 So the element signals the child's process group and then waits *while
 draining its stdout*, because a child blocked writing into a full pipe never
@@ -114,13 +113,13 @@ signal. No wait in the sequence is unbounded.
 
 The board samples in real time, and the element's pipe is the only buffer
 between it and the pipeline. A PAUSED pipeline therefore gives the capture
-exactly one pipe buffer of grace (measured at 65,548 bytes: about 90 ms at
-750 kHz and about 1.1 s at 60 kHz). After that the DMA buffers overrun and
-samples are lost. Worse, the overrun count lives in the closing `TIME`
-chunk, which the stop sequence drains and discards, so a capture that was
-paused and then stopped is silently short, with nothing on the bus to say
-so. Go straight to PLAYING and stop when finished; if something must pause,
-treat what comes after as a different capture.
+exactly one pipe buffer of grace (measured at 65,548 bytes: about 87 ms on an
+RP2350 at 750 kHz and about 0.55 s on an RP2040 at 60 kHz). After that the
+DMA buffers overrun and samples are lost. Worse, the overrun count lives in
+the closing `TIME` chunk, which the stop sequence drains and discards, so a
+capture that was paused and then stopped is silently short, with nothing on
+the bus to say so. Go straight to PLAYING and stop when finished; if
+something must pause, treat what comes after as a different capture.
 
 ### Errors
 
