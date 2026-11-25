@@ -2,7 +2,7 @@
 """Whole-frame and windowed capture at the project's real clock.
 
 A program body: `ttcap.mp.build(cfg, "frame_rp2.py")` puts `prelude.py` in
-front of it (imports, shared CFG keys, registers, chunk writers,
+front of it (imports, shared CFG keys, registers, `write_time_chunk()`,
 `set_gpio_base()`, `init_input_pins()`, cooperative stop) -- read that
 docstring first. Keys this body reads on top of the prelude's:
 
@@ -11,6 +11,7 @@ docstring first. Keys this body reads on top of the prelude's:
                    moves the sample point into the window where uo_out is
                    stable (see SAMPLE POINT)
     clock_hz       the project clock the host programmed
+    clk_pwm        address of the CSR of the PWM slice driving the clock pin
     cpl            clocks per line of the VGA mode (800 for 640x480@60); a
                    multiple of samples_per_word, so a line is whole words
     region_first   first frame line of the picture region (line 0 is the
@@ -69,12 +70,15 @@ whole multiple of the project clock (measured on fpga-4: 4x at 25 and
 31.5 MHz, 2x at 36 and 40 MHz; 28.322 MHz is given as 28.25 = 113 / 4), so
 the PWM that makes the project clock is phase-locked to the PIO. The
 sampler therefore syncs to one clock edge after the trigger and then runs
-free: `in pins [P-1]`, one sample every P system clocks, P = sysclk /
-clock. A wait-for-edge loop needs 3 instructions a sample and could not
-keep up at 2 clocks a pixel (800x600 at 40 MHz); a delay past 4 - 3 made
-it skip samples silently. main() refuses a ratio that is not whole (a
-fractional PWM would drift) or outside 2..32 (the delay field's reach;
-slower clocks are what stream mode is for).
+free: `in pins [P-1]`, one sample every P system clocks. A wait-for-edge
+loop needs 3 instructions a sample and could not keep up at 2 clocks a
+pixel (800x600 at 40 MHz); a delay past 4 - 3 made it skip samples
+silently. P is read from the clock's PWM slice, not assumed: the period is
+DIV_INT * (TOP + 1) system clocks, doubled in phase-correct mode (RP2040
+and RP2350 datasheets, PWM), and main() refuses a fractional divider (the
+clock would drift against the sampler), a slice that is off or not
+free-running, a P outside 2..32 (the delay field's reach; slower clocks are
+what stream mode is for), or one that is not sysclk / clock_hz rounded.
 
 HEAP. One frame of 640x480 is 420,000 samples, and fpga-1 has ~414 KB free
 but in pieces: the largest block measured 142 KB (2026-11-24). So a
@@ -102,6 +106,7 @@ reported per capture (`rxstall` TIME chunk) and in the summary.
 
 CPL = CFG["cpl"]  # noqa: F821 - CFG is prepended by the host
 CLOCK_HZ = CFG["clock_hz"]  # noqa: F821
+CLK_PWM = CFG["clk_pwm"]  # noqa: F821
 SAMPLE_DELAY = CFG["sample_delay"]  # noqa: F821
 REGION_FIRST = CFG["region_first"]  # noqa: F821
 REGION_LINES = CFG["region_lines"]  # noqa: F821
@@ -238,10 +243,14 @@ def main(out):
     """Capture windows of successive frames until told to stop."""
     # cpl being whole words is checked by the host (frame_cfg).
     sysclk = machine.freq()  # noqa: F821
-    period = (sysclk + CLOCK_HZ // 2) // CLOCK_HZ
-    if not 2 <= period <= 32 or abs(sysclk - period * CLOCK_HZ) * 200 > sysclk:
-        msg = "error=sysclk %d is not 2..32 whole project clocks of %d"
-        write_time_chunk(out, 0, (msg % (sysclk, CLOCK_HZ)).encode())  # noqa: F821
+    # The clock actually made (see PHASE-LOCKED SAMPLING): CSR EN and
+    # DIVMODE (bits 0, 5:4), DIV_INT/FRAC (11:4, 3:0), TOP (15:0) at +0x10.
+    csr = MEM[CLK_PWM]
+    div = MEM[CLK_PWM + 4]
+    period = (div >> 4 & 255) * ((MEM[CLK_PWM + 16] & 65535) + 1) * (2 if csr & 2 else 1)
+    if (csr & 49) != 1 or div & 15 or not 2 <= period <= 32 or period != (sysclk + CLOCK_HZ // 2) // CLOCK_HZ:
+        msg = "error=project clock is not 2..32 whole system clocks of %d for %d Hz: pwm csr=%x div=%x"
+        write_time_chunk(out, 0, (msg % (sysclk, CLOCK_HZ, csr, div)).encode())  # noqa: F821
         return
     if not claim_pio(out):  # noqa: F821 - prelude
         return

@@ -3,10 +3,11 @@
 
 A program body: `ttcap.mp.build(cfg, "capture_rp2.py")` puts
 `prelude.py` in front of it, which supplies the imports, the shared CFG
-keys, the register arithmetic, the chunk writers, `make_sampler()`,
-`set_gpio_base()`, `init_input_pins()` and the cooperative stop -- read that
-file's docstring first. This body adds the DMA register map it re-arms
-channels through and `make_sampler()`, the plain sampler program. Keys this body reads on top of the prelude's:
+keys, the register arithmetic, `write_time_chunk()`, `set_gpio_base()`,
+`init_input_pins()` and the cooperative stop -- read that file's docstring
+first. This body adds the DMA register map it re-arms channels through,
+`write_raw_chunk()` and `make_sampler()`, the plain sampler program. Keys
+this body reads on top of the prelude's:
 
     buf_words    32-bit words per DMA buffer (two are allocated), e.g. 4096
     max_bytes    stop after this many emitted bytes; 0 = run until Ctrl-C
@@ -56,6 +57,12 @@ DMA_CH_TRANS_COUNT = 0x08
 def dma_reg(channel, offset):
     """Absolute address of one register of DMA channel `channel`."""
     return DMA_BASE + DMA_CH_STRIDE * channel + offset
+
+
+def write_raw_chunk(out, buf, sample_count):
+    """Emit one `RAW ` chunk and return the number of bytes written."""
+    written = _write_all(out, b"RAW " + _le32(4 + len(buf)) + _le32(sample_count))
+    return written + _write_all(out, buf)
 
 
 def make_sampler(clk_gpio, in_count, push, rising):

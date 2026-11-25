@@ -29,6 +29,10 @@ ALIAS_XOR, ALIAS_SET, ALIAS_CLR = 0x1000, 0x2000, 0x3000
 DMA_BASE = 0x50000000
 DMA_STRIDE = 0x40
 DMA_READ_ADDR, DMA_WRITE_ADDR, DMA_TRANS_COUNT, DMA_CTRL_TRIG = 0x00, 0x04, 0x08, 0x0C
+#: PWM block (pico-sdk addressmap.h) and a slice's registers (hardware/regs/pwm.h).
+PWM_BASE = {"rp2040": 0x40050000, "rp2350": 0x400A8000}
+PWM_SLICE_STRIDE = 0x14
+PWM_CSR, PWM_DIV, PWM_TOP = 0x00, 0x04, 0x10
 #: Emulated SRAM: buffers get addresses here.
 SRAM_BASE = 0x20000000
 #: DMA TREQ value meaning "unpaced" (RP2040 0x3f; the same here for both).
@@ -532,6 +536,10 @@ class Board:
     heap as contiguous blocks, largest first; the default is fpga-1's
     measured state. `cycles_per_byte` prices USB output (the default,
     190, is ~700 KB/s at 133 MHz, the RP2350's measured CDC rate).
+
+    `pwm` is the clock pin's PWM slice as (CSR, DIV, TOP) register values;
+    the default is the free-running integer divider that makes `wave`'s
+    clock exactly (DIV_INT 1, TOP period - 1).
     """
 
     def __init__(
@@ -543,6 +551,7 @@ class Board:
         cycles_per_byte: float = 190.0,
         max_cycles: int = 2_000_000_000,
         idle_cycles: int = 2_000,
+        pwm: tuple[int, int, int] | None = None,
     ) -> None:
         if chip not in ("rp2040", "rp2350"):
             raise ValueError("chip must be rp2040 or rp2350")
@@ -570,6 +579,10 @@ class Board:
         self._dma_running = False
         #: What one `Pin.value()` costs a MicroPython loop, in cycles.
         self.pin_read_cycles = 150
+        self.pwm = (1, 1 << 4, wave.period - 1) if pwm is None else tuple(pwm)
+        gpio = wave.clk_gpio
+        slice_num = (gpio >> 1) & 7 if gpio < 32 else 8 + ((gpio >> 1) & 3)
+        self.pwm_base = PWM_BASE[chip] + PWM_SLICE_STRIDE * slice_num
 
     # -- time ---------------------------------------------------------------
 
@@ -629,6 +642,9 @@ class Board:
                 return ch.read_addr
             if reg == DMA_TRANS_COUNT:
                 return ch.remaining if ch.busy else ch.reload
+        for offset, value in zip((PWM_CSR, PWM_DIV, PWM_TOP), self.pwm):
+            if addr == self.pwm_base + offset:
+                return value
         raise BoardError("mem32 read of unmodelled address 0x%08x" % addr)
 
     def mem32_write(self, addr: int, value: int) -> None:

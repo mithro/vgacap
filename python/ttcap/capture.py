@@ -37,7 +37,7 @@ from vgacap.modes import MODES
 from vgacap.stream import Header, Writer
 
 from . import mp
-from .boards import BoardProfile
+from .boards import BoardProfile, pwm_slice_addr
 from .repl import CHUNK_HEADER_LEN, RawRepl, ReplFramingError
 
 EDGES = ("falling", "rising")
@@ -153,6 +153,7 @@ def frame_cfg(
         max_frames=max_frames,
         sample_delay=sample_delay,
         clock_hz=clock_hz,
+        clk_pwm=pwm_slice_addr(profile, profile.clk_gpio),
     )
     return cfg
 

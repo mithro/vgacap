@@ -184,12 +184,6 @@ def _write_all(out, data):
     return n
 
 
-def write_raw_chunk(out, buf, sample_count):
-    """Emit one `RAW ` chunk and return the number of bytes written."""
-    written = _write_all(out, b"RAW " + _le32(4 + len(buf)) + _le32(sample_count))
-    return written + _write_all(out, buf)
-
-
 def write_time_chunk(out, dropped_samples, msg):
     """Emit one `TIME` chunk and return the number of bytes written.
 
@@ -202,9 +196,7 @@ def write_time_chunk(out, dropped_samples, msg):
     the host already recorded the project clock in the stream header.
     """
     payload = (
-        _le32(0)
-        + _le32(0)  # u64 host_time_ns = 0
-        + _le32(0)  # u32 clock_hz = 0
+        bytes(12)  # u64 host_time_ns = 0, u32 clock_hz = 0
         + _le32(dropped_samples)
         + bytes((len(msg) & 0xFF, (len(msg) >> 8) & 0xFF))
         + msg
