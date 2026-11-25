@@ -1,7 +1,7 @@
 # vgacap MicroPython module
 
-`vgacap` is a [MicroPython](https://micropython.org) C module (a `USER_C_MODULE`) that captures a Tiny
-Tapeout design's VGA output on `uo_out` with the PIO and DMA of the
+`vgacap` is a [MicroPython](https://micropython.org) C module (a `USER_C_MODULE`) that captures a [Tiny
+Tapeout](https://tinytapeout.com) design's VGA output on `uo_out` with the PIO and DMA of the
 RP2350 on the Tiny Tapeout demo board, and writes it as vgacap chunks.
 
 It is the third way to capture on the RP2350 demo board, next to the
@@ -127,10 +127,16 @@ for the tests:
     mpy/build-unix.sh                       # -> build/mpy-unix/micropython
     uv run pytest -q python/tests/test_mpy_module.py
 
-For the demo board, build the rp2 port (RP2350B) in that checkout, with
-the board definition
+CI also compiles the rp2 port (RP2350B) with the module, as a compile
+check only: that build has no frozen `ttboard` or `microcotb` SDK, which
+`--firmware mpy-module` needs. On a board, use the
+[release UF2](https://github.com/mithro/tt-micropython-firmware/releases/tag/dev-vgacap-module),
+loaded and restored as in
+[tt-vga-capture's fpga-1 run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-mpy-module-fpga1),
+which replaced only the firmware region and put it back afterwards. The
+compile check uses the board definition
 [`psychogenic/tinytapeout_rp2350b`](https://github.com/psychogenic/tinytapeout_rp2350b)
-in `build/micropython/ports/rp2/boards/tt_rp2350_board`. It needs
+in `build/micropython/ports/rp2/boards/tt_rp2350_board` and needs
 [the ARM toolchain](../firmware/README.md#building):
 
     git clone -q https://github.com/psychogenic/tinytapeout_rp2350b.git build/tt_rp2350_board
@@ -140,9 +146,8 @@ in `build/micropython/ports/rp2/boards/tt_rp2350_board`. It needs
     make -C build/micropython/ports/rp2 -j"$(nproc)" BOARD=tt_rp2350_board \
         USER_C_MODULES="$PWD/mpy/micropython.cmake"
 
-The [release workflow](https://github.com/mithro/tt-micropython-firmware/blob/vgacap-module/.github/workflows/release.yml)
-does the same. Our sources build with `-Wall -Wextra -Werror` (less
-`-Wunused-parameter`, which MicroPython's own headers trip).
+Our sources build with `-Wall -Wextra -Werror` (less `-Wunused-parameter`,
+which MicroPython's own headers trip).
 
 Both pin MicroPython to [b006887db6](https://github.com/micropython/micropython/commit/b006887db6) (1.29.0-preview), what fpga-1 and fpga-4
 run. The unix build adds `vgacap.sim_board(path, *, bytes_per_s, rxstall)`,
