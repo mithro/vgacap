@@ -22,9 +22,13 @@ gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! \
 # once for the shell, once for GStreamer's pipeline parser (see "Quote the
 # URI twice" under vgacapbin).
 gst-launch-1.0 vgacapbin \
-    'uri="tt-ws://welland:8765/serial?project=tt_um_rejunity_vga&clock-hz=60000"' ! \
+    'uri="tt-ws://127.0.0.1:18007/serial?project=tt_um_rejunity_vga&clock-hz=60000"' ! \
     videoconvert ! autovideosink
 ```
+
+The `tt-ws://127.0.0.1:18007` examples reach a Welland bench board (tt07)
+through an SSH tunnel; see
+[Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board).
 
 ## `vgadecode`: a stream in, video out
 
@@ -81,7 +85,7 @@ boundary: about 82 ms at 750 kHz, but 2.2 s at 60 kHz, the RP2040's
 measured project-clock ceiling at the default buffer size (a larger
 `--buf-words` raises it). `ttcap` turns its first `SIGINT` into a cooperative
 stop that finishes the chunk, writes its closing `TIME` chunk (the only
-overrun and RXSTALL report there is) and exits 0.
+overrun and `rxstall` report there is) and exits 0.
 
 So the element signals the child's process group and then waits *while
 draining its stdout*, because a child blocked writing into a full pipe never
@@ -120,7 +124,7 @@ silent end of stream. The rest of its stderr is logged at `INFO` under the
 
 ```sh
 gst-launch-1.0 vgacapbin 'uri="tt-serial:///dev/ttyACM0?project=tt_um_x&clock-hz=60000"' ! ...
-gst-launch-1.0 vgacapbin 'uri="tt-ws://welland:8765/serial?clock-hz=60000"' ! ...   # or tt-wss://
+gst-launch-1.0 vgacapbin 'uri="tt-ws://127.0.0.1:18007/serial?clock-hz=60000"' ! ...   # or tt-wss://
 gst-launch-1.0 vgacapbin 'uri="file:///captures/tt08.vgacap"' ! ...
 ```
 
