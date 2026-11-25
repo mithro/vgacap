@@ -50,9 +50,10 @@
 //
 // Exit: 0; 2 for usage errors (nothing is written); 1 for I/O, trace and
 // frames.txt errors (a partly written FILE is removed).
-// VGACAP_EXPORT_DEBUG=1 prints "blocks_read=<n>" to stderr, n being the
-// blocks the read decompressed (opening the trace decodes its last block as
-// well; that is not counted), and checks every segment's stepped time
+// VGACAP_EXPORT_DEBUG=1 prints "blocks_read=<n> times=<t> changes=<c>" to
+// stderr: n the blocks the read decompressed (opening the trace decodes its
+// last block as well; that is not counted), t the time steps and c the value
+// changes written (the dump's values included); and it checks every segment's stepped time
 // against vgacap_sample_time_ps.
 #define _XOPEN_SOURCE 700
 #include "vgacap/outputs.h"
@@ -117,6 +118,7 @@ typedef struct exporter {
     // the range
     uint64_t next, to;
     int started, gap;
+    uint64_t n_changes, n_times;   // for VGACAP_EXPORT_DEBUG
 } exporter_t;
 
 #define VCD_BUF (1u << 20)
@@ -187,6 +189,7 @@ static void time_to(exporter_t *x, uint64_t n) {
 // ---- output ------------------------------------------------------------------
 
 static void out_time(exporter_t *x, uint64_t t) {
+    x->n_times++;
     if (x->fst) { fstWriterEmitTimeChange(x->ctx, t); return; }
     vcd_room(x, 24);
     char *p = x->buf + x->len;
@@ -197,6 +200,7 @@ static void out_time(exporter_t *x, uint64_t t) {
 }
 
 static void out_value(exporter_t *x, const sig_t *s, uint64_t v) {
+    x->n_changes++;
     if (x->fst) {
         if (s->width == 1) fstWriterEmitValueChange(x->ctx, s->fh, v ? "1" : "0");
         else fstWriterEmitValueChange64(x->ctx, s->fh, s->width, v);
@@ -219,6 +223,7 @@ static void out_value(exporter_t *x, const sig_t *s, uint64_t v) {
 // from `b` (the value at ts_n). The hot path: one change per sample.
 static void clk_toggles(exporter_t *x, uint64_t k, unsigned b) {
     const sig_t *s = &x->sig[x->clk];
+    x->n_changes += k; x->n_times += k;
     if (x->fst) {
         for (uint64_t i = 0; i < k; i++) {
             time_step(x); b ^= 1u;
@@ -637,7 +642,9 @@ int main(int argc, char **argv) {
         free(x->buf);
     }
     if (why) { fprintf(stderr, PROG ": %s\n", why); unlink(out); return 1; }
-    if (x->debug) fprintf(stderr, "blocks_read=%" PRIu64 "\n", after.blocks_decoded - before.blocks_decoded);
+    if (x->debug)
+        fprintf(stderr, "blocks_read=%" PRIu64 " times=%" PRIu64 " changes=%" PRIu64 "\n",
+                after.blocks_decoded - before.blocks_decoded, x->n_times, x->n_changes);
 
     // The viewer files.
     char abs[PATH_MAX], gtkw[PATH_MAX + 8], sucl[PATH_MAX + 8];

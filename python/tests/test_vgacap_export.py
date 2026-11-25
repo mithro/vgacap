@@ -282,10 +282,15 @@ def busy(tmp_path_factory):
     return path, starts
 
 
-def blocks_read(proc) -> int:
-    m = re.fullmatch(r"blocks_read=(\d+)\n", proc.stderr)
+def debug_counts(proc) -> tuple[int, int, int]:
+    """VGACAP_EXPORT_DEBUG=1's (blocks_read, times, changes)."""
+    m = re.fullmatch(r"blocks_read=(\d+) times=(\d+) changes=(\d+)\n", proc.stderr)
     assert m, proc.stderr
-    return int(m.group(1))
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+
+def blocks_read(proc) -> int:
+    return debug_counts(proc)[0]
 
 
 def test_range_seeks(busy, tmp_path):
@@ -297,6 +302,7 @@ def test_range_seeks(busy, tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert blocks_read(proc) == 1
     vcd = read_vcd(out)
+    assert debug_counts(proc)[1:] == (len(vcd.times), len(vcd.changes))
     assert vcd.times[0] == time_ps(2 * (b3 + 1000), 2, HZ) and vcd.times[-1] == time_ps(2 * (b3 + 3000), 2, HZ)
     proc = run_export(path, out, "--format", "vcd", "--from", str(b4 - 1000), "--to", str(b4 + 1000), env=env)
     assert proc.returncode == 0, proc.stderr
