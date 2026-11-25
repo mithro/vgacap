@@ -59,5 +59,5 @@ All of these were measured, and each is explained in the code's comments.
   generator stopped mid-transfer) leaves the driver unusable until a
   reboot, so teardown lets every transfer finish first.
 - NULL read-ahead transfers (piolib's `rxsource` example) return `-EINVAL`
-  on this kernel, and blocking calls serialise the whole RP1 firmware
+  on this kernel, and blocking calls serialize the whole RP1 firmware
   interface.

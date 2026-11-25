@@ -155,7 +155,7 @@ counted.
 Ctrl-C ends the run cleanly. The demo forwards the signal once to
 `gst-launch -e`, which turns it into an end-of-stream, so the board winds
 down through `vgacapttsrc`'s cooperative stop and the Matroska file is
-finalised rather than truncated. Allow one DMA buffer for that: 2.2 s at a
+finalized rather than truncated. Allow one DMA buffer for that: 2.2 s at a
 60 kHz project clock. `SIGTERM`, `SIGHUP` and `SIGQUIT` do the same.
 However the demo ends (an exception, a `kill`, a closed terminal), it tears
 down the pipeline's whole process group on the way out, so a capture is
