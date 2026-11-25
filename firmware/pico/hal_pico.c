@@ -19,6 +19,7 @@
 #include "hardware/irq.h"
 #include "hardware/pio.h"
 #include "hardware/pwm.h"
+#include "hardware/sync.h"
 #include "hardware/watchdog.h"
 #include "pico/bootrom.h"
 #include "pico/time.h"
@@ -295,10 +296,15 @@ int hal_stream_start(const fw_pio_program_t *prog, unsigned pio, unsigned sm, ui
 }
 
 int hal_stream_full(int i) { return D.full[i]; }
-void hal_stream_release(int i) { D.full[i] = 0; }
-int hal_stream_take_torn(int i) {
+// With the DMA interrupt masked (fw_hal.h): the handler sets torn[i] only
+// while full[i], so once both are cleared together any later mark is the
+// next contents'.
+int hal_stream_release(int i) {
+    uint32_t irqs = save_and_disable_interrupts();
+    D.full[i] = 0;
     int torn = D.torn[i];
-    D.torn[i] = 0;  // no handler sets it while buffer i is not full
+    D.torn[i] = 0;
+    restore_interrupts(irqs);
     return torn;
 }
 uint32_t hal_stream_overruns(void) { return D.overruns; }

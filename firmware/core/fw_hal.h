@@ -86,10 +86,13 @@ int hal_stream_start(const fw_pio_program_t *prog, unsigned pio, unsigned sm,
 // then on that buffer's samples mix two fills, whether its send has begun,
 // is under way or has not started. That buffer is marked torn.
 int hal_stream_full(int i);
-void hal_stream_release(int i);
-// After hal_stream_release(i): whether buffer `i` was torn, clearing the
-// mark. Released first, so no tear during the send can be missed.
-int hal_stream_take_torn(int i);
+// hal_stream_release(i) marks buffer `i` sent and returns whether it was
+// torn, clearing that mark, all in one step the DMA interrupt cannot cut
+// into: a fill that starts on `i` after the release tears the *next*
+// contents, and that mark must survive for the next send. (Releasing and
+// reading the mark apart would let a main loop preempted for longer than
+// a fill clear a mark that belongs to the next send.)
+int hal_stream_release(int i);
 // The overruns so far (an upper bound on the buffers lost: a rewrite that
 // started during a send but never overtook it counts too).
 uint32_t hal_stream_overruns(void);
