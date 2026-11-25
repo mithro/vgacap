@@ -31,7 +31,8 @@ board can settle and writes a dated Markdown report. The checks are:
 [`tools/hil.py`](hil.py) lists why each check needs hardware.
 
 The example runs against `fpga-1`, a demo board with an FPGA breakout on
-the shared Welland bench (see [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)).
+the shared Welland bench, and needs bench access (see
+[python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed)).
 It needs the calibration bitstream uploaded and enabled first, with
 tt-vga-testpatterns'
 [`tools/upload.py`](https://github.com/mithro/tt-vga-testpatterns/blob/main/tools/upload.py):
