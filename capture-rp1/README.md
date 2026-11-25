@@ -54,7 +54,7 @@ kernel module ([`mithro/rpi5-rp1-pio-bench`](https://github.com/mithro/rpi5-rp1-
   driver's threshold left alone; writing TX DMACTRL wedged the channel.
 - The first burst of a capture is stale even after `pio_sm_clear_fifos`, so
   it is captured and dropped.
-- A DMA left waiting on a stopped state machine (a cancelled thread, a
+- A DMA left waiting on a stopped state machine (a canceled thread, a
   generator stopped mid-transfer) leaves the driver unusable until a
   reboot, so teardown lets every transfer finish first.
 - NULL read-ahead transfers (piolib's `rxsource` example) return `-EINVAL`
