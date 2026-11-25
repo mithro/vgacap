@@ -398,6 +398,27 @@ def check_board_wants(board: str | None, project: str | None, design: str | None
         )
 
 
+def check_firmware_wants(firmware: str, project: str | None, design: str | None) -> None:
+    """Refuse `--project` / `--design` on the pico-sdk capture firmware.
+
+    That firmware runs in place of the stock one, which is what knows the
+    shuttle, so it keeps whatever design was enabled before it was loaded
+    and selects none itself (`ttcap.firmware.setup` refuses any selection).
+    Left to it, the refusal arrives several GStreamer ERROR blocks deep,
+    after the board has been opened; the flags alone already say it will.
+    """
+    if firmware == "micropython":
+        return
+    given = [flag for flag, value in (("--project", project), ("--design", design)) if value]
+    if given:
+        raise CaptureError(
+            "%s needs the stock firmware: the %s capture firmware keeps whatever "
+            "design was enabled before it was loaded and cannot select one. Enable "
+            "the design with the stock firmware first (firmware/README.md), then "
+            "run without %s" % (" and ".join(given), firmware, " / ".join(given))
+        )
+
+
 # ------------------------------------------------------------- the numbers
 
 
@@ -1263,6 +1284,7 @@ def plan_demo(
     # person can fix without installing anything.
     link = resolve_link(args.board, args.link)
     check_board_wants(args.board, args.project, args.design)
+    check_firmware_wants(args.firmware, args.project, args.design)
     # Before the GStreamer check: a mistyped number is the person's to fix
     # and should not wait on anything being installed.
     for warning in check_numbers(args):
