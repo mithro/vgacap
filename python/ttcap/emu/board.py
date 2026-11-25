@@ -29,6 +29,12 @@ ALIAS_XOR, ALIAS_SET, ALIAS_CLR = 0x1000, 0x2000, 0x3000
 DMA_BASE = 0x50000000
 DMA_STRIDE = 0x40
 DMA_READ_ADDR, DMA_WRITE_ADDR, DMA_TRANS_COUNT, DMA_CTRL_TRIG = 0x00, 0x04, 0x08, 0x0C
+#: CTRL without the trigger (alias 1): writing it never starts the channel.
+DMA_AL1_CTRL = 0x10
+#: PWM block (pico-sdk addressmap.h) and a slice's registers (hardware/regs/pwm.h).
+PWM_BASE = {"rp2040": 0x40050000, "rp2350": 0x400A8000}
+PWM_SLICE_STRIDE = 0x14
+PWM_CSR, PWM_DIV, PWM_TOP = 0x00, 0x04, 0x10
 #: Emulated SRAM: buffers get addresses here.
 SRAM_BASE = 0x20000000
 #: DMA TREQ value meaning "unpaced" (RP2040 0x3f; the same here for both).
@@ -531,8 +537,19 @@ class Board:
     PIO block and four more DMA channels). `heap_blocks` lists the free
     heap as contiguous blocks, largest first; the default is fpga-1's
     measured state. `cycles_per_byte` prices USB output (the default,
-    190, is ~700 KB/s at 133 MHz, the RP2350's measured CDC rate).
+    190, is ~700 KB/s at 133 MHz, the RP2350's measured CDC rate); a write
+    goes out `USB_PIECE` bytes at a time and reads its buffer as it goes,
+    so a DMA that rewrites a buffer mid-send tears the chunk as it would
+    on the board. `usb_stalls` lists (output offset, cycles): the link
+    stops for that long once that many bytes have gone out -- a host that
+    stopped reading for a while.
+
+    `pwm` is the clock pin's PWM slice as (CSR, DIV, TOP) register values;
+    the default is the free-running integer divider that makes `wave`'s
+    clock exactly (DIV_INT 1, TOP period - 1).
     """
+
+    USB_PIECE = 512
 
     def __init__(
         self,
@@ -543,6 +560,7 @@ class Board:
         cycles_per_byte: float = 190.0,
         max_cycles: int = 2_000_000_000,
         idle_cycles: int = 2_000,
+        pwm: tuple[int, int, int] | None = None,
     ) -> None:
         if chip not in ("rp2040", "rp2350"):
             raise ValueError("chip must be rp2040 or rp2350")
@@ -557,6 +575,7 @@ class Board:
         self.channels = [_Channel(i) for i in range(16 if chip == "rp2350" else 12)]
         self.heap = list(heap_blocks)
         self.output = bytearray()
+        self.usb_stalls: list[tuple[int, int]] = []
         self.stop_after_bytes: int | None = None
         self.stop_when: Callable[["Board"], bool] | None = None
         self._stop_sent = False
@@ -570,6 +589,10 @@ class Board:
         self._dma_running = False
         #: What one `Pin.value()` costs a MicroPython loop, in cycles.
         self.pin_read_cycles = 150
+        self.pwm = (1, 1 << 4, wave.period - 1) if pwm is None else tuple(pwm)
+        gpio = wave.clk_gpio
+        slice_num = (gpio >> 1) & 7 if gpio < 32 else 8 + ((gpio >> 1) & 3)
+        self.pwm_base = PWM_BASE[chip] + PWM_SLICE_STRIDE * slice_num
 
     # -- time ---------------------------------------------------------------
 
@@ -629,6 +652,11 @@ class Board:
                 return ch.read_addr
             if reg == DMA_TRANS_COUNT:
                 return ch.remaining if ch.busy else ch.reload
+            if reg == DMA_CTRL_TRIG:
+                return ch.ctrl
+        for offset, value in zip((PWM_CSR, PWM_DIV, PWM_TOP), self.pwm):
+            if addr == self.pwm_base + offset:
+                return value
         raise BoardError("mem32 read of unmodelled address 0x%08x" % addr)
 
     def mem32_write(self, addr: int, value: int) -> None:
@@ -665,12 +693,16 @@ class Board:
                 ch.ctrl = value
                 self.dma_trigger(ch)
                 return
+            if reg == DMA_AL1_CTRL:
+                # Clearing EN pauses a busy channel; it does not abort it.
+                ch.ctrl = value
+                return
         raise BoardError("mem32 write of unmodelled address 0x%08x" % addr)
 
     def _dma_reg(self, addr: int):
         if DMA_BASE <= addr < DMA_BASE + DMA_STRIDE * len(self.channels):
             num, reg = divmod(addr - DMA_BASE, DMA_STRIDE)
-            if reg in (DMA_READ_ADDR, DMA_WRITE_ADDR, DMA_TRANS_COUNT, DMA_CTRL_TRIG):
+            if reg in (DMA_READ_ADDR, DMA_WRITE_ADDR, DMA_TRANS_COUNT, DMA_CTRL_TRIG, DMA_AL1_CTRL):
                 return self.channels[num], reg
         return None, 0
 
@@ -743,7 +775,21 @@ class Board:
         finally:
             self._dma_running = False
 
+    def abort(self, ch: _Channel) -> None:
+        """CHAN_ABORT, as `dma_channel_abort()` does it for `DMA.active(0)`.
+
+        RP2350-E5 (pico-sdk `dma_channel_abort()`): aborting a busy channel
+        can re-trigger the channel it chains to, unless that channel's EN is
+        clear -- modelled as the abort completing the chain.
+        """
+        was_busy = ch.busy
+        ch.busy = False
+        if self.chip == "rp2350" and was_busy and ch.chain_to != ch.num:
+            self.dma_trigger(self.channels[ch.chain_to])
+
     def _service(self, ch: _Channel) -> None:
+        if not ch.enabled:
+            return  # paused: EN cleared through AL1_CTRL
         sm = self._rx_source(ch)
         if sm is not None:
             while ch.busy and sm.rx:
@@ -888,10 +934,17 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
 
     class Stdout:
         def write(self, data):
-            data = bytes(data)
-            board.output += data
-            board.advance(len(data) * board.cycles_per_byte)
-            return len(data)
+            # Piece by piece from the live buffer: what the DMA rewrites
+            # while a chunk is going out goes out too, as on the board.
+            with memoryview(data) as view:
+                n = len(view)
+                for at in range(0, n, board.USB_PIECE):
+                    while board.usb_stalls and len(board.output) >= board.usb_stalls[0][0]:
+                        board.advance(board.usb_stalls.pop(0)[1])
+                    piece = bytes(view[at : at + board.USB_PIECE])
+                    board.output += piece
+                    board.advance(len(piece) * board.cycles_per_byte)
+            return n
 
         def flush(self):
             pass
@@ -1087,15 +1140,16 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
             if value:
                 board.dma_trigger(ch)
             else:
-                ch.busy = False
+                board.abort(ch)  # rp2_dma.c: dma_channel_abort(), v1.22 on
             return ch.busy
 
         def irq(self, handler=None, hard=False):
             self._ch.handler = handler
 
         def close(self):
+            # MicroPython v1.24's close() only unclaims (no abort), so a
+            # channel still busy here stays busy -- and keeps writing.
             ch = self._ch
-            ch.busy = False
             ch.claimed = False
             ch.handler = None
             ch.owner = None
