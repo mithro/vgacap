@@ -55,11 +55,10 @@ from .capture import (
     CaptureStats,
     frame_note,
     frames_to_max_bytes,
-    restore_mode,
     run_capture,
     run_session,
     select_project,
-    stop_clock,
+    undo_selection,
 )
 from .firmware import FIRMWARES, FirmwareLink, FirmwareSession
 from . import firmware as fwproto
@@ -97,6 +96,8 @@ CAPTURE_FAILURES = (
 def _failed(what: str, exc: BaseException) -> int:
     """Report a subcommand's failure the way `main`'s contract promises."""
     print("%s failed: %s: %s" % (what, type(exc).__name__, exc), file=sys.stderr)
+    for note in getattr(exc, "__notes__", ()):
+        print("  %s" % note, file=sys.stderr)
     return 1
 
 
@@ -467,11 +468,10 @@ class _MicroPythonBoard:
     def run_to_file(self, request: CaptureRequest, fp) -> CaptureStats:
         return run_capture(self.repl, request, fp)
 
-    def teardown(self, selection: dict, stop_clock_after: bool) -> None:
-        if stop_clock_after:
-            stop_clock(self.repl)
-        if "mode_before" in selection:
-            restore_mode(self.repl, selection["mode_before"])
+    def teardown(
+        self, selection: dict, stop_clock_after: bool, error: BaseException | None = None
+    ) -> None:
+        undo_selection(self.repl, selection, stop=stop_clock_after, error=error)
 
     def close(self) -> None:
         self.repl.exit()
@@ -496,8 +496,15 @@ class _FirmwareBoard:
     def run_to_file(self, request: CaptureRequest, fp) -> CaptureStats:
         return run_session(self.session(request), fp)
 
-    def teardown(self, selection: dict, stop_clock_after: bool) -> None:
-        fwproto.teardown(self.link, selection, stop_clock_after)
+    def teardown(
+        self, selection: dict, stop_clock_after: bool, error: BaseException | None = None
+    ) -> None:
+        try:
+            fwproto.teardown(self.link, selection, stop_clock_after)
+        except Exception as exc:  # noqa: BLE001 - noted on the capture's own error
+            if error is None:
+                raise
+            error.add_note(f"putting the board back failed too: {exc}")
 
     def close(self) -> None:
         pass
@@ -616,29 +623,35 @@ def capture(
                     asic_index=asic_index,
                 )
                 selection = driver.setup(request)
-                print(
-                    "profile=%s project=%s enable=%s"
-                    % (board.name, selection["project"], selection["enable"]),
-                    file=say,
-                )
-                # `run_capture()` writes nothing until the board has been
-                # cleaned up and has the heap for the script, so a run
-                # refused there (or one that dies before the first chunk)
-                # must not leave an empty file behind pretending to be a
-                # capture. Anything that did get written is a valid, if
-                # short, stream and is kept.
-                with _open_output(
-                    out_path, on_consumer_close=flag.set if to_stdout else None
-                ) as fp:
-                    try:
-                        if to_stdout:
-                            stats = _stream_capture(driver.session(request), fp, flag)
-                        else:
-                            stats = driver.run_to_file(request, fp)
-                    except BaseException:
-                        if not to_stdout and fp.tell() == 0:
-                            _discard_empty(out_path)
-                        raise
+                try:
+                    print(
+                        "profile=%s project=%s enable=%s"
+                        % (board.name, selection["project"], selection["enable"]),
+                        file=say,
+                    )
+                    # `run_capture()` writes nothing until the board has been
+                    # cleaned up and has the heap for the script, so a run
+                    # refused there (or one that dies before the first chunk)
+                    # must not leave an empty file behind pretending to be a
+                    # capture. Anything that did get written is a valid, if
+                    # short, stream and is kept.
+                    with _open_output(
+                        out_path, on_consumer_close=flag.set if to_stdout else None
+                    ) as fp:
+                        try:
+                            if to_stdout:
+                                stats = _stream_capture(driver.session(request), fp, flag)
+                            else:
+                                stats = driver.run_to_file(request, fp)
+                        except BaseException:
+                            if not to_stdout and fp.tell() == 0:
+                                _discard_empty(out_path)
+                            raise
+                except BaseException as exc:
+                    # Whatever went wrong, a shared board is not left in the
+                    # mode `--ui-in` switched it to, nor (by default) clocked.
+                    driver.teardown(selection, stop_clock_after, error=exc)
+                    raise
             # Reported before anything can be raised about how it ended: a
             # consumer that walked away still produced a real capture, and
             # its stats are the only overruns/rxstall report there is.
@@ -867,7 +880,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--frames",
         type=int,
         help="stream mode: stop after enough bytes for N frames, assuming "
-        "640x480@60 timing (800x525 clocks) plus one frame of margin; frame "
+        "640x480@60 timing (800x525 clocks) plus two frames of margin; frame "
         "and window modes: stop after N complete pictures",
     )
     capture_parser.add_argument(
@@ -920,7 +933,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=lambda s: int(s, 0),
         default=None,
         help="drive the design's ui_in with this value (the SDK is switched "
-        "to ASIC_RP_CONTROL for the capture and put back afterwards); "
+        "to ASIC_RP_CONTROL for the capture and put back however it ends); "
         "default: leave the board's inputs alone",
     )
     capture_parser.add_argument(

@@ -162,6 +162,121 @@ def test_a_clock_the_link_cannot_carry_is_reported_as_overruns(bars_uo):
     assert dropped[-1] == overruns * 4096 * 4
 
 
+#: A counting design whose period (251) divides no buffer length, so a
+#: chunk that does not continue the one before it shows as a jump.
+COUNT = 251
+
+
+def _raw_samples(payload: bytes) -> list[int]:
+    """The 8-bit samples of an RP2350 RAW chunk, first sample in each
+    word's top byte (FLAG_FIRST_SAMPLE_MSB)."""
+    words = payload[4:]
+    return [b for i in range(0, len(words), 4) for b in reversed(words[i : i + 4])]
+
+
+def _damaged_and_reported(out: bytes) -> list[tuple[bool, bool]]:
+    """(damaged, reported) per RAW chunk of the counting design: damaged
+    if its samples jump inside it or it does not continue the chunk
+    before, reported if the next chunk is an `overrun` TIME chunk."""
+    items = list(read_chunks(out))
+    result, last = [], None
+    for i, (tag, payload) in enumerate(items):
+        if tag != "RAW ":
+            continue
+        s = _raw_samples(payload)
+        damaged = any((b - a) % COUNT != 1 for a, b in zip(s, s[1:]))
+        damaged |= last is not None and (s[0] - last) % COUNT != 1
+        last = s[-1]
+        after = items[i + 1] if i + 1 < len(items) else ("", b"")
+        result.append((damaged, after[0] == "TIME" and after[1][18:] == b"overrun"))
+    return result
+
+
+def _old_overrun_check(script: str) -> str:
+    # Before the fix: an overrun was counted only when a buffer completed
+    # again while still FULL.
+    for me, other in ((0, 1), (1, 0)):
+        new = "if FULL[%d]:\n  OVERRUNS[0] += 1\n  TORN[%d] = True\n FULL[%d] = True" % (other, other, me)
+        assert new in script
+        script = script.replace(
+            new, "if FULL[%d]:\n  OVERRUNS[0] += 1\n  TORN[%d] = True\n FULL[%d] = True" % (me, me, me)
+        )
+    return script
+
+
+def _stalled_capture(check: str) -> bytes:
+    profile = RP2350_DBV3
+    period = 100  # a buffer fills in 16384 * 100 cycles
+    fill = 16_384 * period
+    wave = Waveform(bytes(range(COUNT)), profile.uo_gpios, profile.clk_gpio, period=period)
+    # The link is twice as fast as the samples, so nothing is lost -- except
+    # that halfway through the second chunk the host stops reading for 1.36
+    # fills. By then the chain has started rewriting that buffer and runs
+    # past the send's position; the send then finishes before the buffer
+    # completes again.
+    board = Board(wave, cycles_per_byte=period / 2)
+    board.usb_stalls = [(16_396 + 8_000, int(1.36 * fill))]
+    board.stop_after_bytes = 6 * 16_400
+    script = mp.build(capture_cfg(profile), "capture_rp2.py")
+    return board.run_script(_old_overrun_check(script) if check == "old" else script)
+
+
+def test_a_chunk_the_dma_rewrote_while_it_was_sent_is_reported():
+    chunks = _damaged_and_reported(_stalled_capture("new"))
+
+    assert chunks[1] == (True, True)
+    assert all(reported for damaged, reported in chunks if damaged)
+
+
+def test_the_old_overrun_check_misses_that_chunk():
+    # What the fix is for: counted at completion, the overrun is never seen,
+    # and the damaged chunk goes out as if it were contiguous.
+    chunks = _damaged_and_reported(_stalled_capture("old"))
+
+    assert chunks[1] == (True, False)
+
+
+def test_a_link_that_keeps_up_damages_and_reports_nothing():
+    profile = RP2350_DBV3
+    wave = Waveform(bytes(range(COUNT)), profile.uo_gpios, profile.clk_gpio, period=266)
+    board = Board(wave)
+    board.stop_after_bytes = 4 * 16_400
+
+    out = board.run_script(mp.build(capture_cfg(profile), "capture_rp2.py"))
+
+    chunks = _damaged_and_reported(out)
+    assert chunks and not any(d or r for d, r in chunks)
+    assert time_messages(out)[-1].startswith("overruns=0 ")
+
+
+def _old_stream_teardown(script: str) -> str:
+    new = "stop_dma((dma_a, dma_b))"
+    assert new in script
+    return script.replace(
+        new,
+        "for dma in (dma_a, dma_b):\n   if dma is not None:\n    dma.active(0)\n"
+        "  for dma in (dma_a, dma_b):\n   if dma is not None:\n    dma.close()",
+    )
+
+
+@pytest.mark.parametrize("teardown", ["stop_dma", "old"])
+def test_a_stopped_stream_leaves_no_dma_channel_running(bars_uo, teardown):
+    # A and B chain to each other, so on RP2350 aborting one re-triggers
+    # the other (RP2350-E5) unless EN is clear on both first.
+    profile = RP2350_DBV3
+    board = Board(Waveform(bars_uo, profile.uo_gpios, profile.clk_gpio, period=266))
+    board.stop_after_bytes = 20_000
+
+    script = mp.build(capture_cfg(profile), "capture_rp2.py")
+    board.run_script(_old_stream_teardown(script) if teardown == "old" else script)
+
+    busy = [ch.num for ch in board.channels if ch.busy]
+    if teardown == "old":
+        assert busy, "the emulator no longer models the re-trigger"
+    else:
+        assert busy == []
+
+
 def test_a_dma_buffer_larger_than_the_heap_allows_fails_like_the_board(bars_uo):
     profile = RP2350_DBV3
     wave = Waveform(bars_uo, profile.uo_gpios, profile.clk_gpio, period=266)
@@ -185,3 +300,34 @@ def test_unsupported_instructions_are_refused_not_guessed():
     rp2 = board.modules()["rp2"]
     with pytest.raises(BoardError, match="not emulated"):
         rp2.StateMachine(4, program(rp2))
+
+
+@pytest.mark.parametrize("ratio", [1.5, 4.0])
+def test_the_overrun_count_covers_every_lost_buffer(monkeypatch, ratio):
+    # Ground truth from the emulator: words the DMA wrote into the buffers,
+    # against samples that reached the stream. Up to two buffers are still
+    # unsent at the stop, so overruns * buffer must cover the rest, even
+    # with the main loop several buffers behind (ratio 4).
+    from ttcap.emu import board as emu
+
+    written = [0]
+    transfer = emu.Board._transfer
+
+    def counting(self, ch, word):
+        if self._rx_source(ch) is not None:
+            written[0] += 1
+        return transfer(self, ch, word)
+
+    monkeypatch.setattr(emu.Board, "_transfer", counting)
+    profile = RP2350_DBV3
+    buffer = 4096 * 4
+    board = Board(Waveform(bytes(range(COUNT)), profile.uo_gpios, profile.clk_gpio, period=100),
+                  cycles_per_byte=ratio * 100)
+    board.stop_after_bytes = 6 * 16_400
+
+    out = board.run_script(mp.build(capture_cfg(profile), "capture_rp2.py"))
+
+    delivered = sum(int.from_bytes(p[:4], "little") for t, p in read_chunks(out) if t == "RAW ")
+    overruns = int(time_messages(out)[-1].split()[0].split("=")[1])
+    assert overruns * buffer >= written[0] * 4 - delivered - 2 * buffer
+    assert overruns > 0
