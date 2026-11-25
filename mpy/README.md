@@ -1,18 +1,21 @@
 # vgacap MicroPython module
 
 `vgacap` is a MicroPython C module (a `USER_C_MODULE`) that captures a Tiny
-Tapeout design's VGA output on `uo_out` with the RP2350's PIO and DMA and
-writes it as vgacap chunks. It is the third way to run the capture engines,
-next to the MicroPython scripts (`python/ttcap/mp/`) and the pico-sdk
-capture firmware (`firmware/`), and it shares the firmware's engines: the
-module is a thin binding over `firmware/core/fw_capture.c` and
-`firmware/pico/hal_rp2.c`, not a reimplementation.
+Tapeout design's VGA output on `uo_out` with the PIO and DMA of the
+RP2350 on the Tiny Tapeout demo board, and writes it as vgacap chunks.
 
-Built into the demo board's firmware (the `vgacap-module` branch of
-mithro/tt-micropython-firmware, which pins this repository as a submodule),
-it leaves the board exactly as it was -- the ttboard SDK, `tt.shuttle`, the
-FPGA loader, the REPL -- and turns a capture into one call instead of a
-shipped script. The host side is `ttcap capture --firmware mpy-module`.
+It is the third way to capture on the RP2350 demo board, next to the
+MicroPython scripts (`python/ttcap/mp/`) and the pico-sdk capture firmware
+([`firmware/`](../firmware/README.md)). It shares the firmware's capture
+engines: the module is a thin binding over `firmware/core/fw_capture.c`
+and `firmware/pico/hal_rp2.c`, not a reimplementation.
+
+The module is built into the demo board's MicroPython firmware (the
+`vgacap-module` branch of mithro/tt-micropython-firmware, which pins this
+repository as a submodule). The board otherwise stays exactly as it was
+(the ttboard SDK, `tt.shuttle`, the FPGA loader, the REPL), and a capture
+becomes one call instead of a script shipped over the REPL. The host side
+is `ttcap capture --firmware mpy-module`.
 
 ## API
 
@@ -60,20 +63,24 @@ multiple of it, as the firmware does.
   instead of the ones allocated per call. A frame capture's window is as
   many lines as fit in it; `stream()` needs `8 * buf_words` bytes.
 
-Without `buf`, `stream()` allocates its two buffers (`8 * buf_words` bytes;
-`MemoryError` if they do not fit), and `frame()` allocates heap blocks of
-whole lines for the window as `frame_rp2.py` plans them: the whole window
-in one block if the heap has one, else blocks of 64, 16, 4 and 1 lines,
-biggest first, at most 128, with 4 KB held back while planning. The
-capture's DMA walks them in order through control blocks (as
-`frame_rp2.py` does; `firmware/pico/hal_rp2.c`), so a fragmented heap
-still gives one captured frame the whole region: on fpga-1, whose largest
-free block held 188 lines, all 481 lines of 640x480 in a handful of blocks.
-Only a heap with less free memory in total than the region sweeps a
-picture in several windows. The opening `frame window=W buffers=N` TIME
-message says how many lines a window takes and in how many blocks; the
-FRAM chunks are the firmware's (one chunk per window whatever N is), whose
-`buffers` is always 1 (its 440 KB static arena).
+Without `buf`, `stream()` allocates its two buffers (`8 * buf_words`
+bytes; `MemoryError` if they do not fit).
+
+`frame()` allocates heap blocks of whole lines for the window, planned as
+`frame_rp2.py` plans them: the whole window in one block if the heap has
+one, else blocks of 64, 16, 4 and 1 lines, biggest first, at most 128
+blocks, with 4 KB held back while planning. The capture's DMA walks the
+blocks in order through control blocks (as `frame_rp2.py` does; see
+`firmware/pico/hal_rp2.c`), so even a fragmented heap gives one captured
+frame the whole region. On `fpga-1`, an FPGA demo board on the Welland
+bench whose largest free block held 188 lines, all 481 lines of 640x480
+fitted in a handful of blocks. Only a heap with less free memory in total
+than the region sweeps a picture in several windows.
+
+The opening `frame window=W buffers=N` TIME message says how many lines a
+window takes and in how many blocks. The FRAM chunks are the firmware's
+(one chunk per window, whatever N is); the firmware's own `buffers` is
+always 1 (its 440 KB static arena).
 
 **Output:** vgacap chunks only, `RAW `/`FRAM`/`TIME`, exactly as the firmware
 writes them after its `ok` (PROTOCOL.md, "Capture output"), and no `DONE`
@@ -107,8 +114,8 @@ command layer, so it neither offers nor needs them.
 
 ## Building
 
-The rp2 port (the demo board, RP2350B, board definition
-`psychogenic/tinytapeout_rp2350b`):
+For the demo board, build MicroPython's rp2 port (RP2350B, board
+definition `psychogenic/tinytapeout_rp2350b`) with the module:
 
     make -C micropython/ports/rp2 BOARD=tt_rp2350_board \
         USER_C_MODULES=<vgacap>/mpy/micropython.cmake
@@ -119,7 +126,8 @@ repository as the `vgacap` submodule. Our sources build with `-Wall
 -Wextra -Werror` (less `-Wunused-parameter`, which MicroPython's own headers
 trip).
 
-The unix port, on the simulated board (`firmware/sim`), for the tests:
+For the tests, build MicroPython's unix port with the module running on the
+simulated board (`firmware/sim`):
 
     mpy/build-unix.sh [MICROPYTHON_DIR]     # -> build/mpy-unix/micropython
     cd python && uv run pytest -q tests/test_mpy_module.py
@@ -134,14 +142,18 @@ inspect the simulated board; the rp2 build has none of them.
 
 `python/tests/test_mpy_module.py` runs the unix build behind a raw REPL
 (`python/tests/mpy_unix_board.py` plays the board) and drives it through
-ttcap: frame and window captures byte-identical to the pico-sdk firmware's
-(same engines, same simulator) and pixel-exact through `vgacap-frames`,
-a heap fragmented into ~144 KB holes giving all 481 lines in one captured
-frame through chained buffers,
-streams of the design's consecutive samples, stops between chunks,
-overruns, rxstall, refusals, a caller's buffer, and `ttcap capture
---firmware mpy-module`. The tests skip without `build/mpy-unix/micropython`
-unless `VGACAP_REQUIRE_MPY_UNIX` is set, as CI does.
+ttcap. It checks:
+
+* frame and window captures byte-identical to the pico-sdk firmware's
+  (same engines, same simulator) and pixel-exact through `vgacap-frames`;
+* a heap fragmented into ~144 KB holes giving all 481 lines in one
+  captured frame through chained buffers;
+* streams of the design's consecutive samples;
+* stops between chunks, overruns, rxstall, refusals and a caller's buffer;
+* `ttcap capture --firmware mpy-module`.
+
+The tests skip without `build/mpy-unix/micropython` unless
+`VGACAP_REQUIRE_MPY_UNIX` is set, as it is in CI.
 
 ## Files
 
