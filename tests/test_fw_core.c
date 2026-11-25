@@ -587,6 +587,49 @@ TEST(frame_stops_on_the_stop_byte_and_on_max_bytes) {
     ASSERT_TRUE(streq(time_msg(), "frames=1 stalls=0 rxstall=0 sysclk_hz=100000000"));
 }
 
+// A host that drops DTR (closes the port, is unplugged) mid-capture: the
+// capture stops by itself, without a stop byte or max_bytes, and writes
+// nothing more -- a stream that would otherwise run for ever, and a frame
+// capture waiting for a vsync that never comes.
+static void host_leaves(size_t uo_len, double at) {
+    sim_config_t cfg = { .uo = uo, .uo_len = uo_len, .seconds_per_byte = 1e-6, .arena_bytes = 0,
+                         .host_gone_at = at };
+    sim_init(&cfg);
+    sim_io_memory();
+    fw_init();
+    pos = 0;
+}
+
+TEST(capture_ends_when_the_host_goes) {
+    ramp(256);
+    host_leaves(256, 5e-3);
+    send_at("clock hz=100000\nstream buf_words=16 max_bytes=0 edge=falling pio=1 sm=0\n", 0);
+    run();
+    ASSERT_TRUE(sim_now() >= 5e-3);
+    line();
+    ASSERT_TRUE(streq(line(), "ok stream"));
+    size_t len;
+    sim_output(&len);
+    uint32_t raws = 0;
+    while (pos + 8 <= len) {
+        ASSERT_TRUE(streq(chunk(), "RAW "));  // no summary, no DONE
+        raws++;
+    }
+    ASSERT_TRUE(raws >= 5 && raws <= 9);  // ~4.9 ms of 0.64 ms buffers
+
+    memset(uo, 0, 16);  // no sync at all: the window never comes
+    host_leaves(16, 5e-3);
+    send_at("clock hz=25000000\nframe cpl=16 region_first=3 region_lines=5 window_lines=0 "
+            "hsync_active=1 vsync_active=1 max_frames=0 max_bytes=0 edge=rising sample_delay=0 pio=1 sm=0\n", 0);
+    run();
+    ASSERT_TRUE(sim_now() >= 5e-3);
+    line();
+    ASSERT_TRUE(streq(line(), "ok frame"));
+    ASSERT_TRUE(streq(chunk(), "TIME"));  // the opening one, then nothing
+    sim_output(&len);
+    ASSERT_EQ_U(pos, len);
+}
+
 int main(void) {
     RUN(hello_status_and_errors);
     RUN(clock_reports_its_plan);
@@ -608,5 +651,6 @@ int main(void) {
     RUN(frame_rxstall_is_reported_per_window_and_in_the_summary);
     RUN(frame_refusals);
     RUN(frame_stops_on_the_stop_byte_and_on_max_bytes);
+    RUN(capture_ends_when_the_host_goes);
     RUN_TESTS_END();
 }

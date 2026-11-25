@@ -39,6 +39,10 @@ typedef struct sim_config {
     // A host that stops reading once: the first write at or after
     // `stall_at` seconds waits `stall_seconds` first (0: never).
     double stall_at, stall_seconds;
+    // A host that drops DTR (closes the port) at `host_gone_at` seconds (0:
+    // never): from then on hal_host_gone() is true and writes fail, as
+    // tud_cdc_connected() makes them on the board.
+    double host_gone_at;
 } sim_config_t;
 
 // (Re)start the simulated board: boot state, time 0, empty I/O.

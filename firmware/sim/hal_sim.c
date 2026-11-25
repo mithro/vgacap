@@ -219,6 +219,7 @@ static int write_piece(const uint8_t *buf, size_t len) {
         S.stalled = 1;
         advance(S.cfg.stall_seconds);
     }
+    if (hal_host_gone()) return -1;
     if (S.fds) {
         size_t done = 0;
         while (done < len) {
@@ -253,7 +254,7 @@ int hal_write(const uint8_t *buf, size_t len) {
 }
 
 void hal_flush(void) {}
-int hal_host_gone(void) { return 0; }
+int hal_host_gone(void) { return S.cfg.host_gone_at > 0 && S.now >= S.cfg.host_gone_at; }
 
 // ---- the board ------------------------------------------------------------------
 
@@ -290,6 +291,7 @@ void hal_idle(void) {
     if (S.streaming && S.clock_on) next = next_fill_time();
     if (S.framing && S.done_at < next) next = S.done_at;
     if (!S.fds && S.in_pos < S.in_len && S.in[S.in_pos].at < next) next = S.in[S.in_pos].at;
+    if (S.cfg.host_gone_at > S.now && S.cfg.host_gone_at < next) next = S.cfg.host_gone_at;
     if (next < INFINITY) {
         if (next > S.now) advance(next - S.now);
         return;

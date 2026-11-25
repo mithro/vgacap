@@ -140,7 +140,8 @@ program could load the `.pio` files' words the same way.
 * `test_fw_core`: every command's exact reply, and the engines' exact
   chunks on the simulated board: max_bytes, overruns (cumulative, and a
   chunk torn while it is being sent reported straight after it), stop
-  bytes, frame windows, the arena limit, rxstall reports, refusals.
+  bytes, a host that drops DTR, frame windows, the arena limit, rxstall
+  reports, refusals.
 * `test_fw_sim.py`: the transport end to end against `vgacap-fw-sim`, with
   a synthetic VGA design: byte-exact streams, pixel-exact frames and
   windows through `vgacap-frames`, stops, overruns, the CLI, and the same

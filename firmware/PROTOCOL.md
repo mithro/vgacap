@@ -8,6 +8,15 @@ The serial settings do not matter (it is USB CDC), but the host must assert
 DTR, as pyserial does when it opens a port: the firmware only writes while
 DTR is set, and a capture whose host drops DTR stops.
 
+A bridge that keeps the port open keeps DTR set for as long as it does.
+The fpgas.online-tt daemon (`fpgas_tt/bridge.py`) opens the port through
+pyserial-asyncio, so DTR is asserted, and holds it open whether or not a
+ws:// client is connected: a client that leaves mid-capture does not drop
+DTR, and the capture runs on to `max_bytes` or the next host's `0x03`. (Its
+udev rule makes `/dev/ttboard` only for the stock firmware's 2e8a:0005 and
+2e8a:000f, so it bridges this firmware's 2e8a:0009 port only if started
+with `--device` pointing at it.)
+
 ## Commands and replies
 
 A command is one line of ASCII: a command word, then `key=value` arguments
