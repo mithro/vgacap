@@ -104,7 +104,8 @@ is torn, and its `RAW ` chunk (sent before, during or after the rewrite)
 mixes two fills. A `TIME` chunk with the message `overrun` follows that
 very `RAW ` chunk, before any other, its `dropped_samples` the cumulative
 total so far (an upper bound: a rewrite that started during the send but
-never overtook it counts too). vgacap-frames and vgadecode drop the
+never overtook it counts too). [vgacap-frames](../src/tools/README.md#overruns)
+and [vgadecode](../gst/README.md#vgadecode-a-stream-in-video-out) drop the
 picture in progress there. `max_bytes` stops the capture once the chunks sent (RAW and
 overrun TIME, headers included) reach it; 0 means only a stop byte ends it.
 The project clock must be running.
@@ -159,7 +160,8 @@ The firmware writes no `VGCH` header: the host writes it, because only the
 host knows the signal map, the project clock it programmed and the
 description, exactly as on the MicroPython path. So a capture file is the
 host's `VGCH` chunk followed by the firmware's chunks verbatim (without
-`DONE`), and the vgacap readers, `vgacap-dump` and `vgacap-frames` read it
+`DONE`), and the vgacap readers,
+[`vgacap-dump` and `vgacap-frames`](../src/tools/README.md), read it
 as they read any other.
 
 ### Stopping
