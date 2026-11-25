@@ -17,10 +17,12 @@ Subcommands:
   video file, a window and a browser-viewable MJPEG stream (`ttcap.demo`).
 
 Exit codes: 0 success, 1 a board, link or tool error (including a capture
-that ended through `CaptureStats.error`/`timed_out`), 2 a usage error
-(argparse's own), 3 a capture that produced no samples at all -- the one
-failure worth telling apart, because it means the sampler never saw a clock
-edge.
+that ended through `CaptureStats.error`/`timed_out`, one whose board
+raised or sent an `error=` message (`CaptureStats.board_error`, printed),
+and an `--mode rle` capture whose board reported an RX stall), 2 a usage
+error (argparse's own), 3 a capture that produced no samples at all and
+no board error -- the one failure worth telling apart, because it means
+the sampler never saw a clock edge.
 """
 
 from __future__ import annotations
@@ -531,6 +533,8 @@ def capture(
     window_lines: int = 0,
     sample_delay: int = 0,
     ui_in: int | None = None,
+    rle_mask: int = -1,
+    rle_oneshot: bool = False,
     firmware: str = "micropython",
     asic_index: int | None = None,
     board: str | None = None,
@@ -585,13 +589,17 @@ def capture(
                 raise ValueError(f"mode must be one of {sorted(CAPTURE_MODES)}, got {mode!r}")
             script = CAPTURE_MODES[mode]
             framed = script == "frame_rp2.py"
+            rle = script == "rle_rp2.py"
             if edge is None:
-                edge = FRAME_EDGE if framed else "falling"
+                edge = FRAME_EDGE if framed or rle else "falling"
             if mode == "window" and not window_lines:
                 window_lines = DEFAULT_WINDOW_LINES
             max_frames = 0
             if framed and frames is not None:
                 max_frames = frames
+            elif rle and frames is not None:
+                # A frame's bytes depend on the picture under RLE.
+                raise ValueError("--frames does not apply to --mode rle; use --max-bytes or --seconds")
             elif frames is not None:
                 # `buf_words` sizes the chunks, and the byte budget has to
                 # allow for each chunk's 12 non-sample bytes.
@@ -625,6 +633,8 @@ def capture(
                     sample_delay=sample_delay,
                     ui_in=ui_in,
                     asic_index=asic_index,
+                    rle_mask=rle_mask,
+                    rle_oneshot=rle_oneshot,
                 )
                 selection = driver.setup(request)
                 try:
@@ -934,7 +944,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_parser.add_argument(
         "--edge", choices=["falling", "rising"], default=None,
         help="project-clock edge to sample (default: falling in stream mode, "
-        f"where outputs have long settled; {FRAME_EDGE} in frame/window modes, "
+        f"where outputs have long settled; {FRAME_EDGE} in frame/window/rle modes, "
         "measured at 25 MHz)",
     )
     capture_parser.add_argument("--desc", default="", help="note to store in the header")
@@ -945,7 +955,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="stream: every sample, at a clock the USB link can carry "
         "(~750 kHz RP2350, ~60 kHz RP2040); frame: whole frames at the "
         "project's real clock, sent between frames; window: the same, "
-        "--window-lines lines per frame (default stream)",
+        "--window-lines lines per frame; rle: every sample, run-length "
+        "encoded by the PIO, as fast as the picture's runs let the link "
+        "keep up (default stream)",
     )
     capture_parser.add_argument(
         "--vga-mode",
@@ -984,9 +996,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--sample-delay",
         type=int,
         default=0,
-        help="frame/window modes: system clocks to wait after --edge before "
+        help="frame/window/rle modes: system clocks to wait after --edge before "
         "reading uo_out, to sample where it is stable at a real VGA clock "
         "(default 0)",
+    )
+    capture_parser.add_argument(
+        "--rle-mask",
+        type=int,
+        choices=[-1, 0, 1],
+        default=-1,
+        help="rle mode: 1 = one-instruction sample under SHIFTCTRL.IN_COUNT "
+        "(RP2350), 0 = two instructions through the OSR (any RP2), -1 = the "
+        "board picks (default -1)",
+    )
+    capture_parser.add_argument(
+        "--rle-oneshot",
+        action="store_true",
+        help="rle mode: fill the two --buf-words buffers once at full speed, "
+        "then send them -- one unbroken stretch at a clock the link could "
+        "never stream",
     )
     capture_parser.add_argument(
         "--window-lines",
@@ -1078,6 +1106,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 window_lines=args.window_lines,
                 sample_delay=args.sample_delay,
                 ui_in=args.ui_in,
+                rle_mask=args.rle_mask,
+                rle_oneshot=args.rle_oneshot,
                 firmware=args.firmware,
                 asic_index=args.asic_index,
                 board=args.board,
@@ -1109,6 +1139,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             # left to say is why it stopped.
             return _failed("capture", exc)
         if stats.error or stats.timed_out:
+            return 1
+        if args.mode == "rle" and stats.rxstall:
+            # A lost word puts every later pair out of step, so the board
+            # stopped there (rle_rp2.py, RX STALLS ARE FATAL): what was
+            # written is good, but the capture did not finish.
+            print(
+                "rx stall: the RX FIFO overflowed and the RLE capture stopped there",
+                file=sys.stderr,
+            )
+            return 1
+        if stats.board_error:
+            # The board's own reason (a MemoryError for the buffers, a
+            # refused clock), not the no-clock-edge guess below.
+            print("board error: %s" % stats.board_error, file=sys.stderr)
             return 1
         if stats.samples == 0:
             print(

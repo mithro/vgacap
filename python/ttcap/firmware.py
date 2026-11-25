@@ -219,6 +219,9 @@ def capture_command(req: CaptureRequest) -> str:
     """
     if req.profile != RP2350_DBV3:
         raise CaptureError("the capture firmware is built for %s only" % RP2350_DBV3.name)
+    if req.is_rle:
+        # Its CFG has buf_words like a stream's, and would quietly become one.
+        raise CaptureError("the capture firmware has no rle mode; use --firmware micropython")
     cfg = req.cfg()
     if req.is_frame:
         return (
