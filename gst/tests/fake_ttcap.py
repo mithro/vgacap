@@ -20,8 +20,8 @@ spelled out so no shebang or PATH is involved:
 
 Like the real thing, SIGINT is a *cooperative* stop: the flag is noticed at a
 chunk boundary, one more chunk comes out (the board's DMA buffer, already in
-flight, which is where the real 2.2 s at 60 kHz goes), then the closing `TIME`
-chunk, then exit 0. A consumer that closes the pipe instead gets the same
+flight, which is where the real ~137 ms on an RP2040 at 60 kHz goes), then
+the closing `TIME` chunk, then exit 0. A consumer that closes the pipe instead gets the same
 verdict -- `BrokenPipeError` is a clean end and exit 0 -- but no trailer,
 because there is nowhere left to write one.
 """
