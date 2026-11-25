@@ -1,14 +1,17 @@
 # vgacap-dump and vgacap-frames
 
-The C command-line tools for inspecting a [vgacap stream](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-09-15-stream-format.md) and turning it into
-pictures. CMake builds them into `build/`.
+The C command-line tools for inspecting a
+[vgacap stream](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-09-15-stream-format.md)
+and turning it into pictures, and the Python
+[`vgacap-bin2stream`](../../python/vgacap/bin2stream.py) that makes one from a
+simulator dump. CMake builds the C tools into `build/`.
 
 ## Usage
 
 ```sh
 build/vgacap-dump capture.vgacap              # chunk list, total samples, checksum
 mkdir -p out && build/vgacap-frames capture.vgacap out/frame   # out/frame-0000.ppm ...
-uv run vgacap-bin2stream dump.bin out.vgacap  # (Python) wrap a one-byte-per-clock simulator dump
+uv run vgacap-bin2stream dump.bin out.vgacap  # wrap a one-byte-per-clock simulator dump
 ```
 
 ## When frames appear
