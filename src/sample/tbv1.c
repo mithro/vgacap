@@ -67,6 +67,7 @@ struct tbv1 {
     double cpp, half;
     int width, height, hback, vback;
     uint8_t *frame;                  // rgb6, width * height
+    uint8_t colour[256];             // rgb6(uo_out), by uo_out
     // tb.cpp:478-482
     uint64_t frames;
     int in_frame, prev_h, prev_v;
@@ -135,6 +136,15 @@ static void decide(tbv1_t *s, const vgacal_t *cal, double clock_hz, double secon
     s->width = width; s->height = height; s->hback = hback; s->vback = vback;
 }
 
+// tb.cpp:550-552's colour, as rgb6: R = uo[0], uo[4]; G = uo[1], uo[5];
+// B = uo[2], uo[6], first bit most significant (RGB888 / 85).
+static uint8_t rgb6(uint8_t uo) {
+    unsigned r = ((uo & 1u) << 1) | ((uo >> 4) & 1u);
+    unsigned g = (((uo >> 1) & 1u) << 1) | ((uo >> 5) & 1u);
+    unsigned b = (((uo >> 2) & 1u) << 1) | ((uo >> 6) & 1u);
+    return (uint8_t)((r << 4) | (g << 2) | b);
+}
+
 tbv1_t *tbv1_create(const vgacal_t *cal, const vgafc_t *fc, double clock_hz, double seconds,
                     vgasample_frame_fn fn, void *user) {
     if (cal->state != VGACAL_DONE) {
@@ -148,6 +158,7 @@ tbv1_t *tbv1_create(const vgacal_t *cal, const vgafc_t *fc, double clock_hz, dou
     s->from = cal->capture_after_clock;
     s->y = -1; s->last_px = -1;
     decide(s, cal, clock_hz, seconds);
+    for (unsigned uo = 0; uo < 256; uo++) s->colour[uo] = rgb6((uint8_t)uo);
     if (s->geo.ok) {
         s->frame = calloc((size_t)s->width * (size_t)s->height, 1);
         if (!s->frame) { fprintf(stderr, "vgacap_sample: out of memory\n"); abort(); }
@@ -173,14 +184,6 @@ static void emit_frame(tbv1_t *s) {   // tb.cpp:485-505, the frame part
     s->frames++;
 }
 
-// tb.cpp:550-552's colour, as rgb6: R = uo[0], uo[4]; G = uo[1], uo[5];
-// B = uo[2], uo[6], first bit most significant (RGB888 / 85).
-static uint8_t rgb6(uint8_t uo) {
-    unsigned r = ((uo & 1u) << 1) | ((uo >> 4) & 1u);
-    unsigned g = (((uo >> 1) & 1u) << 1) | ((uo >> 5) & 1u);
-    unsigned b = (((uo >> 2) & 1u) << 1) | ((uo >> 6) & 1u);
-    return (uint8_t)((r << 4) | (g << 2) | b);
-}
 
 // tb.cpp:541-553 at clock c, with in_frame && y >= 0 && !h_pulse.
 static inline void pixel_at(tbv1_t *s, uint64_t c, uint8_t colour) {
@@ -207,7 +210,7 @@ static inline void tb_push(tbv1_t *s, uint8_t uo_out, uint64_t first, uint64_t c
     const uint64_t stop = end < s->clock_limit ? end : s->clock_limit;
     const int h_pulse = s->h_low ? !(uo_out & 0x80) : !!(uo_out & 0x80);
     const int v_pulse = s->v_low ? !(uo_out & 0x08) : !!(uo_out & 0x08);
-    const uint8_t colour = rgb6(uo_out);
+    const uint8_t colour = s->colour[uo_out];
 
     // The run's first clock, in full.
     if (s->prev_v && !v_pulse) {                  // vsync pulse ended: new frame
