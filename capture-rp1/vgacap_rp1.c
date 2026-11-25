@@ -122,12 +122,17 @@ static uint8_t *read_file(const char *path, size_t *len)
         fprintf(stderr, "vgacap-rp1: %s: %s\n", path, strerror(errno));
         return NULL;
     }
-    fseek(fp, 0, SEEK_END);
-    long size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
+    long size = fseek(fp, 0, SEEK_END) ? -1 : ftell(fp);
+    // An empty pattern has no transfer size that divides it: the search
+    // below would settle on the largest and DMA that from a 4-byte buffer.
+    if (size <= 0 || fseek(fp, 0, SEEK_SET)) {
+        fprintf(stderr, "vgacap-rp1: %s: %s\n", path, size == 0 ? "empty" : "cannot find its size");
+        fclose(fp);
+        return NULL;
+    }
     // Whole words, and a multiple of the transfer size's granularity.
     size_t padded = ((size_t)size + 3u) & ~(size_t)3u;
-    uint8_t *buf = calloc(1, padded ? padded : 4);
+    uint8_t *buf = calloc(1, padded);
     if (!buf || fread(buf, 1, (size_t)size, fp) != (size_t)size) {
         fprintf(stderr, "vgacap-rp1: cannot read %s\n", path);
         fclose(fp);
