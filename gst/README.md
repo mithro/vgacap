@@ -36,7 +36,7 @@ On quoting, see [`vgacapbin`](#vgacapbin-a-uri-in-video-out).
 | property | default | description |
 |---|---|---|
 | `repeat-last-frame` | `false` | re-push the last frame to hold a steady `output-fps` cadence |
-| `output-fps` | `30/1` | rate when repeating, and when the stream declares no project clock |
+| `output-fps` | `30/1` | fallback frame rate |
 | `max-width` | `1400` | widest line the reconstruction buffers hold, in project clocks |
 | `max-height` | `900` | tallest frame the reconstruction buffers hold, in lines |
 | `force-mode` | `""` | mode table entry to use instead of detecting one |
@@ -70,7 +70,7 @@ websocket bridge.
 
 | property | default | default means | required | in a URI query | description |
 |---|---|---|---|---|---|
-| `link` | `""` | -- | yes | no | `serial:/dev/ttyACM0` or `ws://host:8765/serial` |
+| `link` | `""` | -- | yes | no | board link |
 | `clock-hz` | `0` | -- | yes | yes | project clock to program, in Hz |
 | `project` | `""` | keep the selected project | no | yes | `tt.shuttle` macro to enable |
 | `design` | `""` | -- | no | yes | FPGA bitstream to enable |
@@ -81,7 +81,7 @@ websocket bridge.
 | `ttcap-command` | `uv run --no-sync ttcap` | -- | no | no | command that runs `ttcap` |
 | `stop-timeout` | `15` | -- | no | yes | how long a cooperative stop may take, in seconds |
 | `capture-mode` | `stream` | -- | no | yes | `ttcap capture --mode` |
-| `vga-mode` | `""` | `ttcap`'s default (640x480@60) | no | yes | VGA timing for frame and window modes |
+| `vga-mode` | `""` | `ttcap`'s default (640x480@60) | no | yes | VGA timing |
 | `window-lines` | `0` | `ttcap`'s default | no | yes | most lines per captured frame |
 
 `ttcap-command` is split with shell quoting rules and run with the
