@@ -20,7 +20,7 @@ from xml.sax.saxutils import escape
 
 HERE = pathlib.Path(__file__).resolve().parent
 MARGIN = 16
-W, H = 2 * MARGIN + 4 * 232 + 3 * 22, 1090  # four columns (COL_W, GAP below); H ends below the legend
+W, H = 2 * MARGIN + 2 * 210 + 560 + 2 * 22, 996  # Pi | board | simulator; H ends below the legend
 INK, INK2, MUTED = "#1d2433", "#2b3445", "#5b6577"
 SIG, SIG_FILL, SIG_EDGE = "#1c64d4", "#eaf1fd", "#9dbcef"
 STR, STR_FILL, STR_EDGE = "#f2620c", "#fff2e8", "#f8b48a"
@@ -161,18 +161,20 @@ add("</defs>")
 add(f'<rect x="0" y="0" width="{W}" height="{H}" fill="#ffffff"/>')
 
 # ---- geometry: data flows down the page ----------------------------------------------
-# Columns: Raspberry Pi 5 | the demo board (two columns wide) | simulator.
-COL_W, GAP = 232, 22
+# Columns: Raspberry Pi 5 | the demo board | simulator.
+COL_W, BOARD_W, GAP = 210, 560, 22
 PI_X = MARGIN
-BOARD_X, BOARD_W = PI_X + COL_W + GAP, 2 * COL_W + GAP
+BOARD_X = PI_X + COL_W + GAP
 SIM_X = BOARD_X + BOARD_W + GAP
 LEFT, RIGHT = PI_X, SIM_X + COL_W
-SRC_Y, SRC_H = 236, 316               # the Pi and simulator boxes
-BOARD_Y, BOARD_B = 16, SRC_Y + SRC_H  # the demo board container, top and bottom
+BOARD_Y = 16
+SRC_Y, SRC_H = 222, 236               # the Pi and simulator boxes
+BOARD_B = SRC_Y + SRC_H               # the board box ends level with them
 HOST_Y = BOARD_B + 22                 # ttcap, on the host
 STREAM_Y, STREAM_H = HOST_Y + 84, 96
 LIB_Y = STREAM_Y + STREAM_H + 50
 OUT_Y = LIB_Y + 76 + 52
+LEADER = "#8a93a6"
 
 
 def container(x, title, mark):
@@ -193,7 +195,7 @@ def stack(cx, y, names, w=110, h=28, gap=18):
 
 def inner(x, kind, name, parts, sink):
     """A chip (or a simulator box) holding parts stacked top to bottom, then down to `sink`."""
-    bx, by, bw, bh = x + 16, SRC_Y + 56, COL_W - 32, 116
+    bx, by, bw, bh = x + 16, SRC_Y + 52, COL_W - 32, 116
     cx = x + COL_W / 2
     if kind == "chip":
         chip(bx, by, bw, bh, name)
@@ -206,54 +208,71 @@ def inner(x, kind, name, parts, sink):
     return cx
 
 
-# ---- the demo board: the design on a breakout, captured by the board's own MCU ---------------
-rect(BOARD_X, BOARD_Y, BOARD_W, BOARD_B - BOARD_Y, SIG_FILL, SIG_EDGE)
-PW, PHH = 150, 150 * 457 / 420
-PH_X, PH_Y = BOARD_X + 16, BOARD_Y + 16
-board = base64.b64encode((HERE / "images" / "tt-etr-dbv3p2.jpg").read_bytes()).decode()
-rect(PH_X - 6, PH_Y - 6, PW + 12, PHH + 12, "#ffffff", SIG_EDGE, rx=8)
-add(f'<image x="{PH_X}" y="{PH_Y}" width="{PW}" height="{PHH:.1f}" '
-    f'href="data:image/jpeg;base64,{board}"/>')
-tx = PH_X + PW + 22
-tt_badge(tx + 14, PH_Y + PHH / 2 - 5, 14)
-text(tx + 36, PH_Y + PHH / 2, "Tiny Tapeout demo board", "title")
+def leader(x1, y1, x2, y2):
+    """A callout from a spot on the board render to the part it is."""
+    add(f'<circle cx="{x1:.1f}" cy="{y1:.1f}" r="5" fill="none" stroke="{LEADER}" stroke-width="1.5"/>')
+    add(f'<path d="M{x1 - 5:.1f} {y1:.1f} L{x2:.1f} {y2:.1f}" fill="none" stroke="{LEADER}" '
+        f'stroke-width="1.25" stroke-dasharray="3 3"/>')
+    add(f'<circle cx="{x2:.1f}" cy="{y2:.1f}" r="2.5" fill="{LEADER}"/>')
 
-# Two kinds of breakout: the design alone, or an FPGA with capture logic beside it.
-BK_Y, BK_H = SRC_Y, 116
-bw = (BOARD_W - 48) / 2
-A_X, B_X = BOARD_X + 16, BOARD_X + 32 + bw
-chip(A_X, BK_Y, bw, BK_H, "ASIC or FPGA breakout")
+
+# ---- the demo board: what is on it (left), the board itself (right) ----------------------------
+rect(BOARD_X, BOARD_Y, BOARD_W, BOARD_B - BOARD_Y, SIG_FILL, SIG_EDGE)
+tt_badge(BOARD_X + 26, BOARD_Y + 24, 14)
+text(BOARD_X + 48, BOARD_Y + 29, "Tiny Tapeout demo board", "title")
+
+PW = 180
+PHH = PW * 457 / 420
+INNER_W = BOARD_W - 16 - PW - 28 - 16          # the column of parts
+A_X = BOARD_X + 16
+BK_Y, BK_H = BOARD_Y + 72, 116
+bw = (INNER_W - 36) / 2
+B_X = A_X + bw + 36
+MCU_H = 146
+MCU_Y = BOARD_B - 16 - MCU_H
+
+text(A_X + INNER_W / 2, BK_Y - 10, "breakout", "detail", "middle")
+chip(A_X, BK_Y, bw, BK_H, "ASIC or FPGA")
 part(A_X + (bw - 110) / 2, BK_Y + 49, 110, 28, "your design")
-chip(B_X, BK_Y, bw, BK_H, "FPGA breakout (iCE40UP5K)")
+chip(B_X, BK_Y, bw, BK_H, "iCE40UP5K FPGA")
 stack(B_X + bw / 2, BK_Y + 26, ("design", "capture"))
-OR_X = A_X + bw + 8
+OR_X = A_X + bw + 18
 add(f'<circle cx="{OR_X}" cy="{BK_Y + BK_H / 2}" r="14" fill="#ffffff" stroke="{SIG_EDGE}" '
     f'stroke-width="1.25"/>')
 text(OR_X, BK_Y + BK_H / 2 + 4.5, "or", "part", "middle")
 
-MCU_Y, MCU_H = BK_Y + BK_H + 52, 146
 A_C, B_C = A_X + bw / 2, B_X + bw / 2
 line([(A_C, BK_Y + BK_H + 6), (A_C, MCU_Y - 7)], "sig")
-text(A_C + 9, BK_Y + BK_H + 31, "uo_out[7:0]", "net", fill=SIG)
+text(A_C + 9, MCU_Y - 22, "uo_out[7:0]", "net", fill=SIG)
 line([(B_C, BK_Y + BK_H + 6), (B_C, MCU_Y - 7)], "sig")
-text(B_C + 9, BK_Y + BK_H + 31, "uo_out + uio", "net", fill=SIG)
+text(B_C + 9, MCU_Y - 22, "uo_out + uio", "net", fill=SIG)
 
-chip(A_X, MCU_Y, BOARD_W - 32, MCU_H, "RP2040 or RP2350")
-part(A_X + 24, MCU_Y + 22, BOARD_W - 80, 28, "PIO")
-mid = BOARD_X + BOARD_W / 2
+chip(A_X, MCU_Y, INNER_W, MCU_H, "RP2040 or RP2350")
+part(A_X + 16, MCU_Y + 22, INNER_W - 32, 28, "PIO")
+mid = A_X + INNER_W / 2
 line([(mid, MCU_Y + 50), (mid, MCU_Y + 64)], "thin")
 MCU_BOTTOM = stack(mid, MCU_Y + 66, ("DMA", "USB"), w=110, h=26)
 
-# ---- the Raspberry Pi 5, wired to the board's OUTPUT header --------------------------------------
+# The board render, with callouts to the breakout socket and to the board's RP2350.
+PH_X = BOARD_X + BOARD_W - 16 - PW
+PH_Y = (BK_Y + BOARD_B - 16) / 2 - PHH / 2
+board = base64.b64encode((HERE / "images" / "tt-etr-dbv3p2.jpg").read_bytes()).decode()
+rect(PH_X - 6, PH_Y - 6, PW + 12, PHH + 12, "#ffffff", SIG_EDGE, rx=8)
+add(f'<image x="{PH_X}" y="{PH_Y:.1f}" width="{PW}" height="{PHH:.1f}" '
+    f'href="data:image/jpeg;base64,{board}"/>')
+# Spots on the render (fractions of its width and height): the breakout's left
+# connector, and the RP2350B under the breakout.
+leader(PH_X + 0.31 * PW, PH_Y + 0.34 * PHH, B_X + bw, BK_Y + BK_H / 2)
+leader(PH_X + 0.51 * PW, PH_Y + 0.50 * PHH, A_X + INNER_W, MCU_Y + MCU_H / 2)
+
+# ---- the Raspberry Pi 5, wired to the same uo_out -------------------------------------------------
 container(PI_X, "Raspberry Pi 5", lambda x, y: nested_svg(
     HERE / "logos" / "raspberry-pi.svg", x - 12, y - 15, 24, 30))
 PI_SINK = inner(PI_X, "chip", "RP1", ("PIO", "DMA"), "DRAM")
-TAP_X, TAP_Y = PH_X + PW * 0.76, PH_Y + PHH - 6
-WIRE_Y = PH_Y + PHH + 10
 PI_C = PI_X + COL_W / 2
-line([(TAP_X, TAP_Y), (TAP_X, WIRE_Y), (PI_C, WIRE_Y), (PI_C, SRC_Y - 2)], "sig")
-add(f'<circle cx="{TAP_X:.1f}" cy="{TAP_Y:.1f}" r="4.5" fill="{SIG}"/>')
-text(PI_C + 9, WIRE_Y + 24, "uo_out", "net", fill=SIG)
+TAP_Y = BK_Y + BK_H + 18
+line([(A_C, TAP_Y), (PI_C, TAP_Y), (PI_C, SRC_Y - 2)], "sig")
+add(f'<circle cx="{A_C:.1f}" cy="{TAP_Y}" r="4.5" fill="{SIG}"/>')
 
 # ---- the simulator ---------------------------------------------------------------------------------
 container(SIM_X, "Simulator", lambda x, y: add(
@@ -262,8 +281,8 @@ container(SIM_X, "Simulator", lambda x, y: add(
     f'stroke-width="2.25" stroke-linejoin="round"/>'))
 SIM_SINK = inner(SIM_X, "sim", "Verilator or Icarus", ("design", "tracer"), "trace file")
 SIM_C = SIM_X + COL_W / 2
-doc(SIM_C - 23, 110, 46, 58, "the design's RTL")
-line([(SIM_C, 110 + 58 + 24), (SIM_C, SRC_Y - 2)], "sig")
+doc(SIM_C - 23, 60, 46, 58, "the design's RTL")
+line([(SIM_C, 60 + 58 + 24), (SIM_C, SRC_Y - 2)], "sig")
 
 # ---- into the stream: ttcap on the host for the board, the tools themselves elsewhere -------------
 usb_x = mid
