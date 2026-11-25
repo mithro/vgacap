@@ -1,10 +1,9 @@
 # vgacap/rtl: capture in an FPGA
 
 Capture logic to build into your own FPGA design, so the FPGA writes a
-vgacap stream itself. The modules are small building blocks (leaf modules)
-for an FPGA capture harness, written in Migen, with their generated Verilog
-committed alongside. The design note is tt-vga-capture
-`docs/design/2026-11-23-shared-rtl-capture.md`.
+vgacap stream itself: small Migen modules for an FPGA capture harness,
+with their generated Verilog committed alongside
+([design note](https://github.com/mithro/tt-vga-capture/blob/main/docs/design/2026-11-23-shared-rtl-capture.md)).
 
 On the demo board's FPGA breakout (iCE40UP5K) the framed bytes leave on
 `uo_out` + `uio` for the board's RP2350
@@ -17,8 +16,8 @@ stream format, which vgacap's C and Python readers check.
 
 | module | what | status |
 |---|---|---|
-| `vgacap_raw_framer` | 8-bit samples in; `RAW` chunks (fixed size, header first; the four-byte tag is "RAW" followed by a space) and overrun `TIME` chunks out, as a valid/ready byte stream | here, tested |
-| `UoSampler` | `uo_out` registered on the design clock | in [tt-harness-handheld-vga](https://github.com/mithro/tt-harness-handheld-vga) (a harness for running Tiny Tapeout VGA designs on handheld FPGA consoles, Game Bub first), to be contributed |
+| `vgacap_raw_framer` | 8-bit samples in; `RAW` chunks (fixed size, header first) and overrun `TIME` chunks out, as a valid/ready byte stream | here, tested |
+| `UoSampler` | `uo_out` registered on the design clock | in [tt-harness-handheld-vga](https://github.com/mithro/tt-harness-handheld-vga), to be contributed |
 | RLE chunk writer | for byte-limited links | waits on the [compact-chunk decision](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-11-24-board-rle-throughput.md) |
 
 ## vgacap_raw_framer
