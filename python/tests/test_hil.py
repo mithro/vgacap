@@ -736,6 +736,75 @@ def test_a_signal_right_after_popen_still_registers_the_session(bridge_run, monk
         os.waitpid(pid, 0)
 
 
+def test_a_second_ctrl_c_while_deferred_signals_are_put_back(monkeypatch):
+    """Reproduces the re-review: SIGINT arriving as SIGINT's own handler is
+    restored used to raise there, leaving SIGTERM/SIGHUP/SIGQUIT as the
+    deferring handler for good and the pending SIGTERM never delivered."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    got = []
+
+    def record(signum, _frame):
+        got.append(signum)
+
+    saved = {s: signal.getsignal(s) for s in (signal.SIGINT, *hil.STOP_SIGNALS)}
+    real_signal = signal.signal
+    fired = []
+
+    def signal_then_ctrl_c(sig, handler):
+        old = real_signal(sig, handler)
+        if sig == signal.SIGINT and handler is signal.default_int_handler and not fired:
+            fired.append(1)
+            os.kill(os.getpid(), signal.SIGINT)  # the second Ctrl-C
+        return old
+
+    try:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        for s in hil.STOP_SIGNALS:
+            signal.signal(s, record)
+        monkeypatch.setattr(hil.signal, "signal", signal_then_ctrl_c)
+        with pytest.raises(KeyboardInterrupt):
+            with hil.signals_deferred():
+                os.kill(os.getpid(), signal.SIGTERM)  # held, delivered after
+            time.sleep(0.05)
+        monkeypatch.undo()
+        time.sleep(0.05)
+        assert fired, "the restore never put SIGINT's handler back"
+        for s in hil.STOP_SIGNALS:
+            assert signal.getsignal(s) is record, s
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        assert got == [signal.SIGTERM]
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == set()
+    finally:
+        monkeypatch.undo()
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+
+
+def test_a_restart_that_times_out_discards_unsent_output(bridge_run, monkeypatch):
+    """So close() does not wait out the tty's closing_wait before the
+    bridge starts."""
+    import ttcap.cli
+    import ttcap.repl
+
+    _hil, run, systemd, events = _stopped(bridge_run)
+
+    class StuckLink(FakeBoard):
+        def discard_output(self):
+            self.events.append(("board", "discarded"))
+
+    monkeypatch.setattr(ttcap.cli, "link_from_url", lambda _url, **_kw: StuckLink(events))
+
+    def stuck(_link):
+        raise OSError("Write timeout")
+
+    monkeypatch.setattr(ttcap.repl, "restart_sdk", stuck)
+    run.cleanup()
+    assert events.index(("board", "discarded")) < events.index(("board", "closed"))
+    assert events[-1] == ("systemctl", "start")
+
+
 def test_restart_board_bounds_its_writes(bridge_run, monkeypatch):
     """A USB CDC port that stops draining must not block cleanup."""
     hil, run, _systemd, events = _stopped(bridge_run)

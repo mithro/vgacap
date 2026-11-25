@@ -89,6 +89,11 @@ class SerialLink:
             chunk += self._serial.read(waiting)
         return chunk
 
+    def discard_output(self) -> None:
+        """Drop whatever is written but not yet sent (tcflush), so a close
+        after a write timeout does not wait for it to drain."""
+        self._serial.reset_output_buffer()
+
     def close(self) -> None:
         self._serial.close()
 

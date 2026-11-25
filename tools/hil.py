@@ -152,10 +152,32 @@ def signals_deferred():
             saved[sig] = signal.signal(sig, lambda signum, _f: pending.append(signum))
         yield
     finally:
-        for sig, handler in saved.items():
-            signal.signal(sig, handler)
-        for sig in dict.fromkeys(pending):
-            os.kill(os.getpid(), sig)
+        # Blocked while the handlers go back (only here: a mask around the
+        # block's Popen would be inherited by the child). Unblocked, a
+        # second Ctrl-C would raise from the first handler restored and
+        # leave the rest -- and anything pending -- as the deferring
+        # lambda for good. Blocked, it waits in the kernel.
+        sigs = tuple(saved)
+        old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
+        try:
+            # A signal that arrived just before the block has tripped
+            # Python's flag; give it its (deferring) handler now, before
+            # any real one is back.
+            _run_pending_signal_handlers()
+            for sig, handler in saved.items():
+                signal.signal(sig, handler)
+            # Queued while still blocked, so none can raise here and each
+            # is delivered once the mask is lifted -- to the real handlers.
+            for sig in dict.fromkeys(pending):
+                with contextlib.suppress(OSError):  # one cannot stop the rest
+                    os.kill(os.getpid(), sig)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+
+
+def _run_pending_signal_handlers() -> None:
+    """A Python-level call: entering it is where CPython runs any signal
+    handler whose C-level flag is already set."""
 
 
 #: How long `--stop-bridge` waits between its two reads of the bridge's
@@ -785,6 +807,15 @@ class Hil:
             link = link_from_url(self.args.link, write_timeout=RESTART_WRITE_TIMEOUT_S)
             try:
                 ok, _text = restart_sdk(link)
+            except BaseException:
+                # Output stuck behind a write timeout would make close()
+                # wait out the tty's closing_wait (30 s by default) before
+                # `systemctl start`: drop it.
+                discard = getattr(link, "discard_output", None)
+                if discard is not None:
+                    with contextlib.suppress(Exception):
+                        discard()
+                raise
             finally:
                 link.close()
         except Exception as exc:  # noqa: BLE001 - reported, then the bridge still starts
