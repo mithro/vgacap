@@ -1551,8 +1551,10 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     parser.add_argument(
         "--firmware", choices=list(FIRMWARES), default="micropython",
         help="what runs on the board: the stock MicroPython firmware (default), or "
-        "vgacap's pico-sdk capture firmware (firmware/), loaded with `ttcap reboot "
-        "--to bootsel`; the latter cannot select a design itself",
+        "vgacap's pico-sdk capture firmware, which must already be running: "
+        "`ttcap reboot --to bootsel` and then copy vgacap_fw.uf2 onto the RP2350 "
+        "drive by hand (firmware/README.md). It keeps the design enabled before "
+        "it was loaded and cannot take --project/--design",
     )
     parser.add_argument(
         "--window-lines", type=int, default=0,
