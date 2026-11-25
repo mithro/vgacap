@@ -74,7 +74,7 @@ blocks in order through control blocks (as `frame_rp2.py` does; see
 `firmware/pico/hal_rp2.c`), so even a fragmented heap gives one captured
 frame the whole region. On `fpga-1`, a demo board with an FPGA breakout
 on the [Welland bench](../python/ttcap/README.md#reaching-a-welland-board) whose largest free block held 188 lines, all 481
-lines of 640x480 fitted in a handful of blocks. Only a heap with less free memory in total
+lines of 640x480 fitted in 46 blocks. Only a heap with less free memory in total
 than the region sweeps a picture in several windows.
 
 The opening `frame window=W buffers=N` TIME message says how many lines a
@@ -122,11 +122,9 @@ module:
     make -C micropython/ports/rp2 BOARD=tt_rp2350_board \
         USER_C_MODULES=<vgacap>/mpy/micropython.cmake
 
-The demo-board firmware build does this in mithro/tt-micropython-firmware
-(`vgacap-module` branch, `.github/workflows/release.yml`), with this
-repository as the `vgacap` submodule. Our sources build with `-Wall
--Wextra -Werror` (less `-Wunused-parameter`, which MicroPython's own headers
-trip).
+The [release workflow](https://github.com/mithro/tt-micropython-firmware/blob/vgacap-module/.github/workflows/release.yml)
+does this. Our sources build with `-Wall -Wextra -Werror` (less
+`-Wunused-parameter`, which MicroPython's own headers trip).
 
 For the tests, build MicroPython's unix port with the module running on the
 simulated board ([`firmware/sim`](../firmware/sim/)):
