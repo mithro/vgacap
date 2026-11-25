@@ -101,20 +101,18 @@ See [docs/development.md](docs/development.md).
 
 With a demo board on `/dev/ttyACM0` running a 640x480 VGA design, such as a
 [tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns)
-bitstream on an FPGA breakout:
+bitstream on an FPGA breakout (500 kHz suits an RP2350 demo board; see
+[the fastest clocks](#what-is-in-it) for an RP2040):
 
 ```sh
-# on an ASIC breakout, --project <tt_um_...> instead of --design <bitstream>
-uv run ttcap capture serial:/dev/ttyACM0 --design <bitstream> \
-    --clock-hz 500000 --frames 2 --out capture.vgacap
+uv run ttcap capture serial:/dev/ttyACM0 --clock-hz 500000 --frames 2 --out capture.vgacap
 mkdir -p out && build/vgacap-frames capture.vgacap out/frame      # out/frame-0000.ppm ...
 export GST_PLUGIN_PATH=$PWD/build
-uv run ttcap demo --link serial:/dev/ttyACM0 --design <bitstream> \
-    --clock-hz 500000 --fps 5 --outdir out                         # PNGs + MKV
+uv run ttcap demo --link serial:/dev/ttyACM0 --clock-hz 500000 --fps 5 --outdir out   # PNGs + MKV
 ```
 
 For a board on the Welland bench, see
-[Reaching a Welland board](python/ttcap/README.md#reaching-a-welland-board).
+[Reaching a Welland board](python/ttcap/README.md#reaching-a-welland-board-bench-access-needed).
 
 ## Layout
 
