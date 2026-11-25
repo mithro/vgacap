@@ -121,8 +121,8 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   --asic-index N` sends it. N is `tt.shuttle.<name>.count` under the stock
   firmware.
 * The firmware cannot tell an FPGA breakout from an ASIC breakout, so
-  `ttcap` refuses `--asic-index` for an FPGA bench board, and when these
-  disagree about which board it is:
+  `ttcap` refuses `--asic-index` for a bench demo board with an FPGA
+  breakout, and when these disagree about which board it is:
   - `--board` (`ttcap capture --board SLUG`);
   - a `ws://` link: the bridge's address, the Pi's name, or a tunnel's
     `18000 + octet` port;
