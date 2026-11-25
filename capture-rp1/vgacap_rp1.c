@@ -171,6 +171,42 @@ static int parse(int argc, char **argv, struct options *o)
     return 0;
 }
 
+// Writes the captured words as a vgacap stream; 0 on success.
+static int write_stream(const struct options *o, const uint32_t *buf, uint64_t skip_words, double secs)
+{
+    FILE *fp = fopen(o->out, "wb");
+    if (!fp) {
+        fprintf(stderr, "vgacap-rp1: %s: %s\n", o->out, strerror(errno));
+        return 1;
+    }
+    vgacap_header_t h;
+    vgacap_header_init_tinyvga(&h, 8, 4, VGACAP_FLAG_FIRST_SAMPLE_MSB);
+    h.mode = VGACAP_MODE_EXTCLK;
+    h.clock_hz = o->clock_hz;
+    snprintf(h.desc, sizeof h.desc, "%s", o->desc);
+    h.desc_len = (uint8_t)strlen(h.desc);
+    vgacap_writer_t w;
+    int bad = vgacap_writer_init(&w, file_write, fp, &h);
+    uint64_t left = o->samples;
+    for (uint64_t pos = skip_words; !bad && left; pos += CHUNK_WORDS) {
+        uint32_t n = left < 4u * CHUNK_WORDS ? (uint32_t)left : 4u * CHUNK_WORDS;
+        bad = vgacap_writer_raw(&w, buf + pos, n);
+        left -= n;
+    }
+    if (!bad) {
+        char msg[128];
+        snprintf(msg, sizeof msg, "rp1 samples=%llu seconds=%.3f samples_per_s=%.0f",
+                 (unsigned long long)o->samples, secs, (double)o->samples / secs);
+        bad = vgacap_writer_time(&w, 0, o->clock_hz, 0, msg);
+        printf("%s\n", msg);
+    }
+    if (fclose(fp) || bad) {
+        fprintf(stderr, "vgacap-rp1: writing %s failed\n", o->out);
+        return 1;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     struct options o;
@@ -189,6 +225,33 @@ int main(int argc, char **argv)
     }
     pio_select(pio);
 
+    // Everything claimed from here on is released by the one teardown at the
+    // end, whichever step fails: a state machine, DMA channel or program left
+    // claimed by an early exit leaves the rp1-pio driver unusable until a
+    // reboot (capture-rp1/README.md). So every failure after this point sets
+    // its message and jumps to `teardown`, and teardown undoes only what was
+    // done, in the order below.
+    int status = 1;                  // the exit status; 0 only once the stream is written
+    bool captured = false;
+    int ret = 0;                     // the receive DMA's (or --poll's) result
+    double secs = 0;
+    int cap_sm = -1, gen_sm = -1, cnt_sm = -1;
+    bool cap_loaded = false, gen_loaded = false, cnt_loaded = false;
+    bool gen_pins = false, cnt_pins = false, gen_started = false;
+    uint cap_off = 0, gen_off = 0, cnt_off = 0;
+    struct generator gen = {0};
+    pthread_t gen_thread;
+    uint8_t *gen_data = NULL;
+    uint32_t *buf = NULL;
+    uint16_t gen_insns[2], cnt_insns[2];
+    pio_program_t gen_prog = {.instructions = gen_insns, .length = 2, .origin = -1};
+    pio_program_t cnt_prog = {.instructions = cnt_insns, .length = 2, .origin = -1};
+    // The first DMA burst (8 words) of a capture is stale even after the
+    // FIFOs are cleared -- measured with the counter generator: the first 32
+    // samples broke the count, nothing after them did. So one burst more is
+    // captured and dropped.
+    const uint64_t skip_words = 8;
+
     // ---- the sampler: the RP2's program, word for word ------------------
     uint16_t cap_insns[3] = {
         (uint16_t)pio_encode_wait_gpio(!o.rising, o.clk),
@@ -198,8 +261,9 @@ int main(int argc, char **argv)
     pio_program_t cap_prog = {.instructions = cap_insns, .length = 3, .origin = -1};
     if (getenv("VGACAP_RP1_DEBUG"))
         fprintf(stderr, "sampler: %04x %04x %04x\n", cap_insns[0], cap_insns[1], cap_insns[2]);
-    int cap_sm = pio_claim_unused_sm(pio, true);
-    uint cap_off = pio_add_program(pio, &cap_prog);
+    cap_sm = pio_claim_unused_sm(pio, true);
+    cap_off = pio_add_program(pio, &cap_prog);
+    cap_loaded = true;
     pio_sm_config cc = pio_get_default_sm_config();
     sm_config_set_wrap(&cc, cap_off, cap_off + 2);
     sm_config_set_in_pins(&cc, o.data_base);
@@ -213,7 +277,7 @@ int main(int argc, char **argv)
     if (xret) {
         fprintf(stderr, "vgacap-rp1: cannot set up receive DMA (%u buffers of %u bytes): %d\n",
                 RX_BUFFERS, CHUNK_BYTES, xret);
-        return 1;
+        goto teardown;
     }
     if (!o.poll) {
         // The rp1-pio driver sets the RX DMA request threshold to 1 word
@@ -231,18 +295,11 @@ int main(int argc, char **argv)
     pio_sm_init(pio, (uint)cap_sm, cap_off, &cc);
 
     // ---- the optional generator (test fixture) --------------------------
-    struct generator gen = {0};
-    pthread_t gen_thread;
-    uint8_t *gen_data = NULL;
-    int gen_sm = -1;
-    uint16_t gen_insns[2];
-    pio_program_t gen_prog = {.instructions = gen_insns, .length = 2, .origin = -1};
-    uint gen_off = 0;
     if (o.gen) {
         size_t len = 0;
         gen_data = read_file(o.gen, &len);
         if (!gen_data)
-            return 1;
+            goto teardown;
         gen_insns[0] = (uint16_t)(pio_encode_out(pio_pins, 8) | pio_encode_sideset(1, 0) |
                                   pio_encode_delay(o.gen_delay));
         gen_insns[1] = (uint16_t)(pio_encode_nop() | pio_encode_sideset(1, 1) | pio_encode_delay(o.gen_delay));
@@ -250,6 +307,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "generator: %04x %04x\n", gen_insns[0], gen_insns[1]);
         gen_sm = pio_claim_unused_sm(pio, true);
         gen_off = pio_add_program(pio, &gen_prog);
+        gen_loaded = true;
         pio_sm_config gc = pio_get_default_sm_config();
         sm_config_set_wrap(&gc, gen_off, gen_off + 1);
         sm_config_set_out_pins(&gc, o.data_base, 8);
@@ -263,6 +321,7 @@ int main(int argc, char **argv)
         pio_gpio_init(pio, o.clk);
         pio_sm_set_consecutive_pindirs(pio, (uint)gen_sm, o.data_base, 8, true);
         pio_sm_set_consecutive_pindirs(pio, (uint)gen_sm, o.clk, 1, true);
+        gen_pins = true;
         // Every transfer is exactly the configured size: transfers shorter
         // than it (a 4 KB pattern on a 32 KB configuration) came out of the
         // PIO as a scrambled mix of words (pi-sw2-p4, 2026-11-24). So the
@@ -277,11 +336,16 @@ int main(int argc, char **argv)
         xret = chunk ? pio_sm_config_xfer(pio, (uint)gen_sm, PIO_DIR_TO_SM, chunk, 4) : -1;
         if (xret) {
             fprintf(stderr, "vgacap-rp1: cannot set up transmit DMA: %d\n", xret);
-            return 1;
+            goto teardown;
         }
         pio_sm_init(pio, (uint)gen_sm, gen_off, &gc);
         gen = (struct generator){.pio = pio, .sm = (uint)gen_sm, .data = gen_data, .len = len, .chunk = chunk};
-        pthread_create(&gen_thread, NULL, generator_thread, &gen);
+        int terr = pthread_create(&gen_thread, NULL, generator_thread, &gen);
+        if (terr) {
+            fprintf(stderr, "vgacap-rp1: cannot start the generator thread: %s\n", strerror(terr));
+            goto teardown;
+        }
+        gen_started = true;
         pio_sm_set_enabled(pio, (uint)gen_sm, true);
     }
 
@@ -290,10 +354,6 @@ int main(int argc, char **argv)
     // issues" in piolib's README), and feeding a generator from a second
     // thread while capturing interfered with the capture; this isolates the
     // capture path. A correct capture steps down by exactly 1 every sample.
-    uint16_t cnt_insns[2];
-    pio_program_t cnt_prog = {.instructions = cnt_insns, .length = 2, .origin = -1};
-    uint cnt_off = 0;
-    int cnt_sm = -1;
     if (o.gen_counter) {
         cnt_sm = pio_claim_unused_sm(pio, true);
         // The jump target is program-relative (0); pio_add_program relocates
@@ -306,6 +366,7 @@ int main(int argc, char **argv)
         cnt_insns[1] = (uint16_t)(pio_encode_jmp_x_dec(0) | pio_encode_sideset(1, 1) |
                                   pio_encode_delay(o.gen_delay));
         cnt_off = pio_add_program(pio, &cnt_prog);
+        cnt_loaded = true;
         pio_sm_config kc = pio_get_default_sm_config();
         sm_config_set_wrap(&kc, cnt_off, cnt_off + 1);
         sm_config_set_out_pins(&kc, o.data_base, 8);
@@ -317,22 +378,18 @@ int main(int argc, char **argv)
         pio_gpio_init(pio, o.clk);
         pio_sm_set_consecutive_pindirs(pio, (uint)cnt_sm, o.data_base, 8, true);
         pio_sm_set_consecutive_pindirs(pio, (uint)cnt_sm, o.clk, 1, true);
+        cnt_pins = true;
         pio_sm_init(pio, (uint)cnt_sm, cnt_off, &kc);
         pio_sm_set_enabled(pio, (uint)cnt_sm, true);
     }
 
     // ---- capture --------------------------------------------------------
-    // The first DMA burst (8 words) of a capture is stale even after the
-    // FIFOs are cleared -- measured with the counter generator: the first 32
-    // samples broke the count, nothing after them did. So one burst more is
-    // captured and dropped.
-    const uint64_t skip_words = 8;
     uint64_t words = (o.samples + 3) / 4 + skip_words;
     uint64_t chunks = (words + CHUNK_WORDS - 1) / CHUNK_WORDS;
-    uint32_t *buf = malloc(chunks * CHUNK_BYTES);
+    buf = malloc(chunks * CHUNK_BYTES);
     if (!buf) {
         fprintf(stderr, "vgacap-rp1: cannot allocate %llu bytes\n", (unsigned long long)(chunks * CHUNK_BYTES));
-        return 1;
+        goto teardown;
     }
     // Nothing captured before this run may lead it: words left in the FIFO
     // came out as the first 8 of the stream (pi-sw2-p4, 2026-11-24).
@@ -340,7 +397,6 @@ int main(int argc, char **argv)
     pio_sm_restart(pio, (uint)cap_sm);
     double t0 = now_s();
     pio_sm_set_enabled(pio, (uint)cap_sm, true);
-    int ret = 0;
     if (o.poll) {
         double deadline = now_s() + 10.0;
         for (uint64_t i = 0; i < words && !ret; ) {
@@ -360,16 +416,21 @@ int main(int argc, char **argv)
         for (uint64_t i = 0; i < chunks && !ret; i++)
             ret = pio_sm_xfer_data(pio, (uint)cap_sm, PIO_DIR_FROM_SM, CHUNK_BYTES, buf + i * CHUNK_WORDS);
     }
-    double secs = now_s() - t0;
+    secs = now_s() - t0;
+    if (ret)
+        fprintf(stderr, "vgacap-rp1: receive DMA failed: %d\n", ret);
+    else
+        captured = true;
 
-    // Teardown, in an order that never leaves a DMA transfer waiting on a
-    // state machine that has stopped: the generator thread is asked to stop
-    // and finishes the transfer it is in (its state machine still running),
-    // and only then are the state machines disabled and everything released.
+teardown:
+    // In an order that never leaves a DMA transfer waiting on a state
+    // machine that has stopped: the generator thread is asked to stop and
+    // finishes the transfer it is in (its state machine still running), and
+    // only then are the state machines disabled and everything released.
     // Cancelling the thread inside the transfer instead left the kernel with
     // "DMA wait timed out ... dma2chan1 failed to stop", and the next run
     // could not talk to the RP1 at all (measured on pi-sw2-p4, 2026-11-24).
-    if (o.gen) {
+    if (gen_started) {
         gen.stop = true;
         pthread_join(gen_thread, NULL);
         // The thread's last transfer has returned, but the DMA may still be
@@ -379,61 +440,40 @@ int main(int argc, char **argv)
         double until = now_s() + 2.0;
         while (!pio_sm_is_tx_fifo_empty(pio, (uint)gen_sm) && now_s() < until)
             ;
+    }
+    if (gen_sm >= 0) {
         pio_sm_set_enabled(pio, (uint)gen_sm, false);
-        // Leave the pins as found: inputs.
-        pio_sm_set_consecutive_pindirs(pio, (uint)gen_sm, o.data_base, 8, false);
-        pio_sm_set_consecutive_pindirs(pio, (uint)gen_sm, o.clk, 1, false);
-        pio_remove_program(pio, &gen_prog, gen_off);
+        if (gen_pins) {
+            // Leave the pins as found: inputs.
+            pio_sm_set_consecutive_pindirs(pio, (uint)gen_sm, o.data_base, 8, false);
+            pio_sm_set_consecutive_pindirs(pio, (uint)gen_sm, o.clk, 1, false);
+        }
+        if (gen_loaded)
+            pio_remove_program(pio, &gen_prog, gen_off);
         pio_sm_unclaim(pio, (uint)gen_sm);
     }
-    if (o.gen_counter) {
+    if (cnt_sm >= 0) {
         pio_sm_set_enabled(pio, (uint)cnt_sm, false);
-        pio_sm_set_consecutive_pindirs(pio, (uint)cnt_sm, o.data_base, 8, false);
-        pio_sm_set_consecutive_pindirs(pio, (uint)cnt_sm, o.clk, 1, false);
-        pio_remove_program(pio, &cnt_prog, cnt_off);
+        if (cnt_pins) {
+            pio_sm_set_consecutive_pindirs(pio, (uint)cnt_sm, o.data_base, 8, false);
+            pio_sm_set_consecutive_pindirs(pio, (uint)cnt_sm, o.clk, 1, false);
+        }
+        if (cnt_loaded)
+            pio_remove_program(pio, &cnt_prog, cnt_off);
         pio_sm_unclaim(pio, (uint)cnt_sm);
     }
-    pio_sm_set_enabled(pio, (uint)cap_sm, false);
-    pio_remove_program(pio, &cap_prog, cap_off);
-    pio_sm_unclaim(pio, (uint)cap_sm);
-    pio_close(pio);
-    if (ret) {
-        fprintf(stderr, "vgacap-rp1: receive DMA failed: %d\n", ret);
-        return 1;
+    if (cap_sm >= 0) {
+        pio_sm_set_enabled(pio, (uint)cap_sm, false);
+        if (cap_loaded)
+            pio_remove_program(pio, &cap_prog, cap_off);
+        pio_sm_unclaim(pio, (uint)cap_sm);
     }
+    pio_close(pio);
 
     // ---- the vgacap stream ----------------------------------------------
-    FILE *fp = fopen(o.out, "wb");
-    if (!fp) {
-        fprintf(stderr, "vgacap-rp1: %s: %s\n", o.out, strerror(errno));
-        return 1;
-    }
-    vgacap_header_t h;
-    vgacap_header_init_tinyvga(&h, 8, 4, VGACAP_FLAG_FIRST_SAMPLE_MSB);
-    h.mode = VGACAP_MODE_EXTCLK;
-    h.clock_hz = o.clock_hz;
-    snprintf(h.desc, sizeof h.desc, "%s", o.desc);
-    h.desc_len = (uint8_t)strlen(h.desc);
-    vgacap_writer_t w;
-    int bad = vgacap_writer_init(&w, file_write, fp, &h);
-    uint64_t left = o.samples;
-    for (uint64_t pos = skip_words; !bad && left; pos += CHUNK_WORDS) {
-        uint32_t n = left < 4u * CHUNK_WORDS ? (uint32_t)left : 4u * CHUNK_WORDS;
-        bad = vgacap_writer_raw(&w, buf + pos, n);
-        left -= n;
-    }
-    if (!bad) {
-        char msg[128];
-        snprintf(msg, sizeof msg, "rp1 samples=%llu seconds=%.3f samples_per_s=%.0f",
-                 (unsigned long long)o.samples, secs, (double)o.samples / secs);
-        bad = vgacap_writer_time(&w, 0, o.clock_hz, 0, msg);
-        printf("%s\n", msg);
-    }
-    if (fclose(fp) || bad) {
-        fprintf(stderr, "vgacap-rp1: writing %s failed\n", o.out);
-        return 1;
-    }
+    if (captured)
+        status = write_stream(&o, buf, skip_words, secs);
     free(buf);
     free(gen_data);
-    return 0;
+    return status;
 }
