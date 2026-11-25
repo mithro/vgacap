@@ -197,7 +197,8 @@ program could load the `.pio` files' words the same way.
   buffers (the MicroPython module's), refusals.
 * `test_fw_sim.py`: the transport end to end against `vgacap-fw-sim`, with
   a synthetic VGA design: byte-exact streams, pixel-exact frames and
-  windows through `vgacap-frames`, stops, overruns, the CLI, and the same
+  windows through [`vgacap-frames`](../src/tools/README.md), stops,
+  overruns, the CLI, and the same
   FRAM chunks as `frame_rp2.py` on `ttcap.emu`.
 
 The simulator models what the PIO and DMA deliver, not their cycles; see
@@ -212,9 +213,10 @@ there as in
 and the UF2 copied there. `<dev>` is the stock firmware's serial port
 (`/dev/ttboard` on the fpgas.online Pis).
 
-1. With the stock firmware, enable the design to capture (the fpgas.online
-   bridge (`fpgas-tt`)'s `/designs/<name>/enable`, or `ttcap capture`'s
-   `--design`), and take a reference capture the usual way if wanted.
+1. With the stock firmware, enable the design to capture
+   (`/designs/<name>/enable` on the fpgas.online bridge (`fpgas-tt`), or
+   `ttcap capture`'s `--design`), and take a reference capture the usual
+   way if wanted.
 2. Stop anything else that owns the port, such as the bridge
    (`sudo systemctl stop fpgas-tt`, after checking it has no clients).
 3. Into the bootloader:
