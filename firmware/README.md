@@ -100,8 +100,11 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   (PROTOCOL.md); `ttcap capture --firmware picosdk --asic-index N` sends
   it. N is `tt.shuttle.<name>.count` under the stock firmware. The
   firmware cannot tell an FPGA breakout from an ASIC carrier, so `ttcap`
-  refuses `--asic-index` for an FPGA bench board: one named by `--board`,
-  or the one whose Pi it runs on.
+  refuses `--asic-index` for an FPGA bench board, named by `--board`, by
+  a `ws://` link (the bridge's address, the Pi's name or a tunnel's
+  `18000 + octet` port) or by the Pi it runs on (for a `serial:` link),
+  and when those disagree. `ttcap.firmware.setup()` called directly does
+  not check: its caller must (`ttcap.demo.check_asic_index()`).
 * `ui_in` and `rst_n` are left untouched until `ui_in` / `reset` commands
   drive them; `ttcap` holds reset while it programs the clock and releases
   it last, as `select_project()` does.
