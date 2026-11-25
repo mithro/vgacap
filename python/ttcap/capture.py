@@ -37,7 +37,7 @@ from vgacap.modes import MODES
 from vgacap.stream import Header, Writer
 
 from . import mp
-from .boards import BoardProfile
+from .boards import BoardProfile, pwm_slice_addr
 from .repl import CHUNK_HEADER_LEN, RawRepl, ReplFramingError
 
 EDGES = ("falling", "rising")
@@ -153,6 +153,7 @@ def frame_cfg(
         max_frames=max_frames,
         sample_delay=sample_delay,
         clock_hz=clock_hz,
+        clk_pwm=pwm_slice_addr(profile, profile.clk_gpio),
     )
     return cfg
 
@@ -427,6 +428,9 @@ class CaptureRequest:
                 "seconds and max_bytes are both 0 and no stop callable was "
                 "given: the capture would never stop"
             )
+        # Every check the CFG makes (e.g. sample_delay's range) fails here,
+        # before `select_project()` has sent the board a single command.
+        self.cfg()
 
     @property
     def selection(self) -> str | None:
@@ -610,29 +614,47 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
         # was in is returned so the caller can put it back (`restore_mode`).
         out = _exec_checked(repl, "print(int(tt.mode))")
         did["mode_before"] = int(out.strip().splitlines()[-1])
-        _exec_checked(
-            repl,
-            "from ttboard.mode import RPMode\n"
-            "tt.mode = RPMode.ASIC_RP_CONTROL\n"
-            "tt.ui_in.value = %d" % req.ui_in,
-        )
-        did["ui_in"] = req.ui_in
-    # `clock_project_PWM(freqHz, duty_u16=0xffff/2, quiet=False,
-    # max_rp2040_freq=...)` in both SDK 2.x and 3.x; only the
-    # `max_rp2040_freq` default differs between them, and this passes
-    # neither it nor any other optional argument.
-    _exec_checked(repl, f"tt.clock_project_PWM({int(req.clock_hz)})")
-    _exec_checked(repl, "tt.reset_project(False)")
+    try:
+        if req.ui_in is not None:
+            _exec_checked(
+                repl,
+                "from ttboard.mode import RPMode\n"
+                "tt.mode = RPMode.ASIC_RP_CONTROL\n"
+                "tt.ui_in.value = %d" % req.ui_in,
+            )
+            did["ui_in"] = req.ui_in
+        # `clock_project_PWM(freqHz, duty_u16=0xffff/2, quiet=False,
+        # max_rp2040_freq=...)` in both SDK 2.x and 3.x; only the
+        # `max_rp2040_freq` default differs between them, and this passes
+        # neither it nor any other optional argument.
+        _exec_checked(repl, f"tt.clock_project_PWM({int(req.clock_hz)})")
+        _exec_checked(repl, "tt.reset_project(False)")
+    except BaseException as exc:
+        # The caller never sees `did`, so it cannot put the mode back: a
+        # shared board must not be left in ASIC_RP_CONTROL by a failed setup.
+        if "mode_before" in did:
+            undo_selection(repl, did, stop=True, error=exc)
+        raise
     return did
+
+
+def cleanup_names(cfg: dict) -> list[str]:
+    """What `prepare_board` deletes: the module-level names of EVERY capture
+    program, not just the next one, so switching between stream and frame
+    mode does not leave the other program's globals holding the heap."""
+    names: set[str] = set()
+    for script in CAPTURE_SCRIPTS:
+        names.update(mp.module_level_names(mp.build(cfg, script)))
+    return sorted(names)
 
 
 def prepare_board(repl: RawRepl, names: list[str], timeout: float = 10.0) -> int:
     """Clear a previous run's leftovers and return the free heap in bytes.
 
-    Deletes every module-level name the script is about to define, collects,
-    and reads `gc.mem_free()`. On tt07 that recovered about 5 KB (79,296 ->
-    84,208 free), which was the difference between a capture script that
-    compiled and one that did not.
+    Deletes `names` (every capture program's module-level names, from
+    `cleanup_names`), collects, and reads `gc.mem_free()`. On tt07 that
+    recovered about 5 KB (79,296 -> 84,208 free), which was the difference
+    between a capture script that compiled and one that did not.
     """
     stdout, stderr = repl.exec(_CLEANUP % (names,), timeout=timeout)
     if stderr.strip():
@@ -653,6 +675,34 @@ def stop_clock(repl: RawRepl) -> None:
 def restore_mode(repl: RawRepl, mode: int) -> None:
     """Put the SDK's RPMode back to what `select_project` found (`--ui-in`)."""
     _exec_checked(repl, "tt.mode = %d" % int(mode))
+
+
+def undo_selection(
+    repl: RawRepl, did: dict, stop: bool, error: BaseException | None = None
+) -> None:
+    """Undo what `select_project` returned in `did`: stop the clock when
+    `stop`, and put back the RPMode it changed.
+
+    Both steps are tried even if one fails. With `error` -- the exception
+    a failed capture is already raising -- a failure here becomes a note on
+    it rather than replacing it; without one, the first failure is raised.
+    """
+    steps = []
+    if stop:
+        steps.append(lambda: stop_clock(repl))
+    if "mode_before" in did:
+        steps.append(lambda: restore_mode(repl, did["mode_before"]))
+    first = None
+    for step in steps:
+        try:
+            step()
+        except Exception as exc:  # noqa: BLE001 - reported below
+            if error is not None:
+                error.add_note(f"putting the board back failed too: {exc}")
+            elif first is None:
+                first = exc
+    if first is not None:
+        raise first
 
 
 def _describe(req: CaptureRequest) -> str:
@@ -1046,7 +1096,7 @@ class CaptureSession:
             script = mp.build(req.cfg(), req.script)
 
             needed = req.min_free()
-            self._mem_free = prepare_board(repl, mp.module_level_names(script))
+            self._mem_free = prepare_board(repl, cleanup_names(req.cfg()))
             if self._mem_free < needed:
                 if req.is_frame:
                     why = "one line of frame buffer plus %d to compile the script" % (
