@@ -49,7 +49,7 @@ toolchain): `vgacap-fw-sim` and the C tests [`test_fw_units`](../tests/test_fw_u
 ## Building
 
 Toolchain (Debian/Ubuntu): `sudo apt-get install gcc-arm-none-eabi
-libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib`, plus a host C/C++
+libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib ninja-build`, plus a host C/C++
 compiler and CMake for pioasm and picotool, which the SDK builds itself.
 
 The SDK is pinned to [**pico-sdk 2.2.0**](https://github.com/raspberrypi/pico-sdk/releases/tag/2.2.0), commit
@@ -143,7 +143,7 @@ same order as the `.pio` source:
 The tests hold `fw_pio.c` to both: to pioasm's words for the `.pio` files
 (through the checked-in `.hex`) and to MicroPython's `rp2.asm_pio` words
 for every operand combination they try, configuration registers included
-(`python/tests/test_fw_sim.py`, `tests/test_fw_units.c`). A MicroPython
+(`python/tests/test_fw_sim.py`, [`tests/test_fw_units.c`](../tests/test_fw_units.c)). A MicroPython
 program could load the `.pio` files' words the same way.
 
 ## Off-hardware tests
@@ -153,7 +153,7 @@ program could load the `.pio` files' words the same way.
 
 * `test_fw_units`: argument parsing; the clock plans against the clocks
   the stock firmware was measured to pick on fpga-4 (25 MHz -> 100 MHz,
-  36 MHz -> 72 MHz, 28.322 MHz -> 113 MHz = 28.25 MHz, ...); the PIO words.
+  36 MHz -> 72 MHz, 28.322 MHz -> 113 MHz (28.25 MHz project clock), ...); the PIO words.
 * `test_fw_core`: every command's exact reply, and the engines' exact
   chunks on the simulated board: max_bytes, overruns (cumulative), stop
   bytes, frame windows, the arena limit, chained buffers (the MicroPython
