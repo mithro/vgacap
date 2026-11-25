@@ -101,8 +101,7 @@ See [docs/development.md](docs/development.md).
 ## A first capture
 
 With a demo board on `/dev/ttyACM0` whose FPGA breakout can enable the
-`tt_um_vga_pattern` bitstream, as fpga-1 can
-([Reaching a Welland board](python/ttcap/README.md#reaching-a-welland-board)):
+`tt_um_vga_pattern` bitstream:
 
 ```sh
 uv run ttcap capture serial:/dev/ttyACM0 --design tt_um_vga_pattern \
@@ -112,6 +111,9 @@ export GST_PLUGIN_PATH=$PWD/build
 uv run ttcap demo --link serial:/dev/ttyACM0 --design tt_um_vga_pattern \
     --clock-hz 500000 --fps 5 --outdir out                         # PNGs + MKV
 ```
+
+For a board on the Welland bench, see
+[Reaching a Welland board](python/ttcap/README.md#reaching-a-welland-board).
 
 ## Layout
 
