@@ -5,12 +5,12 @@ serial port, and what comes back. The host side is [`python/ttcap/firmware.py`](
 the firmware side is [`firmware/core/fw.c`](core/fw.c).
 
 The serial settings do not matter (it is USB CDC), but the host must assert
-DTR, as pyserial does when it opens a port: the firmware only writes while
+DTR, as [pyserial](https://github.com/pyserial/pyserial) does when it opens a port: the firmware only writes while
 DTR is set, and a capture whose host drops DTR stops.
 
 A bridge that keeps the port open keeps DTR set for as long as it does.
 The fpgas.online bridge (`fpgas-tt`) opens the port through
-pyserial-asyncio, so DTR is asserted, and holds it open whether or not a
+[pyserial-asyncio](https://github.com/pyserial/pyserial-asyncio), so DTR is asserted, and holds it open whether or not a
 ws:// client is connected: a client that leaves mid-capture does not drop
 DTR, and the capture runs on to `max_bytes` or the next host's `0x03`.
 
@@ -27,21 +27,21 @@ There are no defaults: the host always says what it wants.
 Each command gets exactly one reply line: `ok` followed by `key=value`
 fields, or `err` followed by a message for a person.
 
-| command | arguments | `ok` reply |
-|---|---|---|
-| `hello` | none | `ok vgacap-fw proto=1 chip=rp2350 sysclk_hz=N arena_bytes=N` |
-| `status` | none | `ok clock_hz=N sysclk_hz=N reset=0\|1 ui_in=-1..255` |
-| `clock` | `hz=1..125000000` | `ok clock_hz=N actual_hz=N sysclk_hz=N period=P` |
-| `clock` | `hz=0` | `ok clock_hz=0 sysclk_hz=N` |
-| `reset` | `hold=0\|1` | `ok reset=0\|1` |
-| `ui_in` | `value=-1..255` | `ok ui_in=V` |
-| `asic_select` | `index=0..1023` | `ok asic_select index=N` |
-| `stream` | [see below](#stream) | `ok stream`, then a capture |
-| `frame` | [see below](#frame) | `ok frame`, then a capture |
-| `program_stream` | `edge` | `ok words=... wrap_target=N wrap=N shiftctrl=0x... execctrl=0x...` |
-| `program_frame` | `edge hsync_active vsync_active sample_delay period` | the same |
-| `reboot` | none | `ok reboot`, then the board reboots into its flash firmware |
-| `bootsel` | none | `ok bootsel`, then the board reboots into the USB bootloader |
+| command | arguments | `ok` reply | after the reply |
+|---|---|---|---|
+| `hello` | none | `ok vgacap-fw proto=1 chip=rp2350 sysclk_hz=N arena_bytes=N` | -- |
+| `status` | none | `ok clock_hz=N sysclk_hz=N reset=0\|1 ui_in=-1..255` | -- |
+| `clock` | `hz=1..125000000` | `ok clock_hz=N actual_hz=N sysclk_hz=N period=P` | -- |
+| `clock` | `hz=0` | `ok clock_hz=0 sysclk_hz=N` | -- |
+| `reset` | `hold=0\|1` | `ok reset=0\|1` | -- |
+| `ui_in` | `value=-1..255` | `ok ui_in=V` | -- |
+| `asic_select` | `index=0..1023` | `ok asic_select index=N` | -- |
+| `stream` | [see below](#stream) | `ok stream` | a capture |
+| `frame` | [see below](#frame) | `ok frame` | a capture |
+| `program_stream` | `edge=falling\|rising` | `ok words=... wrap_target=N wrap=N shiftctrl=0x... execctrl=0x...` | -- |
+| `program_frame` | `edge=falling\|rising hsync_active=0..1 vsync_active=0..1 sample_delay=0..31 period=2..32` | as for `program_stream` | -- |
+| `reboot` | none | `ok reboot` | the board reboots into its flash firmware |
+| `bootsel` | none | `ok bootsel` | the board reboots into the USB bootloader |
 
 * `clock hz=N` starts the project clock on GPIO 16, choosing the system
   clock the stock firmware would choose for that project clock (so a design
@@ -77,13 +77,9 @@ fields, or `err` followed by a message for a person.
 * `reboot` returns the board to the firmware in its flash (the stock
   firmware); `bootsel` is for loading another UF2 without it.
 
-At boot the firmware drives one pin, GPIO 1 (`ctrl_sel_nrst`: the iCE40's
-`CRESET_B` on an FPGA breakout, the mux controller's reset on an ASIC
-breakout), high -- the level the stock firmware leaves it at, without a
-glitch low -- and makes `uo_out` (GPIO 33..40) inputs. Every other pin,
-GPIO 0 and 2 (`ctrl_ena`, `ctrl_sel_inc`) included, stays as the
-bootloader left it until a command drives it ([README.md, "Hardware
-notes"](README.md#hardware-notes-and-assumptions)).
+At boot the firmware drives GPIO 1 high and makes `uo_out` (GPIO 33..40)
+inputs; every other pin stays as the bootloader left it until a command
+drives it ([Hardware notes](README.md#hardware-notes-and-assumptions)).
 
 A host can always get the firmware into a known state by sending
 `\x03\nhello\n` and discarding everything before the `ok vgacap-fw` reply:
