@@ -21,7 +21,8 @@ board can settle and writes a dated Markdown report. The checks are:
 - `reference`: pixel-exact against a [`tt-vga-testpatterns`](https://github.com/mithro/tt-vga-testpatterns) calibration
   render;
 - `frame`: whole frames at the design's real clock, each one pixel-exact;
-- `demo-frames`: a `ttcap demo` run writes PNGs at the requested frame rate;
+- `demo-frames`: a [`ttcap demo`](../python/ttcap/README.md#ttcap-demo-a-board-in-video-out)
+  run writes PNGs at the requested frame rate;
 - `video`: its video opens, at the requested rate and the expected length;
 - `serve`: its MJPEG stream delivers at least two parts;
 - `stop`: cooperative stop latency, and no orphaned processes;
