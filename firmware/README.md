@@ -73,14 +73,22 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   BOOTSEL and this firmware, frame, window and streaming captures of
   `tt_um_vgacal_bars` were pixel-exact, so the iCE40 kept its configuration
   (tt-vga-capture `docs/results/2026-11-24-picosdk-firmware-fpga4/`).
-  GPIO 1 is the iCE40's `CRESET_B` there (and the mux controller's reset
-  on an ASIC carrier): the stock firmware leaves it driven high, while the
-  RP2350 is in reset and in its bootloader it is an input with the pad's
-  default pull-down, and this firmware drives it high again first thing at
-  boot. If the board's pull-up does not win over the pull-down in that
-  window, the FPGA comes back unconfigured and captures show no sync. The
-  ASIC boards' mux (GPIO 0/1/2) is not driven at all, so the same question
-  applies to whether the selected project survives there.
+  GPIO 1 (`ctrl_sel_nrst`) is the iCE40's `CRESET_B` there, and the mux
+  controller's reset on an ASIC carrier; low erases the FPGA or resets the
+  mux. The stock firmware leaves it driven high once a design is enabled
+  (`fabricfoxv2.py` raises `CRESET_B` and keeps it there after loading a
+  bitstream; `ProjectMux.reset()` ends with `ncrst(1)`). While the RP2350
+  is in reset and in its bootloader it is an input with the pad's default
+  pull-down (the stock firmware's own boot does the same,
+  `DemoboardDetect.rp_all_inputs()`), so the FPGA surviving the switch
+  means the board's pull-up wins there, as it did on fpga-4. **This
+  firmware drives GPIO 1 high first thing at boot** (`hal_pico_init()`),
+  level before direction so it never glitches low: the level the stock
+  firmware left, so nothing then depends on the pull-up. It never drives
+  it low. On an ASIC carrier that only holds the mux out of reset, the
+  stock firmware's idle level. GPIO 0 (`ctrl_ena`) and GPIO 2
+  (`ctrl_sel_inc`) are not driven at all, so whether an ASIC board's
+  selected project survives the switch is a separate question.
 * `ui_in` and `rst_n` are left untouched until `ui_in` / `reset` commands
   drive them; `ttcap` holds reset while it programs the clock and releases
   it last, as `select_project()` does.

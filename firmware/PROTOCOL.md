@@ -53,6 +53,14 @@ fields, or `err` followed by a message for a person.
 * `reboot` returns the board to the firmware in its flash (the stock
   firmware); `bootsel` is for loading another UF2 without it.
 
+At boot the firmware drives one pin, GPIO 1 (`ctrl_sel_nrst`: the iCE40's
+`CRESET_B` on an FPGA breakout, the mux controller's reset on an ASIC
+carrier), high -- the level the stock firmware leaves it at, without a
+glitch low -- and makes `uo_out` (GPIO 33..40) inputs. Every other pin,
+GPIO 0 and 2 (`ctrl_ena`, `ctrl_sel_inc`) included, stays as the
+bootloader left it until a command drives it (README.md, "Hardware
+notes").
+
 A host can always get the firmware into a known state by sending
 `\x03\nhello\n` and discarding everything before the `ok vgacap-fw` reply:
 the stop byte ends a capture left running by a host that went away, an
