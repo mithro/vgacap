@@ -93,7 +93,6 @@ class VgacapRawFramer(Module):
             fifo.we.eq(word_done & cur_admitted),
         ]
         header_taken = Signal()
-        dropped_now = Signal()
         self.sync += [
             If(self.sample_valid,
                 slot.eq(slot + 1),
@@ -103,7 +102,6 @@ class VgacapRawFramer(Module):
             If(word_done,
                 If(in_chunk == words - 1, in_chunk.eq(0)).Else(in_chunk.eq(in_chunk + 1)),
             ),
-            dropped_now.eq(chunk_start & ~admit_now),
             If(chunk_start & ~admit_now, self.dropped.eq(self.dropped + samples_per_chunk)),
             chunks_pending.eq(chunks_pending + (chunk_start & admit_now) - header_taken),
         ]
