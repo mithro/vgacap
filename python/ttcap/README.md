@@ -24,7 +24,7 @@ uv run ttcap probe ws://127.0.0.1:18034/serial          # sys.version and the GP
 uv run ttcap throughput ws://127.0.0.1:18034/serial     # what clock the link can keep up with
 uv run ttcap capture ws://127.0.0.1:18034/serial --design tt_um_vga_pattern \
     --clock-hz 500000 --frames 2 --out capture.vgacap
-uv run ttcap png capture.vgacap out/frame       # out/frame-0000.png ...
+mkdir -p out && uv run ttcap png capture.vgacap out/frame   # out/frame-0000.png ...
 ```
 
 `--profile` defaults to `auto`, which reads the board's `GPIOMap` and picks
@@ -47,9 +47,8 @@ firmware outright.
 `ttcap png` needs [Pillow](https://github.com/python-pillow/Pillow), so it wants the `synth` extra
 (`uv sync --extra synth`) and a built `build/vgacap-frames`.
 
-Performance captures should own the serial device: on a board's own Pi,
-stop the [fpgas.online](https://tinytapeout.fpgas.online) bridge first (`sudo systemctl stop fpgas-tt`) and
-start it again afterwards.
+For a board on the Welland bench, see
+[Reaching a Welland board](#reaching-a-welland-board).
 
 ## Running on a Raspberry Pi
 
@@ -143,8 +142,9 @@ counted.
 Ctrl-C ends the run cleanly. The demo forwards the signal once to
 `gst-launch-1.0 -e`, which turns it into an end-of-stream, so the board winds
 down through `vgacapttsrc`'s cooperative stop and the Matroska file is
-finalized rather than truncated. Allow one DMA buffer for that: 2.2 s at a
-60 kHz project clock. `SIGTERM`, `SIGHUP` and `SIGQUIT` do the same.
+finalized rather than truncated. Allow one DMA buffer for that: about 137 ms
+on an RP2040 at 60 kHz with the default `--buf-words`. `SIGTERM`, `SIGHUP`
+and `SIGQUIT` do the same.
 However the demo ends (an exception, a `kill`, a closed terminal), it tears
 down the pipeline's whole process group on the way out, so a capture is
 never left holding a shared bench board. A third signal terminates the
@@ -161,9 +161,8 @@ The Welland boards are a shared, public bench of Tiny Tapeout demo boards,
 listed on [tinytapeout.fpgas.online](https://tinytapeout.fpgas.online). Each board is attached to its own
 Raspberry Pi, which runs the fpgas.online bridge (`fpgas-tt`).
 
-`--board` takes a slug from the `WELLAND` table in [`boards.py`](boards.py) (`tt03p5`,
-`tt04`..`tt08`, `fpga-1`, `fpga-3`, `fpga-4`; boards move between ports,
-see the comment on `WELLAND`) and resolves it to a link:
+`--board` takes a slug from the `WELLAND` table in [`boards.py`](boards.py),
+such as `fpga-1`, `fpga-3` or `fpga-4`, and resolves it to a link:
 
 * **on the board's own Pi**, `serial:/dev/ttboard`. Stop the fpgas.online
   bridge first (`sudo systemctl stop fpgas-tt`), since it holds the device
