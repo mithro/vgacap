@@ -406,8 +406,9 @@ def _sigint_stops_the_capture(flag: _StopFlag) -> Iterator[Callable[[], bool] | 
     So the first signal only sets `flag`, which `_watch_for_stop` turns into
     a stop byte at once. The board then finishes the chunk it is writing,
     emits its trailer, and the stream ends whole; the cost is one DMA buffer
-    (2.2 s at the RP2040's 60 kHz floor). The handler is put back inside
-    itself, so a *second* Ctrl-C interrupts for real.
+    (~137 ms on an RP2040 at 60 kHz with the default `--buf-words`). The
+    handler is put back inside itself, so a *second* Ctrl-C interrupts for
+    real.
 
     Yields the predicate to use as `CaptureRequest.stop`, or **None** when
     the handler could not be installed -- off the main thread, `signal` is
@@ -878,10 +879,10 @@ def build_parser() -> argparse.ArgumentParser:
         "closing the pipe, asks the board to stop at its next safe point; "
         "it then finishes the chunk it is writing and emits its closing "
         "TIME chunk, which carries the only overruns/rxstall report there "
-        "is. Allow at least one DMA buffer for that -- about 82 ms at "
-        "750 kHz with the default --buf-words, but 2.2 s at the RP2040's "
-        "60 kHz ceiling -- before escalating to a second signal or a kill. "
-        "Both endings exit 0."
+        "is. Allow at least one DMA buffer for that -- with the default "
+        "--buf-words, about 22 ms on an RP2350 at 750 kHz but about 137 ms "
+        "on an RP2040 at 60 kHz -- before escalating to a second signal or "
+        "a kill. Both endings exit 0."
     )
     capture_limit = capture_parser.add_mutually_exclusive_group()
     capture_limit.add_argument(
