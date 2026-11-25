@@ -276,6 +276,32 @@ def test_an_rx_stall_stops_the_capture_with_an_error():
     assert not any(d for d, _ in damaged_and_reported(stream))
 
 
+def test_a_saturated_run_goes_out_of_main_as_two_halves():
+    # 2^32 equal clocks cannot be emulated, so each buffer's first run
+    # word is set to the PIO's all-ones (2^32 - 1, one short) just before
+    # main() fixes it: main() must count it and send it as two pairs of
+    # 2^31, the rest of the buffer around them untouched.
+    def saturate(script):
+        lines = script.split("\n")
+        (at,) = [i for i, line in enumerate(lines) if line.strip() == "zeros = fix_runs(buf, BUF_WORDS)"]
+        indent = lines[at][: len(lines[at]) - len(lines[at].lstrip())]
+        lines.insert(at, indent + 'buf[4:8] = b"\\xff\\xff\\xff\\xff"')
+        return "\n".join(lines)
+
+    stream = counting_capture(stop_bytes=3 * 16_400, patch=saturate)
+
+    summary = messages(stream)[-1]
+    rle = [p for t, p in read_chunks(stream) if t == "RLE "]
+    pairs = [np.frombuffer(p[4:], dtype="<u4").reshape(-1, 2) for p in rle]
+    # Per buffer: a chunk of the two halves, then the other 2047 pairs.
+    buffers = len(pairs) // 2
+    assert buffers >= 2 and "saturated=%d " % buffers in summary
+    for halves, rest in zip(pairs[0::2], pairs[1::2]):
+        assert halves.tolist() == [[halves[0][0], 1 << 31]] * 2
+        assert len(rest) == 2047 and (rest[:, 1] == 1).all()
+        assert (rest[0][0] - halves[0][0]) % COUNT == 1
+
+
 @pytest.mark.parametrize("oneshot", [False, True], ids=["stream", "oneshot"])
 def test_a_stopped_rle_capture_leaves_no_dma_channel_running(bars_uo, oneshot):
     # A and B chain to each other, so on RP2350 aborting one re-triggers

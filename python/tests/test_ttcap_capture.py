@@ -553,6 +553,38 @@ def test_capture_request_rejects_impossible_requests(kwargs):
         request(**kwargs)
 
 
+def rle_chunk(profile, pairs) -> bytes:
+    return _after_header(header_for(profile), lambda w: w.rle(pairs))
+
+
+def test_rle_samples_are_the_sum_of_the_runs():
+    # Not the pair count, nor the payload's words: a picture of long runs
+    # is few pairs and many samples. A saturated run goes out as two pairs
+    # of 2^31, and its 2^32 samples are counted in full.
+    profile = RP2350_DBV3
+    board = FakeChunkBoard(
+        [
+            rle_chunk(profile, [(7, 3), (9, 1), (7, 40)]),
+            rle_chunk(profile, [(9, 1 << 31), (9, 1 << 31), (4, 5)]),
+            time_chunk(profile, 0, "overruns=0 rxstall=0 saturated=1 sysclk_hz=150000000"),
+        ]
+    )
+
+    stats = run_capture(connect(board), request(profile, script="rle_rp2.py"), io.BytesIO())
+
+    assert stats.samples == 3 + 1 + 40 + (1 << 32) + 5
+    assert stats.chunks == 3
+    assert stats.clean
+
+
+def test_an_rle_oneshot_needs_no_other_limit():
+    # It stops by itself after its two buffers, like a frame capture with
+    # max_frames -- but only the oneshot does.
+    request(script="rle_rp2.py", seconds=0, max_bytes=0, rle_oneshot=True)
+    with pytest.raises(ValueError, match="never stop"):
+        request(script="rle_rp2.py", seconds=0, max_bytes=0)
+
+
 def test_clears_the_previous_run_names_before_sending_the_script():
     profile = RP2040_TT06
     board = FakeChunkBoard(sample_run(profile, [1, 2, 3, 4]), mem_free=90_000)

@@ -583,6 +583,19 @@ def _rle_capture(monkeypatch, tmp_path, chunks, *extra) -> int:
     )
 
 
+def test_an_rle_capture_counts_the_runs_and_a_saturated_one_in_full(monkeypatch, capsys, tmp_path):
+    # Through main(): a 2^32 run arrives as two pairs of 2^31.
+    pairs = [(7, 3), (9, 1 << 31), (9, 1 << 31), (4, 5)]
+    chunks = rle_chunks(RP2350_DBV3, pairs,
+                        ["overruns=0 rxstall=0 saturated=1 sysclk_hz=150000000"])
+
+    assert _rle_capture(monkeypatch, tmp_path, chunks, "--max-bytes", "65536") == 0
+
+    out = capsys.readouterr().out
+    assert "samples=%d " % (3 + (1 << 32) + 5) in out
+    assert "saturated=1" in out
+
+
 def test_an_rle_capture_with_an_rx_stall_exits_one(monkeypatch, capsys, tmp_path):
     # A lost run word puts every later pair out of step: the board stops
     # with an error chunk, and the run is a failure even though what was
@@ -616,3 +629,28 @@ def test_a_stream_capture_with_an_rx_stall_still_exits_zero(monkeypatch, capsys,
     assert code == 0
     assert "rxstall=1" in capsys.readouterr().out
 
+
+def test_rle_refuses_frames_before_touching_the_board(monkeypatch, capsys, tmp_path):
+    # A frame's bytes depend on the picture under RLE, so --frames cannot
+    # become a byte budget.
+    board = capture_board(RP2350_DBV3, [])
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--mode", "rle",
+         "--clock-hz", "25000000", "--frames", "2", "--out", str(tmp_path / "rle.vgacap")]
+    )
+
+    assert code == 1
+    assert "--frames does not apply to --mode rle" in capsys.readouterr().err
+    assert not any(c.startswith("CFG = ") for c in board.commands)
+    assert not (tmp_path / "rle.vgacap").exists()
+
+
+def test_an_rle_oneshot_runs_with_seconds_zero_and_no_byte_limit(monkeypatch, tmp_path):
+    # The oneshot stops itself after its two buffers; no other limit needed.
+    chunks = rle_chunks(RP2350_DBV3, [(7, 3)],
+                        ["overruns=0 rxstall=0 saturated=0 sysclk_hz=150000000"])
+
+    assert _rle_capture(monkeypatch, tmp_path, chunks, "--seconds", "0", "--rle-oneshot") == 0
+    assert _rle_capture(monkeypatch, tmp_path, chunks, "--seconds", "0") == 1

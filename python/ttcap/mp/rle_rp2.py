@@ -88,9 +88,11 @@ grows by the other's code on a board that compiles each in ~80 KB. So an
 overrun is counted when the chain starts on a buffer still FULL, which is
 marked TORN, and the `overrun` TIME chunk follows the torn chunk itself --
 under RLE a torn chunk is worse than a gap: the new pairs in it are one
-short (fix_runs has already run) and spliced onto old ones. An overrun's
-lost samples cannot be counted from pairs, so `dropped_samples` is a
-lower bound: one sample per lost pair.
+short (fix_runs has already run) and spliced onto old ones; vgacap-frames
+and vgadecode drop the picture in progress at the marker. An overrun's
+lost samples cannot be counted from pairs, so `dropped_samples` is only
+an estimate, one sample per pair of each counted buffer: a pair is often
+many samples, and a tear that never overtook the send lost none.
 """
 
 BUF_WORDS = CFG["buf_words"]  # noqa: F821 - CFG is prepended by the host
