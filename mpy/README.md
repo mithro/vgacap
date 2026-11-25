@@ -1,17 +1,17 @@
 # vgacap MicroPython module
 
-`vgacap` is a MicroPython C module (a `USER_C_MODULE`) that captures a Tiny
+`vgacap` is a [MicroPython](https://micropython.org) C module (a `USER_C_MODULE`) that captures a Tiny
 Tapeout design's VGA output on `uo_out` with the PIO and DMA of the
 RP2350 on the Tiny Tapeout demo board, and writes it as vgacap chunks.
 
 It is the third way to capture on the RP2350 demo board, next to the
-MicroPython scripts (`python/ttcap/mp/`) and the pico-sdk capture firmware
+MicroPython scripts ([`python/ttcap/mp/`](../python/ttcap/mp/)) and the pico-sdk capture firmware
 ([`firmware/`](../firmware/README.md)). It shares the firmware's capture
-engines: the module is a thin binding over `firmware/core/fw_capture.c`
-and `firmware/pico/hal_rp2.c`, not a reimplementation.
+engines: the module is a thin binding over [`firmware/core/fw_capture.c`](../firmware/core/fw_capture.c)
+and [`firmware/pico/hal_rp2.c`](../firmware/pico/hal_rp2.c), not a reimplementation.
 
 The module is built into the demo board's MicroPython firmware (the
-`vgacap-module` branch of mithro/tt-micropython-firmware, which pins this
+[`vgacap-module` branch of mithro/tt-micropython-firmware](https://github.com/mithro/tt-micropython-firmware/tree/vgacap-module), which pins this
 repository as a submodule). The board otherwise stays exactly as it was
 (the ttboard SDK, `tt.shuttle`, the FPGA loader, the REPL), and a capture
 becomes one call instead of a script shipped over the REPL. The host side
@@ -67,15 +67,14 @@ Without `buf`, `stream()` allocates its two buffers (`8 * buf_words`
 bytes; `MemoryError` if they do not fit).
 
 `frame()` allocates heap blocks of whole lines for the window, planned as
-`frame_rp2.py` plans them: the whole window in one block if the heap has
+[`frame_rp2.py`](../python/ttcap/mp/frame_rp2.py) plans them: the whole window in one block if the heap has
 one, else blocks of 64, 16, 4 and 1 lines, biggest first, at most 128
 blocks, with 4 KB held back while planning. The capture's DMA walks the
 blocks in order through control blocks (as `frame_rp2.py` does; see
 `firmware/pico/hal_rp2.c`), so even a fragmented heap gives one captured
 frame the whole region. On `fpga-1`, a demo board with an FPGA breakout
-on the Welland bench whose largest free block held 188 lines, all 481
-lines of 640x480
-fitted in a handful of blocks. Only a heap with less free memory in total
+on the [Welland bench](../python/ttcap/README.md#reaching-a-welland-board) whose largest free block held 188 lines, all 481
+lines of 640x480 fitted in a handful of blocks. Only a heap with less free memory in total
 than the region sweeps a picture in several windows.
 
 The opening `frame window=W buffers=N` TIME message says how many lines a
@@ -116,7 +115,7 @@ command layer, so it neither offers nor needs them.
 ## Building
 
 For the demo board, build MicroPython's rp2 port (RP2350B, board
-definition `psychogenic/tinytapeout_rp2350b`, checked out into a directory
+definition [`psychogenic/tinytapeout_rp2350b`](https://github.com/psychogenic/tinytapeout_rp2350b), checked out into a directory
 named `tt_rp2350_board`, which is the MicroPython `BOARD` name) with the
 module:
 
@@ -130,12 +129,12 @@ repository as the `vgacap` submodule. Our sources build with `-Wall
 trip).
 
 For the tests, build MicroPython's unix port with the module running on the
-simulated board (`firmware/sim`):
+simulated board ([`firmware/sim`](../firmware/sim/)):
 
     mpy/build-unix.sh [MICROPYTHON_DIR]     # -> build/mpy-unix/micropython
     cd python && uv run pytest -q tests/test_mpy_module.py
 
-Both pin MicroPython to b006887db6 (1.29.0-preview), what the demo boards
+Both pin MicroPython to [b006887db6](https://github.com/micropython/micropython/commit/b006887db6) (1.29.0-preview), what the demo boards
 run. The unix build adds `vgacap.sim_board(path, *, bytes_per_s, rxstall)`,
 `vgacap.sim_clock(hz)`, `vgacap.sim_now()` and `vgacap.sim_frame_spans()`
 (the buffers the last frame window was captured into), to set up and
@@ -143,8 +142,8 @@ inspect the simulated board; the rp2 build has none of them.
 
 ## Tests
 
-`python/tests/test_mpy_module.py` runs the unix build behind a raw REPL
-(`python/tests/mpy_unix_board.py` plays the board) and drives it through
+[`python/tests/test_mpy_module.py`](../python/tests/test_mpy_module.py) runs the unix build behind a raw REPL
+([`python/tests/mpy_unix_board.py`](../python/tests/mpy_unix_board.py) plays the board) and drives it through
 ttcap. It checks:
 
 * frame and window captures byte-identical to the pico-sdk firmware's
@@ -160,10 +159,10 @@ The tests skip without `build/mpy-unix/micropython` unless
 
 ## Files
 
-| File | What |
-|---|---|
-| `modvgacap.c` | The binding: arguments, buffers, the module table. |
-| `hal_mpy.c` | The host link over MicroPython streams, idling, and the PIO hand-over. |
-| `micropython.cmake` | The rp2 build (with `firmware/pico/hal_rp2.c`). |
-| `micropython.mk` | The unix build (with `firmware/sim/hal_sim.c`). |
-| `build-unix.sh` | Builds the unix port with the module, at the pinned MicroPython. |
+| file | port | contents | HAL source built in |
+|---|---|---|---|
+| [`modvgacap.c`](modvgacap.c) | both | Python binding | -- |
+| [`hal_mpy.c`](hal_mpy.c) | both | host link over MicroPython streams | -- |
+| [`micropython.cmake`](micropython.cmake) | rp2 | module build rules | [`firmware/pico/hal_rp2.c`](../firmware/pico/hal_rp2.c) |
+| [`micropython.mk`](micropython.mk) | unix | module build rules | [`firmware/sim/hal_sim.c`](../firmware/sim/hal_sim.c) |
+| [`build-unix.sh`](build-unix.sh) | unix | build script at the pinned MicroPython | -- |
