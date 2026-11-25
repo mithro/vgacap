@@ -27,7 +27,7 @@ board can settle and writes a dated Markdown report. The checks are:
 - `stop`: cooperative stop latency, and no orphaned processes;
 - `board-usable`: the board still answers afterwards.
 
-`tools/hil.py` lists why each check needs hardware.
+[`tools/hil.py`](hil.py) lists why each check needs hardware.
 
 The example runs against `fpga-1`, a demo board with an FPGA breakout on
 the shared Welland bench (see [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)).
@@ -49,11 +49,13 @@ tools/hil.sh --board fpga-1 --design tt_um_vgacal_bars --clock-hz 500000 \
 - `--ui-in` for `tt_um_vgacal_modes`;
 - `--stop-bridge` when running on the board's own Pi with
   `serial:/dev/ttboard` (it stops `fpgas-tt`, which holds the device, and
-  always restarts it).
+  starts it again afterwards if it stopped it);
+- `--testpatterns DIR` if tt-vga-testpatterns is not checked out next to
+  vgacap (the `reference` and `frame` checks SKIP otherwise).
 
 Every check prints PASS, FAIL or SKIP with what it measured. The exit
-status is 0 if all checks passed, 1 if any failed, and 2 if the run could
-not start (lock held, missing tool, bad arguments).
+status is 0 if no check failed (SKIPs included), 1 if any failed, and 2 if
+the run could not start (lock held, missing tool, bad arguments).
 
 ## Running on shared boards
 
