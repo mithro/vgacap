@@ -633,7 +633,7 @@ def test_board_of_link():
     assert demo.board_of_link("ws://127.0.0.1:18035/serial") == "fpga-4"  # tunnel_hint's port
     assert demo.board_of_link("ws://localhost:18007/serial") == "tt07"
     assert demo.board_of_link("ws://127.0.0.1:8765/serial") is None
-    assert demo.board_of_link("ws://example.org:18035/serial") is None  # not a tunnel here
+    assert demo.board_of_link("ws://192.0.2.1:18035/serial") is None  # not a tunnel here
     assert demo.board_of_link("serial:/dev/ttyACM0") is None
     assert demo.board_of_link(None) is None
 
@@ -743,3 +743,38 @@ def test_the_asic_index_refusal_names_the_boards_from_the_table(monkeypatch):
     with pytest.raises(CaptureError) as e:
         demo.check_asic_index("fpga-4", 3, hostname="workstation")
     assert "for the RP2350 ASIC carriers: tt09; fpga-4 is an FPGA board" in str(e.value)
+
+
+def test_every_spelling_of_the_pis_own_bridge_is_this_pi(monkeypatch, tmp_path):
+    # On fpga-4's Pi any host that connects back to this machine is the
+    # Pi's own bridge to fpga-4, however it is spelt: refused.
+    real_getaddrinfo = demo.socket.getaddrinfo
+    names = {"localhost.": "127.0.0.1", "ip6-localhost": "::1", "pi-wifi": "192.168.7.9"}
+
+    def getaddrinfo(host, *args, **kwargs):
+        if host in names:
+            return real_getaddrinfo(names[host], *args, **kwargs)
+        if host == "no-such-host":
+            raise demo.socket.gaierror(-2, "Name or service not known")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(demo.socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(demo, "_address_is_local", lambda address: address == "192.168.7.9")
+    monkeypatch.setattr(demo.socket, "gethostname", lambda: "pi-sw2-p35")
+    monkeypatch.setattr(cli, "link_from_url", _no_link)
+    for host in ("0.0.0.0", "[::]", "0", "localhost.", "127.1", "2130706433", "0x7f.0.0.1",
+                 "ip6-localhost", "[::ffff:127.0.0.1]", "LOCALHOST", "pi-wifi", "192.168.7.9"):
+        url = "ws://%s:8765/serial" % host
+        assert demo.link_is_this_machine(url), url
+        with pytest.raises(CaptureError, match="fpga-4 is an FPGA board"):
+            cli.capture(url, tmp_path / "x.vgacap", clock_hz=100_000, seconds=1, max_bytes=0,
+                        firmware="picosdk", asic_index=3)
+    # A tunnel port on any loopback spelling is the tunnel's board.
+    assert demo.board_of_link("ws://0.0.0.0:18007/serial") == "tt07"
+    assert demo.board_of_link("ws://2130706433:18035/serial") == "fpga-4"
+    # Another machine is not this one.
+    assert not demo.link_is_this_machine("ws://192.0.2.1:8765/serial")
+    # A host that does not resolve: which board is unknowable, so refused.
+    with pytest.raises(CaptureError, match="does not resolve"):
+        demo.check_asic_index(None, 3, link="ws://no-such-host:8765/serial", hostname="workstation")
+    assert not list(tmp_path.iterdir())

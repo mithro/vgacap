@@ -73,7 +73,8 @@ fields, or `err` followed by a message for a person.
   alone and GPIO 1 stays high from boot.
   The firmware cannot tell the carriers apart; `ttcap capture` refuses
   `--asic-index` for an FPGA bench board (named by `--board`, the ws://
-  link or the Pi it runs on, the Pi also for its own bridge on loopback),
+  link or the Pi it runs on, the Pi also for a link that resolves to this
+  machine, its own bridge; an unresolvable host is refused),
   and when those disagree.
 * `program_stream` / `program_frame` print the PIO program a capture with
   those operands would load, in hex, with its configuration -- for
