@@ -1044,6 +1044,192 @@ TEST(test_trace_runs_against_12dfaf7) {
     remove(path);
 }
 
+// ---- the RUNS decoder specialised on the value width, against the generic --------
+//
+// runs_fast decodes a RUNS chunk with a body specialised on the value width
+// (vb 1 to 8), one bounds test a pair while a pair's worst case is in the
+// buffer, and the per-byte loop for the chunk's tail; the generic body
+// (vgacap_trace_set_generic_runs) tests every byte. For every vb, streams of
+// valid chunks, chunks with one planted fault (a value with the clock bit or
+// a bit above sample_bits, a pair equal to the one before, a zero run, a run
+// not minimally encoded, a tenth LEB128 byte above 1, a count too large or
+// too small, a byte left over) and hostile damage, plain (read leniently)
+// and as zstd blocks (read strictly), must give the same batches, runs,
+// return value and error text through both bodies, over several ranges and
+// with a batch function that stops early.
+
+struct batches { struct all_runs a; size_t nbatch, cap; size_t *size; size_t stop_after; };
+static int on_batch(void *user, const vgacap_trace_run_t *runs, size_t n) {
+    struct batches *b = user;
+    if (b->nbatch == b->cap) {
+        b->cap = b->cap ? 2 * b->cap : 64;
+        b->size = realloc(b->size, b->cap * sizeof *b->size);
+        if (!b->size) { fprintf(stderr, "  out of memory\n"); exit(2); }
+    }
+    b->size[b->nbatch++] = n;
+    for (size_t i = 0; i < n; i++) on_all(&b->a, runs[i].first_sample, runs[i].value, runs[i].run);
+    return b->stop_after && b->nbatch >= b->stop_after;
+}
+static void batches_free(struct batches *b) { all_free(&b->a); free(b->size); memset(b, 0, sizeof *b); }
+
+// A RUNS chunk of `pairs` pairs for header h, with fault `fault` (F_NONE:
+// none) planted at pair `at`.
+enum { F_NONE, F_CLK, F_HIGH, F_EQUAL, F_ZERO, F_NOTMIN, F_TENTH, F_COUNT_UP, F_COUNT_DOWN, F_EXTRA, F_KINDS };
+static void put_runs_vb(struct membuf_t *m, const vgacap_header_t *h, unsigned pairs, int fault, unsigned at) {
+    const unsigned bits = h->sample_bits, vb = (bits + 7u) / 8u;
+    const uint64_t mask = bits >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << bits) - 1u;
+    const uint64_t clk = h->clock_bit == VGACAP_CLOCK_BIT_NONE ? 0 : (uint64_t)1 << h->clock_bit;
+    uint8_t *p = malloc(8 + (size_t)pairs * 20);
+    size_t n = 4;
+    uint32_t count = pairs;
+    if (fault == F_COUNT_UP) count++;
+    if (fault == F_COUNT_DOWN) count--;
+    for (int i = 0; i < 4; i++) p[i] = (uint8_t)(count >> (8 * i));
+    uint64_t prev = 0;
+    for (unsigned k = 0; k < pairs; k++) {
+        uint64_t v = ((uint64_t)rnd() << 40 ^ (uint64_t)rnd() << 20 ^ rnd()) & mask & ~clk;
+        if (k && v == prev) v ^= (clk == 1 ? 2 : 1);
+        if (k == at && fault == F_CLK && clk) v |= clk;
+        if (k == at && fault == F_HIGH && vb * 8 > bits) v |= (uint64_t)1 << bits;
+        if (k == at && fault == F_EQUAL && k) v = prev;
+        prev = v;
+        for (unsigned i = 0; i < vb; i++) p[n++] = (uint8_t)(v >> (8 * i));
+        uint32_t c = rnd() % 64;
+        uint64_t run = c < 40 ? 1 + c % 4 : c < 52 ? 100 + rnd() % 100000
+                     : c < 58 ? ((uint64_t)rnd() << 24 | rnd()) + 1 : UINT64_MAX - rnd();
+        if (k == at && fault == F_ZERO) run = 0;
+        if (k == at && fault == F_NOTMIN) {
+            p[n++] = (uint8_t)(0x80 | (run & 0x7F)); p[n++] = 0;   // a needless zero byte
+        } else if (k == at && fault == F_TENTH) {
+            for (int i = 0; i < 9; i++) p[n++] = 0xFF;
+            p[n++] = (uint8_t)(2 + rnd() % 254);
+        } else {
+            do { uint8_t b = run & 0x7F; run >>= 7; p[n++] = (uint8_t)(b | (run ? 0x80 : 0)); } while (run);
+        }
+    }
+    if (fault == F_EXTRA) p[n++] = (uint8_t)rnd();
+    put_chunk(m, VGACAP_TAG_RUNS, p, (uint32_t)n);
+    free(p);
+}
+
+struct diff_stats { int streams, unopened, failed_reads, mismatches; };
+
+static void diff_compare(const char *path, struct diff_stats *st, const char *what) {
+    char err[256] = "";
+    vgacap_trace_reader_t *r = vgacap_trace_open(path, err, sizeof err);
+    if (!r) { st->unopened++; return; }
+    const uint64_t s = vgacap_trace_info(r)->samples;
+    const uint64_t ranges[][2] = { { 0, UINT64_MAX }, { 1, s / 2 + 1 }, { s / 3, UINT64_MAX },
+                                   { UINT64_MAX - 100, UINT64_MAX }, { rnd() % (s + 1), rnd() % (s + 2) + s / 2 } };
+    const unsigned nr = sizeof ranges / sizeof ranges[0];
+    for (unsigned i = 0; i < nr + 2; i++) {
+        uint64_t from = i < nr ? ranges[i][0] : 0, to = i < nr ? ranges[i][1] : UINT64_MAX;
+        size_t stop = i < nr ? 0 : i - nr + 1;   // the last two: stop after the first or second batch
+        struct batches b[2]; memset(b, 0, sizeof b);
+        char e[2][256] = { "", "" };
+        int rc[2];
+        for (int g = 0; g < 2; g++) {
+            vgacap_trace_set_generic_runs(r, g);
+            b[g].stop_after = stop;
+            rc[g] = vgacap_trace_read_runs(r, from, to, on_batch, &b[g], e[g], sizeof e[g]);
+        }
+        vgacap_trace_set_generic_runs(r, 0);
+        int same = rc[0] == rc[1] && !strcmp(e[0], e[1]) && b[0].nbatch == b[1].nbatch &&
+                   all_same(&b[0].a, &b[1].a);
+        for (size_t k = 0; same && k < b[0].nbatch; k++) same = b[0].size[k] == b[1].size[k];
+        if (!same) {
+            st->mismatches++;
+            fprintf(stderr, "  %s, range %u: rc %d/%d, '%s' / '%s', %zu/%zu batches\n", what, i, rc[0], rc[1],
+                    e[0], e[1], b[0].nbatch, b[1].nbatch);
+        }
+        if (rc[0]) st->failed_reads++;
+        batches_free(&b[0]); batches_free(&b[1]);
+    }
+    st->streams++;
+    vgacap_trace_close(r);
+}
+
+// A stream of two blocks of RUNS chunks for `bits`-bit samples, with a
+// planted fault (`fault` > 0, at a random pair, often near a chunk's end)
+// or hostile damage (`fault` < 0), plain or as zstd blocks.
+static void diff_one(const char *path, unsigned bits, int zstd, int fault, struct diff_stats *st, const char *what) {
+    vgacap_header_t h;
+    uint8_t clock_bit = bits >= 2 && rnd() % 3 ? (uint8_t)(rnd() % bits) : VGACAP_CLOCK_BIT_NONE;
+    vgacap_header_init_v2(&h, (uint8_t)bits, clock_bit == VGACAP_CLOCK_BIT_NONE ? 1 : 2, clock_bit,
+                          (uint8_t)(rnd() & 1));
+    h.mode = VGACAP_MODE_EVENT; h.clock_hz = 25175000;
+    struct membuf_t blk[2];
+    memset(blk, 0, sizeof blk);
+    vgacap_writer_t w;
+    vgacap_writer_init(&w, mem_put, &blk[0], &h);
+    vgacap_writer_meta(&w, OPEN_META, strlen(OPEN_META));
+    uint64_t at = 0;
+    const int faulty_block = (int)(rnd() % 2);
+    for (int b = 0; b < 2; b++) {
+        size_t start = blk[b].n;
+        put_blkh(&blk[b], at);
+        size_t runs_from = blk[b].n;
+        unsigned chunks = 1 + rnd() % 3, faulty_chunk = rnd() % chunks;
+        for (unsigned c = 0; c < chunks; c++) {
+            // Some chunks span more than one batch (1024 runs).
+            unsigned pairs = rnd() % 4 ? 1 + rnd() % 60 : 1000 + rnd() % 1500;
+            int f = fault > 0 && b == faulty_block && c == faulty_chunk ? fault : F_NONE;
+            unsigned fat = rnd() % 2 ? pairs - 1 - rnd() % (pairs < 4 ? pairs : 4) : rnd() % pairs;
+            put_runs_vb(&blk[b], &h, pairs, f, fat);
+        }
+        struct ev_runs e; memset(&e, 0, sizeof e);
+        vgacap_reader_t *sr = malloc(sizeof *sr);
+        vgacap_reader_init_header(sr, on_ev, &e, &h);
+        vgacap_reader_feed(sr, blk[b].p + start, blk[b].n - start);
+        free(sr);
+        at = e.n;
+        all_free(&e.a);
+        if (b == 1) put_chunk(&blk[b], VGACAP_TAG_META, (const uint8_t *)CLOSE_META, (uint32_t)strlen(CLOSE_META));
+        if (fault < 0 && b == faulty_block) damage(&blk[b], b == 0 && zstd ? runs_from : start, blk[b].n);
+    }
+    struct membuf_t all = { NULL, 0, 0 };
+    if (!zstd) {
+        for (int b = 0; b < 2; b++) mem_put(&all, blk[b].p, blk[b].n);
+    } else {
+        ZSTD_CCtx *c = ZSTD_createCCtx();
+        ZSTD_CCtx_setParameter(c, ZSTD_c_checksumFlag, 1);
+        for (int b = 0; b < 2; b++) {
+            size_t cap = ZSTD_compressBound(blk[b].n);
+            uint8_t *z = malloc(cap);
+            size_t zn = ZSTD_compress2(c, z, cap, blk[b].p, blk[b].n);
+            if (!ZSTD_isError(zn)) mem_put(&all, z, zn);
+            free(z);
+        }
+        ZSTD_freeCCtx(c);
+    }
+    spit(path, all.p, all.n);
+    diff_compare(path, st, what);
+    free(all.p);
+    for (int b = 0; b < 2; b++) free(blk[b].p);
+}
+
+TEST(test_trace_runs_specialised_vs_generic) {
+    char path[256]; tmp_path(path, sizeof path, "read_runs_vb.bin");
+    struct diff_stats st = { 0, 0, 0, 0 };
+    fz = 1717;
+    for (unsigned vb = 1; vb <= 8; vb++) {
+        for (int t = 0; t < 3 * F_KINDS + 12; t++) {
+            // The width: the whole of vb bytes, or a few bits short of it.
+            unsigned bits = 8 * vb - (t % 3 ? rnd() % 8 : 0);
+            int fault = t < 3 * F_KINDS ? t % F_KINDS : -1;   // faults planted, then hostile damage
+            char what[64];
+            snprintf(what, sizeof what, "vb %u bits %u trial %d fault %d", vb, bits, t, fault);
+            diff_one(path, bits, t & 1, fault, &st, what);
+        }
+    }
+    fprintf(stderr, "  %d streams compared (%d reads failed alike), %d that do not open\n", st.streams,
+            st.failed_reads, st.unopened);
+    ASSERT_EQ_U(st.mismatches, 0);
+    ASSERT_TRUE(st.streams >= 8 * (3 * F_KINDS + 12) * 3 / 4);
+    ASSERT_TRUE(st.failed_reads > 0);
+    remove(path);
+}
+
 TEST(test_trace_not_a_trace) {
     char path[256]; tmp_path(path, sizeof path, "read_junk.bin");
     char err[256] = "";
@@ -1073,6 +1259,7 @@ int main(void) {
     RUN(test_trace_v1_capture);
     RUN(test_trace_runs_fast_path);
     RUN(test_trace_runs_against_12dfaf7);
+    RUN(test_trace_runs_specialised_vs_generic);
     RUN(test_trace_not_a_trace);
     if (five_ready) remove(five_path());
     RUN_TESTS_END();
