@@ -1,6 +1,6 @@
-# vgacap capture firmware protocol, version 1
+# vgacap firmware protocol, version 1
 
-What a host sends the capture firmware ([`firmware/`](README.md)) over its USB CDC
+What a host sends the vgacap firmware ([`firmware/`](README.md)) over its USB CDC
 serial port, and what comes back. The host side is [`python/ttcap/firmware.py`](../python/ttcap/firmware.py);
 the firmware side is [`firmware/core/fw.c`](core/fw.c).
 
