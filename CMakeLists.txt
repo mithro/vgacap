@@ -7,6 +7,27 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 add_compile_options(-Wall -Wextra -Werror -Wshadow -Wconversion)
 include_directories(include)
+
+# Skylake-family x86-64 CPUs with the JCC-erratum microcode keep any 32-byte
+# block of code holding a jump that crosses or ends on a 32-byte boundary out
+# of the uop cache; the hot decode and sampler loops then run up to a third
+# slower, by where the linker happens to put them. The assembler can pad such
+# jumps with NOPs. It changes no instruction and no output. It goes into
+# CMAKE_C_FLAGS, not the compile options, so that third_party (which resets
+# its directory's options) gets it too.
+option(VGACAP_JCC_PAD "Pad x86-64 jumps away from 32-byte boundaries (-Wa,-mbranches-within-32B-boundaries)" ON)
+if(VGACAP_JCC_PAD)
+  set(VGACAP_JCC_FLAG "-Wa,-mbranches-within-32B-boundaries")
+  if(CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag("${VGACAP_JCC_FLAG}" VGACAP_HAVE_JCC_FLAG)
+  endif()
+  if(VGACAP_HAVE_JCC_FLAG)
+    string(APPEND CMAKE_C_FLAGS " ${VGACAP_JCC_FLAG}")
+  else()
+    message(STATUS "vgacap: VGACAP_JCC_PAD: ${VGACAP_JCC_FLAG} is not supported here (needs GNU or Clang on x86-64 and an assembler that takes it); building without it")
+  endif()
+endif()
 enable_testing()
 
 # Libraries. Each section is owned by one component; add sources in place.
