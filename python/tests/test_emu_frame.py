@@ -271,6 +271,33 @@ def test_the_rp2040_pwm_slice_is_read_at_its_own_address(tmp_path, bars_uo):
     assert chunks(out)[1][0].startswith("error=project clock is not 2..32")
 
 
+def _old_dma_teardown(script: str) -> str:
+    # The teardown before stop_dma(): abort and close each channel in turn.
+    new = "stop_dma((ctl, data))"
+    assert new in script
+    return script.replace(
+        new, "for dma in (ctl, data):\n   if dma is not None:\n    dma.active(0)\n    dma.close()"
+    )
+
+
+@pytest.mark.parametrize("teardown", ["stop_dma", "old"])
+def test_a_stop_mid_window_leaves_no_dma_channel_running(bars_uo, teardown):
+    # Stopped while the data channel is filling a buffer: on RP2350 an
+    # abort re-triggers the chained control channel (RP2350-E5), which
+    # starts the data channel on the next buffer -- one about to be freed.
+    # Clearing EN on both first is what stops that.
+    board, out = run_frame(RP2350_DBV3, bars_uo, stop_after_bytes=1,
+                           script=_old_dma_teardown if teardown == "old" else None)
+
+    frams, times = chunks(out)
+    assert frams == [] and times[-1].startswith("frames=0 ")
+    busy = [ch.num for ch in board.channels if ch.busy]
+    if teardown == "old":
+        assert busy, "the emulator no longer models the re-trigger"
+    else:
+        assert busy == []
+
+
 @pytest.mark.parametrize("period,high", [(2, 1), (3, 1), (4, 2)])
 def test_two_to_four_system_clocks_a_pixel_are_exact(tmp_path, bars_uo, period, high):
     # 800x600 at 40 MHz runs the RP2350 at 80 MHz: 2 clocks a pixel, which

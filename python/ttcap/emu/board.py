@@ -29,6 +29,8 @@ ALIAS_XOR, ALIAS_SET, ALIAS_CLR = 0x1000, 0x2000, 0x3000
 DMA_BASE = 0x50000000
 DMA_STRIDE = 0x40
 DMA_READ_ADDR, DMA_WRITE_ADDR, DMA_TRANS_COUNT, DMA_CTRL_TRIG = 0x00, 0x04, 0x08, 0x0C
+#: CTRL without the trigger (alias 1): writing it never starts the channel.
+DMA_AL1_CTRL = 0x10
 #: PWM block (pico-sdk addressmap.h) and a slice's registers (hardware/regs/pwm.h).
 PWM_BASE = {"rp2040": 0x40050000, "rp2350": 0x400A8000}
 PWM_SLICE_STRIDE = 0x14
@@ -642,6 +644,8 @@ class Board:
                 return ch.read_addr
             if reg == DMA_TRANS_COUNT:
                 return ch.remaining if ch.busy else ch.reload
+            if reg == DMA_CTRL_TRIG:
+                return ch.ctrl
         for offset, value in zip((PWM_CSR, PWM_DIV, PWM_TOP), self.pwm):
             if addr == self.pwm_base + offset:
                 return value
@@ -681,12 +685,16 @@ class Board:
                 ch.ctrl = value
                 self.dma_trigger(ch)
                 return
+            if reg == DMA_AL1_CTRL:
+                # Clearing EN pauses a busy channel; it does not abort it.
+                ch.ctrl = value
+                return
         raise BoardError("mem32 write of unmodelled address 0x%08x" % addr)
 
     def _dma_reg(self, addr: int):
         if DMA_BASE <= addr < DMA_BASE + DMA_STRIDE * len(self.channels):
             num, reg = divmod(addr - DMA_BASE, DMA_STRIDE)
-            if reg in (DMA_READ_ADDR, DMA_WRITE_ADDR, DMA_TRANS_COUNT, DMA_CTRL_TRIG):
+            if reg in (DMA_READ_ADDR, DMA_WRITE_ADDR, DMA_TRANS_COUNT, DMA_CTRL_TRIG, DMA_AL1_CTRL):
                 return self.channels[num], reg
         return None, 0
 
@@ -759,7 +767,21 @@ class Board:
         finally:
             self._dma_running = False
 
+    def abort(self, ch: _Channel) -> None:
+        """CHAN_ABORT, as `dma_channel_abort()` does it for `DMA.active(0)`.
+
+        RP2350-E5 (pico-sdk `dma_channel_abort()`): aborting a busy channel
+        can re-trigger the channel it chains to, unless that channel's EN is
+        clear -- modelled as the abort completing the chain.
+        """
+        was_busy = ch.busy
+        ch.busy = False
+        if self.chip == "rp2350" and was_busy and ch.chain_to != ch.num:
+            self.dma_trigger(self.channels[ch.chain_to])
+
     def _service(self, ch: _Channel) -> None:
+        if not ch.enabled:
+            return  # paused: EN cleared through AL1_CTRL
         sm = self._rx_source(ch)
         if sm is not None:
             while ch.busy and sm.rx:
@@ -1103,15 +1125,16 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
             if value:
                 board.dma_trigger(ch)
             else:
-                ch.busy = False
+                board.abort(ch)  # rp2_dma.c: dma_channel_abort(), v1.22 on
             return ch.busy
 
         def irq(self, handler=None, hard=False):
             self._ch.handler = handler
 
         def close(self):
+            # MicroPython v1.24's close() only unclaims (no abort), so a
+            # channel still busy here stays busy -- and keeps writing.
             ch = self._ch
-            ch.busy = False
             ch.claimed = False
             ch.handler = None
             ch.owner = None

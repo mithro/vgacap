@@ -3,8 +3,8 @@
 
 A program body: `ttcap.mp.build(cfg, "frame_rp2.py")` puts `prelude.py` in
 front of it (imports, shared CFG keys, registers, `write_time_chunk()`,
-`set_gpio_base()`, `init_input_pins()`, cooperative stop) -- read that
-docstring first. Keys this body reads on top of the prelude's:
+`set_gpio_base()`, `init_input_pins()`, `stop_dma()`, cooperative stop) --
+read that docstring first. Keys this body reads on top of the prelude's:
 
     sample_delay   system clocks to wait after the sampled project-clock
                    edge (`edge`, from the prelude) before reading the pins:
@@ -415,10 +415,7 @@ def main(out):
             rp2.PIO(PIO_NUM).remove_program(program)  # noqa: F821
         except Exception:
             pass
-        for dma in (ctl, data):
-            if dma is not None:
-                dma.active(0)
-                dma.close()
+        stop_dma((ctl, data))  # noqa: F821 - prelude; before bufs is freed
         summary = "frames=%d stalls=%d rxstall=%d sysclk_hz=%d" % (
             frames, stalls, 1 if (stalls or rxstall) else 0, machine.freq()  # noqa: F821
         )

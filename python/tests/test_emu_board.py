@@ -162,6 +162,34 @@ def test_a_clock_the_link_cannot_carry_is_reported_as_overruns(bars_uo):
     assert dropped[-1] == overruns * 4096 * 4
 
 
+def _old_stream_teardown(script: str) -> str:
+    new = "stop_dma((dma_a, dma_b))"
+    assert new in script
+    return script.replace(
+        new,
+        "for dma in (dma_a, dma_b):\n   if dma is not None:\n    dma.active(0)\n"
+        "  for dma in (dma_a, dma_b):\n   if dma is not None:\n    dma.close()",
+    )
+
+
+@pytest.mark.parametrize("teardown", ["stop_dma", "old"])
+def test_a_stopped_stream_leaves_no_dma_channel_running(bars_uo, teardown):
+    # A and B chain to each other, so on RP2350 aborting one re-triggers
+    # the other (RP2350-E5) unless EN is clear on both first.
+    profile = RP2350_DBV3
+    board = Board(Waveform(bars_uo, profile.uo_gpios, profile.clk_gpio, period=266))
+    board.stop_after_bytes = 20_000
+
+    script = mp.build(capture_cfg(profile), "capture_rp2.py")
+    board.run_script(_old_stream_teardown(script) if teardown == "old" else script)
+
+    busy = [ch.num for ch in board.channels if ch.busy]
+    if teardown == "old":
+        assert busy, "the emulator no longer models the re-trigger"
+    else:
+        assert busy == []
+
+
 def test_a_dma_buffer_larger_than_the_heap_allows_fails_like_the_board(bars_uo):
     profile = RP2350_DBV3
     wave = Waveform(bars_uo, profile.uo_gpios, profile.clk_gpio, period=266)

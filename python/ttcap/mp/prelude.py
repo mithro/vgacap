@@ -362,6 +362,30 @@ def new_state_machine(program):
     return rp2.StateMachine(PIO_NUM * 4 + SM_NUM, program, in_base=machine.Pin(IN_BASE))
 
 
+def stop_dma(dmas):
+    """Stop and close the `rp2.DMA` channels in `dmas` (None entries are
+    skipped), so that none can write into a buffer about to be freed.
+
+    `DMA.active(0)` aborts the channel (rp2_dma.c calls
+    `dma_channel_abort()`, which waits for BUSY to clear; checked in v1.22,
+    v1.24 and master), and v1.24's `close()` only unclaims it. The abort is
+    not enough on its own for channels that chain to each other: RP2350-E5 (pico-sdk's
+    `dma_channel_abort()` notes) -- an abort can re-trigger the chained
+    channel unless EN is clear on it and on the aborted one first, and a
+    re-triggered channel goes on filling a freed buffer. So EN is cleared on
+    every channel, through the non-triggering AL1_CTRL alias (+0x10, from
+    CTRL_TRIG at +0x0c), before any is aborted. Harmless on RP2040.
+    """
+    for dma in dmas:
+        if dma is not None:
+            at = 0x50000000 + 0x40 * dma.channel
+            machine.mem32[at + 16] = machine.mem32[at + 12] & ~1
+    for dma in dmas:
+        if dma is not None:
+            dma.active(0)
+            dma.close()
+
+
 def firmware_problem():
     """Why this firmware cannot run a capture, as bytes, or None if it can.
 

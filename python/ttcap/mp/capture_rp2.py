@@ -4,10 +4,10 @@
 A program body: `ttcap.mp.build(cfg, "capture_rp2.py")` puts
 `prelude.py` in front of it, which supplies the imports, the shared CFG
 keys, the register arithmetic, `write_time_chunk()`, `set_gpio_base()`,
-`init_input_pins()` and the cooperative stop -- read that file's docstring
-first. This body adds the DMA register map it re-arms channels through,
-`write_raw_chunk()` and `make_sampler()`, the plain sampler program. Keys
-this body reads on top of the prelude's:
+`init_input_pins()`, `stop_dma()` and the cooperative stop -- read that
+file's docstring first. This body adds the DMA register map it re-arms
+channels through, `write_raw_chunk()` and `make_sampler()`, the plain
+sampler program. Keys this body reads on top of the prelude's:
 
     buf_words    32-bit words per DMA buffer (two are allocated), e.g. 4096
     max_bytes    stop after this many emitted bytes; 0 = run until Ctrl-C
@@ -302,12 +302,7 @@ def main(out):
             rp2.PIO(PIO_NUM).remove_program(sampler)
         except Exception:
             pass
-        for dma in (dma_a, dma_b):
-            if dma is not None:
-                dma.active(0)
-        for dma in (dma_a, dma_b):
-            if dma is not None:
-                dma.close()
+        stop_dma((dma_a, dma_b))  # see the prelude: EN off, then abort
         # Unconditional: with a cooperative stop there is no such thing as a
         # half-written chunk to desync the stream, so the host always gets
         # its overruns/rxstall summary -- which is the only place those
