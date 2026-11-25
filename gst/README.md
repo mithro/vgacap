@@ -26,8 +26,8 @@ gst-launch-1.0 vgacapbin \
     videoconvert ! autovideosink
 ```
 
-`127.0.0.1:18034` is an SSH tunnel to fpga-1
-([Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board)).
+`127.0.0.1:18034` is an SSH tunnel to fpga-1, which needs bench access
+([Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed)).
 On quoting, see [`vgacapbin`](#vgacapbin-a-uri-in-video-out).
 
 ## `vgadecode`: a stream in, video out
