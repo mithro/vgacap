@@ -707,8 +707,8 @@ static void on_ev(void *user, const vgacap_event_t *ev) {
     else if (ev->type == VGACAP_EV_ERROR) e->done = 1;
 }
 
-static int stop_first_batch(void *user, const uint64_t *first, const uint64_t *value, const uint64_t *run, size_t n) {
-    (void)first; (void)value; (void)run;
+static int stop_first_batch(void *user, const vgacap_trace_run_t *runs, size_t n) {
+    (void)runs;
     *(size_t *)user += n;
     return 1;
 }

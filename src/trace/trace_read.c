@@ -408,13 +408,13 @@ struct rd {
     const char *what;
     uint64_t skip;     // RUN events the stream reader is to pass over
     size_t nb;         // runs in the batch
-    uint64_t first[BATCH], value[BATCH], run[BATCH];
+    vgacap_trace_run_t runs[BATCH];
 };
 
 static void flush(struct rd *d) {
     size_t n = d->nb;
     d->nb = 0;
-    if (n && d->fn(d->user, d->first, d->value, d->run, n)) d->done = 1;
+    if (n && d->fn(d->user, d->runs, n)) d->done = 1;
 }
 
 // A run of `run` samples of `value` (the clock bit of its first sample) at
@@ -426,9 +426,9 @@ static inline void put(struct rd *d, uint64_t value, uint64_t run) {
     if (a >= d->to) { d->done = 1; return; }
     uint64_t s = a > d->from ? a : d->from, t = e < d->to ? e : d->to;
     size_t i = d->nb++;
-    d->first[i] = s;
-    d->value[i] = value ^ (((s - a) & 1) ? d->clk : 0);
-    d->run[i] = t - s;
+    d->runs[i].first_sample = s;
+    d->runs[i].value = value ^ (((s - a) & 1) ? d->clk : 0);
+    d->runs[i].run = t - s;
     if (e >= d->to) d->done = 1;
     if (d->nb == BATCH) flush(d);
 }
@@ -483,7 +483,18 @@ static int runs_fast(vgacap_reader_t *sr, struct rd *d, const uint8_t *p, uint32
     if (count == 0 || len - 4u < (uint64_t)count * (vb + 1u)) return -1;
     const uint64_t mask = h->sample_bits >= 64 ? ~(uint64_t)0 : (((uint64_t)1 << h->sample_bits) - 1u);
     const uint64_t clk = h->clock_bit == VGACAP_CLOCK_BIT_NONE ? 0 : (uint64_t)1 << h->clock_bit;
+    const uint64_t bad_bits = clk | ~mask;
+    const uint64_t vmask = vb >= 8 ? ~(uint64_t)0 : (((uint64_t)1) << (8u * vb)) - 1u;
+    // put()'s work, on locals: the batch arrays are uint64_t, as d->n is,
+    // so through d every store would make the compiler reload the rest.
+    const uint64_t from = d->from, to = d->to, dclk = d->clk;
+    vgacap_trace_run_t *const out = d->runs;
+    // clock_first ^ (sample & 1) as the clock bit: cf, flipped on odd samples.
+    const uint64_t cf = clk && (h->clock_first & 1u) ? clk : 0;
     const uint64_t n0 = d->n;
+    uint64_t n = n0;
+    size_t nb = d->nb;
+    // The clock bit of a pair's first sample: clock_first ^ (its sample & 1).
     uint64_t pos = sr->sample_pos, prev = 0;
     uint32_t done = 0;
     for (; done < count; done++) {
@@ -491,31 +502,54 @@ static int runs_fast(vgacap_reader_t *sr, struct rd *d, const uint8_t *p, uint32
         uint64_t value = 0;
         if ((size_t)(end - q) >= 8) {
             memcpy(&value, q, 8);
-            value = vb >= 8 ? value : value & ((((uint64_t)1) << (8u * vb)) - 1u);
+            value &= vmask;
         } else {
             for (unsigned k = 0; k < vb; k++) value |= (uint64_t)q[k] << (8u * k);
         }
         q += vb;
-        if ((value & clk) || (value & ~mask) || (done && value == prev)) goto bad;
-        uint64_t run = 0;
-        uint8_t b;
-        unsigned k = 0;
-        for (;;) {
-            if (q == end) goto bad;
-            b = *q++;
-            if (k == 9 && b > 1u) goto bad;
-            run |= (uint64_t)(b & 0x7Fu) << (7u * k);
-            k++;
-            if (!(b & 0x80u)) break;
+        if ((value & bad_bits) || (done && value == prev)) goto bad;
+        uint64_t run;
+        uint8_t b = *q++;                   // q < end: vb + 1 bytes were there
+        if (b < 0x80u) {
+            run = b;
+        } else {
+            run = b & 0x7Fu;
+            for (unsigned k = 1;; k++) {
+                if (q == end) goto bad;
+                b = *q++;
+                if (k == 9 && b > 1u) goto bad;
+                run |= (uint64_t)(b & 0x7Fu) << (7u * k);
+                if (!(b & 0x80u)) break;
+            }
         }
-        if (b == 0) goto bad;
-        uint64_t v = value;
-        if (clk && ((h->clock_first ^ (pos & 1u)) & 1u)) v |= clk;
+        if (b == 0) goto bad;               // a zero run, or not minimally encoded
+        const uint64_t v = value | (cf ^ (clk & (0 - (pos & 1u))));
         pos += run;
         prev = value;
-        put(d, v, run);
-        if (d->done) return 0;
+        // put(d, v, run)
+        const uint64_t a = n, e = n + run;
+        n = e;
+        if (a >= from && e < to) {                       // the usual case: inside the range
+            out[nb].first_sample = a; out[nb].value = v; out[nb].run = run;
+            nb++;
+        } else {
+            if (e <= from) continue;
+            if (a >= to) { d->done = 1; d->n = n; d->nb = nb; return 0; }
+            const uint64_t s0 = a > from ? a : from, t0 = e < to ? e : to;
+            out[nb].first_sample = s0;
+            out[nb].value = v ^ (((s0 - a) & 1) ? dclk : 0);
+            out[nb].run = t0 - s0;
+            nb++;
+            if (e >= to) { d->done = 1; d->n = n; d->nb = nb; return 0; }
+        }
+        if (nb == BATCH) {
+            d->n = n; d->nb = nb;
+            flush(d);
+            nb = 0;
+            if (d->done) return 0;
+        }
     }
+    d->n = n; d->nb = nb;
     if (q != end) goto bad;
     // The stream reader's state after the chunk, as runs_byte leaves it.
     memcpy(sr->tag, p, 4);
@@ -531,6 +565,7 @@ static int runs_fast(vgacap_reader_t *sr, struct rd *d, const uint8_t *p, uint32
     sr->sample_pos = pos;
     return 0;
 bad:
+    d->nb = nb;          // the runs before the fault stay in the batch
     d->n = n0;
     d->skip = done;
     return -1;
@@ -558,10 +593,10 @@ static void feed_until_done(vgacap_reader_t *sr, struct rd *d, const uint8_t *p,
     }
 }
 
-static int one_by_one(void *user, const uint64_t *first, const uint64_t *value, const uint64_t *run, size_t n) {
+static int one_by_one(void *user, const vgacap_trace_run_t *runs, size_t n) {
     const struct { vgacap_trace_run_fn fn; void *user; } *o = user;
     for (size_t i = 0; i < n; i++)
-        if (o->fn(o->user, first[i], value[i], run[i])) return 1;
+        if (o->fn(o->user, runs[i].first_sample, runs[i].value, runs[i].run)) return 1;
     return 0;
 }
 
@@ -576,7 +611,7 @@ int vgacap_trace_read_runs(vgacap_trace_reader_t *R, uint64_t from, uint64_t to,
     if (from >= to || from >= R->info.samples) return 0;
     struct rd *d = malloc(sizeof *d);
     if (!d) { set_err(err, errlen, "out of memory"); return -1; }
-    memset(d, 0, offsetof(struct rd, first));
+    memset(d, 0, offsetof(struct rd, runs));
     d->from = from; d->to = to; d->clk = R->clk; d->fn = fn; d->user = user;
     int rc = 0;
     if (!R->info.compressed) {

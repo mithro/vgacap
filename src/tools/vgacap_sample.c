@@ -291,10 +291,10 @@ static inline int on_run(tool_t *t, uint64_t s, uint64_t value, uint64_t r) {
     return t->failed;
 }
 
-static int on_runs(void *user, const uint64_t *s, const uint64_t *value, const uint64_t *r, size_t n) {
+static int on_runs(void *user, const vgacap_trace_run_t *runs, size_t n) {
     tool_t *t = user;
     for (size_t i = 0; i < n; i++)
-        if (on_run(t, s[i], value[i], r[i])) return 1;
+        if (on_run(t, runs[i].first_sample, runs[i].value, runs[i].run)) return 1;
     return 0;
 }
 
