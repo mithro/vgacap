@@ -101,13 +101,17 @@ def test_a_whole_frame_at_the_shortest_locked_clock_is_sample_exact(name):
     assert abs(len(words) // 2 - changes) < 2000
 
 
+@pytest.mark.parametrize("sample_delay", [0, 3])
 @pytest.mark.parametrize("locked", [True, False], ids=["locked", "edge"])
 @pytest.mark.parametrize("masked", [True, False], ids=["mask", "osr"])
 @pytest.mark.parametrize("name", ["bars", "random", "alternating"])
-def test_every_form_is_exact_at_its_shortest_clock(name, masked, locked):
-    period = MIN_PERIOD[(locked, masked)]
+def test_every_form_is_exact_at_its_shortest_clock(name, masked, locked, sample_delay):
+    # The edge style's `wait [delay]` is in every loop, so its shortest
+    # clock is that much longer; the locked style waits only once.
+    period = MIN_PERIOD[(locked, masked)] + (0 if locked else sample_delay)
     for high in sorted({period // 2, (period + 1) // 2}):
-        run_and_check(signal(name), period, 30_000, locked=locked, masked=masked, high=high)
+        run_and_check(signal(name), period, 30_000, locked=locked, masked=masked, high=high,
+                      sample_delay=sample_delay)
 
 
 @pytest.mark.parametrize("delay", [0, 1, 2, 3])
@@ -135,15 +139,18 @@ def test_a_clock_one_cycle_short_of_the_program_is_caught(masked, period):
     assert not ok
 
 
+@pytest.mark.parametrize("sample_delay", [0, 1, 4])
 @pytest.mark.parametrize("masked", [True, False], ids=["mask", "osr"])
-def test_edge_style_needs_two_more_cycles(masked):
+def test_edge_style_needs_two_more_cycles(masked, sample_delay):
     # The waits find the edge a cycle after it, and must be back at the
-    # first wait before the clock rises again.
-    shortest = MIN_PERIOD[(False, masked)]
+    # first wait before the clock rises again -- after the sample delay,
+    # which the edge style spends on every clock.
+    shortest = MIN_PERIOD[(False, masked)] + sample_delay
     for period in range(shortest - 3, shortest):
         for name in ("random", "alternating"):
             uo = signal(name)
-            run = Run(uo, period, locked=False, masked=masked, words=1 << 16)
+            run = Run(uo, period, locked=False, masked=masked, sample_delay=sample_delay,
+                      words=1 << 16)
             run.advance(period * 10_000)
             try:
                 samples = expand_words(run.words())

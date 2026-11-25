@@ -146,6 +146,25 @@ def test_forcing_locked_on_a_fractional_ratio_is_refused(bars_uo):
     assert messages(auto)[0] == "rle style=edge period=11 mask=1"
 
 
+@pytest.mark.parametrize("masked,period", [(1, 8), (0, 9)])
+def test_the_edge_style_counts_the_sample_delay_in_its_shortest_clock(masked, period):
+    # Every edge-style loop waits `sample_delay` cycles after the edge, so
+    # its shortest clock grows by that much: 8 + 1 would read about every
+    # other clock of this signal, and is refused rather than run.
+    uo = np.random.default_rng(5).integers(0, 256, 50_000, dtype=np.uint8).tobytes()
+    chip = "rp2350" if masked else "rp2040"
+    profile = RP2350_DBV3 if masked else RP2040_TT06
+    kw = dict(chip=chip, style="edge", mask=masked, stop_bytes=200_000)
+    refused = run(profile, uo, period, 144_000_000, sample_delay=1, **kw)
+    assert messages(refused)[0].startswith("error=no exact rle style")
+
+    ok = run(profile, uo, period + 1, 144_000_000, sample_delay=1, **kw)
+    assert messages(ok)[0] == "rle style=edge period=%d mask=%d" % (period + 1, masked)
+    want = uo if masked else window_values(uo, profile, RP2040_PADS)
+    got = samples_of(ok)
+    assert len(got) > 10_000 and matches_signal(got, want)[0]
+
+
 def test_more_pairs_than_the_link_carries_are_reported_as_overruns(bars_uo):
     # 25 MHz bars at the modelled USB rate: ~2 MB/s of pairs for 0.7 MB/s.
     stream = run(RP2350_DBV3, bars_uo, 6, 150_000_000, stop_bytes=200_000,

@@ -67,7 +67,8 @@ early, late, missed or doubled -- the emulator test checks this on whole
 frames of every calibration pattern. P must be at least the longest path:
 6 (masked) or 7 (generic). "edge" waits for each clock edge instead (two
 `wait` instructions on top), which needs no ratio but a longer clock
-(EDGE_MIN_PERIOD below, measured on the emulator); it is what a reduced
+(EDGE_MIN_PERIOD below, measured on the emulator, plus sample_delay: the
+second wait's delay is spent on every clock); it is what a reduced
 streaming clock with a fractional divider needs. "auto" takes locked when
 the ratio is whole and in range, edge otherwise.
 
@@ -94,7 +95,8 @@ BUF_BYTES = 4 * BUF_WORDS
 PAIRS_PER_BUF = BUF_WORDS // 2
 
 #: Shortest project clock, in system clocks, each style is exact at: the
-#: longest path (locked), measured on the emulator's sweep (edge).
+#: longest path (locked), measured on the emulator's sweep (edge, at
+#: sample_delay 0; each cycle of delay adds one, as every loop waits it).
 LOCKED_MIN_PERIOD = (7, 6)  # indexed by mask
 EDGE_MIN_PERIOD = (9, 8)
 #: A delay field holds 31, and the entry path is 4 instructions long.
@@ -245,9 +247,10 @@ def choose(sysclk, masked):
         return True, period
     if STYLE == "locked":
         return None
-    # Edge style: the shortest clock it may see. A fractional divider's
-    # short period is one system clock under the average.
-    if sysclk // CLOCK_HZ - (0 if whole else 1) < EDGE_MIN_PERIOD[masked]:
+    # Edge style: the shortest clock it may see (a fractional divider's
+    # short period is one system clock under the average), less the delay
+    # every loop spends after the edge.
+    if sysclk // CLOCK_HZ - (0 if whole else 1) - SAMPLE_DELAY < EDGE_MIN_PERIOD[masked]:
         return None
     return False, period
 
@@ -260,8 +263,8 @@ def main(out):
         masked = 1 if hasattr(rp2.PIO, "gpio_base") else 0  # noqa: F821 - RP2350 only
     picked = choose(sysclk, masked)
     if picked is None:
-        msg = "error=no exact rle style for sysclk %d clock %d style=%s mask=%d"
-        write_time_chunk(out, 0, (msg % (sysclk, CLOCK_HZ, STYLE, masked)).encode())  # noqa: F821
+        msg = "error=no exact rle style for sysclk %d clock %d style=%s mask=%d delay=%d"
+        write_time_chunk(out, 0, (msg % (sysclk, CLOCK_HZ, STYLE, masked, SAMPLE_DELAY)).encode())  # noqa: F821
         return
     locked, period = picked
     if not claim_pio(out):  # noqa: F821 - prelude
