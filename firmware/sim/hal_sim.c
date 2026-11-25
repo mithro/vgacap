@@ -42,6 +42,7 @@ static struct {
     size_t arena_bytes;
     int force_rxstall;
     int stalled;  // the one host stall (sim_config_t) has happened
+    int refuse_sysclk;
     // streaming
     int streaming;
     uint32_t *bufs[2];
@@ -106,6 +107,7 @@ int sim_input_closed(void) {
 
 double sim_now(void) { return S.now; }
 void sim_force_rxstall(int on) { S.force_rxstall = on; }
+void sim_refuse_sysclk(int on) { S.refuse_sysclk = on; }
 
 // ---- the design ---------------------------------------------------------------
 
@@ -259,10 +261,11 @@ const fw_board_t *hal_board(void) { return &fw_board_dbv3; }
 uint32_t hal_sysclk_hz(void) { return S.sysclk_hz; }
 
 int hal_clock(const fw_clock_plan_t *plan, const char **why) {
-    (void)why;
-    if (!plan) {
-        S.clock_on = 0;
-        return 0;
+    S.clock_on = 0;  // as on the board: the PWM stops first
+    if (!plan) return 0;
+    if (S.refuse_sysclk && plan->sysclk_hz != S.sysclk_hz) {
+        *why = "the system clock cannot be set to that frequency";
+        return -1;
     }
     S.sysclk_hz = plan->sysclk_hz;
     S.clock_hz = (double)plan->sysclk_hz * 16.0 / ((double)plan->div16 * (double)(plan->top + 1u));

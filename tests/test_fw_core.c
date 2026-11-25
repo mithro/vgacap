@@ -108,6 +108,26 @@ TEST(clock_reports_its_plan) {
     ASSERT_TRUE(streq(line(), "ok clock_hz=0 sysclk_hz=133000000"));
 }
 
+// set_sys_clock_hz() can fail. hal_clock() has stopped the PWM by then, so
+// the firmware must not go on believing the old clock runs: status says 0
+// and a capture is refused. A plan the firmware cannot make leaves the
+// running clock alone.
+TEST(clock_a_failed_system_clock_stops_the_clock) {
+    boot(1, 1e-6);
+    pos = 0;
+    send_at("clock hz=25000000\nclock hz=2\nstatus\n", 0);
+    run();
+    ASSERT_TRUE(streq(line(), "ok clock_hz=25000000 actual_hz=25000000 sysclk_hz=100000000 period=4"));
+    ASSERT_TRUE(streq(line(), "err clock 2: no system clock for that project clock (3 Hz .. 125 MHz)"));
+    ASSERT_TRUE(streq(line(), "ok clock_hz=25000000 sysclk_hz=100000000 reset=0 ui_in=-1"));
+    sim_refuse_sysclk(1);
+    send_at("clock hz=36000000\nstatus\nstream buf_words=16 max_bytes=0 edge=falling pio=1 sm=0\n", 0);
+    run();
+    ASSERT_TRUE(streq(line(), "err clock 36000000: the system clock cannot be set to that frequency"));
+    ASSERT_TRUE(streq(line(), "ok clock_hz=0 sysclk_hz=100000000 reset=0 ui_in=-1"));
+    ASSERT_TRUE(streq(line(), "err the project clock is stopped: send 'clock hz=N' first"));
+}
+
 TEST(overlong_line_is_refused_whole) {
     boot(1, 1e-6);
     pos = 0;
@@ -547,6 +567,7 @@ TEST(frame_stops_on_the_stop_byte_and_on_max_bytes) {
 int main(void) {
     RUN(hello_status_and_errors);
     RUN(clock_reports_its_plan);
+    RUN(clock_a_failed_system_clock_stops_the_clock);
     RUN(overlong_line_is_refused_whole);
     RUN(program_commands_print_the_words);
     RUN(reboot_answers_then_stops);

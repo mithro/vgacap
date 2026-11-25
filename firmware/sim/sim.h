@@ -60,6 +60,9 @@ int sim_input_closed(void);
 double sim_now(void);
 // Force the next frame capture's RXSTALL (tests of the rxstall reports).
 void sim_force_rxstall(int on);
+// Make hal_clock() fail, as set_sys_clock_hz() can, for any plan that
+// needs a different system clock.
+void sim_refuse_sysclk(int on);
 
 #ifdef __cplusplus
 }

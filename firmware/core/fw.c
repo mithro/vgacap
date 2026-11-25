@@ -162,7 +162,12 @@ static void cmd_clock(const char *args) {
         return;
     }
     fw_clock_plan_t plan;
-    if (fw_clock_plan((uint32_t)v[0], &plan, &why) || hal_clock(&plan, &why)) {
+    if (fw_clock_plan((uint32_t)v[0], &plan, &why)) {
+        reply("err clock %lu: %s", (unsigned long)v[0], why);  // the clock runs on as it was
+        return;
+    }
+    if (hal_clock(&plan, &why)) {
+        S.clock_on = 0;  // hal_clock() stopped the PWM before it failed
         reply("err clock %lu: %s", (unsigned long)v[0], why);
         return;
     }

@@ -55,7 +55,7 @@ const fw_board_t *hal_board(void);
 uint32_t hal_sysclk_hz(void);
 // Switch to `plan` (system clock first, then the PWM on the clock pin), or
 // stop the clock (pin low and released) when plan is NULL. Returns 0, or
-// -1 with *why set.
+// -1 with *why set and the clock stopped.
 int hal_clock(const fw_clock_plan_t *plan, const char **why);
 // Hold (1) or release (0) the project's reset.
 void hal_reset(int hold);
