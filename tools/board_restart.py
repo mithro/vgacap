@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Put a demo board back to the SDK's start state: Ctrl-B, then Ctrl-D.
+"""Put a demo board back to the SDK's start state: Ctrl-C, Ctrl-B, Ctrl-D.
 
 See `ttcap.repl.restart_sdk`. On a fpgas.online board the daemon's idle
 display then returns to "loaded" about 75 s later.

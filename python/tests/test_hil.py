@@ -498,6 +498,30 @@ def test_restart_sdk_leaves_raw_repl_then_soft_resets():
             raise AssertionError("restart_sdk must leave the link to its caller")
 
     link = FakeLink()
-    ok, text = restart_sdk(link, wait=1.0)
+    started = time.monotonic()
+    ok, text = restart_sdk(link, wait=30.0)
     assert ok and "sdk_version" in text
-    assert link.written == [b"\x02", b"\r\n", b"\x04"]
+    # Ctrl-C twice first, so code still running on the board cannot hold
+    # the restart up.
+    assert link.written == [b"\r\x03\x03", b"\x02", b"\r\n", b"\x04"]
+    # Done as soon as the board is back at a prompt, not after all of `wait`.
+    assert time.monotonic() - started < 10.0
+
+
+def test_restart_sdk_without_a_reboot_says_so():
+    from ttcap.repl import restart_sdk
+
+    class SilentLink:
+        written: list = []
+
+        def write(self, data):
+            self.written.append(data)
+
+        def read(self, timeout):
+            return b">>> "  # a prompt, but no reboot ever
+
+        def close(self):
+            pass
+
+    ok, _text = restart_sdk(SilentLink(), wait=0.5)
+    assert not ok
