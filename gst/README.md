@@ -32,14 +32,14 @@ On quoting, see [`vgacapbin`](#vgacapbin-a-uri-in-video-out).
 
 ## `vgadecode`: a stream in, video out
 
-| property | default | description |
-|---|---|---|
-| `repeat-last-frame` | `false` | re-push the last frame to hold a steady `output-fps` cadence |
-| `output-fps` | `30/1` | fallback frame rate |
-| `max-width` | `1400` | widest line the reconstruction buffers hold, in project clocks |
-| `max-height` | `900` | tallest frame the reconstruction buffers hold, in lines |
-| `force-mode` | `""` | mode table entry to use instead of detecting one |
-| `partial` | `false` | also push frames whose lines were not all covered |
+| property | default | unit | description |
+|---|---|---|---|
+| `repeat-last-frame` | `false` | -- | re-push the last frame to hold a steady `output-fps` cadence |
+| `output-fps` | `30/1` | frames/s | fallback frame rate |
+| `max-width` | `1400` | project clocks | widest line the reconstruction buffers hold |
+| `max-height` | `900` | lines | tallest frame the reconstruction buffers hold |
+| `force-mode` | `""` | -- | mode table entry to use instead of detecting one |
+| `partial` | `false` | -- | also push frames whose lines were not all covered |
 
 The reconstruction buffers are allocated once, when the element starts.
 
@@ -71,21 +71,21 @@ buffers. The board protocol stays in Python ([`ttcap`](../python/ttcap/README.md
 USB serial or over the [fpgas.online bridge](https://tinytapeout.fpgas.online)
 (`fpgas-tt`).
 
-| property | default | default means | required | in a URI query | description |
-|---|---|---|---|---|---|
-| `link` | `""` | -- | yes | no | board link |
-| `clock-hz` | `0` | -- | yes | yes | project clock to program, in Hz |
-| `project` | `""` | keep the selected project | no | yes | `tt.shuttle` macro to enable |
-| `design` | `""` | -- | no | yes | FPGA bitstream to enable |
-| `profile` | `auto` | ask the board for its `GPIOMap` | no | yes | board profile |
-| `pio` | `-1` | `ttcap`'s default | no | yes | PIO block for the sampler |
-| `buf-words` | `-1` | `ttcap`'s default | no | yes | words per DMA buffer |
-| `seconds` | `0` | until the element is stopped | no | yes | capture duration, in seconds |
-| `ttcap-command` | `uv run --no-sync ttcap` | -- | no | no | command that runs `ttcap` |
-| `stop-timeout` | `15` | -- | no | yes | how long a cooperative stop may take, in seconds |
-| `capture-mode` | `stream` | -- | no | yes | `ttcap capture --mode` |
-| `vga-mode` | `""` | `ttcap`'s default (640x480@60) | no | yes | VGA timing |
-| `window-lines` | `0` | `ttcap`'s default | no | yes | most lines per captured frame |
+| property | default | unit | default means | required | in a URI query | description |
+|---|---|---|---|---|---|---|
+| `link` | `""` | -- | -- | yes | no | board link |
+| `clock-hz` | `0` | Hz | -- | yes | yes | project clock to program |
+| `project` | `""` | -- | keep the selected project | no | yes | `tt.shuttle` macro to enable |
+| `design` | `""` | -- | -- | no | yes | FPGA bitstream to enable |
+| `profile` | `auto` | -- | ask the board for its `GPIOMap` | no | yes | board profile |
+| `pio` | `-1` | -- | `ttcap`'s default | no | yes | PIO block for the sampler |
+| `buf-words` | `-1` | words | `ttcap`'s default | no | yes | words per DMA buffer |
+| `seconds` | `0` | s | until the element is stopped | no | yes | capture duration |
+| `ttcap-command` | `uv run --no-sync ttcap` | -- | -- | no | no | command that runs `ttcap` |
+| `stop-timeout` | `15` | s | -- | no | yes | how long a cooperative stop may take |
+| `capture-mode` | `stream` | -- | -- | no | yes | `ttcap capture --mode` |
+| `vga-mode` | `""` | -- | `ttcap`'s default (640x480@60) | no | yes | VGA timing |
+| `window-lines` | `0` | lines | `ttcap`'s default | no | yes | most lines per captured frame |
 
 `ttcap-command` is split with shell quoting rules and run with the
 pipeline's own working directory, which is what `uv run` needs to find the
