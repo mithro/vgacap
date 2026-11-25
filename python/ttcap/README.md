@@ -18,13 +18,15 @@ REPL. The other capture sources have their own READMEs:
 [`capture-rp1/`](../../capture-rp1/README.md) (Raspberry Pi 5) and
 [`rtl/`](../../rtl/README.md) (FPGA).
 
-With a demo board on `/dev/ttyACM0` whose FPGA breakout can enable the
-`tt_um_vga_pattern` bitstream:
+With a demo board on `/dev/ttyACM0` running a 640x480 VGA design, such as a
+[tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns)
+bitstream on an FPGA breakout:
 
 ```sh
 uv run ttcap probe serial:/dev/ttyACM0          # sys.version and the GPIO map
 uv run ttcap throughput serial:/dev/ttyACM0     # what clock the link can keep up with
-uv run ttcap capture serial:/dev/ttyACM0 --design tt_um_vga_pattern \
+# on an ASIC breakout, --project <tt_um_...> instead of --design <bitstream>
+uv run ttcap capture serial:/dev/ttyACM0 --design <bitstream> \
     --clock-hz 500000 --frames 2 --out capture.vgacap
 mkdir -p out && uv run ttcap png capture.vgacap out/frame   # out/frame-0000.png ...
 ```
@@ -142,15 +144,17 @@ down through `vgacapttsrc`'s cooperative stop and the Matroska file is
 finalized rather than truncated. Allow one DMA buffer for that: with the
 default `--buf-words`, about 22 ms on an RP2350 at 750 kHz and about
 137 ms on an RP2040 at 60 kHz. `SIGTERM`, `SIGHUP` and `SIGQUIT` do the
-same.
+same. Because these are *graceful* stops, the demo exits with the
+pipeline's own status: a `kill` on a run that captured successfully exits
+**0**, not 143.
+
+Repeated stop signals escalate: the first ends the stream, a second stops
+it now, a third terminates the pipeline and a fourth kills it, at the cost
+of the video.
+
 However the demo ends (an exception, a `kill`, a closed terminal), it tears
 down the pipeline's whole process group on the way out, so a capture is
-never left holding a shared bench board. A third signal terminates the
-pipeline and a fourth kills it, at the cost of the video.
-
-Because every one of those is a *graceful* stop, the demo then exits with
-the pipeline's own status: a `kill` on a run that captured successfully
-exits **0**, not 143.
+never left holding a shared bench board.
 
 ## Reaching a Welland board
 
