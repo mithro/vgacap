@@ -191,22 +191,23 @@ static void cmd_reset(const char *args) {
 // firmware src/ttboard/project_mux.py): reset the mux (inc, nrst, ena all
 // low, 10 ms, nrst high, 10 ms), `index` pulses on inc (1 ms high, 1 ms
 // low), then ena high. Running in place of the stock firmware, this is the
-// only way an ASIC board's project survives the switch: the mux lines float
-// while the RP2350 is in its bootloader (measured on tt09, 2026-11-24: no
-// sync at all until the project was selected again).
+// only way an ASIC board's project survives the switch: nothing drives the
+// mux lines while the RP2350 is in its bootloader (measured on tt09,
+// 2026-11-24: no sync at all until the project was selected again). Up to
+// ~2 s at index 1023, so the waits service USB (hal_wait_us).
 static void cmd_asic_select(const char *args) {
     static const fw_arg_spec_t specs[] = { { "index", 0, 1023, NULL } };
     int64_t v[1];
     PARSE(args, specs, v);
     hal_asic_ctrl(0, 0, 0);
-    hal_delay_us(10000);
+    hal_wait_us(10000);
     hal_asic_ctrl(0, 1, 0);
-    hal_delay_us(10000);
+    hal_wait_us(10000);
     for (int64_t i = 0; i < v[0]; i++) {
         hal_asic_ctrl(0, 1, 1);
-        hal_delay_us(1000);
+        hal_wait_us(1000);
         hal_asic_ctrl(0, 1, 0);
-        hal_delay_us(1000);
+        hal_wait_us(1000);
     }
     hal_asic_ctrl(1, 1, 0);
     reply("ok asic_select index=%d", (int)v[0]);

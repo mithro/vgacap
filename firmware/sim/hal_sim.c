@@ -301,6 +301,9 @@ int hal_gpio_get(unsigned gpio) {
 }
 
 void hal_delay_us(uint32_t us) { advance((double)us * 1e-6); }
+void hal_wait_us(uint32_t us) {
+    advance((double)us * 1e-6);
+}
 
 void hal_idle(void) {
     double next = INFINITY;

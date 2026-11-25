@@ -69,7 +69,11 @@ void hal_ui_in(int value);
 void hal_asic_ctrl(int ena, int nrst, int inc);
 // Level of one GPIO, read directly.
 int hal_gpio_get(unsigned gpio);
+// A short exact wait (busy: microseconds between GPIO reads).
 void hal_delay_us(uint32_t us);
+// Wait at least `us`, servicing the host link meanwhile (milliseconds of
+// pin sequencing, during which USB must not go unserviced).
+void hal_wait_us(uint32_t us);
 // Idle until something might have changed (an interrupt, a byte).
 void hal_idle(void);
 // Reboot: into the flash firmware, or into the USB bootloader.

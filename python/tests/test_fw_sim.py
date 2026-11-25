@@ -568,8 +568,14 @@ def test_asic_select_brings_the_design_back(asic_fw, bars_uo, tmp_path):
 
 
 def test_the_wrong_asic_index_selects_another_project(asic_fw):
-    _, data = capture(asic_fw, request(clock_hz=100_000, max_bytes=40_000, asic_index=4))
-    assert not _stream_samples(data).any()
+    req = request(clock_hz=100_000, max_bytes=40_000, asic_index=4)
+    did = setup(asic_fw, req)
+    assert did["asic_index"] == 4  # it was selected, just not the design's index
+    out = io.BytesIO()
+    stats = run_session(FirmwareSession(asic_fw, req), out)
+    assert stats.clean, stats.format()
+    samples = _stream_samples(out.getvalue())
+    assert len(samples) and not samples.any()
 
 
 def test_asic_select_validates_its_index(fw):

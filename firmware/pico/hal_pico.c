@@ -121,6 +121,10 @@ void hal_ui_in(int value) {
 
 int hal_gpio_get(unsigned gpio) { return gpio_get(gpio) ? 1 : 0; }
 void hal_delay_us(uint32_t us) { busy_wait_us_32(us); }
+void hal_wait_us(uint32_t us) {
+    absolute_time_t until = make_timeout_time_us(us);
+    while (!time_reached(until)) tud_task();
+}
 void hal_idle(void) { tud_task(); }
 
 void hal_reboot(int bootsel) {
