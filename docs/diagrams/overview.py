@@ -206,6 +206,7 @@ def inner(x, kind, name, parts, sink):
     sx = px + w1 + 22 + w2 / 2
     line([(sx, by + 54), (sx, SRC_Y + SRC_H - 44)], "thin")
     part(sx - 40, SRC_Y + SRC_H - 42, 80, 26, sink)
+    return sx
 
 
 # ---- the demo board: the design on a breakout, captured by the board's own MCU ---------------
@@ -249,7 +250,7 @@ flow(mid - 120, MCU_Y + 62, (("DMA", 76), ("USB", 76)))
 # ---- the Raspberry Pi 5, wired to the board's OUTPUT header --------------------------------------
 container(PI_X, "Raspberry Pi 5", lambda x, y: nested_svg(
     HERE / "logos" / "raspberry-pi.svg", x - 12, y - 15, 24, 30))
-inner(PI_X, "chip", "RP1", (("PIO", 54), ("DMA", 54)), "DRAM")
+PI_SINK = inner(PI_X, "chip", "RP1", (("PIO", 54), ("DMA", 54)), "DRAM")
 TAP_X, TAP_Y = PH_X + PW * 0.76, PH_Y + PHH - 6
 WIRE_Y = PH_Y + PHH + 10
 PI_C = PI_X + COL_W / 2
@@ -262,7 +263,7 @@ container(SIM_X, "Simulator", lambda x, y: add(
     f'<path d="M{x - 11} {y + 4} L{x - 11} {y - 4} L{x - 4} {y - 4} L{x - 4} {y + 4} '
     f'L{x + 3} {y + 4} L{x + 3} {y - 4} L{x + 10} {y - 4}" fill="none" stroke="{SIG}" '
     f'stroke-width="2.25" stroke-linejoin="round"/>'))
-inner(SIM_X, "sim", "Verilator or Icarus", (("design", 66), ("tracer", 66)), "trace file")
+SIM_SINK = inner(SIM_X, "sim", "Verilator or Icarus", (("design", 66), ("tracer", 66)), "trace file")
 SIM_C = SIM_X + COL_W / 2
 doc(SIM_C - 23, 110, 46, 58, "the design's RTL")
 line([(SIM_C, 110 + 58 + 24), (SIM_C, SRC_Y - 2)], "sig")
@@ -273,8 +274,8 @@ line([(usb_x, MCU_Y + 90), (usb_x, HOST_Y - 2)], "str")
 laptop(usb_x - 29, HOST_Y, 58, 32)
 text(usb_x + 40, HOST_Y + 22, "ttcap", "title")
 line([(usb_x, HOST_Y + 40), (usb_x, STREAM_Y - 2)], "str")
-for cx in (PI_C, SIM_C):
-    line([(cx, SRC_Y + SRC_H), (cx, STREAM_Y - 2)], "str")
+for cx in (PI_SINK, SIM_SINK):
+    line([(cx, SRC_Y + SRC_H - 16), (cx, STREAM_Y - 2)], "str")
 
 # ---- the stream: one format for every source --------------------------------------------------------
 rect(LEFT, STREAM_Y, RIGHT - LEFT, STREAM_H, "#f7f8fb", INK2, rx=6, sw=2.5)
