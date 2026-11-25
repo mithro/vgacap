@@ -5,7 +5,7 @@ Tapeout](https://tinytapeout.com) design's VGA output on `uo_out` with the PIO a
 RP2350 on the Tiny Tapeout demo board, and writes it as vgacap chunks.
 
 It is the third way to capture on the RP2350 demo board, next to the
-MicroPython scripts ([`python/ttcap/mp/`](../python/ttcap/mp/)) and the pico-sdk capture firmware
+MicroPython scripts ([`python/ttcap/mp/`](../python/ttcap/mp/)) and the vgacap firmware
 ([`firmware/`](../firmware/README.md)). It shares the firmware's capture
 engines: the module is a thin binding over [`firmware/core/fw_capture.c`](../firmware/core/fw_capture.c)
 and [`firmware/pico/hal_rp2.c`](../firmware/pico/hal_rp2.c), not a reimplementation.
@@ -161,7 +161,7 @@ inspect the simulated board; the rp2 build has none of them.
 ([`python/tests/mpy_unix_board.py`](../python/tests/mpy_unix_board.py) plays the board) and drives it through
 ttcap. It checks:
 
-* frame and window captures byte-identical to the pico-sdk firmware's
+* frame and window captures byte-identical to the vgacap firmware's
   (same engines, same simulator) and pixel-exact through
   [`vgacap-frames`](../src/tools/README.md);
 * a heap fragmented into ~144 KB holes giving all 481 lines in one
