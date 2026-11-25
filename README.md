@@ -2,10 +2,11 @@
 
 vgacap captures the VGA output of a [Tiny Tapeout](https://tinytapeout.com)
 design, turns it into pictures and video, and checks it pixel by pixel. A
-design that drives the Tiny VGA Pmod puts its VGA signals on its eight
-`uo_out` pins; vgacap records those pins and rebuilds the screen from them.
+design that drives the [Tiny VGA Pmod](https://github.com/mole99/tiny-vga)
+puts its VGA signals on its eight `uo_out` pins; vgacap records those pins
+and rebuilds the screen from them.
 
-Every capture source writes the same format: a **vgacap stream**, a small
+Every capture source writes the same format: a [**vgacap stream**](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-09-15-stream-format.md), a small
 chunked format that records the design's `uo_out` once per project clock,
 either continuously or as whole frames or windows. Everything downstream of
 the source reads only that stream, so a capture from a Tiny Tapeout demo
@@ -32,32 +33,66 @@ calibration designs and their reference renders live in
 
 **The common core**, used by every capture source and consumer:
 
-| | |
-|---|---|
-| stream format | `include/vgacap/stream.h`, `src/stream/`: the `VGCH` header and the `RAW`, `RLE`, `FRAM`, `EVNT` and `TIME` chunks; a callback-based C99 writer (no allocation, so it also builds into board firmware) and an incremental reader. `python/vgacap/stream.py` is the Python mirror. |
-| reconstruction | `include/vgacap/frame.h`, `src/frame/` (`libvgaframe`): learns the sync timing and polarity from the signal itself, tolerates glitch pulses, matches a mode table and rebuilds frames, both from continuous streams and from the whole frames or windows in `FRAM` chunks. |
-| test data | `python/vgacap/synth.py` generates synthetic VGA signals; `vgacap-bin2stream` wraps a one-byte-per-clock simulator dump as a stream. |
+| part | C header | C source | Python |
+|---|---|---|---|
+| stream format | [`include/vgacap/stream.h`](include/vgacap/stream.h) | [`src/stream/`](src/stream/) | [`python/vgacap/stream.py`](python/vgacap/stream.py) |
+| reconstruction (`libvgaframe`) | [`include/vgacap/frame.h`](include/vgacap/frame.h) | [`src/frame/`](src/frame/) | -- |
+| synthetic VGA signals | -- | -- | [`python/vgacap/synth.py`](python/vgacap/synth.py) |
+| simulator dump to stream (`vgacap-bin2stream`) | -- | -- | [`python/vgacap/bin2stream.py`](python/vgacap/bin2stream.py) |
+
+- The stream has a `VGCH` header and `RAW`, `RLE`, `FRAM`, `EVNT` and
+  `TIME` chunks. The writer is callback-based C99 with no allocation, so it
+  also builds into board firmware; the reader is incremental.
+- The reconstruction learns the sync timing and polarity from the signal,
+  tolerates glitch pulses, matches a mode table, and rebuilds frames from
+  continuous streams and from the whole frames or windows in `FRAM` chunks.
+- `vgacap-bin2stream` wraps a one-byte-per-clock simulator dump.
 
 **Capture sources.** Each source is a different way of getting `uo_out` into
 a vgacap stream; pick one by the hardware you have and how fast the design
 must run.
 
-| source | where | how it reaches the host | status |
+| source | runs on | code | `ttcap` option |
 |---|---|---|---|
-| Tiny Tapeout demo board, stock firmware | `python/ttcap/mp/`: capture programs that `ttcap` pushes through the board's MicroPython REPL and runs on the PIO of its RP2040 or RP2350 | USB serial, or the [fpgas.online websocket bridge](python/ttcap/README.md#reaching-a-welland-board) | streaming, whole-frame and windowed capture; pixel-exact on RP2350 boards with FPGA and ASIC breakouts; on RP2040 boards streaming is proven on silicon, frame and window capture only in the emulator |
-| demo board, run-length | [vgacap PR #6](https://github.com/mithro/vgacap/pull/6) (not yet merged): the PIO counts runs itself | as above, with fewer bytes for simple pictures | exact up to 25 MHz with an FPGA breakout; exact with an ASIC breakout at 100 kHz |
-| demo board (RP2350), vgacap firmware | `firmware/`: a pico-sdk firmware loaded into RAM in place of the stock one (`ttcap --firmware picosdk`) | USB serial, with its own protocol (`firmware/PROTOCOL.md`) | frame, window and stream capture pixel-exact with FPGA and ASIC breakouts |
-| demo board (RP2350), MicroPython C module | `mpy/`: the same capture engines built into a custom MicroPython firmware (`import vgacap`, `ttcap --firmware mpy-module`) | as for the stock firmware | pixel-exact with an FPGA breakout |
-| Raspberry Pi 5 | `capture-rp1/` (`vgacap-rp1`): the PIO in the Pi 5's own RP1 I/O chip, via piolib, with the board's `uo_out` wired to the Pi's GPIO header | runs on the Pi itself | proven by loopback; waiting for a Pi 5 wired to a Tiny Tapeout board |
-| FPGA | `rtl/`: capture logic to build into an FPGA design (Migen source and generated Verilog), e.g. beside your design on the demo board's FPGA breakout (iCE40UP5K) | on the breakout, `uo_out` + `uio` to the board's RP2350; elsewhere, whatever link the FPGA design has | exact on an iCE40 FPGA breakout at 250 kHz and 25 MHz |
-| simulators | `vgacap-bin2stream` today; full simulation traces are being added | files | in use by the tests |
-| BIO (the I/O coprocessor on bunnie's Baochip) | research in tt-vga-capture | -- | simulator only |
+| stock firmware | demo board microcontroller | [`python/ttcap/mp/`](python/ttcap/mp/) | `--firmware micropython` |
+| vgacap firmware | demo board RP2350 | [`firmware/`](firmware/README.md) | `--firmware picosdk` |
+| MicroPython C module | demo board RP2350 | [`mpy/`](mpy/README.md) | `--firmware mpy-module` |
+| Raspberry Pi 5 | RP1 | [`capture-rp1/`](capture-rp1/README.md) | -- |
+| FPGA | iCE40UP5K breakout | [`rtl/`](rtl/README.md) | -- |
+| simulator | host | [`python/vgacap/bin2stream.py`](python/vgacap/bin2stream.py) | -- |
+| BIO | [Baochip](https://github.com/baochip/baochip-1x) | [research note](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-11-24-bio-capture-feasibility.md) | -- |
 
-**Consumers and tools:** the C tools `vgacap-dump` and `vgacap-frames`; the
-`ttcap` CLI (`capture`, `png`, `demo`, `probe`, `throughput`, `reboot`);
-the GStreamer plugin in `gst/` (`vgadecode`, `vgacapttsrc`, `vgacapbin`);
-`ttcap.emu`, a cycle-level RP2040/RP2350 emulator that runs the exact board
-programs for the tests; and `tools/hil.py`, the hardware-in-the-loop check.
+**Verification:**
+
+| source | chip | breakout | stream | frame | window |
+|---|---|---|---|---|---|
+| stock firmware | RP2350 | FPGA | pixel-exact | pixel-exact | pixel-exact |
+| stock firmware | RP2350 | ASIC | clean | clean | not checked |
+| stock firmware | RP2040 | ASIC | clean | emulator only | emulator only |
+| vgacap firmware | RP2350 | FPGA | pixel-exact | pixel-exact | pixel-exact |
+| vgacap firmware | RP2350 | ASIC | clean | clean | clean |
+| MicroPython C module | RP2350 | FPGA | pixel-exact | pixel-exact | pixel-exact |
+| FPGA | RP2350 | FPGA | pixel-exact | -- | -- |
+| Raspberry Pi 5 | RP1 | -- | loopback only | -- | -- |
+| simulator | -- | -- | tests only | -- | -- |
+| BIO | -- | -- | simulator only | -- | -- |
+
+Run-length capture on the stock firmware
+([vgacap PR #6](https://github.com/mithro/vgacap/pull/6), not yet merged) was
+exact up to 25 MHz with an FPGA breakout and at 100 kHz with an ASIC
+breakout.
+
+**Consumers and tools:**
+
+- [`vgacap-dump` and `vgacap-frames`](src/tools/README.md), the C tools;
+- the [`ttcap`](python/ttcap/README.md) CLI: `capture`, `png`, `demo`,
+  `probe`, `throughput`, `reboot`;
+- the [GStreamer](https://gstreamer.freedesktop.org) plugin in
+  [`gst/`](gst/README.md): `vgadecode`, `vgacapttsrc`, `vgacapbin`;
+- [`ttcap.emu`](python/ttcap/emu/), a cycle-level RP2040/RP2350 emulator
+  that runs the exact board programs for the tests;
+- [`tools/hil.py`](tools/README.md#hardware-in-the-loop-check), the
+  hardware-in-the-loop check.
 
 ## Building and testing
 
@@ -88,21 +123,22 @@ demo, the shared Welland bench boards, running on a Raspberry Pi),
 
 ## Layout
 
-| | |
+| path | contents |
 |---|---|
-| [`src/tools/`](src/tools/README.md) | `vgacap-dump` (chunk list, sample checksum) and `vgacap-frames` (stream to PPM frames) |
-| `python/vgacap/` | Python mirror of the stream format, mode table, synthetic signal generators, `vgacap-bin2stream` |
-| [`python/ttcap/`](python/ttcap/README.md) | the `ttcap` CLI and library: board links (serial, websocket), the capture session for the demo board's RP2040/RP2350, `ttcap demo`; `mp/` holds the MicroPython board programs, `emu/` the RP2040/RP2350 emulator |
-| [`firmware/`](firmware/README.md) | pico-sdk capture firmware for the Tiny Tapeout demo board v3 (RP2350), with its portable core in `firmware/core/` and a simulated board in `firmware/sim/` |
-| [`mpy/`](mpy/README.md) | the same capture engines as a MicroPython `USER_C_MODULE` |
-| [`capture-rp1/`](capture-rp1/README.md) | `vgacap-rp1`: capture with the PIO in the Raspberry Pi 5's RP1 chip, via piolib |
-| [`rtl/`](rtl/README.md) | FPGA capture modules (Migen source and generated Verilog) |
-| [`gst/`](gst/README.md) | the GStreamer plugin |
-| [`tools/`](tools/README.md) | `hil.py` (hardware-in-the-loop check), `board_exec.py`, `board_restart.py` |
-| `tests/`, `python/tests/`, `gst/tests/` | C unit tests (ctest) and Python and end-to-end tests (pytest) |
-
-[tt-vga-capture/docs/research/2026-09-15-stream-format.md](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-09-15-stream-format.md)
-describes the stream format in full.
+| [`src/tools/`](src/tools/README.md) | `vgacap-dump` and `vgacap-frames` |
+| [`python/vgacap/`](python/vgacap/) | Python stream library |
+| [`python/ttcap/`](python/ttcap/README.md) | `ttcap` CLI and library |
+| [`python/ttcap/mp/`](python/ttcap/mp/) | MicroPython board programs |
+| [`python/ttcap/emu/`](python/ttcap/emu/) | RP2040 and RP2350 emulator |
+| [`firmware/`](firmware/README.md) | pico-sdk capture firmware |
+| [`mpy/`](mpy/README.md) | MicroPython C module |
+| [`capture-rp1/`](capture-rp1/README.md) | Raspberry Pi 5 capture |
+| [`rtl/`](rtl/README.md) | FPGA capture modules |
+| [`gst/`](gst/README.md) | GStreamer plugin |
+| [`tools/`](tools/README.md) | hardware-in-the-loop scripts |
+| [`tests/`](tests/) | C unit tests (ctest) |
+| [`python/tests/`](python/tests/) | Python tests (pytest) |
+| [`gst/tests/`](gst/tests/) | plugin end-to-end tests (pytest) |
 
 ## License
 
