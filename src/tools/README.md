@@ -22,7 +22,8 @@ the frame that its first vsync pulse begins, so two frame periods are
 enough for the first picture, and each further period adds one. A capture
 that happens to start exactly on a vsync pulse cannot measure that pulse
 and waits for the next one, so capture at least three frame periods to be
-sure.
+sure. `ttcap capture --frames N` sizes its capture by the same rule: N + 2
+frame periods, so three for one frame and one more for each further frame.
 
 ## Glitches
 
