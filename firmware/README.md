@@ -2,10 +2,10 @@
 
 A C firmware for the Tiny Tapeout demo board v3 (RP2350B) that captures a
 design's VGA output on `uo_out` without MicroPython underneath. It does
-what the MicroPython capture programs (`python/ttcap/mp/`) do: streaming
+what the MicroPython capture programs ([`python/ttcap/mp/`](../python/ttcap/mp/)) do: streaming
 capture, whole-frame capture and windowed capture. The host drives it with
 `ttcap capture --firmware picosdk` over the protocol in
-[PROTOCOL.md](PROTOCOL.md), and the same tools read its vgacap streams as
+[PROTOCOL.md](PROTOCOL.md), and the same tools read its [vgacap streams](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-09-15-stream-format.md) as
 read the MicroPython ones.
 
 It is built **no_flash**: the RP2350's bootloader loads the UF2 into SRAM
@@ -18,19 +18,31 @@ were measured on: `fpga-4` is a demo board with an FPGA breakout on the
 shared Welland bench (see
 [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)),
 and `tt09` is a demo board with an ASIC breakout (a TT09 chip) at Welland.
-`tt09` is not a `--board` slug in `python/ttcap/boards.py`, so `ttcap`
+`tt09` is not a `--board` slug in [`python/ttcap/boards.py`](../python/ttcap/boards.py), so `ttcap`
 reaches it with an explicit link (`serial:` or `ws://`) instead of
 `--board`.
 
 ## Layout
 
-| Path | What |
-|---|---|
-| `core/` | Portable C, no pico-sdk: the command loop and argument parser (`fw.c`, `fw_args.c`), the stream and frame engines (`fw_capture.c`, which the MicroPython module in `../mpy/` drives too), the PIO program builder (`fw_pio.c`), the project clock plan (`fw_clock.c`), the board's pins (`fw_board.c`), and the HAL contract (`fw_hal.h`). |
-| `pico/` | The pico-sdk HAL: the capture half shared with the MicroPython module (`hal_rp2.c`: PIO, DMA) and the firmware's own half (`hal_pico.c`: USB, clock, reset, ui_in, reboot); USB descriptors, TinyUSB config, `main.c`, and the board header `boards/tt_demoboard_v3.h`. |
-| `pio/` | The PIO programs' readable sources and pioasm's output for them. |
-| `sim/` | The HAL on a host: a simulated board (`hal_sim.c`) and `vgacap-fw-sim`, the firmware speaking the protocol on stdin/stdout. |
-| `CMakeLists.txt` | The firmware build: a pico-sdk project of its own. |
+| path | contents | in the [`mpy/`](../mpy/README.md) rp2 build | in the `mpy/` unix build |
+|---|---|---|---|
+| [`core/fw.c`](core/fw.c) | command loop | no | no |
+| [`core/fw_args.c`](core/fw_args.c) | argument parser | yes | yes |
+| [`core/fw_capture.c`](core/fw_capture.c) | stream and frame engines | yes | yes |
+| [`core/fw_pio.c`](core/fw_pio.c) | PIO program builder | yes | yes |
+| [`core/fw_clock.c`](core/fw_clock.c) | project clock plan | yes | yes |
+| [`core/fw_board.c`](core/fw_board.c) | board pins | yes | yes |
+| [`core/fw_hal.h`](core/fw_hal.h) | HAL contract | yes | yes |
+| [`pico/hal_rp2.c`](pico/hal_rp2.c) | PIO and DMA HAL | yes | no |
+| [`pico/hal_pico.c`](pico/hal_pico.c) | firmware-only HAL | no | no |
+| [`pico/main.c`](pico/main.c) | `main()` | no | no |
+| [`pico/usb_descriptors.c`](pico/usb_descriptors.c) | USB descriptors | no | no |
+| [`pico/tusb_config.h`](pico/tusb_config.h) | TinyUSB configuration | no | no |
+| [`pico/boards/tt_demoboard_v3.h`](pico/boards/tt_demoboard_v3.h) | board header | no | no |
+| [`pio/`](pio/) | PIO sources and pioasm output | no | no |
+| [`sim/hal_sim.c`](sim/hal_sim.c) | simulated board | no | yes |
+| [`sim/sim_main.c`](sim/sim_main.c) | `vgacap-fw-sim` | no | no |
+| [`CMakeLists.txt`](CMakeLists.txt) | pico-sdk firmware build | no | no |
 
 The root `CMakeLists.txt` builds `core/` and `sim/` for the host (no ARM
 toolchain): `vgacap-fw-sim` and the C tests `test_fw_units` and
@@ -43,9 +55,9 @@ Toolchain (Debian/Ubuntu): `sudo apt-get install gcc-arm-none-eabi
 libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib`, plus a host C/C++
 compiler and CMake for pioasm and picotool, which the SDK builds itself.
 
-The SDK is pinned to **pico-sdk 2.2.0**, commit
-`a1438dff1d38bd9c65dbd693f0e5db4b9ae91779`, with `lib/tinyusb` at its
-submodule pin `86ad6e56c1700e85f1c5678607a762cfe3aa2f47`; the build refuses
+The SDK is pinned to [**pico-sdk 2.2.0**](https://github.com/raspberrypi/pico-sdk/releases/tag/2.2.0), commit
+[`a1438dff1d38bd9c65dbd693f0e5db4b9ae91779`](https://github.com/raspberrypi/pico-sdk/tree/a1438dff1d38bd9c65dbd693f0e5db4b9ae91779), with `lib/tinyusb` at its
+submodule pin [`86ad6e56c1700e85f1c5678607a762cfe3aa2f47`](https://github.com/hathach/tinyusb/tree/86ad6e56c1700e85f1c5678607a762cfe3aa2f47); the build refuses
 any other SDK version.
 
     git clone --branch 2.2.0 --depth 1 https://github.com/raspberrypi/pico-sdk.git pico-sdk
@@ -54,7 +66,7 @@ any other SDK version.
     cmake --build firmware/build
 
 The result is `firmware/build/vgacap_fw.uf2` (family `rp2350-arm-s`,
-loaded at `0x20000000`). The first configure fetches picotool 2.2.0 and
+loaded at `0x20000000`). The first configure fetches [picotool](https://github.com/raspberrypi/picotool) 2.2.0 and
 builds it; `-DPICOTOOL_FETCH_FROM_GIT_PATH=<dir>` shares that between
 builds.
 
@@ -82,7 +94,7 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
 * **Verified on fpga-4 (2026-11-24)**: after BOOTSEL and this firmware,
   frame, window and streaming captures of `tt_um_vgacal_bars` were
   pixel-exact, so the iCE40 kept its configuration (tt-vga-capture
-  `docs/results/2026-11-24-picosdk-firmware-fpga4/`).
+  [`docs/results/2026-11-24-picosdk-firmware-fpga4/`](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-picosdk-firmware-fpga4)).
 * GPIO 1 is the iCE40's `CRESET_B` on every Tiny Tapeout FPGA breakout
   (and the mux controller's reset on an ASIC breakout). The stock firmware
   leaves it driven high. While the RP2350 is in reset and in its bootloader it is an
@@ -115,26 +127,26 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   product `vgacap capture firmware`, serial number the chip's unique ID:
   `/dev/serial/by-id/usb-vgacap_vgacap_capture_firmware_<id>-if00`. A udev
   rule that names the stock firmware's port (`/dev/ttboard` on the
-  fpgas.online Pis) will not match it.
+  [fpgas.online](https://tinytapeout.fpgas.online) Pis) will not match it.
 
 ## PIO programs
 
-`pio/vgacap_stream.pio` and `pio/vgacap_frame.pio` are the programs'
+[`pio/vgacap_stream.pio`](pio/vgacap_stream.pio) and [`pio/vgacap_frame.pio`](pio/vgacap_frame.pio) are the programs'
 readable sources, written at the RP2350 board's default operands. The
 operands of one capture (edge, sync polarities, sample delay, system
-clocks per sample) are only known when it starts, so `core/fw_pio.c`
+clocks per sample) are only known when it starts, so [`core/fw_pio.c`](core/fw_pio.c)
 builds the loaded words at run time, instruction for instruction in the
 same order as the `.pio` source:
 
-| `.pio` | MicroPython (`python/ttcap/mp/`) | `core/fw_pio.c` |
-|---|---|---|
-| `vgacap_stream.pio` | `capture_rp2.py` `make_sampler()` | `fw_pio_sampler()` |
-| `vgacap_frame.pio` | `frame_rp2.py` `make_trigger()` | `fw_pio_frame()` |
+| `.pio` source | MicroPython file | MicroPython function | `fw_pio.c` function |
+|---|---|---|---|
+| [`vgacap_stream.pio`](pio/vgacap_stream.pio) | [`capture_rp2.py`](../python/ttcap/mp/capture_rp2.py) | `make_sampler()` | `fw_pio_sampler()` |
+| [`vgacap_frame.pio`](pio/vgacap_frame.pio) | [`frame_rp2.py`](../python/ttcap/mp/frame_rp2.py) | `make_trigger()` | `fw_pio_frame()` |
 
 The tests hold `fw_pio.c` to both: to pioasm's words for the `.pio` files
 (through the checked-in `.hex`) and to MicroPython's `rp2.asm_pio` words
 for every operand combination they try, configuration registers included
-(`python/tests/test_fw_sim.py`, `tests/test_fw_units.c`). A MicroPython
+([`python/tests/test_fw_sim.py`](../python/tests/test_fw_sim.py), [`tests/test_fw_units.c`](../tests/test_fw_units.c)). A MicroPython
 program could load the `.pio` files' words the same way.
 
 ## Off-hardware tests
@@ -155,7 +167,7 @@ program could load the `.pio` files' words the same way.
   FRAM chunks as `frame_rp2.py` on `ttcap.emu`.
 
 The simulator models what the PIO and DMA deliver, not their cycles; see
-`sim/sim.h` for what that leaves out.
+[`sim/sim.h`](sim/sim.h) for what that leaves out.
 
 ## Running it on a board
 
