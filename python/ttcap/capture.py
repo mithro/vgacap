@@ -586,6 +586,20 @@ class CaptureStats:
     mem_free_before: int = 0
 
     @property
+    def board_error(self) -> str:
+        """What the board said went wrong, or "" if it said nothing.
+
+        The last line of its traceback (e.g. a `MemoryError` allocating the
+        DMA buffers) if it raised, else its first `error=` TIME message (a
+        setup the script refused) -- either way the reason a run with no
+        samples has none, which is not that the sampler saw no clock.
+        """
+        lines = [line.strip() for line in self.stderr.splitlines() if line.strip()]
+        if lines:
+            return lines[-1]
+        return next((m for m in self.messages if m.startswith("error=")), "")
+
+    @property
     def clean(self) -> bool:
         return not (
             self.overruns

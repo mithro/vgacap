@@ -15,11 +15,12 @@ Subcommands:
   video file, a window and a browser-viewable MJPEG stream (`ttcap.demo`).
 
 Exit codes: 0 success, 1 a board, link or tool error (including a capture
-that ended through `CaptureStats.error`/`timed_out`, and an `--mode rle`
-capture whose board reported an RX stall), 2 a usage error
-(argparse's own), 3 a capture that produced no samples at all -- the one
-failure worth telling apart, because it means the sampler never saw a clock
-edge.
+that ended through `CaptureStats.error`/`timed_out`, one whose board
+raised or sent an `error=` message (`CaptureStats.board_error`, printed),
+and an `--mode rle` capture whose board reported an RX stall), 2 a usage
+error (argparse's own), 3 a capture that produced no samples at all and
+no board error -- the one failure worth telling apart, because it means
+the sampler never saw a clock edge.
 """
 
 from __future__ import annotations
@@ -961,6 +962,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "rx stall: the RX FIFO overflowed and the RLE capture stopped there",
                 file=sys.stderr,
             )
+            return 1
+        if stats.board_error:
+            # The board's own reason (a MemoryError for the buffers, a
+            # refused clock), not the no-clock-edge guess below.
+            print("board error: %s" % stats.board_error, file=sys.stderr)
             return 1
         if stats.samples == 0:
             print(

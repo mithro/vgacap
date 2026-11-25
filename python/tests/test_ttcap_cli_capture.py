@@ -654,3 +654,43 @@ def test_an_rle_oneshot_runs_with_seconds_zero_and_no_byte_limit(monkeypatch, tm
 
     assert _rle_capture(monkeypatch, tmp_path, chunks, "--seconds", "0", "--rle-oneshot") == 0
     assert _rle_capture(monkeypatch, tmp_path, chunks, "--seconds", "0") == 1
+
+
+# -- a board that raised or refused ------------------------------------------
+
+#: What fpga-1 printed for `--buf-words 36000`: the heap passed the host's
+#: free-bytes check but held no 144000-byte block for a DMA buffer.
+MEMORY_ERROR = (
+    "Traceback (most recent call last):\r\n"
+    '  File "<stdin>", line 300, in <module>\r\n'
+    "MemoryError: memory allocation failed, allocating 144000 bytes\r\n"
+)
+
+
+@pytest.mark.parametrize("mode", ["stream", "rle"])
+def test_a_board_that_raised_reports_why_not_a_missing_clock(monkeypatch, capsys, tmp_path, mode):
+    board = capture_board(RP2350_DBV3, [], stderr=MEMORY_ERROR)
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--mode", mode,
+         "--clock-hz", "25000000", "--seconds", "0.05",
+         "--out", str(tmp_path / "s.vgacap")]
+    )
+
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "board error: MemoryError: memory allocation failed, allocating 144000 bytes" in err
+    assert "clock edge" not in err
+
+
+def test_a_setup_the_board_refused_is_reported_as_its_error(monkeypatch, capsys, tmp_path):
+    # No samples because the script said no, not because there was no clock.
+    msg = "error=no exact rle style: sysclk 150000000 clock 30000000 style=auto mask=1 delay=0"
+    chunks = rle_chunks(RP2350_DBV3, [], [msg])
+
+    assert _rle_capture(monkeypatch, tmp_path, chunks, "--seconds", "0.05") == 1
+
+    err = capsys.readouterr().err
+    assert "board error: " + msg in err
+    assert "clock edge" not in err
