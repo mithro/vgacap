@@ -21,7 +21,7 @@ from ttcap import mp
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
 from ttcap.capture import capture_cfg
 
-SCRIPTS = ["capture_rp2.py", "throughput.py"]
+SCRIPTS = ["prelude.py", "capture_rp2.py", "throughput.py"]
 
 #: What the board must be able to compile. The unminified capture script was
 #: 25,358 bytes and did not reliably fit.
@@ -30,7 +30,7 @@ MAX_SCRIPT_BYTES = 10_000
 
 @pytest.fixture(scope="module")
 def capture_source() -> str:
-    return mp.load("capture_rp2.py")
+    return mp.source("capture_rp2.py")
 
 
 def strip_docstrings(tree: ast.AST) -> ast.AST:
@@ -85,22 +85,30 @@ def test_minify_preserves_the_program(name):
 
 @pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
 def test_the_uploaded_capture_script_fits_in_the_board(profile):
-    script = mp.with_cfg(mp.minify(mp.load("capture_rp2.py")), capture_cfg(profile))
+    script = mp.build(capture_cfg(profile), "capture_rp2.py")
 
     assert len(script) < MAX_SCRIPT_BYTES
     # ... and it is a real saving, not a file that was already small.
-    assert len(script) < len(mp.load("capture_rp2.py")) / 2
+    assert len(script) < len(mp.source("capture_rp2.py")) / 2
 
 
-def test_minify_keeps_line_numbers_pointing_at_the_source(capture_source):
-    minified = mp.minify(capture_source)
-
-    for line, text in enumerate(capture_source.split("\n")):
-        if text.startswith("def main("):
-            assert minified.split("\n")[line] == text
-            break
-    else:
-        raise AssertionError("capture_rp2.py has no top-level main()")
+def test_every_def_in_the_built_script_locates_back_to_its_file():
+    # A board traceback numbers lines in the one concatenated script; each
+    # top-level def must map back to the file and line a reader would open.
+    built = mp.build(capture_cfg(RP2040_TT06), "capture_rp2.py").split("\n")
+    located = []
+    for line, text in enumerate(built, 1):
+        if text.startswith("def "):
+            name, number = mp.locate(line, "capture_rp2.py")
+            assert mp.load(name).split("\n")[number - 1] == text
+            located.append(name)
+    expected = [
+        name
+        for name in ("prelude.py", "capture_rp2.py")
+        for text in mp.load(name).split("\n")
+        if text.startswith("def ")
+    ]
+    assert located == expected
 
 
 # -- the stripping rules --------------------------------------------------
@@ -156,6 +164,76 @@ def test_module_level_names_covers_what_a_run_leaves_behind(capture_source):
 
 
 def test_module_level_names_includes_the_prepended_cfg():
-    script = mp.with_cfg(mp.minify(mp.load("capture_rp2.py")), capture_cfg(RP2040_TT06))
+    script = mp.build(capture_cfg(RP2040_TT06), "capture_rp2.py")
 
     assert "CFG" in mp.module_level_names(script)
+
+
+# -- build / source / locate / annotate -----------------------------------
+
+
+def test_build_is_cfg_then_the_prelude_then_the_body():
+    script = mp.build(capture_cfg(RP2040_TT06), "capture_rp2.py")
+    lines = script.split("\n")
+
+    assert lines[0].startswith("CFG = {")
+    # Exactly the two minified parts after the CFG line, in order.
+    assert "\n".join(lines[1:]) == mp.minify(mp.load("prelude.py")) + mp.minify(
+        mp.load("capture_rp2.py")
+    )
+    compile(script, "<stdin>", "exec")
+
+
+def test_build_strips_the_body_docstring_too():
+    # minify() only knows a *leading* docstring; concatenated first, the
+    # body's would survive as a statement and cost the board heap.
+    script = mp.build(capture_cfg(RP2040_TT06), "capture_rp2.py")
+
+    assert "Continuous capture" not in script
+    assert "Board-side code shared" not in script
+
+
+def test_source_has_the_same_layout_as_build_without_the_cfg_line():
+    built = mp.build(capture_cfg(RP2040_TT06), "capture_rp2.py")
+
+    assert mp.source("capture_rp2.py").count("\n") == built.count("\n") - 1
+
+
+def test_build_wants_a_body_and_never_a_second_prelude():
+    with pytest.raises(ValueError, match="body"):
+        mp.build({})
+    with pytest.raises(ValueError, match="always included"):
+        mp.build({}, "prelude.py")
+
+
+def test_locate_maps_each_part():
+    prelude_lines = mp.load("prelude.py").count("\n")
+
+    assert mp.locate(1, "capture_rp2.py") == ("CFG", 1)
+    assert mp.locate(2, "capture_rp2.py") == ("prelude.py", 1)
+    assert mp.locate(1 + prelude_lines, "capture_rp2.py") == ("prelude.py", prelude_lines)
+    assert mp.locate(2 + prelude_lines, "capture_rp2.py") == ("capture_rp2.py", 1)
+    with pytest.raises(ValueError):
+        mp.locate(10**6, "capture_rp2.py")
+    with pytest.raises(ValueError):
+        mp.locate(0, "capture_rp2.py")
+
+
+def test_annotate_names_the_file_and_line_of_a_board_traceback():
+    script = mp.build(capture_cfg(RP2040_TT06), "capture_rp2.py").split("\n")
+    line = next(n for n, text in enumerate(script, 1) if text.startswith("def main("))
+    own = mp.load("capture_rp2.py").split("\n")
+    expected = next(n for n, text in enumerate(own, 1) if text.startswith("def main("))
+    stderr = (
+        "Traceback (most recent call last):\r\n"
+        f'  File "<stdin>", line {line}, in main\r\n'
+        '  File "<stdin>", line 999999, in <module>\r\n'
+        "OSError: [Errno 12] ENOMEM\r\n"
+    )
+
+    out = mp.annotate(stderr, "capture_rp2.py")
+
+    assert f'File "<stdin>", line {line} [capture_rp2.py:{expected}], in main' in out
+    # A line that does not map is left exactly as the board said it.
+    assert 'File "<stdin>", line 999999, in <module>' in out
+    assert out.endswith("OSError: [Errno 12] ENOMEM\r\n")

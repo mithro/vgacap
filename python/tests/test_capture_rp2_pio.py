@@ -37,9 +37,17 @@ SCRIPT = "capture_rp2.py"
 STUB_RP2 = type("rp2", (), {"asm_pio": staticmethod(stub_asm_pio), "PIO": StubPIO})
 
 
-@pytest.fixture(scope="module")
-def source() -> str:
-    return mp.load(SCRIPT)
+@pytest.fixture(scope="module", params=["readable", "as-shipped"])
+def source(request) -> str:
+    """Prelude plus body, once as written and once exactly as shipped.
+
+    The shipped form is `mp.build()` minus its `CFG = ...` line, so every
+    test here also proves the minified script the board actually compiles
+    -- not just the commented one a reader sees.
+    """
+    if request.param == "readable":
+        return mp.source(SCRIPT)
+    return mp.build(capture_cfg(RP2040_TT06), SCRIPT).split("\n", 1)[1]
 
 
 def _exec_functions(source: str, names, globals_=None) -> dict:
@@ -84,7 +92,7 @@ def _assemble(source: str, cfg: dict, rising: bool = False):
 
 @pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
 def test_script_compiles_with_each_board_profile(source, profile):
-    compile(mp.with_cfg(source, capture_cfg(profile)), SCRIPT, "exec")
+    compile(mp.build(capture_cfg(profile), SCRIPT), SCRIPT, "exec")
 
 
 @pytest.mark.parametrize("edge", ["falling", "rising"])

@@ -11,6 +11,12 @@ dataclasses) and are never imported on the host -- they are read as text with
 Each script expects a module-level `CFG` dict that the host prepends; the
 per-script docstring documents the keys it reads.
 
+Capture programs come in two parts: `prelude.py`, shared by every one, and
+a program body such as `capture_rp2.py`. `build(cfg, body)` is what goes to
+the board, `source(body)` the readable whole the tests work on, and
+`locate()`/`annotate()` turn a board traceback's line back into a file and
+line. `throughput.py` is standalone and still goes through `with_cfg()`.
+
 The sources are written for a reader, and then `minify()` strips the prose
 out on the way to the board. That is not a style preference: the RP2040
 demo board leaves about 80 KB of free heap, and compiling a 25 KB script
@@ -25,6 +31,7 @@ from __future__ import annotations
 
 import ast
 import io
+import re
 import tokenize
 from importlib.resources import files
 
@@ -47,6 +54,90 @@ def with_cfg(source: str, cfg: dict) -> str:
     traceback the board reports.
     """
     return "CFG = " + repr(cfg) + "\n" + source
+
+
+#: The board-side code every capture program shares; see its docstring.
+PRELUDE = "prelude.py"
+
+
+def _parts(names: tuple[str, ...]) -> tuple[str, ...]:
+    if not names:
+        raise ValueError("name at least one program body, e.g. 'capture_rp2.py'")
+    if PRELUDE in names:
+        raise ValueError(f"{PRELUDE} is always included; name only the body")
+    return (PRELUDE, *names)
+
+
+def _join(texts) -> str:
+    """Concatenate sources so each starts on a fresh line of its own.
+
+    Every part ends in exactly one newline, so part i's line n is line
+    `offset_i + n` of the result -- the arithmetic `locate()` undoes.
+    """
+    return "".join(text if text.endswith("\n") else text + "\n" for text in texts)
+
+
+def source(*names: str) -> str:
+    """The prelude plus the named program bodies, unminified, without CFG.
+
+    Concatenation, not import: the board has no package path for these
+    files, and one script is one compile. This is the readable form the
+    host tests lift functions out of; `build()` is what goes to the board.
+    """
+    return _join(load(name) for name in _parts(names))
+
+
+def build(cfg: dict, *names: str) -> str:
+    """The script to send to the board: CFG, then the minified parts.
+
+    Each part is minified on its own, because `minify()` recognises only a
+    *leading* docstring as one -- a body's docstring in the middle of a
+    concatenation is just an expression statement.
+    """
+    return with_cfg(_join(minify(load(name)) for name in _parts(names)), cfg)
+
+
+def locate(line: int, *names: str) -> tuple[str, int]:
+    """Map line `line` of `build(cfg, *names)` to (file, line in that file).
+
+    `minify()` keeps every part's line count, so this is the same layout as
+    `source()` shifted by the one `CFG = ...` line. Line 1 is `("CFG", 1)`.
+    """
+    if line < 1:
+        raise ValueError(f"line numbers start at 1, got {line}")
+    if line == 1:
+        return ("CFG", 1)
+    rest = line - 1
+    for name in _parts(names):
+        text = load(name)
+        length = text.count("\n") + (0 if text.endswith("\n") else 1)
+        if rest <= length:
+            return (name, rest)
+        rest -= length
+    raise ValueError(f"line {line} is past the end of the built script")
+
+
+_TRACEBACK_LINE = re.compile(r'(File "<stdin>", line (\d+))')
+
+
+def annotate(stderr: str, *names: str) -> str:
+    """Add the file and line to each `File "<stdin>", line N` of a traceback.
+
+    The board sees one concatenated script called `<stdin>`, so its
+    tracebacks number lines in that; a reader wants `capture_rp2.py:123`.
+    The original text is kept and the location appended, so nothing the
+    board said is lost. Lines that do not map (past the end) are left as
+    they are.
+    """
+
+    def repl(match: re.Match) -> str:
+        try:
+            name, number = locate(int(match.group(2)), *names)
+        except ValueError:
+            return match.group(1)
+        return "%s [%s:%d]" % (match.group(1), name, number)
+
+    return _TRACEBACK_LINE.sub(repl, stderr)
 
 
 def _docstring_lines(tree: ast.Module) -> set[int]:
