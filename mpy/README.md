@@ -130,7 +130,8 @@ for the tests:
 For the demo board, build the rp2 port (RP2350B) in that checkout, with
 the board definition
 [`psychogenic/tinytapeout_rp2350b`](https://github.com/psychogenic/tinytapeout_rp2350b)
-in `build/micropython/ports/rp2/boards/tt_rp2350_board`:
+in `build/micropython/ports/rp2/boards/tt_rp2350_board`. It needs
+[the ARM toolchain](../firmware/README.md#building):
 
     git clone -q https://github.com/psychogenic/tinytapeout_rp2350b.git build/tt_rp2350_board
     git -C build/tt_rp2350_board checkout -q 596f456
