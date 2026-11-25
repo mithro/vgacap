@@ -26,9 +26,8 @@ gst-launch-1.0 vgacapbin \
     videoconvert ! autovideosink
 ```
 
-The `tt-ws://127.0.0.1:18007` examples reach a Welland bench board (tt07)
-through an SSH tunnel; see
-[Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board).
+`127.0.0.1:18007` is an SSH tunnel to tt07
+([Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board)).
 
 ## `vgadecode`: a stream in, video out
 

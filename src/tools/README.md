@@ -8,11 +8,8 @@ pictures. CMake builds them into `build/`.
 ```sh
 build/vgacap-dump capture.vgacap              # chunk list, total samples, checksum
 mkdir -p out && build/vgacap-frames capture.vgacap out/frame   # out/frame-0000.ppm ...
-uv run vgacap-bin2stream dump.bin out.vgacap  # wrap a one-byte-per-clock simulator dump
+uv run vgacap-bin2stream dump.bin out.vgacap  # (Python) wrap a one-byte-per-clock simulator dump
 ```
-
-`vgacap-bin2stream` is a Python tool from `python/vgacap/`, not one of the
-C tools; it is listed here because it makes streams for them.
 
 ## When frames appear
 
