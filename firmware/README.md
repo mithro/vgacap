@@ -95,12 +95,16 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   FPGA breakout, and the mux controller's reset on an ASIC breakout; low
   erases the FPGA or resets the mux.
   - The stock firmware leaves it driven high once a design is enabled
-    (`fabricfoxv2.py` raises `CRESET_B` and keeps it there after loading a
-    bitstream; `ProjectMux.reset()` ends with `ncrst(1)`).
+    ([`fabricfoxv2.py`](https://github.com/TinyTapeout/tt-micropython-firmware/blob/15ba5ced7aae7746ea2f9004cb412109c9fe9c83/src/ttboard/fpga/fabricfoxv2.py)
+    raises `CRESET_B` and keeps it there after loading a
+    bitstream;
+    [`ProjectMux.reset()`](https://github.com/TinyTapeout/tt-micropython-firmware/blob/15ba5ced7aae7746ea2f9004cb412109c9fe9c83/src/ttboard/project_mux.py)
+    ends with `ncrst(1)`).
   - While the RP2350 is in reset and in its bootloader it is an input with
     the pad's default pull-down, as in the stock firmware's own boot
-    (`DemoboardDetect.rp_all_inputs()`). The FPGA surviving the switch
-    means the board's pull-up wins there, as it did on fpga-4.
+    ([`DemoboardDetect.rp_all_inputs()`](https://github.com/TinyTapeout/tt-micropython-firmware/blob/15ba5ced7aae7746ea2f9004cb412109c9fe9c83/src/ttboard/boot/demoboard_detect.py)).
+    The FPGA surviving the switch means the board's pull-up wins there, as
+    it did on fpga-4.
   - **This firmware drives GPIO 1 high first thing at boot**
     (`hal_pico_init()`), level before direction so it never glitches low.
     That is the level the stock firmware left, so nothing then depends on
