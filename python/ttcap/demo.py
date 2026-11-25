@@ -546,6 +546,7 @@ NUMBER_RANGES = {
     "clock_hz": (1, 200_000_000, "a project clock in Hz", ""),
     "buf_words": (1, 1 << 24, "words per DMA buffer", "omit it for ttcap's default"),
     "serve": (1, 65535, "a TCP port", ""),
+    "window_lines": (0, 4096, "a line count", "0 for ttcap's default"),
 }
 
 
