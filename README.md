@@ -50,12 +50,12 @@ carrying an FPGA that stands in for the chip.
 | source | where | how it reaches the host | status |
 |---|---|---|---|
 | Tiny Tapeout demo board, stock firmware | `python/ttcap/mp/`: capture programs that `ttcap` pushes through the board's MicroPython REPL and runs on the PIO of its RP2040 or RP2350 | USB serial, or the fpgas.online websocket bridge | streaming, whole-frame and windowed capture; pixel-exact on RP2350 boards (FPGA and ASIC); on RP2040 boards streaming is proven on silicon, frame and window capture only in the emulator |
-| demo board, run-length | `ttcap capture --mode rle` ([vgacap PR #6](https://github.com/mithro/vgacap/pull/6)): the PIO counts runs itself | as above, with fewer bytes for simple pictures | exact up to 25 MHz on an FPGA board, and on an ASIC board |
+| demo board, run-length | `ttcap capture --mode rle` ([vgacap PR #6](https://github.com/mithro/vgacap/pull/6)): the PIO counts runs itself | as above, with fewer bytes for simple pictures | exact up to 25 MHz on an FPGA board; exact on an ASIC board at 100 kHz |
 | demo board (RP2350), vgacap firmware | `firmware/`: a pico-sdk firmware loaded into RAM in place of the stock one (`ttcap --firmware picosdk`) | USB serial, with its own protocol (`firmware/PROTOCOL.md`) | frame, window and stream capture pixel-exact on FPGA and ASIC boards |
 | demo board (RP2350), MicroPython C module | `mpy/`: the same capture engines built into a custom MicroPython firmware (`import vgacap`, `ttcap --firmware mpy-module`) | as for the stock firmware | pixel-exact on an FPGA board |
 | Raspberry Pi 5 | `capture-rp1/` (`vgacap-rp1`): the PIO in the Pi 5's own RP1 I/O chip, via piolib, with the board's `uo_out` wired to the Pi's GPIO header | runs on the Pi itself | proven by loopback; waiting for a Pi 5 wired to a Tiny Tapeout board |
 | FPGA | `rtl/`: capture logic to build into an FPGA design (Migen source and generated Verilog) | whatever link the FPGA design has | exact on an iCE40 at 250 kHz and 25 MHz |
-| simulators | `vgacap-bin2stream` today; full simulation traces are being added (tt-vga-capture Milestone 10) | files | in use by the tests |
+| simulators | `vgacap-bin2stream` today; full simulation traces are being added | files | in use by the tests |
 | BIO (the I/O coprocessor on bunnie's Baochip) | research in tt-vga-capture | -- | simulator only |
 
 **Consumers and tools:** the C tools `vgacap-dump` and `vgacap-frames`; the
