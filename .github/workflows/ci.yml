@@ -14,6 +14,14 @@
 name: ci
 on: [push, pull_request]
 
+env:
+  # raspberrypi/utils' piolib, at the commit vgacap-rp1 was proven with on
+  # pi-sw2-p4 (capture-rp1/README.md). The c job compiles the tool against
+  # it; the pytest jobs build capture-rp1/print_programs.c against its
+  # headers, and python/tests/test_rp1_sampler.py fails rather than skips
+  # under CI without it.
+  PIOLIB_COMMIT: 05e8808e84ed99b168b14a4025dddb9118fa1c17
+
 jobs:
   c:
     name: C libraries, no GStreamer
@@ -39,6 +47,17 @@ jobs:
           grep -q 'skipping the plugin' configure.log
           test ! -e build/libgstvgacap.so
           ! ctest --test-dir build -N | grep -q gst_plugin_inspect
+      # The RP1 (Pi 5) capture tool cannot run here, but it must keep
+      # compiling against the piolib it was proven with on pi-sw2-p4
+      # (capture-rp1/README.md); -Werror so a warning is a failure. The
+      # default target builds vgacap-rp1-programs too.
+      - name: vgacap-rp1 compiles against piolib
+        run: |
+          git init -q utils
+          git -C utils remote add origin https://github.com/raspberrypi/utils.git
+          git -C utils fetch -q --depth 1 origin "$PIOLIB_COMMIT"
+          git -C utils checkout -q FETCH_HEAD
+          make -C capture-rp1 PIOLIB="$PWD/utils/piolib" CFLAGS="-O2 -Wall -Wextra -Werror"
 
   python:
     name: Python suite, no GStreamer
@@ -53,6 +72,13 @@ jobs:
         run: |
           ! command -v gst-launch-1.0
           test ! -e build/libgstvgacap.so
+      - name: piolib, for the RP1 sampler test
+        run: |
+          git init -q utils
+          git -C utils remote add origin https://github.com/raspberrypi/utils.git
+          git -C utils fetch -q --depth 1 origin "$PIOLIB_COMMIT"
+          git -C utils checkout -q FETCH_HEAD
+          echo "VGACAP_PIOLIB=$PWD/utils/piolib" >> "$GITHUB_ENV"
       - run: uv run pytest -q
 
   gstreamer:
@@ -112,6 +138,13 @@ jobs:
       - name: the plugin must have been built here
         run: test -e build/libgstvgacap.so
       - run: ctest --test-dir build --output-on-failure
+      - name: piolib, for the RP1 sampler test
+        run: |
+          git init -q utils
+          git -C utils remote add origin https://github.com/raspberrypi/utils.git
+          git -C utils fetch -q --depth 1 origin "$PIOLIB_COMMIT"
+          git -C utils checkout -q FETCH_HEAD
+          echo "VGACAP_PIOLIB=$PWD/utils/piolib" >> "$GITHUB_ENV"
       # pyproject's testpaths covers python/tests and gst/tests, so one run
       # is both suites. A skip is a pass to pytest, so the plugin and
       # hardware-check tests skipping here -- a missing package, a plugin
