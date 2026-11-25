@@ -1,8 +1,10 @@
 # GStreamer plugin
 
-`gst/` builds `libgstvgacap.so`, a GStreamer plugin that decodes a vgacap
-stream to video, captures live from a Tiny Tapeout demo board, or does both
-from a URI. It has three elements:
+`gst/` builds `libgstvgacap.so`, a [GStreamer](https://gstreamer.freedesktop.org)
+plugin that decodes a
+[vgacap stream](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-09-15-stream-format.md)
+to video, captures live from a [Tiny Tapeout](https://tinytapeout.com) demo
+board, or does both from a URI. It has three elements:
 
 - `vgadecode` turns a vgacap stream (`application/x-vgacap`) into
   `video/x-raw` RGB frames;
@@ -19,8 +21,7 @@ gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! \
     pngenc ! multifilesink location=frame-%04d.png
 
 # ...or straight off a board, through either link. The URI is quoted twice:
-# once for the shell, once for GStreamer's pipeline parser (see "Quote the
-# URI twice" under vgacapbin).
+# once for the shell, once for GStreamer's pipeline parser.
 gst-launch-1.0 vgacapbin \
     'uri="tt-ws://127.0.0.1:18007/serial?project=tt_um_rejunity_vga&clock-hz=60000"' ! \
     videoconvert ! autovideosink
@@ -28,16 +29,20 @@ gst-launch-1.0 vgacapbin \
 
 `127.0.0.1:18007` is an SSH tunnel to tt07
 ([Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board)).
+On quoting, see [`vgacapbin`](#vgacapbin-a-uri-in-video-out).
 
 ## `vgadecode`: a stream in, video out
 
-| property | default | |
+| property | default | description |
 |---|---|---|
-| `repeat-last-frame` | false | re-push the last frame to hold a steady `output-fps` cadence |
-| `output-fps` | 30/1 | rate used when repeating, and when the stream declares no project clock |
-| `max-width`, `max-height` | 1400, 900 | size of the reconstruction buffers, allocated once when the element starts |
-| `force-mode` | `""` | force a mode table entry instead of detecting one |
-| `partial` | false | also push frames whose lines were not all covered |
+| `repeat-last-frame` | `false` | re-push the last frame to hold a steady `output-fps` cadence |
+| `output-fps` | `30/1` | rate when repeating, and when the stream declares no project clock |
+| `max-width` | `1400` | widest line the reconstruction buffers hold, in project clocks |
+| `max-height` | `900` | tallest frame the reconstruction buffers hold, in lines |
+| `force-mode` | `""` | mode table entry to use instead of detecting one |
+| `partial` | `false` | also push frames whose lines were not all covered |
+
+The reconstruction buffers are allocated once, when the element starts.
 
 Frames are timestamped in project time -- clocks since the first emitted
 frame divided by the stream's `clock_hz` -- when the header declares a clock,
@@ -57,25 +62,32 @@ The detected timing is posted on the bus as an element message named
 
 ## `vgacapttsrc`: capturing from a board
 
-`vgacapttsrc` runs `ttcap capture --out -` as a child process and pushes its
-stdout as 64 KiB `application/x-vgacap` buffers. The board protocol stays
-in Python, and the same element works over USB serial or over the
-fpgas.online websocket bridge.
+`vgacapttsrc` runs `ttcap capture --out -` as
+a child process and pushes its stdout as 64 KiB `application/x-vgacap`
+buffers. The board protocol stays in Python ([`ttcap`](../python/ttcap/README.md)), and the same element works over
+USB serial or over the [fpgas.online](https://tinytapeout.fpgas.online)
+websocket bridge.
 
-| property | default | |
-|---|---|---|
-| `link` | `""` | `serial:/dev/ttyACM0`, or `ws://host:8765/serial`; required |
-| `clock-hz` | 0 | project clock to program; required |
-| `project`, `design` | `""` | `tt.shuttle` macro / FPGA bitstream to enable |
-| `profile` | `auto` | board profile, or ask the board for its `GPIOMap` |
-| `pio`, `buf-words` | -1 | board tuning; -1 leaves `ttcap`'s own defaults |
-| `seconds` | 0 | capture duration; 0 captures until the element is stopped |
-| `ttcap-command` | `uv run --no-sync ttcap` | split with shell quoting rules, so an absolute path or another interpreter works |
-| `stop-timeout` | 15 | how long a cooperative stop may take |
+| property | default | default means | required | in a URI query | description |
+|---|---|---|---|---|---|
+| `link` | `""` | -- | yes | no | `serial:/dev/ttyACM0` or `ws://host:8765/serial` |
+| `clock-hz` | `0` | -- | yes | yes | project clock to program, in Hz |
+| `project` | `""` | keep the selected project | no | yes | `tt.shuttle` macro to enable |
+| `design` | `""` | -- | no | yes | FPGA bitstream to enable |
+| `profile` | `auto` | ask the board for its `GPIOMap` | no | yes | board profile |
+| `pio` | `-1` | `ttcap`'s default | no | yes | PIO block for the sampler |
+| `buf-words` | `-1` | `ttcap`'s default | no | yes | words per DMA buffer |
+| `seconds` | `0` | until the element is stopped | no | yes | capture duration, in seconds |
+| `ttcap-command` | `uv run --no-sync ttcap` | -- | no | no | command that runs `ttcap` |
+| `stop-timeout` | `15` | -- | no | yes | how long a cooperative stop may take, in seconds |
+| `capture-mode` | `stream` | -- | no | yes | `ttcap capture --mode` |
+| `vga-mode` | `""` | `ttcap`'s default (640x480@60) | no | yes | VGA timing for frame and window modes |
+| `window-lines` | `0` | `ttcap`'s default | no | yes | most lines per captured frame |
 
-`ttcap-command` is run with the pipeline's own working directory, which is
-what `uv run` needs to find the project; give an absolute `ttcap` (or an
-absolute interpreter and script) when the pipeline runs from elsewhere.
+`ttcap-command` is split with shell quoting rules and run with the
+pipeline's own working directory, which is what `uv run` needs to find the
+project; give an absolute `ttcap` (or an absolute interpreter and script)
+when the pipeline runs from elsewhere.
 
 ### Stopping matters
 
@@ -137,10 +149,10 @@ properties are mirrored on the bin, so `?seconds=10` and `seconds=10` do the
 same thing (the query wins if both are given). `tt-ws://host:8765` with no
 path means the bridge's `/serial` endpoint.
 
-A query may only carry the **capture parameters**: `project`, `design`,
-`clock-hz`, `profile`, `pio`, `buf-words`, `seconds`, `stop-timeout`.
-Naming anything else is an error, not a silent no-op. That matters most for
+A query may only set the properties marked "in a URI query" in the
+[`vgacapttsrc` table](#vgacapttsrc-capturing-from-a-board). Naming anything
+else is an error, not a silent no-op. That matters most for
 `ttcap-command`, which is a program to run, and `link`, which would move the
 capture somewhere other than where the URI says. A URI can arrive from
-somewhere that is not a trusted shell, so everything outside that list
-stays settable only as an element property, by whoever builds the pipeline.
+somewhere that is not a trusted shell, so those stay settable only as
+element properties, by whoever builds the pipeline.
