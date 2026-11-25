@@ -300,3 +300,34 @@ def test_unsupported_instructions_are_refused_not_guessed():
     rp2 = board.modules()["rp2"]
     with pytest.raises(BoardError, match="not emulated"):
         rp2.StateMachine(4, program(rp2))
+
+
+@pytest.mark.parametrize("ratio", [1.5, 4.0])
+def test_the_overrun_count_covers_every_lost_buffer(monkeypatch, ratio):
+    # Ground truth from the emulator: words the DMA wrote into the buffers,
+    # against samples that reached the stream. Up to two buffers are still
+    # unsent at the stop, so overruns * buffer must cover the rest, even
+    # with the main loop several buffers behind (ratio 4).
+    from ttcap.emu import board as emu
+
+    written = [0]
+    transfer = emu.Board._transfer
+
+    def counting(self, ch, word):
+        if self._rx_source(ch) is not None:
+            written[0] += 1
+        return transfer(self, ch, word)
+
+    monkeypatch.setattr(emu.Board, "_transfer", counting)
+    profile = RP2350_DBV3
+    buffer = 4096 * 4
+    board = Board(Waveform(bytes(range(COUNT)), profile.uo_gpios, profile.clk_gpio, period=100),
+                  cycles_per_byte=ratio * 100)
+    board.stop_after_bytes = 6 * 16_400
+
+    out = board.run_script(mp.build(capture_cfg(profile), "capture_rp2.py"))
+
+    delivered = sum(int.from_bytes(p[:4], "little") for t, p in read_chunks(out) if t == "RAW ")
+    overruns = int(time_messages(out)[-1].split()[0].split("=")[1])
+    assert overruns * buffer >= written[0] * 4 - delivered - 2 * buffer
+    assert overruns > 0
