@@ -397,6 +397,40 @@ def check_board_wants(board: str | None, project: str | None, design: str | None
         )
 
 
+def board_of_this_pi(hostname: str | None = None) -> str | None:
+    """The bench slug whose Pi this process runs on, or None."""
+    for slug in sorted(WELLAND):
+        if running_on_board_pi(slug, hostname):
+            return slug
+    return None
+
+
+def check_asic_index(board: str | None, asic_index: int | None, hostname: str | None = None) -> None:
+    """Refuse `--asic-index` on an FPGA board.
+
+    `asic_select` pulls GPIO 1 low, and on an FPGA breakout that is the
+    iCE40's CRESET_B: the shared FPGA's configuration is erased, for every
+    later visitor too. The firmware cannot tell the carriers apart, so the
+    host refuses it here, as `check_board_wants` refuses --project: by the
+    slug, from `--board`, or else from the bench Pi this runs on (where
+    `ttcap capture --firmware picosdk serial:...` is run). With neither
+    there is no knowing what is on the other end of the link, and nothing
+    is refused.
+    """
+    if asic_index is None:
+        return
+    if board is None:
+        board = board_of_this_pi(hostname)
+    if board is None or board not in WELLAND:
+        return
+    if board_takes_a_design(board):
+        raise CaptureError(
+            "--asic-index is for the ASIC shuttles (%s); %s is an FPGA board, "
+            "where asic_select pulls GPIO 1 -- the iCE40's CRESET_B -- low and "
+            "erases the FPGA" % (asic_slugs(), board)
+        )
+
+
 # ------------------------------------------------------------- the numbers
 
 
