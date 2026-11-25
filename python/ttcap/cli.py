@@ -809,7 +809,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=lambda s: int(s, 0),
         default=None,
         help="drive the design's ui_in with this value (the SDK is switched "
-        "to ASIC_RP_CONTROL for the capture and put back afterwards); "
+        "to ASIC_RP_CONTROL for the capture and put back however it ends); "
         "default: leave the board's inputs alone",
     )
     capture_parser.add_argument(
