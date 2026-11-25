@@ -18,9 +18,6 @@ were measured on: `fpga-4` is a demo board with an FPGA breakout on the
 shared Welland bench (see
 [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)),
 and `tt09` is a demo board with an ASIC breakout (a TT09 chip) at Welland.
-`tt09` is not a `--board` slug in [`python/ttcap/boards.py`](../python/ttcap/boards.py), so `ttcap`
-reaches it with an explicit link (`serial:` or `ws://`) instead of
-`--board`.
 
 ## Layout
 
@@ -28,18 +25,18 @@ reaches it with an explicit link (`serial:` or `ws://`) instead of
 |---|---|---|---|
 | [`core/fw.c`](core/fw.c) | command loop | no | no |
 | [`core/fw_args.c`](core/fw_args.c) | argument parser | yes | yes |
-| [`core/fw_capture.c`](core/fw_capture.c) | stream and frame engines | yes | yes |
+| [`core/fw_capture.c`](core/fw_capture.c) | capture engines | yes | yes |
 | [`core/fw_pio.c`](core/fw_pio.c) | PIO program builder | yes | yes |
 | [`core/fw_clock.c`](core/fw_clock.c) | project clock plan | yes | yes |
 | [`core/fw_board.c`](core/fw_board.c) | board pins | yes | yes |
 | [`core/fw_hal.h`](core/fw_hal.h) | HAL contract | yes | yes |
-| [`pico/hal_rp2.c`](pico/hal_rp2.c) | PIO and DMA HAL | yes | no |
+| [`pico/hal_rp2.c`](pico/hal_rp2.c) | RP2350 HAL | yes | no |
 | [`pico/hal_pico.c`](pico/hal_pico.c) | firmware-only HAL | no | no |
 | [`pico/main.c`](pico/main.c) | `main()` | no | no |
 | [`pico/usb_descriptors.c`](pico/usb_descriptors.c) | USB descriptors | no | no |
 | [`pico/tusb_config.h`](pico/tusb_config.h) | TinyUSB configuration | no | no |
 | [`pico/boards/tt_demoboard_v3.h`](pico/boards/tt_demoboard_v3.h) | board header | no | no |
-| [`pio/`](pio/) | PIO sources and pioasm output | no | no |
+| [`pio/`](pio/) | PIO programs | no | no |
 | [`sim/hal_sim.c`](sim/hal_sim.c) | simulated board | no | yes |
 | [`sim/sim_main.c`](sim/sim_main.c) | `vgacap-fw-sim` | no | no |
 | [`CMakeLists.txt`](CMakeLists.txt) | pico-sdk firmware build | no | no |
@@ -179,9 +176,8 @@ and the UF2 copied there. `<dev>` is the stock firmware's serial port
 (`/dev/ttboard` on the fpgas.online Pis).
 
 1. With the stock firmware, enable the design to capture (the fpgas-tt
-   daemon's `/designs/<name>/enable`, or
-   `uv run --no-sync ttcap capture --design`), and take a reference capture
-   the usual way if wanted.
+   daemon's `/designs/<name>/enable`, or `ttcap capture`'s `--design`), and
+   take a reference capture the usual way if wanted.
 2. Stop anything else that owns the port (`sudo systemctl stop fpgas-tt`,
    after checking the bridge has no clients).
 3. Into the bootloader:
