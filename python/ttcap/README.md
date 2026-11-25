@@ -87,10 +87,9 @@ One capture feeds every output, through a `tee`:
 | `http://localhost:PORT/` | off | `--serve PORT` | `jpegenc` | -- | `multipartmux` | `fdsink` |
 
 `--serve` runs an MJPEG HTTP server that publishes
-`multipart/x-mixed-replace` on the loopback address,
-with an index page containing an `<img src="/stream.mjpg">`, which is all a
-browser needs. The server uses only the standard library, and a viewer
-that falls behind loses frames rather than slowing the capture down.
+`multipart/x-mixed-replace` on the loopback address, with an index page
+containing an `<img src="/stream.mjpg">`. A viewer that falls behind loses
+frames rather than slowing the capture down.
 
 ### Frame rate
 
@@ -98,8 +97,7 @@ At a 60 kHz project clock a 640x480 frame is 800x525 clocks, so each frame
 is **seven seconds long**: honest timing, but a slideshow rather than a
 video. `--fps 30` (or `30/1`, or `29.97`) sets [`vgadecode`](../../gst/README.md#vgadecode-a-stream-in-video-out)'s
 `repeat-last-frame` and `output-fps`, which re-push the last frame to fill
-the gaps so the video plays at wall-clock speed. Nothing is invented: a
-repeated frame is the frame that was on the screen. The setting is on the
+the gaps so the video plays at wall-clock speed. The setting is on the
 decoder, so every output shares the one cadence.
 
 ### The pipeline
@@ -118,40 +116,34 @@ a bad one is refused with the range it takes.
 
 A `--clock-hz` above what the demo board has been measured to keep up with
 *at the default buffer size* (60 kHz on an RP2040 demo board, 750 kHz on an
-RP2350 one) is a **warning**, not an error. Watching the board overrun is a
-legitimate thing to want, the closing `TIME` chunk reports it, and a larger
-`--buf-words` moves the ceiling.
+RP2350 one) is a **warning**, not an error; a larger `--buf-words` moves
+the ceiling.
 
 ### The output directory
 
 `--outdir` belongs to one run alone. A directory that already holds a
-`frame-*.png` or a `capture.mkv` is **refused**, because a shorter capture
-would overwrite the first frames and leave the rest: two runs mixed
-together.
+`frame-*.png` or a `capture.mkv` is **refused**.
 `--force` first deletes every `frame-*.png` and `capture.mkv` in it (the
 refusal names them, so nothing goes unseen) and leaves everything else
 alone.
 
 A run that finishes without producing any frames exits **3**, the same code
 `ttcap capture` uses when no samples arrived and the board reported no
-error (a board error exits 1). The demo judges this on the
-files, unless `--no-png`/`--no-video` switched them off, and otherwise on
-the decoder's own bus messages, since a window or a stream cannot be
-counted.
+error (a board error exits 1).
 
 ### Stopping
 
 Ctrl-C ends the run cleanly. The demo forwards the signal once to
 `gst-launch-1.0 -e`, which turns it into an end-of-stream, so the board winds
 down through `vgacapttsrc`'s cooperative stop and the Matroska file is
-finalized rather than truncated. Allow one DMA buffer for that: about 137 ms
-on an RP2040 at 60 kHz with the default `--buf-words`. `SIGTERM`, `SIGHUP`
-and `SIGQUIT` do the same.
+finalized rather than truncated. Allow one DMA buffer for that: with the
+default `--buf-words`, about 22 ms on an RP2350 at 750 kHz and about
+137 ms on an RP2040 at 60 kHz. `SIGTERM`, `SIGHUP` and `SIGQUIT` do the
+same.
 However the demo ends (an exception, a `kill`, a closed terminal), it tears
 down the pipeline's whole process group on the way out, so a capture is
 never left holding a shared bench board. A third signal terminates the
-pipeline and a fourth kills it, at the cost of the video. Only `SIGKILL`
-cannot be covered, since nothing in the process runs after it.
+pipeline and a fourth kills it, at the cost of the video.
 
 Because every one of those is a *graceful* stop, the demo then exits with
 the pipeline's own status: a `kill` on a run that captured successfully
@@ -181,8 +173,7 @@ uv run ttcap demo --link ws://127.0.0.1:18034/serial --design tt_um_vga_pattern 
 ```
 
 Any free local port works, and one per board keeps two tunnels from
-colliding. Do not use the octet on its own (`-L 34:…`): every Welland slug's
-octet is below 1024, and ssh refuses to forward those without root.
+colliding.
 
 `--link` overrides the board entirely. A run over the bridge that fails to
 connect prints that tunnel command before it exits.
