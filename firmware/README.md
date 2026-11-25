@@ -1,17 +1,22 @@
 # vgacap capture firmware (pico-sdk)
 
-A C firmware for the Tiny Tapeout demo board v3 (RP2350B) that does what
-the MicroPython capture programs (`python/ttcap/mp/`) do -- streaming
-capture, whole-frame capture and windowed capture of a design's VGA output
-on `uo_out` -- without MicroPython underneath. The host drives it with
+A C firmware for the Tiny Tapeout demo board v3 (RP2350B) that captures a
+design's VGA output on `uo_out` without MicroPython underneath. It does
+what the MicroPython capture programs (`python/ttcap/mp/`) do: streaming
+capture, whole-frame capture and windowed capture. The host drives it with
 `ttcap capture --firmware picosdk` over the protocol in
-[PROTOCOL.md](PROTOCOL.md), and the streams it produces are read by the
-same tools as the MicroPython ones.
+[PROTOCOL.md](PROTOCOL.md), and the same tools read its vgacap streams as
+read the MicroPython ones.
 
-It is built **no_flash**: the UF2 is loaded into SRAM by the RP2350's
-bootloader and runs from there, and flash is never written. A reset, a
-power cycle or `ttcap reboot --firmware picosdk` brings the board's stock
-firmware back.
+It is built **no_flash**: the RP2350's bootloader loads the UF2 into SRAM
+and runs it from there, and flash is never written. A reset, a power cycle
+or `ttcap reboot --firmware picosdk` brings the board's stock firmware
+back.
+
+The hardware notes below name the boards they were measured on: `fpga-4`
+is an FPGA demo board on the shared Welland bench (see
+[python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)),
+and `tt09` is an ASIC demo board.
 
 ## Layout
 
@@ -65,35 +70,37 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   block whose GPIO window is moved to 16 (PIO1 by default, as on the
   MicroPython path; with nothing else loaded any block works).
 * **The firmware cannot select a design.** It runs instead of the stock
-  firmware, which is what knows the shuttle and loads FPGA bitstreams, so
-  the design has to be enabled with the stock firmware first and still be
-  there after the switch. On the FPGA boards that relies on the iCE40
-  keeping its configuration while the RP2350 resets into its bootloader
-  and into this firmware. **Verified on fpga-4 (2026-11-24)**: after
-  BOOTSEL and this firmware, frame, window and streaming captures of
-  `tt_um_vgacal_bars` were pixel-exact, so the iCE40 kept its configuration
-  (tt-vga-capture `docs/results/2026-11-24-picosdk-firmware-fpga4/`).
-  GPIO 1 is the iCE40's `CRESET_B` there (and the mux controller's reset
-  on an ASIC carrier). The stock firmware leaves it driven high; while the
-  RP2350 is in reset and in its bootloader it is an input with the pad's
-  default pull-down, and this firmware leaves GPIO 0/1/2 alone unless told
-  otherwise (`asic_select`). On fpga-4 the FPGA's configuration survived
-  that anyway.
+  firmware, and the stock firmware is what knows the shuttle and loads FPGA
+  bitstreams. So the design has to be enabled with the stock firmware
+  first and still be there after the switch. On the FPGA boards, that
+  relies on the iCE40 keeping its configuration while the RP2350 resets
+  into its bootloader and then into this firmware.
+* **Verified on fpga-4 (2026-11-24)**: after BOOTSEL and this firmware,
+  frame, window and streaming captures of `tt_um_vgacal_bars` were
+  pixel-exact, so the iCE40 kept its configuration (tt-vga-capture
+  `docs/results/2026-11-24-picosdk-firmware-fpga4/`).
+* GPIO 1 is the iCE40's `CRESET_B` on the FPGA boards (and the mux
+  controller's reset on an ASIC carrier). The stock firmware leaves it
+  driven high. While the RP2350 is in reset and in its bootloader it is an
+  input with the pad's default pull-down, and this firmware leaves
+  GPIO 0/1/2 alone unless told otherwise (`asic_select`). On fpga-4 the
+  FPGA's configuration survived that anyway.
 * **ASIC boards lose their project across the switch.** On tt09
   (2026-11-24) the stock firmware's frame capture of
-  `tt_um_rejunity_vga_logo` was clean, and this firmware's, after the
-  switch, saw no sync at all: the mux lines float in the bootloader and
+  `tt_um_rejunity_vga_logo` was clean, but this firmware's, after the
+  switch, saw no sync at all: the mux lines float in the bootloader, and
   the mux comes back with nothing selected. So this firmware selects the
-  project itself with `asic_select index=N`, the stock SDK's sequence
-  (PROTOCOL.md); `ttcap capture --firmware picosdk --asic-index N` sends
-  it. N is `tt.shuttle.<name>.count` under the stock firmware.
+  project itself with `asic_select index=N`, using the stock SDK's
+  sequence ([PROTOCOL.md](PROTOCOL.md));
+  `ttcap capture --firmware picosdk --asic-index N` sends it. N is
+  `tt.shuttle.<name>.count` under the stock firmware.
 * `ui_in` and `rst_n` are left untouched until `ui_in` / `reset` commands
   drive them; `ttcap` holds reset while it programs the clock and releases
   it last, as `select_project()` does.
-* The project clock comes from the PWM on GPIO 16, at the system clock the
-  stock firmware picks for that clock (a whole multiple of it whenever one
-  exists: 100 MHz for 25 MHz), which frame capture's phase-locked sampler
-  needs.
+* The project clock comes from the PWM on GPIO 16, with the system clock
+  set to what the stock firmware picks for that project clock. That is a
+  whole multiple of the project clock whenever one exists (100 MHz for
+  25 MHz), which frame capture's phase-locked sampler needs.
 * Project clocks above 66.5 MHz raise the system clock to twice the
   project clock (up to 250 MHz), as the stock firmware does; like
   MicroPython's `machine.freq` (checked at b006887db6), nothing raises the
@@ -149,9 +156,10 @@ The simulator models what the PIO and DMA deliver, not their cycles; see
 
 ## Running it on a board
 
-The steps, on the board's own Pi, with `ttcap` from this repository and the
-UF2 copied there. `<dev>` is the stock firmware's port (`/dev/ttboard` on the
-fpgas.online Pis).
+These steps run on the Raspberry Pi the board is attached to (on the
+fpgas.online bench, the board's own Pi), with `ttcap` from this repository
+and the UF2 copied there. `<dev>` is the stock firmware's serial port
+(`/dev/ttboard` on the fpgas.online Pis).
 
 1. With the stock firmware, enable the design to capture (the fpgas-tt
    daemon's `/designs/<name>/enable`, or `ttcap capture --design`), and
