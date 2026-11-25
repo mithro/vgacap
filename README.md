@@ -15,7 +15,7 @@ reconstruction, video and comparison tools.
 
 <p align="center">
   <img src="docs/diagrams/overview.svg" width="100%"
-       alt="vgacap overview. A Tiny Tapeout demo board box has its parts in a left column and a render of the board on the right, with dotted callouts from the render to the breakout and to the RP2040 or RP2350. Under the label breakout are two chips with an or between them: ASIC or FPGA, holding your design, which sends uo_out[7:0] down; and iCE40UP5K FPGA, holding design then capture, which sends uo_out + uio down. Both go to the RP2040 or RP2350: PIO, then DMA, then USB, to ttcap on a laptop. A wire tapping the uo_out[7:0] arrow goes left to a Raspberry Pi 5, whose RP1 runs PIO, then DMA, into DRAM. On the right, the design's RTL goes into a simulator (Verilator or Icarus: design, then tracer, then trace file). DRAM, ttcap and the trace file all feed one vgacap stream, drawn as a strip of colored pixel samples followed by black sync samples. The stream goes to libvgaframe, which rebuilds every frame, and on to pictures and video, and to pixel-exact checks against references. A legend shows signals in blue, captured data in orange and pictures in green.">
+       alt="vgacap overview. A Tiny Tapeout demo board box has its parts in a left column and a render of the board on the right, with dotted callouts from the render to the breakout and to the RP2040 or RP2350. Under the label breakout are two chips with an or between them: ASIC or FPGA, holding your design, which sends uo_out[7:0] down; and iCE40UP5K FPGA, holding design then capture, which sends uo_out + uio down. The two lines join into one arrow into the RP2040 or RP2350: PIO, then DMA, then USB, to ttcap on a laptop. A wire tapping the uo_out[7:0] arrow goes left to a Raspberry Pi 5, whose RP1 runs PIO, then DMA, into DRAM. On the right, the design's RTL goes into a simulator (Verilator or Icarus: design, then tracer, then trace file). DRAM, ttcap and the trace file all feed one vgacap stream, drawn as a strip of colored pixel samples followed by black sync samples. The stream goes to libvgaframe, which rebuilds every frame, and on to pictures and video, and to pixel-exact checks against references. A legend shows signals in blue, captured data in orange and pictures in green.">
 </p>
 
 *Figure 1: from a design's `uo_out` to pictures and checks
@@ -26,7 +26,7 @@ The design, research notes, measurements, work log and task list live in
 calibration designs and their reference renders live in
 [mithro/tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns).
 
-> **Caution: AI in use.** This project is being built with Claude Code.
+> **Caution: AI in use.** This project is being built with [Claude Code](https://claude.com/claude-code).
 > Check the code and the measurements before relying on them.
 
 ## What is in it
@@ -57,10 +57,9 @@ must run.
 | stock firmware | demo board microcontroller | [`python/ttcap/mp/`](python/ttcap/mp/) | `--firmware micropython` |
 | vgacap firmware | demo board RP2350 | [`firmware/`](firmware/README.md) | `--firmware picosdk` |
 | MicroPython C module | demo board RP2350 | [`mpy/`](mpy/README.md) | `--firmware mpy-module` |
-| Raspberry Pi 5 | RP1 | [`capture-rp1/`](capture-rp1/README.md) | -- |
-| FPGA | iCE40UP5K breakout | [`rtl/`](rtl/README.md) | -- |
-| simulator | host | [`python/vgacap/bin2stream.py`](python/vgacap/bin2stream.py) | -- |
-| BIO | [Baochip](https://github.com/baochip/baochip-1x) | [research note](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-11-24-bio-capture-feasibility.md) | -- |
+| Raspberry Pi 5 | Raspberry Pi 5 RP1 | [`capture-rp1/`](capture-rp1/README.md) | -- |
+| FPGA | demo board with an FPGA breakout | [`rtl/`](rtl/README.md) | -- |
+| simulator | host computer | [`python/vgacap/bin2stream.py`](python/vgacap/bin2stream.py) | -- |
 
 **Verification:**
 
@@ -74,13 +73,15 @@ must run.
 | MicroPython C module | RP2350 | FPGA | pixel-exact | pixel-exact | pixel-exact |
 | FPGA | RP2350 | FPGA | pixel-exact | -- | -- |
 | Raspberry Pi 5 | RP1 | -- | loopback only | -- | -- |
-| simulator | -- | -- | tests only | -- | -- |
-| BIO | -- | -- | simulator only | -- | -- |
+| simulator | -- | -- | clean | -- | -- |
+| [BIO](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-11-24-bio-capture-feasibility.md) | -- | -- | simulator only | -- | -- |
 
 Run-length capture on the stock firmware
 ([vgacap PR #6](https://github.com/mithro/vgacap/pull/6), not yet merged) was
-exact up to 25 MHz with an FPGA breakout and at 100 kHz with an ASIC
-breakout.
+exact up to
+[25 MHz](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-11-24-pio-run-counting.md)
+with an FPGA breakout and
+[matched RAW capture at 100 kHz with an ASIC breakout](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-pio-rle-tt09).
 
 **Consumers and tools:**
 
@@ -96,17 +97,11 @@ breakout.
 
 ## Building and testing
 
-```sh
-cmake -S . -B build && cmake --build build
-ctest --test-dir build --output-on-failure
-uv run pytest -q
-```
-
-More: [docs/development.md](docs/development.md).
+See [docs/development.md](docs/development.md).
 
 ## A first capture
 
-With a Tiny Tapeout demo board on `/dev/ttyACM0`:
+With a demo board with an ASIC breakout carrying TT07 on `/dev/ttyACM0`:
 
 ```sh
 uv run ttcap capture serial:/dev/ttyACM0 \
@@ -114,12 +109,6 @@ uv run ttcap capture serial:/dev/ttyACM0 \
 mkdir -p out && build/vgacap-frames capture.vgacap out/frame      # out/frame-0000.ppm ...
 uv run ttcap demo --link serial:/dev/ttyACM0 --clock-hz 60000 --outdir out   # PNGs + MKV
 ```
-
-More: [python/ttcap/README.md](python/ttcap/README.md) (capturing, the
-demo, the shared Welland bench boards, running on a Raspberry Pi),
-[gst/README.md](gst/README.md) (GStreamer),
-[src/tools/README.md](src/tools/README.md) (the C tools) and
-[tools/README.md](tools/README.md) (the hardware-in-the-loop check).
 
 ## Layout
 
