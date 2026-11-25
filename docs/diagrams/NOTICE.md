@@ -15,4 +15,4 @@
   only to identify the Raspberry Pi 5 capture source.
 
 The logos are trademarks of their owners and are not covered by this
-repository's licence.
+repository's license.
