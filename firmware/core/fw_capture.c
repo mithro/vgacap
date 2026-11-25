@@ -178,11 +178,11 @@ int fw_stream_run(const fw_stream_args_t *a, uint32_t *arena, size_t arena_bytes
         if (stopping) break;
         vgacap_writer_raw(&o.w, bufs[index], spc);
         hal_flush();  // a whole chunk reaches the host now, not with the next one
-        // Released first: once the buffer is not full no fill can tear it,
-        // so a tear during the send above cannot be missed here. A torn
-        // chunk is never followed by another without its report.
-        hal_stream_release(index);
-        if (hal_stream_take_torn(index)) {
+        // Released and the torn mark taken in one step (fw_hal.h): a tear
+        // during the send above cannot be missed, nor one of the next
+        // contents taken for it. A torn chunk is never followed by another
+        // without its report.
+        if (hal_stream_release(index)) {
             // Cumulative, never an increment: see prelude.py write_time_chunk().
             out_time(&o, hal_stream_overruns() * spc, "overrun");
         }

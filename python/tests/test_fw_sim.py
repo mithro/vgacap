@@ -619,8 +619,46 @@ def test_asic_index_is_refused_on_an_fpga_boards_own_pi(monkeypatch):
         demo.check_asic_index(None, 3, hostname="pi-sw2-p34.welland.example")
     demo.check_asic_index(None, 3, hostname="pi-sw2-p7")  # tt07, an ASIC shuttle
     demo.check_asic_index(None, 3, hostname="somewhere-else")  # unknown: not refused
-    demo.check_asic_index("tt07", 3, hostname="pi-sw2-p35")  # --board wins
     demo.check_asic_index("fpga-4", None)  # no asic_select, nothing to refuse
+    # --board naming an ASIC on an FPGA board's Pi: the Pi's serial port is
+    # the FPGA board's, whatever --board says.
+    with pytest.raises(CaptureError, match="fpga-4 is an FPGA board"):
+        demo.check_asic_index("tt07", 3, link="serial:/dev/ttyACM0", hostname="pi-sw2-p35")
+
+
+def test_board_of_link():
+    assert demo.board_of_link("ws://10.21.2.35:8765/serial") == "fpga-4"
+    assert demo.board_of_link("wss://pi-sw2-p34:8765/serial") == "fpga-1"
+    assert demo.board_of_link("ws://pi-sw2-p7.welland.example:8765/serial") == "tt07"
+    assert demo.board_of_link("ws://127.0.0.1:18035/serial") == "fpga-4"  # tunnel_hint's port
+    assert demo.board_of_link("ws://localhost:18007/serial") == "tt07"
+    assert demo.board_of_link("ws://127.0.0.1:8765/serial") is None
+    assert demo.board_of_link("ws://example.org:18035/serial") is None  # not a tunnel here
+    assert demo.board_of_link("serial:/dev/ttyACM0") is None
+    assert demo.board_of_link(None) is None
+
+
+def test_asic_index_is_refused_by_the_link(monkeypatch):
+    monkeypatch.setattr(demo, "_address_is_local", lambda address: False)
+    for url in ("ws://10.21.2.35:8765/serial", "ws://127.0.0.1:18035/serial"):
+        with pytest.raises(CaptureError, match="fpga-4 is an FPGA board"):
+            demo.check_asic_index(None, 3, link=url, hostname="workstation")
+    demo.check_asic_index(None, 3, link="ws://10.21.2.7:8765/serial", hostname="workstation")
+    demo.check_asic_index("tt07", 3, link="ws://127.0.0.1:18007/serial", hostname="workstation")
+    # Two ASIC boards named for one link: which one is it?
+    with pytest.raises(CaptureError, match="disagree: --board says tt08, the link says tt07"):
+        demo.check_asic_index("tt08", 3, link="ws://10.21.2.7:8765/serial", hostname="workstation")
+    with pytest.raises(CaptureError, match="disagree: --board says tt08, this Pi says tt07"):
+        demo.check_asic_index("tt08", 3, link="serial:/dev/ttyACM0", hostname="pi-sw2-p7")
+    # A ws link from a bench Pi is about the link's board, not the Pi's.
+    demo.check_asic_index(None, 3, link="ws://10.21.2.7:8765/serial", hostname="pi-sw2-p8")
+
+
+def test_capture_refuses_asic_index_over_an_fpga_tunnel(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "link_from_url", _no_link)
+    with pytest.raises(CaptureError, match="fpga-1 is an FPGA board"):
+        cli.capture("ws://127.0.0.1:18034/serial", tmp_path / "x.vgacap", clock_hz=100_000,
+                    seconds=1, max_bytes=0, firmware="picosdk", asic_index=3)
 
 
 def test_cli_reboot_finds_the_capture_firmware(monkeypatch, bars_uo, capsys):

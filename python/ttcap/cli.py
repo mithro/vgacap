@@ -599,7 +599,7 @@ def capture(
     if asic_index is not None and firmware != "picosdk":
         raise ValueError("--asic-index is for --firmware picosdk; the stock "
                          "firmware selects a project with --project")
-    check_asic_index(board, asic_index)
+    check_asic_index(board, asic_index, link=url)
     link = link_from_url(url)
     try:
         drivers = {"picosdk": _FirmwareBoard, mpmodule.FIRMWARE: _ModuleBoard}
@@ -988,7 +988,8 @@ def build_parser() -> argparse.ArgumentParser:
         "mux index (the stock SDK's tt.shuttle.<name>.count) before capturing; "
         "the selection does not survive the switch to the capture firmware. "
         "Never on an FPGA board, where the mux reset line erases the FPGA: "
-        "refused for one named by --board, or the bench Pi this runs on",
+        "refused for one named by --board, the link (a bridge address, Pi name "
+        "or tunnel port) or the bench Pi this runs on, or when they disagree",
     )
     capture_parser.add_argument(
         "--board",
