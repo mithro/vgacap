@@ -20,10 +20,14 @@ uv run pytest -q
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs these jobs on
 every push and pull request, on a pinned `ubuntu-24.04` image:
 
-| job | GStreamer | plugin | `ctest` | `pytest` | also builds |
+| step | `c` | `firmware` | `mpy-module` | `python` | `gstreamer` |
 |---|---|---|---|---|---|
-| `c` | absent | skipped | all | -- | `vgacap-rp1` |
-| `firmware` | -- | -- | -- | -- | `vgacap_fw.uf2` |
-| `mpy-module` | -- | -- | -- | `test_mpy_module.py` | MicroPython rp2 port |
-| `python` | absent | skipped | -- | all | -- |
-| `gstreamer` | installed | built | all | all | -- |
+| host CMake build | yes | no | yes | yes | yes |
+| `vgacap-rp1` against piolib | yes | no | no | no | no |
+| `vgacap_fw.uf2` for the RP2350 | no | yes | no | no | no |
+| MicroPython unix port with the module | no | no | yes | no | no |
+| MicroPython rp2 port with the module | no | no | yes | no | no |
+| GStreamer | absent | -- | absent | absent | installed |
+| plugin | skipped | -- | skipped | skipped | built |
+| `ctest` | yes | no | no | no | yes |
+| `pytest` | no | no | `test_mpy_module.py` | all | all |
