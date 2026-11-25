@@ -59,6 +59,10 @@ the PTS, if you need something that only ever goes up.
 The detected timing is posted on the bus as an element message named
 `vgacap-timing`, once when it is first known and again whenever it changes.
 
+An overrun (a `TIME` chunk with the message `overrun`, or a rise in its
+dropped count) discards the picture in progress, and the next frame out
+carries `GST_BUFFER_FLAG_DISCONT`.
+
 ## `vgacapttsrc`: capturing from a board
 
 `vgacapttsrc` runs `ttcap capture --out -` as
