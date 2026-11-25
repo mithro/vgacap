@@ -17,6 +17,9 @@ The hardware notes below name the boards they were measured on: `fpga-4`
 is an FPGA demo board on the shared Welland bench (see
 [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)),
 and `tt09` is the ASIC demo board at Welland that carries a TT09 chip.
+`tt09` is not a `--board` slug in `python/ttcap/boards.py`, so `ttcap`
+reaches it with an explicit link (`serial:` or `ws://`) instead of
+`--board`.
 
 ## Layout
 
@@ -120,9 +123,9 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
 `pio/vgacap_stream.pio` and `pio/vgacap_frame.pio` are the programs'
 readable sources, written at the RP2350 board's default operands. The
 operands of one capture (edge, sync polarities, sample delay, system
-clocks per sample) are only known when it starts, so the words the
-firmware loads are built by `core/fw_pio.c` in the same order. One
-instruction for one instruction:
+clocks per sample) are only known when it starts, so `core/fw_pio.c`
+builds the loaded words at run time, instruction for instruction in the
+same order as the `.pio` source:
 
 | `.pio` | MicroPython (`python/ttcap/mp/`) | `core/fw_pio.c` |
 |---|---|---|
@@ -158,16 +161,20 @@ The simulator models what the PIO and DMA deliver, not their cycles; see
 ## Running it on a board
 
 These steps run on the Raspberry Pi the board is attached to (on the
-fpgas.online bench, the board's own Pi), with `ttcap` from this repository
+fpgas.online bench, the board's own Pi), with this repository checked out
+there as in
+[Running on a Raspberry Pi](../python/ttcap/README.md#running-on-a-raspberry-pi)
 and the UF2 copied there. `<dev>` is the stock firmware's serial port
 (`/dev/ttboard` on the fpgas.online Pis).
 
 1. With the stock firmware, enable the design to capture (the fpgas-tt
-   daemon's `/designs/<name>/enable`, or `ttcap capture --design`), and
-   take a reference capture the usual way if wanted.
+   daemon's `/designs/<name>/enable`, or
+   `uv run --no-sync ttcap capture --design`), and take a reference capture
+   the usual way if wanted.
 2. Stop anything else that owns the port (`sudo systemctl stop fpgas-tt`,
    after checking the bridge has no clients).
-3. Into the bootloader: `ttcap reboot serial:<dev> --to bootsel`. The board
+3. Into the bootloader:
+   `uv run --no-sync ttcap reboot serial:<dev> --to bootsel`. The board
    reappears as a USB drive labelled `RP2350`.
 4. Load the firmware:
 
@@ -176,14 +183,15 @@ and the UF2 copied there. `<dev>` is the stock firmware's serial port
        sudo cp vgacap_fw.uf2 /mnt/rp2350/ && sync
        sudo umount /mnt/rp2350    # may report the drive already gone
 
-   The drive disappears and the serial port above appears.
+   The drive disappears and the vgacap firmware's serial port (see the USB
+   note above) appears.
 5. Capture, e.g.
 
        FW=$(ls /dev/serial/by-id/usb-vgacap_vgacap_capture_firmware_*-if00)
-       ttcap capture --firmware picosdk serial:$FW --clock-hz 25000000 --mode frame --frames 2 --out frame.vgacap
-       ttcap capture --firmware picosdk serial:$FW --clock-hz 25000000 --mode window --frames 1 --out window.vgacap
-       ttcap capture --firmware picosdk serial:$FW --clock-hz 750000 --seconds 4 --out stream.vgacap
-       ttcap png frame.vgacap frame
+       uv run --no-sync ttcap capture --firmware picosdk serial:$FW --clock-hz 25000000 --mode frame --frames 2 --out frame.vgacap
+       uv run --no-sync ttcap capture --firmware picosdk serial:$FW --clock-hz 25000000 --mode window --frames 1 --out window.vgacap
+       uv run --no-sync ttcap capture --firmware picosdk serial:$FW --clock-hz 750000 --seconds 4 --out stream.vgacap
+       uv run --no-sync ttcap png frame.vgacap frame
 
-6. Back to the stock firmware: `ttcap reboot serial:$FW --firmware picosdk`
+6. Back to the stock firmware: `uv run --no-sync ttcap reboot serial:$FW --firmware picosdk`
    (or reset / power cycle the board), then restart `fpgas-tt`.
