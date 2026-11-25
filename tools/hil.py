@@ -122,6 +122,30 @@ def _on_stop_signal(signum, _frame):
 #: keep holding a shared board.
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
 
+#: How long `--stop-bridge` waits between its two reads of the bridge's
+#: client count. A count of 0 read once can be a visitor between two
+#: connections; it has to stay 0 across this wait as well.
+BRIDGE_SETTLE_S = 3.0
+
+
+def bridge_state() -> str:
+    """`fpgas-tt` as systemd sees it: "active", "inactive", or anything
+    else (another state, or why it could not be asked) -- which is neither,
+    and so never a reason to act."""
+    try:
+        proc = subprocess.run(["systemctl", "is-active", "fpgas-tt"],
+                              capture_output=True, text=True, check=False,
+                              timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "unknown (%s: %s)" % (type(exc).__name__, exc)
+    if proc.returncode == 0:
+        return "active"
+    state = (proc.stdout or "").strip()
+    # `failed` is stopped too: nothing holds the device.
+    if state in ("inactive", "failed"):
+        return "inactive"
+    return state or "unknown (systemctl is-active exit %d)" % proc.returncode
+
 
 class Fatal(Exception):
     """Cannot start, or cannot go on: reported, not a check result."""
@@ -602,22 +626,39 @@ class Hil:
         """
         if shutil.which("systemctl") is None:
             raise Fatal("--stop-bridge, but there is no systemctl on this host")
-        active = subprocess.run(["systemctl", "is-active", "--quiet", "fpgas-tt"],
-                                check=False, timeout=60).returncode == 0
-        if not active:
+        state = bridge_state()
+        if state == "inactive":
             self.notes.append("fpgas-tt was already stopped; left alone.")
             return
+        if state != "active":
+            raise Fatal("--stop-bridge refused: fpgas-tt is %s" % state)
         # The bridge serves visitors of the public site too, who cannot see
-        # a claims file: never cut one off.
-        clients = bridge_clients(self.args.bridge_health)
-        if clients != 0:
-            raise Fatal("--stop-bridge refused: the bridge at %s has %s client(s) "
-                        "connected" % (self.args.bridge_health, clients))
-        # Marked before the attempt: a stop that takes effect and then times
-        # out must still be undone.
+        # a claims file: never cut one off. Read twice, a settle apart, the
+        # second time immediately before stopping.
+        for attempt in range(2):
+            if attempt:
+                time.sleep(BRIDGE_SETTLE_S)
+            clients = bridge_clients(self.args.bridge_health)
+            if clients != 0:
+                raise Fatal("--stop-bridge refused: the bridge at %s has %s "
+                            "client(s) connected" % (self.args.bridge_health, clients))
+        try:
+            subprocess.run(["sudo", "-n", "systemctl", "stop", "fpgas-tt"],
+                           check=True, timeout=120)
+        except BaseException as exc:
+            # However the attempt ended -- a failure, a timeout, a stop
+            # signal -- a stop that took effect must still be undone, and
+            # one that did not must not be "undone" by restarting the board
+            # under the running daemon.
+            after = bridge_state()
+            if after != "active":
+                self.bridge_stopped = True
+            if not isinstance(exc, (OSError, subprocess.SubprocessError)):
+                raise
+            raise Fatal("--stop-bridge: `sudo -n systemctl stop fpgas-tt` failed "
+                        "(%s: %s); fpgas-tt is now %s"
+                        % (type(exc).__name__, exc, after)) from None
         self.bridge_stopped = True
-        subprocess.run(["sudo", "-n", "systemctl", "stop", "fpgas-tt"],
-                       check=True, timeout=120)
         self.notes.append("fpgas-tt stopped for this run, and started again after.")
 
     def restore_bridge(self) -> None:

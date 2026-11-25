@@ -399,13 +399,17 @@ def test_frames_left_by_an_earlier_run_do_not_count(workspace):
 # ------------------------------------------------- --stop-bridge etiquette
 
 
-def _health_server(body: bytes):
-    """A one-thread HTTP server answering every GET with `body`."""
+def _health_server(*bodies: bytes):
+    """A one-thread HTTP server answering GETs with `bodies` in turn, the
+    last one for ever after."""
     import http.server
     import threading
 
+    answers = list(bodies)
+
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - the http.server spelling
+            body = answers.pop(0) if len(answers) > 1 else answers[0]
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -480,6 +484,149 @@ def test_stop_bridge_refuses_while_a_visitor_is_connected(tmp_path, monkeypatch)
         server.shutdown()
     assert not run.bridge_stopped
     assert not any("stop" in argv for argv in calls), calls
+
+
+class FakeSystemd:
+    """`subprocess.run` for systemctl: one `fpgas-tt` unit, every call
+    recorded in `events` (shared with the fake board link)."""
+
+    def __init__(self, events, *, state="active", stop="ok"):
+        self.events = events
+        self.state = state
+        #: "ok", "fails" (exit 1, still running), "times-out-stopped"
+        #: (TimeoutExpired, but it did stop) or "interrupted".
+        self.stop = stop
+
+    real_run = staticmethod(subprocess.run)
+
+    def __call__(self, argv, check=False, **kw):
+        argv = list(argv)
+        if "systemctl" not in argv:
+            return self.real_run(argv, check=check, **kw)  # git describe, say
+        if argv[:2] == ["systemctl", "is-active"]:
+            code = 0 if self.state == "active" else 3
+            return subprocess.CompletedProcess(argv, code, stdout=self.state + "\n")
+        self.events.append(("systemctl", argv[-2]))
+        if argv[-2] == "stop":
+            if self.stop == "fails":
+                code = 1
+            elif self.stop == "times-out-stopped":
+                self.state = "inactive"
+                raise subprocess.TimeoutExpired(argv, 120)
+            elif self.stop == "interrupted":
+                self.state = "inactive"
+                raise KeyboardInterrupt
+            else:
+                self.state, code = "inactive", 0
+        elif argv[-2] == "start":
+            self.state, code = "active", 0
+        else:
+            raise AssertionError(argv)
+        if check and code:
+            raise subprocess.CalledProcessError(code, argv)
+        return subprocess.CompletedProcess(argv, code)
+
+
+class FakeBoard:
+    """A board link that soft-reboots on Ctrl-D, recording into `events`."""
+
+    def __init__(self, events):
+        self.events = events
+        self.replies = []
+
+    def write(self, data):
+        self.events.append(("board", data))
+        if data == b"\x04":
+            self.replies = [b"MPY: soft reboot\r\n", b">>> "]
+
+    def read(self, timeout):
+        return self.replies.pop(0) if self.replies else b""
+
+    def close(self):
+        self.events.append(("board", "closed"))
+
+
+@pytest.fixture
+def bridge_run(tmp_path, monkeypatch):
+    """A `Hil` with --stop-bridge on a serial link, systemd and the board
+    faked, and a /health that says 0 clients."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+    import ttcap.cli
+
+    events = []
+    systemd = FakeSystemd(events)
+    board = FakeBoard(events)
+    server, url = _health_server(b'{"clients": 0}')
+    monkeypatch.setattr(hil.shutil, "which", lambda _name: "/bin/systemctl")
+    monkeypatch.setattr(hil.subprocess, "run", systemd)
+    monkeypatch.setattr(hil, "BRIDGE_SETTLE_S", 0.0)
+    monkeypatch.setattr(ttcap.cli, "link_from_url", lambda _url: board)
+    args = hil.build_parser().parse_args(
+        [str(tmp_path / "report.md"), "--clock-hz", "500000",
+         "--link", "serial:/dev/null", "--stop-bridge", "--bridge-health", url,
+         "--workdir", str(tmp_path)])
+    yield hil, hil.Hil(args), systemd, events
+    server.shutdown()
+
+
+def test_stop_bridge_reads_the_count_twice(tmp_path, monkeypatch, bridge_run):
+    """A visitor arriving between the two reads stops the stop."""
+    hil, run, _systemd, events = bridge_run
+    server, url = _health_server(b'{"clients": 0}', b'{"clients": 1}')
+    run.args.bridge_health = url
+    try:
+        with pytest.raises(hil.Fatal, match="1 client"):
+            run.stop_bridge()
+    finally:
+        server.shutdown()
+    assert not run.bridge_stopped and events == []
+
+
+def test_a_failed_stop_is_a_clean_error_and_no_board_restart(bridge_run):
+    hil, run, systemd, events = bridge_run
+    systemd.stop = "fails"
+    with pytest.raises(hil.Fatal, match="systemctl stop fpgas-tt. failed.*now active"):
+        run.stop_bridge()
+    assert not run.bridge_stopped
+    run.cleanup()
+    # The daemon never stopped: the board must not be reset under it.
+    assert events == [("systemctl", "stop")]
+
+
+@pytest.mark.parametrize("how", ["times-out-stopped", "interrupted"])
+def test_a_stop_that_took_effect_is_still_undone(bridge_run, how):
+    hil, run, systemd, events = bridge_run
+    systemd.stop = how
+    with pytest.raises((hil.Fatal, KeyboardInterrupt)):
+        run.stop_bridge()
+    assert run.bridge_stopped
+    run.cleanup()
+    assert systemd.state == "active"
+    assert events[-1] == ("systemctl", "start")
+
+
+def test_failed_stop_through_main_writes_a_report(tmp_path, monkeypatch, bridge_run):
+    """Not a traceback: the run is reported as cut short, with a report."""
+    hil, run, systemd, _events = bridge_run
+    systemd.stop = "fails"
+    frames = tmp_path / "vgacap-frames"
+    frames.write_text("")
+    report = tmp_path / "report.md"
+    saved = {sig: signal.getsignal(sig) for sig in hil.STOP_SIGNALS}
+    try:
+        code = hil.main([str(report), "--clock-hz", "500000", "--seconds", "4",
+                         "--link", "serial:/dev/null", "--stop-bridge",
+                         "--bridge-health", run.args.bridge_health,
+                         "--vgacap-frames", str(frames),
+                         "--workdir", str(tmp_path / "work"),
+                         "--lock-dir", str(tmp_path / "lock")])
+    finally:
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
+    assert code == 1
+    text = report.read_text()
+    assert "systemctl stop fpgas-tt` failed" in text
 
 
 def test_restart_sdk_leaves_raw_repl_then_soft_resets():
