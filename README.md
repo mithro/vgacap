@@ -48,9 +48,8 @@ calibration designs and their reference renders live in
   continuous streams and from the whole frames or windows in `FRAM` chunks.
 - `vgacap-bin2stream` wraps a one-byte-per-clock simulator dump.
 
-**Capture sources.** Each source is a different way of getting `uo_out` into
-a vgacap stream; pick one by the hardware you have and how fast the design
-must run.
+**Capture sources.** Pick one by the hardware you have and how fast the
+design must run.
 
 | source | runs on | code | `ttcap` option |
 |---|---|---|---|
@@ -101,30 +100,23 @@ See [docs/development.md](docs/development.md).
 
 ## A first capture
 
-With a demo board with an ASIC breakout carrying TT07 on `/dev/ttyACM0`:
+With fpga-1 on the Welland bench
+([Reaching a Welland board](python/ttcap/README.md#reaching-a-welland-board)):
 
 ```sh
-uv run ttcap capture serial:/dev/ttyACM0 \
-    --project tt_um_rejunity_vga --clock-hz 60000 --seconds 1 --out capture.vgacap
+ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com
+uv run ttcap capture ws://127.0.0.1:18034/serial --design tt_um_vga_pattern \
+    --clock-hz 500000 --frames 2 --out capture.vgacap
 mkdir -p out && build/vgacap-frames capture.vgacap out/frame      # out/frame-0000.ppm ...
-uv run ttcap demo --link serial:/dev/ttyACM0 --clock-hz 60000 --outdir out   # PNGs + MKV
+uv run ttcap demo --link ws://127.0.0.1:18034/serial --design tt_um_vga_pattern \
+    --clock-hz 500000 --fps 5 --outdir out                         # PNGs + MKV
 ```
 
 ## Layout
 
 | path | contents |
 |---|---|
-| [`src/tools/`](src/tools/README.md) | `vgacap-dump` and `vgacap-frames` |
 | [`python/vgacap/`](python/vgacap/) | Python stream library |
-| [`python/ttcap/`](python/ttcap/README.md) | `ttcap` CLI and library |
-| [`python/ttcap/mp/`](python/ttcap/mp/) | MicroPython board programs |
-| [`python/ttcap/emu/`](python/ttcap/emu/) | RP2040 and RP2350 emulator |
-| [`firmware/`](firmware/README.md) | pico-sdk capture firmware |
-| [`mpy/`](mpy/README.md) | MicroPython C module |
-| [`capture-rp1/`](capture-rp1/README.md) | Raspberry Pi 5 capture |
-| [`rtl/`](rtl/README.md) | FPGA capture modules |
-| [`gst/`](gst/README.md) | GStreamer plugin |
-| [`tools/`](tools/README.md) | hardware-in-the-loop scripts |
 | [`tests/`](tests/) | C unit tests (ctest) |
 | [`python/tests/`](python/tests/) | Python tests (pytest) |
 | [`gst/tests/`](gst/tests/) | plugin end-to-end tests (pytest) |
