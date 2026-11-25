@@ -77,8 +77,9 @@ absolute interpreter and script) when the pipeline runs from elsewhere.
 ### Stopping matters
 
 The board samples into a DMA double buffer and can only stop at a buffer
-boundary: about 82 ms at 750 kHz, but 2.2 s at the RP2040's 60 kHz
-project-clock ceiling. `ttcap` turns its first `SIGINT` into a cooperative
+boundary: about 82 ms at 750 kHz, but 2.2 s at 60 kHz, the RP2040's
+measured project-clock ceiling at the default buffer size (a larger
+`--buf-words` raises it). `ttcap` turns its first `SIGINT` into a cooperative
 stop that finishes the chunk, writes its closing `TIME` chunk (the only
 overrun and RXSTALL report there is) and exits 0.
 
