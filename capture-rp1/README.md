@@ -12,8 +12,7 @@ RP1 I/O chip has a PIO block like the RP2040's and RP2350's, and
 3. DMA the words into DRAM through
    [piolib](https://github.com/raspberrypi/utils/tree/master/piolib);
 4. write a vgacap stream (`VGCH` header, `RAW` chunks, a closing `TIME`
-   chunk; the four-byte tag of a `RAW` chunk is "RAW" followed by a
-   space).
+   chunk).
 
 ```sh
 git clone --depth 1 https://github.com/raspberrypi/utils.git
@@ -46,8 +45,6 @@ FIFO covers that gap only up to that rate. The way past it is a cyclic-DMA
 kernel module (`mithro/rpi5-rp1-pio-bench`, 45-56 MB/s).
 
 ## What the driver needed
-
-All of these were measured, and each is explained in the code's comments.
 
 - Transfer sizes are `uint16_t` in the ioctl, so 64 KB is 0.
 - The RX DMA request threshold must equal its burst of 8 (joined FIFO,
