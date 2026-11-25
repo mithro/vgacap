@@ -16,7 +16,7 @@ and comparison tools.
  ---------------                 ----------              ---------
  TT demo board      ─┐                                ┌─ vgacap-frames, ttcap png (PPM/PNG)
  Raspberry Pi 5     ─┤                                ├─ GStreamer: vgadecode, vgacapbin
- FPGA design       ─┼──▶  VGCH header + RAW / RLE ──▶├─ ttcap demo (PNG, MKV, window, MJPEG)
+ FPGA design        ─┼──▶  VGCH header + RAW / RLE ──▶├─ ttcap demo (PNG, MKV, window, MJPEG)
  simulator dumps    ─┤     / FRAM / EVNT / TIME       ├─ vgacap-dump (chunks, checksum)
  (BIO, research)    ─┘     chunks (include/vgacap/    └─ pixel-exact checks against
                            stream.h)                     tt-vga-testpatterns references
