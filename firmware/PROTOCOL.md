@@ -11,10 +11,11 @@ DTR is set, and a capture whose host drops DTR stops.
 ## Commands and replies
 
 A command is one line of ASCII: a command word, then `key=value` arguments
-separated by spaces, ending in `\n`. `\r` and other control characters are
-ignored, an empty line does nothing, and a line over 256 bytes is refused
-whole. Every argument a command takes must be given exactly once; an
-unknown or repeated key is an error, and so is a value outside its range.
+separated by spaces, ending in `\n`. `0x03` discards the line so far;
+`\r` and other control characters are ignored, an empty line does
+nothing, and a line over 256 bytes is refused whole. Every argument a
+command takes must be given exactly once; an unknown or repeated key is
+an error, and so is a value outside its range.
 There are no defaults: the host always says what it wants.
 
 Each command gets exactly one reply line: `ok` followed by `key=value`
@@ -63,8 +64,10 @@ notes").
 
 A host can always get the firmware into a known state by sending
 `\x03\nhello\n` and discarding everything before the `ok vgacap-fw` reply:
-the stop byte ends a capture left running by a host that went away, an
-idle firmware ignores it, and the empty line ends any half-sent command.
+the stop byte ends a capture left running by a host that went away, and
+an idle firmware discards the line received so far on it, so a half-sent
+command (say `reboo`) is never completed by what follows; the empty line
+then does nothing.
 
 ## Captures
 

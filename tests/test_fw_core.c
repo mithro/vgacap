@@ -142,6 +142,29 @@ TEST(overlong_line_is_refused_whole) {
     ASSERT_TRUE(strncmp(line(), "ok vgacap-fw", 12) == 0);
 }
 
+// An idle stop byte discards a half-received line, so a host's
+// "\x03\nhello\n" resync never completes what an earlier host left
+// half-sent ("reboo" + "t\n" would otherwise reboot the board). It also
+// clears an overlong line.
+TEST(idle_stop_byte_discards_the_line_so_far) {
+    boot(1, 1e-6);
+    pos = 0;
+    send_at("reboo\x03t\nsta\x03\nhello\n", 0);
+    char big[300];
+    memset(big, 'x', sizeof big - 1);
+    big[sizeof big - 1] = 0;
+    send_at(big, 0);
+    send_at("\x03status\n", 0);
+    run();
+    ASSERT_TRUE(!fw_reboot_requested());
+    ASSERT_TRUE(streq(line(), "err unknown command 't'"));
+    ASSERT_TRUE(strncmp(line(), "ok vgacap-fw", 12) == 0);
+    ASSERT_TRUE(streq(line(), "ok clock_hz=0 sysclk_hz=150000000 reset=0 ui_in=-1"));
+    size_t len;
+    sim_output(&len);
+    ASSERT_EQ_U(pos, len);
+}
+
 TEST(program_commands_print_the_words) {
     boot(1, 1e-6);
     pos = 0;
@@ -569,6 +592,7 @@ int main(void) {
     RUN(clock_reports_its_plan);
     RUN(clock_a_failed_system_clock_stops_the_clock);
     RUN(overlong_line_is_refused_whole);
+    RUN(idle_stop_byte_discards_the_line_so_far);
     RUN(program_commands_print_the_words);
     RUN(reboot_answers_then_stops);
     RUN(stream_needs_a_clock);

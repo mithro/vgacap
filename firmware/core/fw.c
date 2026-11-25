@@ -470,7 +470,15 @@ void fw_poll(void) {
             S.overlong = 0;
             continue;
         }
-        // '\r', and a stop byte that arrives between captures, are dropped.
+        // A stop byte between captures discards the line so far: a host
+        // resyncing with "\x03\nhello\n" gets a clean line whatever an
+        // earlier host left half-sent (PROTOCOL.md, "known state").
+        if (c == FW_STOP_BYTE) {
+            S.len = 0;
+            S.overlong = 0;
+            continue;
+        }
+        // '\r' and the other control characters are dropped.
         if (c < 0x20 || c == 0x7F) continue;
         if (S.len < FW_LINE_MAX) S.line[S.len++] = (char)c;
         else S.overlong = 1;
