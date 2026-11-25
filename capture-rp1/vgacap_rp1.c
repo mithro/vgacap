@@ -81,7 +81,7 @@ struct generator {
     size_t len;              // bytes, a multiple of 4
     uint chunk;              // bytes per transfer; divides len exactly
     volatile bool stop;
-    int error;
+    int error;               // the failing transfer's result; read after the join
 };
 
 static double now_s(void)
@@ -433,6 +433,12 @@ teardown:
     if (gen_started) {
         gen.stop = true;
         pthread_join(gen_thread, NULL);
+        // A generator that stopped feeding the pins mid-capture makes the
+        // capture not the pattern it claims to be: fail the run.
+        if (gen.error) {
+            fprintf(stderr, "vgacap-rp1: generator transmit DMA failed: %d\n", gen.error);
+            captured = false;
+        }
         // The thread's last transfer has returned, but the DMA may still be
         // feeding the FIFO: wait until the state machine has taken it all,
         // so no transfer is in flight when the channel is released (one that
