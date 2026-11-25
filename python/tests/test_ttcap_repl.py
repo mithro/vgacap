@@ -198,3 +198,33 @@ def test_websocket_link_raises_linkclosed_when_server_closes():
         server.shutdown()
         thread.join(timeout=2.0)
 
+
+
+def test_a_serial_write_timeout_bounds_a_port_that_stops_draining():
+    """hil's board restart passes one, so a USB CDC port that stops
+    reading cannot block its cleanup before the bridge starts again."""
+    import time
+
+    import serial
+
+    master_fd, slave_fd = os.openpty()
+    try:
+        link = SerialLink(os.ttyname(slave_fd), write_timeout=0.5)
+        started = time.monotonic()
+        with pytest.raises(serial.SerialTimeoutException):
+            # Nobody reads the master: the pty buffer fills, then stalls.
+            link.write(b"x" * (4 * 1024 * 1024))
+        assert time.monotonic() - started < 10
+        link.close()
+    finally:
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
+def test_serial_writes_block_by_default(fake_board):
+    """Captures are unchanged: no write timeout unless asked for."""
+    link = SerialLink(fake_board.slave_name)
+    try:
+        assert link._serial.write_timeout is None
+    finally:
+        link.close()
