@@ -1,8 +1,8 @@
 # vgacap capture firmware protocol, version 1
 
 What a host sends the capture firmware (`firmware/`) over its USB CDC
-serial port, and what comes back. The host side is `python/ttcap/firmware.py`;
-the firmware side is `firmware/core/fw.c`.
+serial port, and what comes back. The host side is [`python/ttcap/firmware.py`](../python/ttcap/firmware.py);
+the firmware side is [`firmware/core/fw.c`](core/fw.c).
 
 The serial settings do not matter (it is USB CDC), but the host must assert
 DTR, as pyserial does when it opens a port: the firmware only writes while
@@ -30,16 +30,17 @@ There are no defaults: the host always says what it wants.
 Each command gets exactly one reply line: `ok` followed by `key=value`
 fields, or `err` followed by a message for a person.
 
-| Command | Arguments | `ok` reply |
+| command | arguments | `ok` reply |
 |---|---|---|
 | `hello` | none | `ok vgacap-fw proto=1 chip=rp2350 sysclk_hz=N arena_bytes=N` |
 | `status` | none | `ok clock_hz=N sysclk_hz=N reset=0\|1 ui_in=-1..255` |
-| `clock` | `hz=0..125000000` | `ok clock_hz=N actual_hz=N sysclk_hz=N period=P`, or for `hz=0` `ok clock_hz=0 sysclk_hz=N` |
+| `clock` | `hz=1..125000000` | `ok clock_hz=N actual_hz=N sysclk_hz=N period=P` |
+| `clock` | `hz=0` | `ok clock_hz=0 sysclk_hz=N` |
 | `reset` | `hold=0\|1` | `ok reset=0\|1` |
 | `ui_in` | `value=-1..255` | `ok ui_in=V` |
-| `asic_select` | `index=0..1023` | `ok asic_select index=N`, after about 20 ms + 2 ms per index |
-| `stream` | see below | `ok stream`, then a capture |
-| `frame` | see below | `ok frame`, then a capture |
+| `asic_select` | `index=0..1023` | `ok asic_select index=N` |
+| `stream` | [see below](#stream) | `ok stream`, then a capture |
+| `frame` | [see below](#frame) | `ok frame`, then a capture |
 | `program_stream` | `edge` | `ok words=... wrap_target=N wrap=N shiftctrl=0x... execctrl=0x...` |
 | `program_frame` | `edge hsync_active vsync_active sample_delay period` | the same |
 | `reboot` | none | `ok reboot`, then the board reboots into its flash firmware |
@@ -55,25 +56,24 @@ fields, or `err` followed by a message for a person.
 * `reset hold=1` drives the project's `rst_n` (GPIO 14) low, `hold=0` high.
   Until the first `reset` the pin is left alone (the board pulls it up).
 * `ui_in value=V` drives `ui_in` (GPIO 17..24) with V; `value=-1` releases
-  the pins. Until then they are left alone: the FPGA boards take `ui_in`
-  from their own switches.
-* `asic_select index=N` (ASIC carriers only) selects the project at mux
+  the pins. Until then they are left alone: a demo board with an FPGA
+  breakout takes `ui_in` from its own switches.
+* `asic_select index=N` (ASIC breakouts only) selects the project at mux
   index N exactly as the stock firmware's `ProjectMux.reset_and_clock_mux()`
   does: `ctrl_sel_inc` (GPIO 2), `ctrl_sel_nrst` (GPIO 1) and `ctrl_ena`
   (GPIO 0) low, 10 ms, `ctrl_sel_nrst` high, 10 ms, N pulses on
   `ctrl_sel_inc` (1 ms high, 1 ms low), then `ctrl_ena` high. N is the
   stock SDK's `tt.shuttle.<name>.count`. It is needed because nothing
   drives those lines while the RP2350 is in reset and in its bootloader
-  (they are inputs with the pad pull-down then), so an ASIC board comes
-  back with no project selected (tt09, 2026-11-24); the firmware's boot
-  only drives GPIO 1 high again, which does not select one. **Never on an
-  FPGA carrier**: GPIO 1 is the iCE40's `CRESET_B` there, and pulling it
-  low erases the FPGA's configuration; `asic_select` is the only thing that
-  ever drives it low. Until the first `asic_select`, GPIO 0 and 2 are left
-  alone and GPIO 1 stays high from boot.
-  The firmware cannot tell the carriers apart; `ttcap capture` refuses
-  `--asic-index` for an FPGA bench board (named by `--board`, the ws://
-  link or the Pi it runs on), and when those disagree.
+  (they are inputs with the pad pull-down then), so a demo board with an
+  ASIC breakout comes back with no project selected (tt09, 2026-11-24).
+  **Never on an FPGA breakout**: GPIO 1 is the iCE40's `CRESET_B` there,
+  and pulling it low erases the FPGA's configuration; `asic_select` is the
+  only thing that ever drives it low. The reply comes after about 20 ms +
+  2 ms per index. The firmware cannot tell the breakouts apart;
+  `ttcap capture` refuses `--asic-index` for a bench demo board with an
+  FPGA breakout (named by `--board`, the ws:// link or the Pi it runs on),
+  and when those disagree.
 * `program_stream` / `program_frame` print the PIO program a capture with
   those operands would load, in hex, with its configuration -- for
   diagnosis and for the tests that compare it with MicroPython's assembler.
@@ -83,11 +83,11 @@ fields, or `err` followed by a message for a person.
 
 At boot the firmware drives one pin, GPIO 1 (`ctrl_sel_nrst`: the iCE40's
 `CRESET_B` on an FPGA breakout, the mux controller's reset on an ASIC
-carrier), high -- the level the stock firmware leaves it at, without a
+breakout), high -- the level the stock firmware leaves it at, without a
 glitch low -- and makes `uo_out` (GPIO 33..40) inputs. Every other pin,
 GPIO 0 and 2 (`ctrl_ena`, `ctrl_sel_inc`) included, stays as the
-bootloader left it until a command drives it (README.md, "Hardware
-notes").
+bootloader left it until a command drives it ([README.md, "Hardware
+notes"](README.md#hardware-notes-and-assumptions)).
 
 A host can always get the firmware into a known state by sending
 `\x03\nhello\n` and discarding everything before the `ok vgacap-fw` reply:
@@ -102,7 +102,7 @@ then does nothing.
 
     stream buf_words=1..A/8 max_bytes=0..4294967295 edge=falling|rising pio=0..2 sm=0..3
 
-Continuous capture, `python/ttcap/mp/capture_rp2.py`'s semantics: one sample
+Continuous capture, [`python/ttcap/mp/capture_rp2.py`](../python/ttcap/mp/capture_rp2.py)'s semantics: one sample
 of `uo_out` on every chosen edge of the project clock, into two DMA
 buffers of `buf_words` 32-bit words (4 samples each) that alternate. Each
 full buffer is sent as a `RAW ` chunk, read from the live buffer. The DMA
@@ -123,7 +123,7 @@ The project clock must be running.
           hsync_active=-1..1 vsync_active=-1..1 max_frames=0..4294967295
           max_bytes=0..4294967295 edge=falling|rising sample_delay=0..31 pio=0..2 sm=0..3
 
-Whole-frame and windowed capture, `frame_rp2.py`'s semantics: the project
+Whole-frame and windowed capture, [`frame_rp2.py`](../python/ttcap/mp/frame_rp2.py)'s semantics: the project
 clock runs at its real rate, the state machine waits for the vsync leading
 edge, counts hsync leading edges to the first line wanted, then samples
 once every `period` system clocks (phase-locked: the system clock is a
@@ -144,7 +144,7 @@ project clock is running at 2..32 whole system clocks per clock.
 ### Capture output
 
 After `ok stream` / `ok frame` the firmware writes binary vgacap chunks
-(`include/vgacap/stream.h`): `tag[4]`, `u32` little-endian length, payload.
+([`include/vgacap/stream.h`](../include/vgacap/stream.h)): `tag[4]`, `u32` little-endian length, payload.
 Only these:
 
 * `RAW ` and `FRAM`, the samples, packed 4 to a word with the first
