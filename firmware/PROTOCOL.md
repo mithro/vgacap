@@ -9,13 +9,10 @@ DTR, as pyserial does when it opens a port: the firmware only writes while
 DTR is set, and a capture whose host drops DTR stops.
 
 A bridge that keeps the port open keeps DTR set for as long as it does.
-The fpgas.online-tt daemon (`fpgas_tt/bridge.py`) opens the port through
+The fpgas.online bridge (`fpgas-tt`) opens the port through
 pyserial-asyncio, so DTR is asserted, and holds it open whether or not a
 ws:// client is connected: a client that leaves mid-capture does not drop
-DTR, and the capture runs on to `max_bytes` or the next host's `0x03`. (Its
-udev rule makes `/dev/ttboard` only for the stock firmware's 2e8a:0005 and
-2e8a:000f, so it bridges this firmware's 2e8a:0009 port only if started
-with `--device` pointing at it.)
+DTR, and the capture runs on to `max_bytes` or the next host's `0x03`.
 
 ## Commands and replies
 
@@ -62,22 +59,17 @@ fields, or `err` followed by a message for a person.
   the pins. Until then they are left alone: a demo board with an FPGA
   breakout takes `ui_in` from its own switches.
 * `asic_select index=N` (ASIC breakouts only) selects the project at mux
-  index N exactly as the stock firmware's `ProjectMux.reset_and_clock_mux()`
+  index N exactly as the stock firmware's
+  [`ProjectMux.reset_and_clock_mux()`](https://github.com/TinyTapeout/tt-micropython-firmware/blob/15ba5ced7aae7746ea2f9004cb412109c9fe9c83/src/ttboard/project_mux.py)
   does: `ctrl_sel_inc` (GPIO 2), `ctrl_sel_nrst` (GPIO 1) and `ctrl_ena`
   (GPIO 0) low, 10 ms, `ctrl_sel_nrst` high, 10 ms, N pulses on
   `ctrl_sel_inc` (1 ms high, 1 ms low), then `ctrl_ena` high. N is the
-  stock SDK's `tt.shuttle.<name>.count`. It is needed because nothing
-  drives those lines while the RP2350 is in reset and in its bootloader
-  (they are inputs with the pad pull-down then), so a demo board with an
-  ASIC breakout comes back with no project selected (tt09, 2026-11-24).
-  **Never on an FPGA breakout**: GPIO 1 is the iCE40's `CRESET_B` there,
-  and pulling it low erases the FPGA's configuration; `asic_select` is the
-  only thing that ever drives it low. The reply comes after about 20 ms +
-  2 ms per index. The firmware cannot tell the breakouts apart;
-  `ttcap capture` refuses `--asic-index` for a bench demo board with an
-  FPGA breakout (named by `--board`, the ws:// link or the Pi it runs on,
-  the Pi also for its own bridge on loopback),
-  and when those disagree.
+  stock SDK's `tt.shuttle.<name>.count`. The reply comes after about
+  20 ms + 2 ms per index. **Never on an FPGA breakout**: GPIO 1 is the
+  iCE40's `CRESET_B` there, and pulling it low erases the FPGA's
+  configuration; `asic_select` is the only thing that ever drives it low.
+  Why it is needed, and when `ttcap` refuses it:
+  [README.md, "Hardware notes"](README.md#hardware-notes-and-assumptions).
 * `program_stream` / `program_frame` print the PIO program a capture with
   those operands would load, in hex, with its configuration -- for
   diagnosis and for the tests that compare it with MicroPython's assembler.
@@ -104,7 +96,7 @@ then does nothing.
 
 ### `stream`
 
-    stream buf_words=1..A/8 max_bytes=0..4294967295 edge=falling|rising pio=0..2 sm=0..3
+    stream buf_words=1..arena_bytes/8 max_bytes=0..4294967295 edge=falling|rising pio=0..2 sm=0..3
 
 Continuous capture, [`python/ttcap/mp/capture_rp2.py`](../python/ttcap/mp/capture_rp2.py)'s semantics: one sample
 of `uo_out` on every chosen edge of the project clock, into two DMA
