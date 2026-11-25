@@ -28,8 +28,8 @@ Safety on a shared bench:
 * every board command runs in its own session, and whatever is left of that
   session is killed on the way out, however this script ends short of SIGKILL (SIGTERM, SIGHUP and
   SIGQUIT are caught and turned into an orderly stop);
-* `--stop-bridge` is the only thing that touches `fpgas-tt`, and it always
-  starts it again.
+* `--stop-bridge` is the only thing that touches `fpgas-tt`, and it starts
+  it again if it stopped it.
 
 A board that does not answer is a clear failure naming the board, never a
 hang: every command has a timeout.
