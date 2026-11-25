@@ -1,11 +1,12 @@
 # ttcap
 
-`ttcap` is the command and Python library for capturing from a Tiny
-Tapeout demo board: the board's RP2040 or RP2350 microcontroller samples
-the design's `uo_out` with its PIO, and `ttcap` drives it, turns captures
-into PNGs and runs a live demo. `mp/` holds the MicroPython programs that
-run on the board, and `emu/` the RP2040/RP2350 emulator the tests run
-them on.
+`ttcap` is the command and Python library for capturing from a
+[Tiny Tapeout](https://tinytapeout.com) demo board: the board's RP2040 or
+RP2350 microcontroller samples the design's `uo_out` with its PIO, and
+`ttcap` drives it, turns captures into PNGs and runs a live demo.
+[`mp/`](mp/) holds the [MicroPython](https://micropython.org) programs that
+run on the board, and [`emu/`](emu/) the RP2040/RP2350 emulator the tests
+run them on.
 
 ## Capturing with the stock firmware
 
@@ -42,18 +43,18 @@ demo board has. If it refuses, reset the board: a script that fails to
 compile on the board does not always say so, and can halt the firmware
 outright.
 
-`ttcap png` needs Pillow, so it wants the `synth` extra
+`ttcap png` needs [Pillow](https://github.com/python-pillow/Pillow), so it wants the `synth` extra
 (`uv sync --extra synth`) and a built `build/vgacap-frames`.
 
 Performance captures should own the serial device: on a board's own Pi,
-stop the fpgas.online bridge first (`sudo systemctl stop fpgas-tt`) and
+stop the [fpgas.online](https://tinytapeout.fpgas.online) bridge first (`sudo systemctl stop fpgas-tt`) and
 start it again afterwards.
 
 ## Running on a Raspberry Pi
 
-The board tools (`ttcap`) need only pyserial and websockets. On a Pi, keep
+The board tools (`ttcap`) need only [pyserial](https://github.com/pyserial/pyserial) and [websockets](https://github.com/python-websockets/websockets). On a Pi, keep
 the dev group (pytest, numpy, Pillow) out of the environment; otherwise
-`uv` will try to build numpy and Pillow from source, which can hang a Pi 3:
+[`uv`](https://docs.astral.sh/uv/) will try to build numpy and Pillow from source, which can hang a Pi 3:
 
 ```sh
 git clone https://github.com/mithro/vgacap.git && cd vgacap
@@ -77,14 +78,15 @@ a board of your own.
 
 One capture feeds every output, through a `tee`:
 
-| output | on by default | pipeline |
-|---|---|---|
-| `out/frame-%04d.png` | yes (`--no-png` to drop) | `pngenc ! multifilesink` |
-| `out/capture.mkv` | yes (`--no-video` to drop) | `x264enc`, else `vp8enc`, into `matroskamux` |
-| a window | `--window` | `autovideosink` |
-| `http://localhost:PORT/` | `--serve PORT` | `jpegenc ! multipartmux` into an MJPEG HTTP server |
+| output | default | flag | encoder | fallback encoder | muxer | sink |
+|---|---|---|---|---|---|---|
+| `out/frame-%04d.png` | on | `--no-png` | `pngenc` | -- | -- | `multifilesink` |
+| `out/capture.mkv` | on | `--no-video` | `x264enc` | `vp8enc` | `matroskamux` | `filesink` |
+| window | off | `--window` | -- | -- | -- | `autovideosink` |
+| `http://localhost:PORT/` | off | `--serve PORT` | `jpegenc` | -- | `multipartmux` | `fdsink` |
 
-`--serve` publishes `multipart/x-mixed-replace` on the loopback address,
+`--serve` runs an MJPEG HTTP server that publishes
+`multipart/x-mixed-replace` on the loopback address,
 with an index page containing an `<img src="/stream.mjpg">`, which is all a
 browser needs. The server uses only the standard library, and a viewer
 that falls behind loses frames rather than slowing the capture down.
@@ -93,7 +95,7 @@ that falls behind loses frames rather than slowing the capture down.
 
 At a 60 kHz project clock a 640x480 frame is 800x525 clocks, so each frame
 is **seven seconds long**: honest timing, but a slideshow rather than a
-video. `--fps 30` (or `30/1`, or `29.97`) sets `vgadecode`'s
+video. `--fps 30` (or `30/1`, or `29.97`) sets [`vgadecode`](../../gst/README.md#vgadecode-a-stream-in-video-out)'s
 `repeat-last-frame` and `output-fps`, which re-push the last frame to fill
 the gaps so the video plays at wall-clock speed. Nothing is invented: a
 repeated frame is the frame that was on the screen. The setting is on the
@@ -105,11 +107,11 @@ decoder, so every output shares the one cadence.
 the board, the outdir or the port. It is the same command a real run
 prints before it starts, so you can copy, edit and run it by hand. The demo
 drives `gst-launch-1.0` as a child process rather than building the
-pipeline in-process, because the GStreamer Python bindings (`python3-gi`)
+pipeline in-process, because the [GStreamer](https://gstreamer.freedesktop.org) Python bindings (`python3-gi`)
 are an OS package and `ttcap` runs under `uv`. The pipeline text is the
-same either way, and `ttcap.demo.use_gst_python()` is the check.
+same either way, and [`ttcap.demo.use_gst_python()`](demo.py) is the check.
 
-The pipeline builds the source (`vgacapttsrc`) by name, with its settings
+The pipeline builds the source ([`vgacapttsrc`](../../gst/README.md#vgacapttsrc-capturing-from-a-board)) by name, with its settings
 as element properties, and never as a `vgacapbin` URI. One of those
 settings is `ttcap-command`, which names the program that talks to the
 board, and a URI query is not allowed to set it (see
@@ -164,10 +166,10 @@ exits **0**, not 143.
 ## Reaching a Welland board
 
 The Welland boards are a shared, public bench of Tiny Tapeout demo boards,
-listed on tinytapeout.fpgas.online. Each board is attached to its own
+listed on [tinytapeout.fpgas.online](https://tinytapeout.fpgas.online). Each board is attached to its own
 Raspberry Pi, which runs the fpgas.online bridge (`fpgas-tt`).
 
-`--board` takes a slug from the `WELLAND` table in `boards.py` (`tt03p5`,
+`--board` takes a slug from the `WELLAND` table in [`boards.py`](boards.py) (`tt03p5`,
 `tt04`..`tt08`, `fpga-1`, `fpga-3`, `fpga-4`; boards move between ports,
 see the comment on `WELLAND`) and resolves it to a link:
 
