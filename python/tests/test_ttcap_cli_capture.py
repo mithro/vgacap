@@ -546,3 +546,151 @@ def test_a_bad_sample_delay_is_refused_before_the_board_is_touched(monkeypatch, 
 
     assert "sample_delay" in capsys.readouterr().err
     assert not any(c.startswith("tt.") or "RPMode" in c for c in board.commands)
+
+
+# -- --mode rle -----------------------------------------------------------
+
+
+def rle_chunks(profile, pairs, summary) -> list[bytes]:
+    """One RLE chunk of `pairs` and the closing TIME chunks, as rle_rp2.py
+    sends them."""
+    buf = io.BytesIO()
+    writer = Writer(
+        buf,
+        Header(
+            version=1,
+            sample_bits=profile.sample_bits,
+            mode=0,
+            clock_hz=0,
+            signal_map=profile.signal_map,
+            samples_per_word=profile.samples_per_word,
+            flags=profile.flags,
+        ),
+    )
+    mark = buf.tell()
+    writer.rle(pairs)
+    for message in summary:
+        writer.time(0, 0, 0, message)
+    return [buf.getvalue()[mark:]]
+
+
+def _rle_capture(monkeypatch, tmp_path, chunks, *extra) -> int:
+    board = capture_board(RP2350_DBV3, chunks)
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+    return cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--mode", "rle",
+         "--clock-hz", "25000000", "--out", str(tmp_path / "rle.vgacap"), *extra]
+    )
+
+
+def test_an_rle_capture_counts_the_runs_and_a_saturated_one_in_full(monkeypatch, capsys, tmp_path):
+    # Through main(): a 2^32 run arrives as two pairs of 2^31.
+    pairs = [(7, 3), (9, 1 << 31), (9, 1 << 31), (4, 5)]
+    chunks = rle_chunks(RP2350_DBV3, pairs,
+                        ["overruns=0 rxstall=0 saturated=1 sysclk_hz=150000000"])
+
+    assert _rle_capture(monkeypatch, tmp_path, chunks, "--max-bytes", "65536") == 0
+
+    out = capsys.readouterr().out
+    assert "samples=%d " % (3 + (1 << 32) + 5) in out
+    assert "saturated=1" in out
+
+
+def test_an_rle_capture_with_an_rx_stall_exits_one(monkeypatch, capsys, tmp_path):
+    # A lost run word puts every later pair out of step: the board stops
+    # with an error chunk, and the run is a failure even though what was
+    # written before the stall is good.
+    chunks = rle_chunks(RP2350_DBV3, [(7, 3), (9, 4)],
+                        ["error=rxstall", "overruns=0 rxstall=1 saturated=0 sysclk_hz=150000000"])
+
+    assert _rle_capture(monkeypatch, tmp_path, chunks, "--max-bytes", "65536") == 1
+
+    captured = capsys.readouterr()
+    assert "rxstall=1" in captured.out
+    assert "rx stall" in captured.err
+    _, items = read_stream((tmp_path / "rle.vgacap").read_bytes())
+    assert [tuple(i[1:]) for i in items if i[0] == "run"] == [(7, 3), (9, 4)]
+
+
+def test_a_stream_capture_with_an_rx_stall_still_exits_zero(monkeypatch, capsys, tmp_path):
+    # Only RLE makes the stall fatal; a RAW stream with a stall is short of
+    # samples, but every word it has is in step.
+    profile = RP2350_DBV3
+    chunks = sample_chunks(profile, list(range(32)))
+    chunks[0] = chunks[0].replace(b"rxstall=0", b"rxstall=1")
+    board = capture_board(profile, chunks)
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz", "100000",
+         "--seconds", "0.05", "--out", str(tmp_path / "s.vgacap")]
+    )
+
+    assert code == 0
+    assert "rxstall=1" in capsys.readouterr().out
+
+
+def test_rle_refuses_frames_before_touching_the_board(monkeypatch, capsys, tmp_path):
+    # A frame's bytes depend on the picture under RLE, so --frames cannot
+    # become a byte budget.
+    board = capture_board(RP2350_DBV3, [])
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--mode", "rle",
+         "--clock-hz", "25000000", "--frames", "2", "--out", str(tmp_path / "rle.vgacap")]
+    )
+
+    assert code == 1
+    assert "--frames does not apply to --mode rle" in capsys.readouterr().err
+    assert not any(c.startswith("CFG = ") for c in board.commands)
+    assert not (tmp_path / "rle.vgacap").exists()
+
+
+def test_an_rle_oneshot_runs_with_seconds_zero_and_no_byte_limit(monkeypatch, tmp_path):
+    # The oneshot stops itself after its two buffers; no other limit needed.
+    chunks = rle_chunks(RP2350_DBV3, [(7, 3)],
+                        ["overruns=0 rxstall=0 saturated=0 sysclk_hz=150000000"])
+
+    assert _rle_capture(monkeypatch, tmp_path, chunks, "--seconds", "0", "--rle-oneshot") == 0
+    assert _rle_capture(monkeypatch, tmp_path, chunks, "--seconds", "0") == 1
+
+
+# -- a board that raised or refused ------------------------------------------
+
+#: What fpga-1 printed for `--buf-words 36000`: the heap passed the host's
+#: free-bytes check but held no 144000-byte block for a DMA buffer.
+MEMORY_ERROR = (
+    "Traceback (most recent call last):\r\n"
+    '  File "<stdin>", line 300, in <module>\r\n'
+    "MemoryError: memory allocation failed, allocating 144000 bytes\r\n"
+)
+
+
+@pytest.mark.parametrize("mode", ["stream", "rle"])
+def test_a_board_that_raised_reports_why_not_a_missing_clock(monkeypatch, capsys, tmp_path, mode):
+    board = capture_board(RP2350_DBV3, [], stderr=MEMORY_ERROR)
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--mode", mode,
+         "--clock-hz", "25000000", "--seconds", "0.05",
+         "--out", str(tmp_path / "s.vgacap")]
+    )
+
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "board error: MemoryError: memory allocation failed, allocating 144000 bytes" in err
+    assert "clock edge" not in err
+
+
+def test_a_setup_the_board_refused_is_reported_as_its_error(monkeypatch, capsys, tmp_path):
+    # No samples because the script said no, not because there was no clock.
+    msg = "error=no exact rle style: sysclk 150000000 clock 30000000 style=auto mask=1 delay=0"
+    chunks = rle_chunks(RP2350_DBV3, [], [msg])
+
+    assert _rle_capture(monkeypatch, tmp_path, chunks, "--seconds", "0.05") == 1
+
+    err = capsys.readouterr().err
+    assert "board error: " + msg in err
+    assert "clock edge" not in err
