@@ -13,10 +13,11 @@ and runs it from there, and flash is never written. A reset, a power cycle
 or `ttcap reboot --firmware picosdk` brings the board's stock firmware
 back.
 
-The hardware notes below name the boards they were measured on: `fpga-4`
-is an FPGA demo board on the shared Welland bench (see
+The [hardware notes](#hardware-notes-and-assumptions) name the boards they
+were measured on: `fpga-4` is a demo board with an FPGA breakout on the
+shared Welland bench (see
 [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)),
-and `tt09` is the ASIC demo board at Welland that carries a TT09 chip.
+and `tt09` is a demo board with an ASIC breakout (a TT09 chip) at Welland.
 `tt09` is not a `--board` slug in `python/ttcap/boards.py`, so `ttcap`
 reaches it with an explicit link (`serial:` or `ws://`) instead of
 `--board`.
@@ -75,7 +76,7 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
 * **The firmware cannot select a design.** It runs instead of the stock
   firmware, and the stock firmware is what knows the shuttle and loads FPGA
   bitstreams. So the design has to be enabled with the stock firmware
-  first and still be there after the switch. On the FPGA boards, that
+  first and still be there after the switch. With an FPGA breakout, that
   relies on the iCE40 keeping its configuration while the RP2350 resets
   into its bootloader and then into this firmware.
 * **Verified on fpga-4 (2026-11-24)**: after BOOTSEL and this firmware,
@@ -83,13 +84,11 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   pixel-exact, so the iCE40 kept its configuration (tt-vga-capture
   `docs/results/2026-11-24-picosdk-firmware-fpga4/`).
 * GPIO 1 is the iCE40's `CRESET_B` on every Tiny Tapeout FPGA breakout
-  board (and the mux
-  controller's reset on an ASIC carrier). The stock firmware leaves it
-  driven high. While the RP2350 is in reset and in its bootloader it is an
+  (and the mux controller's reset on an ASIC breakout). The stock firmware
+  leaves it driven high. While the RP2350 is in reset and in its bootloader it is an
   input with the pad's default pull-down, and this firmware leaves
-  GPIO 0/1/2 alone unless told otherwise (`asic_select`). On fpga-4 the
-  FPGA's configuration survived that anyway.
-* **ASIC boards lose their project across the switch.** On tt09
+  GPIO 0/1/2 alone unless told otherwise (`asic_select`).
+* **ASIC breakouts lose their project across the switch.** On tt09
   (2026-11-24) the stock firmware's frame capture of
   `tt_um_rejunity_vga_logo` was clean, but this firmware's, after the
   switch, saw no sync at all: the mux lines float in the bootloader, and
@@ -107,7 +106,7 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   25 MHz), which frame capture's phase-locked sampler needs.
 * Project clocks above 66.5 MHz raise the system clock to twice the
   project clock (up to 250 MHz), as the stock firmware does; like
-  MicroPython's `machine.freq` (checked at b006887db6), nothing raises the
+  MicroPython's `machine.freq`, nothing raises the
   core voltage for that. Only 100 MHz has been used on the boards so far.
 * The capture buffer is a 440 KB static array: a whole 640x480@60 picture
   region (481 lines of 800 samples) is one capture; 800x600 takes two
@@ -149,7 +148,7 @@ program could load the `.pio` files' words the same way.
 * `test_fw_core`: every command's exact reply, and the engines' exact
   chunks on the simulated board: max_bytes, overruns (cumulative), stop
   bytes, frame windows, the arena limit, chained buffers (the MicroPython
-  module's), rxstall reports, refusals.
+  module's), refusals.
 * `test_fw_sim.py`: the transport end to end against `vgacap-fw-sim`, with
   a synthetic VGA design: byte-exact streams, pixel-exact frames and
   windows through `vgacap-frames`, stops, overruns, the CLI, and the same
@@ -183,8 +182,7 @@ and the UF2 copied there. `<dev>` is the stock firmware's serial port
        sudo cp vgacap_fw.uf2 /mnt/rp2350/ && sync
        sudo umount /mnt/rp2350    # may report the drive already gone
 
-   The drive disappears and the vgacap firmware's serial port (see the USB
-   note above) appears.
+   The drive disappears and the vgacap firmware's serial port appears.
 5. Capture, e.g.
 
        FW=$(ls /dev/serial/by-id/usb-vgacap_vgacap_capture_firmware_*-if00)
