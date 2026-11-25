@@ -96,10 +96,14 @@ def _failed(what: str, exc: BaseException) -> int:
     return 1
 
 
-def link_from_url(url: str) -> ReplLink:
-    """Build a ReplLink from `serial:<port>` or `ws://...` / `wss://...`."""
+def link_from_url(url: str, write_timeout: float | None = None) -> ReplLink:
+    """Build a ReplLink from `serial:<port>` or `ws://...` / `wss://...`.
+
+    `write_timeout` bounds each serial write (None: block, the default for
+    captures); a WebSocket link ignores it.
+    """
     if url.startswith("serial:"):
-        return SerialLink(url[len("serial:") :])
+        return SerialLink(url[len("serial:") :], write_timeout=write_timeout)
     if url.startswith("ws://") or url.startswith("wss://"):
         return WebSocketLink(url)
     raise ValueError(f"unsupported link url {url!r}: expected serial:<port> or ws(s)://...")

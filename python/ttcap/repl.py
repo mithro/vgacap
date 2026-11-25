@@ -67,10 +67,14 @@ class ReplLink(Protocol):
 class SerialLink:
     """A ReplLink over a local serial device (pyserial)."""
 
-    def __init__(self, port: str, baudrate: int = 115200) -> None:
+    def __init__(self, port: str, baudrate: int = 115200,
+                 write_timeout: float | None = None) -> None:
         import serial  # local import: pyserial is an optional runtime dependency
 
-        self._serial = serial.Serial(port, baudrate=baudrate, exclusive=True, timeout=0)
+        # `write_timeout` None blocks, as captures always have; a number
+        # makes a write that cannot drain raise SerialTimeoutException.
+        self._serial = serial.Serial(port, baudrate=baudrate, exclusive=True, timeout=0,
+                                     write_timeout=write_timeout)
 
     def write(self, data: bytes) -> None:
         self._serial.write(data)

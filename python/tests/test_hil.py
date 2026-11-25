@@ -520,6 +520,7 @@ class FakeSystemd:
         argv = list(argv)
         if argv[0] == "ps":
             assert kw.get("timeout"), "ps must be bounded"
+            self.ps_calls = getattr(self, "ps_calls", 0) + 1
             if "ps" in self.raise_from:
                 raise self.raise_from.pop("ps")
         if "systemctl" not in argv:
@@ -586,7 +587,7 @@ def bridge_run(tmp_path, monkeypatch):
     monkeypatch.setattr(hil.shutil, "which", lambda _name: "/bin/systemctl")
     monkeypatch.setattr(hil.subprocess, "run", systemd)
     monkeypatch.setattr(hil, "BRIDGE_SETTLE_S", 0.0)
-    monkeypatch.setattr(ttcap.cli, "link_from_url", lambda _url: board)
+    monkeypatch.setattr(ttcap.cli, "link_from_url", lambda _url, **_kw: board)
     args = hil.build_parser().parse_args(
         [str(tmp_path / "report.md"), "--clock-hz", "500000",
          "--link", "serial:/dev/null", "--stop-bridge", "--bridge-health", url,
@@ -666,7 +667,107 @@ def test_a_stuck_or_missing_ps_cannot_keep_the_bridge_down(bridge_run, error):
     systemd.raise_from["ps"] = error
     run.cleanup()
     assert systemd.state == "active" and events[-1] == ("systemctl", "start")
-    assert any("could not check session 999999" in n for n in run.notes), run.notes
+    assert any("could not check session(s) 999999" in n for n in run.notes), run.notes
+
+
+def test_cleanup_takes_one_ps_for_every_session(bridge_run):
+    """A stuck `ps` costs PS_TIMEOUT_S once, not once a session, while
+    cleanup is deaf to signals (logind SIGKILLs a dropped ssh ~90 s on)."""
+    _hil, run, systemd, events = _stopped(bridge_run)
+    run.sessions = [999997, 999998, 999999]
+    systemd.raise_from["ps"] = subprocess.TimeoutExpired(["ps"], 30)
+    run.cleanup()
+    assert systemd.ps_calls == 1
+    assert events[-1] == ("systemctl", "start")
+    assert any("999997, 999998, 999999" in n for n in run.notes), run.notes
+
+
+def test_reap_kills_every_session_from_one_snapshot(tmp_path, bridge_run):
+    hil, run, systemd, _events = bridge_run
+    procs = [run.spawn(["sleep", "60"]) for _ in range(3)]
+    try:
+        before = getattr(systemd, "ps_calls", 0)
+        hil._reap(*run.sessions)
+        assert systemd.ps_calls - before == 1
+        for proc in procs:
+            assert proc.wait(timeout=10) == -signal.SIGKILL
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+
+@pytest.mark.parametrize("error", [subprocess.TimeoutExpired(["ps"], 30),
+                                   OSError("no ps")])
+def test_a_ps_failure_outside_cleanup_is_fatal(bridge_run, error):
+    """Raised from a check, a TimeoutExpired escaped main's handlers and
+    no report was written; a Fatal is reported."""
+    hil, _run, systemd, _events = bridge_run
+    systemd.raise_from["ps"] = error
+    with pytest.raises(hil.Fatal, match="`ps` could not list"):
+        hil._survivors(12345)
+
+
+def test_a_signal_right_after_popen_still_registers_the_session(bridge_run, monkeypatch):
+    """The signal is held until the session is on the list, then delivered;
+    the board command does not inherit an ignored SIGINT."""
+    hil, run, _systemd, _events = bridge_run
+    real_popen = subprocess.Popen
+
+    def popen(argv, **kw):
+        proc = real_popen(argv, **kw)
+        os.kill(os.getpid(), signal.SIGINT)  # lands before the append
+        return proc
+
+    monkeypatch.setattr(hil.subprocess, "Popen", popen)
+    with pytest.raises(KeyboardInterrupt):
+        run.spawn(["sleep", "30"])
+    assert len(run.sessions) == 1
+    pid = run.sessions[0]
+    try:
+        status = pathlib.Path("/proc/%d/status" % pid).read_text()
+        ignored = int(next(line.split()[1] for line in status.splitlines()
+                           if line.startswith("SigIgn:")), 16)
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            assert not ignored & (1 << (sig - 1)), (sig, hex(ignored))
+    finally:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+
+
+def test_restart_board_bounds_its_writes(bridge_run, monkeypatch):
+    """A USB CDC port that stops draining must not block cleanup."""
+    hil, run, _systemd, events = _stopped(bridge_run)
+    import ttcap.cli
+    seen = {}
+
+    def link(_url, **kw):
+        seen.update(kw)
+        return FakeBoard(events)
+
+    monkeypatch.setattr(ttcap.cli, "link_from_url", link)
+    run.cleanup()
+    assert seen == {"write_timeout": hil.RESTART_WRITE_TIMEOUT_S}
+    assert 0 < hil.RESTART_WRITE_TIMEOUT_S <= 5
+
+
+def test_a_failed_start_on_an_active_bridge_does_not_say_it_is_down(bridge_run):
+    _hil, run, systemd, _events = bridge_run
+    systemd.stop = "fails"
+    with pytest.raises(_hil.Fatal):
+        run.stop_bridge()
+    systemd.raise_from["start"] = subprocess.TimeoutExpired(["systemctl"], 120)
+    run.cleanup()
+    assert not any("still down" in n for n in run.notes), run.notes
+    assert any("but fpgas-tt is active" in n for n in run.notes), run.notes
+
+
+def test_a_failed_start_on_a_stopped_bridge_says_so(bridge_run):
+    _hil, run, systemd, _events = _stopped(bridge_run)
+    systemd.raise_from["start"] = subprocess.TimeoutExpired(["systemctl"], 120)
+    run.cleanup()
+    assert any("WARNING" in n and "still down" in n for n in run.notes), run.notes
 
 
 def test_a_cleanup_cut_short_before_the_start_is_retried_in_full(bridge_run):
@@ -763,7 +864,7 @@ def test_the_bridge_starts_when_the_restart_raises(bridge_run, monkeypatch):
 
     _hil, run, systemd, events = _stopped(bridge_run)
 
-    def no_link(_url):
+    def no_link(_url, **_kw):
         raise OSError("could not open port /dev/null")
 
     monkeypatch.setattr(ttcap.cli, "link_from_url", no_link)
@@ -816,7 +917,7 @@ def test_a_signal_during_cleanup_does_not_stop_it(bridge_run, monkeypatch, sig):
 
     board.write = write
     import ttcap.cli
-    monkeypatch.setattr(ttcap.cli, "link_from_url", lambda _url: board)
+    monkeypatch.setattr(ttcap.cli, "link_from_url", lambda _url, **_kw: board)
     # As main() has it: the stop signals raise Interrupted.
     saved = {s: signal.getsignal(s) for s in hil.STOP_SIGNALS}
     for s in hil.STOP_SIGNALS:

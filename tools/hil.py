@@ -136,6 +136,28 @@ def signals_ignored():
             signal.signal(sig, handler)
 
 
+@contextlib.contextmanager
+def signals_deferred():
+    """SIGINT and every stop signal held until the block ends, then
+    delivered to whatever handled them before.
+
+    Unlike signals_ignored(), nothing is lost, and a child started inside
+    the block does not inherit an ignored disposition (exec resets a
+    caught signal to its default; an ignored one stays ignored).
+    """
+    pending: list[int] = []
+    saved = {}
+    try:
+        for sig in (signal.SIGINT, *STOP_SIGNALS):
+            saved[sig] = signal.signal(sig, lambda signum, _f: pending.append(signum))
+        yield
+    finally:
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
+        for sig in dict.fromkeys(pending):
+            os.kill(os.getpid(), sig)
+
+
 #: How long `--stop-bridge` waits between its two reads of the bridge's
 #: client count. A count of 0 read once can be a visitor between two
 #: connections; it has to stay 0 across this wait as well.
@@ -193,9 +215,33 @@ def _tail(text: str, lines: int = 12) -> str:
     return "\n".join(kept)
 
 
+#: How long one write to the board may block while restarting it.
+RESTART_WRITE_TIMEOUT_S = 2.0
+
 #: `ps` is local and quick; one that takes longer than this is stuck, and
 #: cleanup -- deaf to signals -- must not wait on it for ever.
 PS_TIMEOUT_S = 30.0
+
+
+def _sessions_now() -> dict[str, list[str]]:
+    """Every live process as `pid args`, by session id: one `ps`.
+
+    A `ps` that fails or outlives PS_TIMEOUT_S is a Fatal, so a run that
+    meets one is still reported.
+    """
+    try:
+        proc = subprocess.run(["ps", "-eo", "pid=,sid=,args="],
+                              capture_output=True, text=True, check=False,
+                              timeout=PS_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise Fatal("`ps` could not list this host's processes (%s: %s)"
+                    % (type(exc).__name__, exc)) from None
+    table: dict[str, list[str]] = {}
+    for line in proc.stdout.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) == 3:
+            table.setdefault(fields[1], []).append("%s %s" % (fields[0], fields[2]))
+    return table
 
 
 def _survivors(sid: int) -> list[str]:
@@ -206,24 +252,19 @@ def _survivors(sid: int) -> list[str]:
     the group of the process we spawned does not contain the grandchild that
     actually holds the board. The session does.
     """
-    proc = subprocess.run(["ps", "-eo", "pid=,sid=,args="],
-                          capture_output=True, text=True, check=False,
-                          timeout=PS_TIMEOUT_S)
-    found = []
-    for line in proc.stdout.splitlines():
-        fields = line.split(None, 2)
-        if len(fields) == 3 and fields[1] == str(sid):
-            found.append("%s %s" % (fields[0], fields[2]))
-    return found
+    return _sessions_now().get(str(sid), [])
 
 
-def _reap(sid: int) -> None:
-    """Leave nothing of session `sid` running. Belt and braces: this runs
-    even when the command we spawned exited cleanly, because the whole point
-    of the orphan check is that a clean exit is not proof."""
-    for entry in _survivors(sid):
-        with contextlib.suppress(ValueError, ProcessLookupError, PermissionError):
-            os.kill(int(entry.split()[0]), signal.SIGKILL)
+def _reap(*sids: int) -> None:
+    """Leave nothing of sessions `sids` running, from one `ps` snapshot.
+    Belt and braces: this runs even when the command we spawned exited
+    cleanly, because the whole point of the orphan check is that a clean
+    exit is not proof."""
+    table = _sessions_now()
+    for sid in sids:
+        for entry in table.get(str(sid), []):
+            with contextlib.suppress(ValueError, ProcessLookupError, PermissionError):
+                os.kill(int(entry.split()[0]), signal.SIGKILL)
 
 
 # -------------------------------------------------------------------- the run
@@ -295,10 +336,14 @@ class Hil:
                    time.monotonic() - started)
 
     def spawn(self, argv: list[str]) -> subprocess.Popen:
-        proc = subprocess.Popen(
-            [str(a) for a in argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, start_new_session=True, env=self.env(), cwd=ROOT)
-        self.sessions.append(proc.pid)
+        # Deferred, not ignored: a signal between Popen returning and the
+        # append would otherwise leave a session cleanup never reaps, and
+        # the board command must not inherit an ignored SIGTERM.
+        with signals_deferred():
+            proc = subprocess.Popen(
+                [str(a) for a in argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, start_new_session=True, env=self.env(), cwd=ROOT)
+            self.sessions.append(proc.pid)
         return proc
 
     def env(self) -> dict:
@@ -715,11 +760,18 @@ class Hil:
             code, why = -1, str(exc)
         else:
             why = "exit %d" % code
-        if code != 0:
+        if code == 0:
+            return
+        state = bridge_state()
+        if state == "active":
+            # After a stop that never took effect: the start had nothing to do.
+            self.notes.append("`sudo systemctl start fpgas-tt` failed (%s), but "
+                              "fpgas-tt is active." % why)
+        else:
             self.notes.append(
                 "WARNING: `sudo systemctl start fpgas-tt` failed (%s) -- the "
-                "bridge is still down and the next user of this board will "
-                "find it so." % why)
+                "bridge is %s and the next user of this board will find it "
+                "so." % (why, "still down" if state == "inactive" else state))
 
     def restart_board(self) -> None:
         """Ctrl-B, Ctrl-D on the run's own serial link (see restart_sdk)."""
@@ -728,7 +780,9 @@ class Hil:
         from ttcap.cli import link_from_url
         from ttcap.repl import restart_sdk
         try:
-            link = link_from_url(self.args.link)
+            # A write timeout: a USB CDC port that stops draining must not
+            # block cleanup before `systemctl start`.
+            link = link_from_url(self.args.link, write_timeout=RESTART_WRITE_TIMEOUT_S)
             try:
                 ok, _text = restart_sdk(link)
             finally:
@@ -796,13 +850,17 @@ class Hil:
         """
         with signals_ignored():
             try:
-                for sid in self.sessions:
+                # One `ps` for every session: a stuck one costs PS_TIMEOUT_S
+                # once, not once a session, while this is deaf to signals.
+                if self.sessions:
                     try:
-                        _reap(sid)
-                    except Exception as exc:  # noqa: BLE001 - reported, then the rest
+                        _reap(*self.sessions)
+                    except Exception as exc:  # noqa: BLE001 - reported, then the bridge
                         self.notes.append(
-                            "WARNING: could not check session %d for leftover "
-                            "board commands (%s: %s)." % (sid, type(exc).__name__, exc))
+                            "WARNING: could not check session(s) %s for leftover "
+                            "board commands (%s: %s)."
+                            % (", ".join(map(str, self.sessions)),
+                               type(exc).__name__, exc))
             finally:
                 self.restore_bridge()
 
