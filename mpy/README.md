@@ -70,8 +70,8 @@ bytes; `MemoryError` if they do not fit).
 [`frame_rp2.py`](../python/ttcap/mp/frame_rp2.py) plans them: the whole window in one block if the heap has
 one, else blocks of 64, 16, 4 and 1 lines, biggest first, at most 128
 blocks, with 4 KB held back while planning. The capture's DMA walks the
-blocks in order through control blocks (as `frame_rp2.py` does; see
-`firmware/pico/hal_rp2.c`), so even a fragmented heap gives one captured
+blocks in order through control blocks (as [`frame_rp2.py`](../python/ttcap/mp/frame_rp2.py) does; see
+[`firmware/pico/hal_rp2.c`](../firmware/pico/hal_rp2.c)), so even a fragmented heap gives one captured
 frame the whole region. On `fpga-1`, a demo board with an FPGA breakout
 on the [Welland bench](../python/ttcap/README.md#reaching-a-welland-board) whose largest free block held 188 lines, all 481
 lines of 640x480 fitted in 46 blocks. Only a heap with less free memory in total
@@ -114,28 +114,31 @@ command layer, so it neither offers nor needs them.
 
 ## Building
 
-For the demo board, build MicroPython's rp2 port (RP2350B) with the
-board definition
-[`psychogenic/tinytapeout_rp2350b`](https://github.com/psychogenic/tinytapeout_rp2350b)
-in `micropython/ports/rp2/boards/tt_rp2350_board`, as the `mpy-module` job
-in [`ci.yml`](../.github/workflows/ci.yml) does:
+The steps follow the `mpy-module` job in
+[`ci.yml`](../.github/workflows/ci.yml). `mpy/build-unix.sh` clones
+MicroPython into `build/micropython` and pins it, then builds the unix port
+with the module on the simulated board ([`firmware/sim`](../firmware/sim/))
+for the tests:
 
-    git clone https://github.com/psychogenic/tinytapeout_rp2350b.git tt_rp2350_board
-    git -C tt_rp2350_board checkout 596f456
-    cp -r tt_rp2350_board micropython/ports/rp2/boards/tt_rp2350_board
-    make -C micropython/ports/rp2 BOARD=tt_rp2350_board submodules
-    make -C micropython/ports/rp2 BOARD=tt_rp2350_board \
-        USER_C_MODULES=<vgacap>/mpy/micropython.cmake
+    cmake -S . -B build && cmake --build build -j
+    mpy/build-unix.sh                       # -> build/mpy-unix/micropython
+    uv run pytest -q python/tests/test_mpy_module.py
+
+For the demo board, build the rp2 port (RP2350B) in that checkout, with
+the board definition
+[`psychogenic/tinytapeout_rp2350b`](https://github.com/psychogenic/tinytapeout_rp2350b)
+in `build/micropython/ports/rp2/boards/tt_rp2350_board`:
+
+    git clone -q https://github.com/psychogenic/tinytapeout_rp2350b.git build/tt_rp2350_board
+    git -C build/tt_rp2350_board checkout -q 596f456
+    cp -r build/tt_rp2350_board build/micropython/ports/rp2/boards/tt_rp2350_board
+    make -C build/micropython/ports/rp2 BOARD=tt_rp2350_board submodules
+    make -C build/micropython/ports/rp2 -j"$(nproc)" BOARD=tt_rp2350_board \
+        USER_C_MODULES="$PWD/mpy/micropython.cmake"
 
 The [release workflow](https://github.com/mithro/tt-micropython-firmware/blob/vgacap-module/.github/workflows/release.yml)
-does this. Our sources build with `-Wall -Wextra -Werror` (less
+does the same. Our sources build with `-Wall -Wextra -Werror` (less
 `-Wunused-parameter`, which MicroPython's own headers trip).
-
-For the tests, build MicroPython's unix port with the module running on the
-simulated board ([`firmware/sim`](../firmware/sim/)):
-
-    mpy/build-unix.sh [MICROPYTHON_DIR]     # -> build/mpy-unix/micropython
-    cd python && uv run pytest -q tests/test_mpy_module.py
 
 Both pin MicroPython to [b006887db6](https://github.com/micropython/micropython/commit/b006887db6) (1.29.0-preview), what fpga-1 and fpga-4
 run. The unix build adds `vgacap.sim_board(path, *, bytes_per_s, rxstall)`,
