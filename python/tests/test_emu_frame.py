@@ -227,15 +227,16 @@ def test_the_measured_default_sample_point_is_exact(tmp_path, bars_uo):
 
 
 @pytest.mark.parametrize("clock_hz,pwm", [
-    # 133 MHz / 25 MHz is 5.32: MicroPython's PWM gets there with TOP 4 and
-    # a fractional DIV of 17/16, which would drift past the sampler.
-    (25_000_000, (1, 0x11, 4)),
+    # What MicroPython's PWM makes for 25 MHz at 133 MHz: DIV 1, TOP 4 --
+    # a whole 5 clocks, but 26.6 MHz, 6.4% from what the header says.
+    (25_000_000, (1, 0x10, 4)),
+    (133_000_000 // 5, (1, 0x11, 4)),  # a fractional divider would drift
     (133_000_000 // 40, (1, 0x10, 39)),  # 40 clocks: past the delay field
     (133_000_000, (1, 0x10, 0)),  # 1 clock
     (133_000_000 // 5, (0x11, 0x10, 4)),  # whole, but DIVMODE gated by pin B
     (133_000_000 // 5, (0, 0x10, 4)),  # whole, but the slice is off
     (20_000_000, (1, 0x10, 4)),  # whole, but not the clock that was asked for
-], ids=["fractional", "40", "1", "divmode", "off", "not-asked"])
+], ids=["25MHz", "fractional", "40", "1", "divmode", "off", "not-asked"])
 def test_a_clock_the_sampler_cannot_lock_to_is_refused(bars_uo, clock_hz, pwm):
     # The check reads the clock pin's PWM slice: what was actually made,
     # not what was asked for. Each is refused with a reason.
