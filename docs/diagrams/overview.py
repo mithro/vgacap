@@ -19,7 +19,8 @@ import re
 from xml.sax.saxutils import escape
 
 HERE = pathlib.Path(__file__).resolve().parent
-W, H = 1154, 1042
+MARGIN = 16
+W, H = 2 * MARGIN + 4 * 232 + 3 * 22, 1032  # four columns (COL_W, GAP below); H ends below the legend
 INK, INK2, MUTED = "#1d2433", "#2b3445", "#5b6577"
 SIG, SIG_FILL, SIG_EDGE = "#1c64d4", "#eaf1fd", "#9dbcef"
 STR, STR_FILL, STR_EDGE = "#f2620c", "#fff2e8", "#f8b48a"
@@ -172,7 +173,7 @@ add(f'<rect x="0" y="0" width="{W}" height="{H}" fill="#ffffff"/>')
 # ---- geometry: data flows down the page ----------------------------------------------
 # Columns: Raspberry Pi 5 | the demo board (two columns wide) | simulator.
 COL_W, GAP = 232, 22
-PI_X = 150
+PI_X = MARGIN
 BOARD_X, BOARD_W = PI_X + COL_W + GAP, 2 * COL_W + GAP
 SIM_X = BOARD_X + BOARD_W + GAP
 LEFT, RIGHT = PI_X, SIM_X + COL_W
