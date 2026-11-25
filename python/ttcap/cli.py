@@ -15,7 +15,8 @@ Subcommands:
   video file, a window and a browser-viewable MJPEG stream (`ttcap.demo`).
 
 Exit codes: 0 success, 1 a board, link or tool error (including a capture
-that ended through `CaptureStats.error`/`timed_out`), 2 a usage error
+that ended through `CaptureStats.error`/`timed_out`, and an `--mode rle`
+capture whose board reported an RX stall), 2 a usage error
 (argparse's own), 3 a capture that produced no samples at all -- the one
 failure worth telling apart, because it means the sampler never saw a clock
 edge.
@@ -951,6 +952,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             # left to say is why it stopped.
             return _failed("capture", exc)
         if stats.error or stats.timed_out:
+            return 1
+        if args.mode == "rle" and stats.rxstall:
+            # A lost word puts every later pair out of step, so the board
+            # stopped there (rle_rp2.py, RX STALLS ARE FATAL): what was
+            # written is good, but the capture did not finish.
+            print(
+                "rx stall: the RX FIFO overflowed and the RLE capture stopped there",
+                file=sys.stderr,
+            )
             return 1
         if stats.samples == 0:
             print(

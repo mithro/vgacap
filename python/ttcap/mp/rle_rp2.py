@@ -73,9 +73,14 @@ streaming clock with a fractional divider needs. "auto" takes locked when
 the ratio is exactly whole (sysclk == P * clock_hz: 0.4% off drifts a
 sample every 250 clocks) and in range, edge otherwise.
 
-A push to a full RX FIFO is `noblock`: the word is dropped but the phase
-is kept, and FDEBUG.RXSTALL is set (RP2040 datasheet, FDEBUG), which the
-summary reports -- a nonzero rxstall means the stream is wrong.
+RX STALLS ARE FATAL. A `push noblock` to a full RX FIFO drops the word,
+a value or a run, which puts every later pair out of step; and the next
+value's autopush stalls the state machine anyway, so the locked phase is
+lost too. Either sets FDEBUG.RXSTALL (RP2040 datasheet, FDEBUG). So the
+main loop polls it, and at the first stall sends an `error=rxstall` TIME
+chunk instead of the buffer it may have hit and stops; every chunk before
+it was complete, and checked, before it was sent. The summary's rxstall=1
+makes `ttcap capture --mode rle` exit non-zero.
 
 DMA, overruns, the cooperative stop and the hard-IRQ rules are
 capture_rp2.py's, repeated here rather than shared so that neither script
@@ -123,8 +128,8 @@ def make_rle(clk_gpio, clk_act, delay, period, masked, in_count, locked):
     # lengths (cycles from S to the next S, without padding): equal 5,
     # change 6, saturation 6, entry 4 -- one more each when not masked.
     pad_long = period - 7 + masked if locked else 0
-    pad_eq = pad_long + 1 if locked else 0
-    pad_entry = pad_long + 2 if locked else 0
+    pad_eq = pad_long + locked  # `locked` is a bool: + 1 or + 0
+    pad_entry = pad_long + 2 * locked
 
     # Both run inside rle() while asm_pio has swapped the globals, so
     # the mnemonics resolve there, as rle()'s own do.
@@ -192,8 +197,7 @@ def fix_runs(buf, words: int) -> int:
 def write_rle_chunk(out, buf, pairs):
     """Emit one `RLE ` chunk of the first `pairs` pairs of `buf`."""
     head = b"RLE " + _le32(4 + 8 * pairs) + _le32(pairs)  # noqa: F821 - prelude
-    sent = _write_all(out, head)  # noqa: F821
-    return sent + _write_all(out, memoryview(buf)[: 8 * pairs])  # noqa: F821
+    return _write_all(out, head) + _write_all(out, memoryview(buf)[: 8 * pairs])  # noqa: F821
 
 
 def write_pairs(out, buf):
@@ -203,7 +207,7 @@ def write_pairs(out, buf):
     start = 0
     for pair in range(PAIRS_PER_BUF):
         at = 8 * pair
-        if buf[at + 4] or buf[at + 5] or buf[at + 6] or buf[at + 7]:
+        if any(buf[at + 4 : at + 8]):
             continue
         if pair > start:
             sent += write_rle_chunk(out, view[8 * start :], pair - start)
@@ -251,8 +255,7 @@ def choose(sysclk, masked):
     period = (sysclk + CLOCK_HZ // 2) // CLOCK_HZ
     # Exactly whole, or the padded loop drifts against the clock.
     whole = sysclk == period * CLOCK_HZ
-    lo = LOCKED_MIN_PERIOD[masked]
-    if STYLE != "edge" and whole and lo <= period <= LOCKED_MAX_PERIOD:
+    if STYLE != "edge" and whole and LOCKED_MIN_PERIOD[masked] <= period <= LOCKED_MAX_PERIOD:
         return True, period
     if STYLE == "locked":
         return None
@@ -267,9 +270,8 @@ def choose(sysclk, masked):
 def main(out):
     """Run the RLE program, streaming RLE chunks to `out` until stopped."""
     sysclk = machine.freq()  # noqa: F821
-    masked = MASK
-    if masked < 0:
-        masked = 1 if hasattr(rp2.PIO, "gpio_base") else 0  # noqa: F821 - RP2350 only
+    # -1: the masked form wherever IN_COUNT exists, i.e. on an RP2350.
+    masked = MASK if MASK >= 0 else int(hasattr(rp2.PIO, "gpio_base"))  # noqa: F821
     picked = choose(sysclk, masked)
     if picked is None:
         msg = "error=no exact rle style for sysclk %d clock %d style=%s mask=%d delay=%d"
@@ -289,7 +291,7 @@ def main(out):
         # it through the atomic SET alias and read it back.
         MEM[SHIFTCTRL_SET] = IN_COUNT  # noqa: F821
         if MEM[SHIFTCTRL_SET - 0x2000] & 0x1F != IN_COUNT:  # noqa: F821
-            write_time_chunk(out, 0, b"error=SHIFTCTRL.IN_COUNT did not take")  # noqa: F821
+            write_time_chunk(out, 0, b"error=SHIFTCTRL.IN_COUNT not set")  # noqa: F821
             return
 
     global WR_A, WR_B, TC_A, TC_B, ADDR_A, ADDR_B
@@ -297,11 +299,7 @@ def main(out):
     bufs = [bytearray(BUF_BYTES), bytearray(BUF_BYTES)]
     FULL[0] = FULL[1] = TORN[0] = TORN[1] = False
     OVERRUNS[0] = 0
-    dma_a = None
-    dma_b = None
-    dma_s = None
-    poller = None
-    stdin = None
+    dma_a = dma_b = dma_s = poller = stdin = None
     saturated = 0
 
     try:
@@ -344,7 +342,7 @@ def main(out):
         dma_b.irq(on_b, hard=True)
 
         MEM[FDEBUG_ADDR] = RXSTALL_BIT  # noqa: F821
-        report = "rle style=%s period=%d mask=%d" % ("locked" if locked else "edge", period, masked)
+        report = "rle style=%s period=%d mask=%d" % (("edge", "locked")[locked], period, masked)
         sent = write_time_chunk(out, 0, report.encode())  # noqa: F821
         dma_a.active(1)
         sm.active(1)
@@ -352,11 +350,14 @@ def main(out):
         index = 0
         stopping = False
         while True:
-            while not FULL[index]:
+            while not FULL[index] and not MEM[FDEBUG_ADDR] & RXSTALL_BIT:  # noqa: F821
                 if stop_requested(poller, stdin):  # noqa: F821
                     stopping = True
                     break
                 machine.idle()  # noqa: F821
+            if MEM[FDEBUG_ADDR] & RXSTALL_BIT:  # noqa: F821 - see RX STALLS
+                write_time_chunk(out, OVERRUNS[0] * PAIRS_PER_BUF, b"error=rxstall")  # noqa: F821
+                break
             if stopping:
                 break
             buf = bufs[index]
@@ -400,11 +401,7 @@ def main(out):
         if hasattr(out, "flush"):
             out.flush()
         del bufs
-        dma_a = None
-        dma_b = None
-        dma_s = None
-        poller = None
-        stdin = None
+        dma_a = dma_b = dma_s = poller = stdin = None
         gc.collect()  # noqa: F821
         micropython.kbd_intr(3)  # noqa: F821
 

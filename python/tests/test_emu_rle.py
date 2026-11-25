@@ -254,6 +254,28 @@ def test_a_counting_capture_that_keeps_up_damages_and_reports_nothing():
     assert messages(stream)[-1].startswith("overruns=0 rxstall=0 ")
 
 
+def _unchained(script: str) -> str:
+    # Channel A chains to itself: after the first buffer nothing drains
+    # the RX FIFO, which fills and stalls the state machine.
+    old = "(dma_a, bufs[0], dma_b.channel)"
+    assert old in script
+    return script.replace(old, "(dma_a, bufs[0], dma_a.channel)")
+
+
+def test_an_rx_stall_stops_the_capture_with_an_error():
+    # A dropped run word would put every later pair out of step, so the
+    # first stall ends the run: nothing after it is sent, and the board
+    # stops by itself (no stop_bytes) rather than wait for a buffer.
+    stream = counting_capture(stop_bytes=None, patch=_unchained)
+
+    msgs = messages(stream)
+    assert msgs[-2].startswith("error=rxstall")
+    assert msgs[-1].startswith("overruns=0 rxstall=1 ")
+    tags = [t for t, _ in read_chunks(stream)]
+    assert tags[-2:] == ["TIME", "TIME"]
+    assert not any(d for d, _ in damaged_and_reported(stream))
+
+
 @pytest.mark.parametrize("oneshot", [False, True], ids=["stream", "oneshot"])
 def test_a_stopped_rle_capture_leaves_no_dma_channel_running(bars_uo, oneshot):
     # A and B chain to each other, so on RP2350 aborting one re-triggers

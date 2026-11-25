@@ -546,3 +546,73 @@ def test_a_bad_sample_delay_is_refused_before_the_board_is_touched(monkeypatch, 
 
     assert "sample_delay" in capsys.readouterr().err
     assert not any(c.startswith("tt.") or "RPMode" in c for c in board.commands)
+
+
+# -- --mode rle -----------------------------------------------------------
+
+
+def rle_chunks(profile, pairs, summary) -> list[bytes]:
+    """One RLE chunk of `pairs` and the closing TIME chunks, as rle_rp2.py
+    sends them."""
+    buf = io.BytesIO()
+    writer = Writer(
+        buf,
+        Header(
+            version=1,
+            sample_bits=profile.sample_bits,
+            mode=0,
+            clock_hz=0,
+            signal_map=profile.signal_map,
+            samples_per_word=profile.samples_per_word,
+            flags=profile.flags,
+        ),
+    )
+    mark = buf.tell()
+    writer.rle(pairs)
+    for message in summary:
+        writer.time(0, 0, 0, message)
+    return [buf.getvalue()[mark:]]
+
+
+def _rle_capture(monkeypatch, tmp_path, chunks, *extra) -> int:
+    board = capture_board(RP2350_DBV3, chunks)
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+    return cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--mode", "rle",
+         "--clock-hz", "25000000", "--out", str(tmp_path / "rle.vgacap"), *extra]
+    )
+
+
+def test_an_rle_capture_with_an_rx_stall_exits_one(monkeypatch, capsys, tmp_path):
+    # A lost run word puts every later pair out of step: the board stops
+    # with an error chunk, and the run is a failure even though what was
+    # written before the stall is good.
+    chunks = rle_chunks(RP2350_DBV3, [(7, 3), (9, 4)],
+                        ["error=rxstall", "overruns=0 rxstall=1 saturated=0 sysclk_hz=150000000"])
+
+    assert _rle_capture(monkeypatch, tmp_path, chunks, "--max-bytes", "65536") == 1
+
+    captured = capsys.readouterr()
+    assert "rxstall=1" in captured.out
+    assert "rx stall" in captured.err
+    _, items = read_stream((tmp_path / "rle.vgacap").read_bytes())
+    assert [tuple(i[1:]) for i in items if i[0] == "run"] == [(7, 3), (9, 4)]
+
+
+def test_a_stream_capture_with_an_rx_stall_still_exits_zero(monkeypatch, capsys, tmp_path):
+    # Only RLE makes the stall fatal; a RAW stream with a stall is short of
+    # samples, but every word it has is in step.
+    profile = RP2350_DBV3
+    chunks = sample_chunks(profile, list(range(32)))
+    chunks[0] = chunks[0].replace(b"rxstall=0", b"rxstall=1")
+    board = capture_board(profile, chunks)
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+
+    code = cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz", "100000",
+         "--seconds", "0.05", "--out", str(tmp_path / "s.vgacap")]
+    )
+
+    assert code == 0
+    assert "rxstall=1" in capsys.readouterr().out
+
