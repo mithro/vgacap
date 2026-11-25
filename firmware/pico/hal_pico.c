@@ -201,6 +201,7 @@ static struct {
     uint32_t *buf[2];
     uint32_t words;
     volatile int full[2];
+    volatile int torn[2];
     volatile uint32_t overruns;
     volatile int frame_done;
     uint32_t stop_word;
@@ -217,7 +218,12 @@ static void __isr dma_irq(void) {
             // chain restarts this channel as soon as the partner completes.
             dma_channel_set_write_addr((uint)D.ch[i], D.buf[i], false);
             dma_channel_set_trans_count((uint)D.ch[i], D.words, false);
-            if (D.full[i]) D.overruns++;
+            // This completion has just started the partner on its buffer
+            // (fw_hal.h hal_stream_full; capture_rp2.py on_a/on_b).
+            if (D.full[1 - i]) {
+                D.overruns++;
+                D.torn[1 - i] = 1;
+            }
             D.full[i] = 1;
         }
     } else if (D.mode == MODE_FRAME) {
@@ -266,6 +272,7 @@ int hal_stream_start(const fw_pio_program_t *prog, unsigned pio, unsigned sm, ui
     D.buf[1] = buf1;
     D.words = buf_words;
     D.full[0] = D.full[1] = 0;
+    D.torn[0] = D.torn[1] = 0;
     D.overruns = 0;
     const uint dreq = pio_get_dreq(P.pio, P.sm, false);
     for (int i = 0; i < 2; i++) {
@@ -289,6 +296,11 @@ int hal_stream_start(const fw_pio_program_t *prog, unsigned pio, unsigned sm, ui
 
 int hal_stream_full(int i) { return D.full[i]; }
 void hal_stream_release(int i) { D.full[i] = 0; }
+int hal_stream_take_torn(int i) {
+    int torn = D.torn[i];
+    D.torn[i] = 0;  // no handler sets it while buffer i is not full
+    return torn;
+}
 uint32_t hal_stream_overruns(void) { return D.overruns; }
 
 void hal_stream_stop(uint32_t *overruns, int *rxstall) {

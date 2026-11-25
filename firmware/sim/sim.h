@@ -36,6 +36,9 @@ typedef struct sim_config {
     size_t uo_len;
     double seconds_per_byte;  // USB cost of each byte sent to the host
     size_t arena_bytes;       // the capture buffer (the firmware's is ~440 KB)
+    // A host that stops reading once: the first write at or after
+    // `stall_at` seconds waits `stall_seconds` first (0: never).
+    double stall_at, stall_seconds;
 } sim_config_t;
 
 // (Re)start the simulated board: boot state, time 0, empty I/O.

@@ -242,6 +242,112 @@ TEST(stream_overruns_are_cumulative) {
     ASSERT_TRUE(last_dropped > 0);
 }
 
+// Whether a RAW chunk's samples are consecutive clocks of the ramp() design
+// (uo[i] = 7i + 3 is a bijection on 0..255, so each value names its clock).
+static int raw_is_contiguous(void) {
+    uint32_t n = u32_at(payload);
+    uint8_t first = payload[4 + 3];
+    size_t at = 0;
+    while (uo[at] != first) at++;
+    for (uint32_t s = 0; s < n; s++) {
+        if (payload[4 + 4 * (s / 4) + (3 - s % 4)] != uo[(at + s) % 256]) return 0;
+    }
+    return 1;
+}
+
+// The DMA starts rewriting a buffer as soon as the other one fills, so a
+// slow send of buffer 0 is overtaken part way through: its chunk goes out
+// mixed. That is the overrun (counted as the fill starts, not when it
+// completes), and the `overrun` TIME follows that very chunk. Ground
+// truth: every RAW chunk that is not contiguous is followed straight away
+// by its report, and the first one here is.
+TEST(stream_a_chunk_torn_mid_send_is_reported_after_it) {
+    ramp(256);
+    // 2 ms per 76-byte chunk, a buffer of 64 samples fills in 0.64 ms:
+    // buffer 0 is full at 0.64 ms and sent until 2.64 ms; the fill after
+    // buffer 1 rewrites it from 1.28 ms at a word per 40 us, faster than
+    // the send reads it (a word per 105 us), so it overtakes the send.
+    boot(256, 2e-3 / 76.0);
+    pos = 0;
+    send_at("clock hz=100000\nstream buf_words=16 max_bytes=600 edge=falling pio=1 sm=0\n", 0);
+    run();
+    line();
+    ASSERT_TRUE(streq(line(), "ok stream"));
+    ASSERT_TRUE(streq(chunk(), "RAW "));
+    ASSERT_TRUE(!raw_is_contiguous());
+    ASSERT_TRUE(streq(chunk(), "TIME"));
+    ASSERT_TRUE(streq(time_msg(), "overrun"));
+    // Cumulative: the fills that overran during that slow send, so far.
+    uint32_t last_dropped = u32_at(payload + 12);
+    ASSERT_TRUE(last_dropped >= 64 && last_dropped % 64 == 0);
+    uint32_t raws = 1, torn = 1, reports = 1;
+    const char *tag;
+    while (!strcmp(tag = chunk(), "RAW ")) {
+        raws++;
+        int contiguous = raw_is_contiguous();
+        tag = chunk();
+        if (!strcmp(tag, "TIME") && !strcmp(time_msg(), "overrun")) {
+            reports++;
+            ASSERT_TRUE(u32_at(payload + 12) >= last_dropped);
+            last_dropped = u32_at(payload + 12);
+        } else {
+            ASSERT_TRUE(contiguous);  // a torn chunk without its report
+            pos -= 8u + paylen;       // not ours: read it again above
+        }
+        if (!contiguous) torn++;
+    }
+    // The summary: a buffer torn but never sent before max_bytes is counted
+    // there too.
+    ASSERT_TRUE(streq(tag, "TIME"));
+    uint32_t total = u32_at(payload + 12);
+    ASSERT_TRUE(total >= last_dropped);
+    char want[96];
+    snprintf(want, sizeof want, "overruns=%u rxstall=0 sysclk_hz=133000000", total / 64);
+    ASSERT_TRUE(streq(time_msg(), want));
+    ASSERT_TRUE(raws >= 4);
+    ASSERT_TRUE(torn >= 2);
+    ASSERT_TRUE(reports >= torn);
+}
+
+// The case counting at completion misses: the host stops reading in the
+// middle of buffer 0's chunk, the next fill of buffer 0 overtakes the send
+// and the send then finishes, releasing the buffer, before that fill
+// completes. The overrun is counted as the fill starts, so the mixed chunk
+// is still followed by its report; nothing else is torn or reported.
+TEST(stream_a_host_stall_mid_chunk_is_reported) {
+    ramp(256);
+    // A 1 MB/s link: the stream starts at ~0.07 ms, buffer 0 is full at
+    // ~0.71 ms and its send reaches word 8 at ~0.75 ms, where the host
+    // stops reading for 1 ms. Buffer 0's next fill runs from ~1.35 ms to
+    // ~1.99 ms, a word per 40 us, so by ~1.75 ms it has rewritten words
+    // 0..10; the send finishes at ~1.78 ms, before that fill completes.
+    sim_config_t cfg = { .uo = uo, .uo_len = 256, .seconds_per_byte = 1e-6, .arena_bytes = 0,
+                         .stall_at = 0.74e-3, .stall_seconds = 1e-3 };
+    sim_init(&cfg);
+    sim_io_memory();
+    fw_init();
+    pos = 0;
+    send_at("clock hz=100000\nstream buf_words=16 max_bytes=600 edge=falling pio=1 sm=0\n", 0);
+    run();
+    line();
+    ASSERT_TRUE(streq(line(), "ok stream"));
+    ASSERT_TRUE(streq(chunk(), "RAW "));
+    ASSERT_TRUE(!raw_is_contiguous());
+    ASSERT_TRUE(streq(chunk(), "TIME"));
+    ASSERT_TRUE(streq(time_msg(), "overrun"));
+    ASSERT_EQ_U(u32_at(payload + 12), 64);
+    uint32_t raws = 1;
+    const char *tag;
+    while (!strcmp(tag = chunk(), "RAW ")) {
+        raws++;
+        ASSERT_TRUE(raw_is_contiguous());
+    }
+    ASSERT_TRUE(raws >= 4);
+    ASSERT_TRUE(streq(tag, "TIME"));
+    ASSERT_TRUE(streq(time_msg(), "overruns=1 rxstall=0 sysclk_hz=133000000"));
+    ASSERT_EQ_U(u32_at(payload + 12), 64);
+}
+
 // The stop byte is noticed between chunks, never inside one, and the
 // trailer still follows.
 TEST(stream_stops_on_the_stop_byte) {
@@ -448,6 +554,8 @@ int main(void) {
     RUN(stream_rejects_a_buffer_the_arena_cannot_hold_twice);
     RUN(stream_to_max_bytes);
     RUN(stream_overruns_are_cumulative);
+    RUN(stream_a_chunk_torn_mid_send_is_reported_after_it);
+    RUN(stream_a_host_stall_mid_chunk_is_reported);
     RUN(stream_stops_on_the_stop_byte);
     RUN(frame_whole_region_measures_polarity);
     RUN(frame_windows_sweep_the_region);

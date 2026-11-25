@@ -130,7 +130,8 @@ program could load the `.pio` files' words the same way.
   the stock firmware was measured to pick on fpga-4 (25 MHz -> 100 MHz,
   36 MHz -> 72 MHz, 28.322 MHz -> 113 MHz = 28.25 MHz, ...); the PIO words.
 * `test_fw_core`: every command's exact reply, and the engines' exact
-  chunks on the simulated board: max_bytes, overruns (cumulative), stop
+  chunks on the simulated board: max_bytes, overruns (cumulative, and a
+  chunk torn while it is being sent reported straight after it), stop
   bytes, frame windows, the arena limit, rxstall reports, refusals.
 * `test_fw_sim.py`: the transport end to end against `vgacap-fw-sim`, with
   a synthetic VGA design: byte-exact streams, pixel-exact frames and

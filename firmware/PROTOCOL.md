@@ -67,10 +67,15 @@ idle firmware ignores it, and the empty line ends any half-sent command.
 Continuous capture, `python/ttcap/mp/capture_rp2.py`'s semantics: one sample
 of `uo_out` on every chosen edge of the project clock, into two DMA
 buffers of `buf_words` 32-bit words (4 samples each) that alternate. Each
-full buffer is sent as a `RAW ` chunk. A buffer the DMA comes back to
-before it was sent is an *overrun*: a `TIME` chunk with the message
-`overrun` follows the next `RAW `, its `dropped_samples` the cumulative
-total so far. `max_bytes` stops the capture once the chunks sent (RAW and
+full buffer is sent as a `RAW ` chunk, read from the live buffer. The DMA
+starts rewriting a buffer as soon as the other one fills, so a fill that
+starts on a buffer not yet completely sent is an *overrun*: that buffer
+is torn, and its `RAW ` chunk (sent before, during or after the rewrite)
+mixes two fills. A `TIME` chunk with the message `overrun` follows that
+very `RAW ` chunk, before any other, its `dropped_samples` the cumulative
+total so far (an upper bound: a rewrite that started during the send but
+never overtook it counts too). vgacap-frames and vgadecode drop the
+picture in progress there. `max_bytes` stops the capture once the chunks sent (RAW and
 overrun TIME, headers included) reach it; 0 means only a stop byte ends it.
 The project clock must be running.
 

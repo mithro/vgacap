@@ -81,9 +81,17 @@ uint32_t *hal_arena(size_t *bytes);
 int hal_stream_start(const fw_pio_program_t *prog, unsigned pio, unsigned sm,
                      uint32_t *buf0, uint32_t *buf1, uint32_t buf_words, const char **why);
 // Whether buffer `i` holds samples nobody has sent yet; and to say it has
-// been sent. A completion that finds its buffer still full is an overrun.
+// been sent. Each completion starts the chain partner's fill at once, so
+// the overrun is counted when a fill *starts* on a buffer still full: from
+// then on that buffer's samples mix two fills, whether its send has begun,
+// is under way or has not started. That buffer is marked torn.
 int hal_stream_full(int i);
 void hal_stream_release(int i);
+// After hal_stream_release(i): whether buffer `i` was torn, clearing the
+// mark. Released first, so no tear during the send can be missed.
+int hal_stream_take_torn(int i);
+// The overruns so far (an upper bound on the buffers lost: a rewrite that
+// started during a send but never overtook it counts too).
 uint32_t hal_stream_overruns(void);
 // Stop everything; return the overrun count and RXSTALL as they were
 // before anything was torn down.
