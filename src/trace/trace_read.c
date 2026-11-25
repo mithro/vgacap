@@ -29,6 +29,7 @@
 #define ZSTD_STATIC_LINKING_ONLY   // ZSTD_isSkippableFrame
 #include "vgacap/trace.h"
 #include "trace_read_stats.h"
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -398,7 +399,7 @@ const vgacap_trace_info_t *vgacap_trace_info(const vgacap_trace_reader_t *r) { r
 // rd's `skip`): the reader then delivers the same runs and reports the
 // fault as it always did. Every other chunk goes to the stream reader.
 
-#define BATCH 1024u
+#define BATCH VGACAP_TRACE_RUNS_MAX
 
 struct rd {
     uint64_t n, from, to, clk;
@@ -460,6 +461,19 @@ static uint32_t le32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+// Little-endian whatever the host's order: one load on a little-endian
+// host (GCC 14 does not merge the byte-wise form here, and it cost 1.2
+// ns/clock on the busy trace).
+static uint64_t le64(const uint8_t *p) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    uint64_t v;
+    memcpy(&v, p, 8);
+    return v;
+#else
+    return (uint64_t)le32(p) | ((uint64_t)le32(p + 4) << 32);
+#endif
+}
+
 // Between chunks, with the header that makes a RUNS chunk of this length
 // acceptable (reader.c's header_problem and chunk_rule for RUNS).
 static int runs_fast_ok(const vgacap_reader_t *sr, uint32_t len) {
@@ -501,8 +515,7 @@ static int runs_fast(vgacap_reader_t *sr, struct rd *d, const uint8_t *p, uint32
         if ((size_t)(end - q) < vb + 1u) goto bad;
         uint64_t value = 0;
         if ((size_t)(end - q) >= 8) {
-            memcpy(&value, q, 8);
-            value &= vmask;
+            value = le64(q) & vmask;
         } else {
             for (unsigned k = 0; k < vb; k++) value |= (uint64_t)q[k] << (8u * k);
         }
@@ -529,7 +542,10 @@ static int runs_fast(vgacap_reader_t *sr, struct rd *d, const uint8_t *p, uint32
         // put(d, v, run)
         const uint64_t a = n, e = n + run;
         n = e;
-        if (a >= from && e < to) {                       // the usual case: inside the range
+        // The usual case: inside the range, a + run < to without the sum
+        // (a run that wraps past 2^64 takes put()'s tests below, as in the
+        // stream reader's path; run is never 0).
+        if (a >= from && a < to && run < to - a) {
             out[nb].first_sample = a; out[nb].value = v; out[nb].run = run;
             nb++;
         } else {
@@ -574,13 +590,17 @@ bad:
 // Feeds p[0, n) through the stream reader, its RUNS chunks by runs_fast
 // where it can, until the read is done.
 static void feed_until_done(vgacap_reader_t *sr, struct rd *d, const uint8_t *p, size_t n) {
-    size_t pos = 0;
+    size_t pos = 0, refed_end = 0;   // refed_end: the end of a chunk runs_fast handed back
     while (pos < n && !d->done) {
+        // By the end of a handed-back chunk the stream reader has delivered
+        // (and passed over) every run runs_fast had.
+        assert(pos < refed_end || !d->skip);
         size_t k = n - pos;
         if (!sr->failed && !sr->scanning && !sr->in_payload && !sr->hdrfill && k >= 8) {
             uint32_t len = le32(p + pos + 4);
             if (memcmp(p + pos, VGACAP_TAG_RUNS, 4) == 0 && runs_fast_ok(sr, len) && len <= k - 8) {
                 if (runs_fast(sr, d, p + pos, len) == 0) { pos += 8 + (size_t)len; continue; }
+                refed_end = pos + 8 + (size_t)len;
             }
             // One chunk, header and payload, if it is all there.
             if ((uint64_t)len + 8 < k) k = (size_t)len + 8;
@@ -591,6 +611,7 @@ static void feed_until_done(vgacap_reader_t *sr, struct rd *d, const uint8_t *p,
         if (vgacap_reader_feed(sr, p + pos, k)) break;
         pos += k;
     }
+    (void)refed_end;   // read by the assert only
 }
 
 static int one_by_one(void *user, const vgacap_trace_run_t *runs, size_t n) {

@@ -31,6 +31,7 @@ extern "C" {
 #define VGACAP_TRACE_BLOCK_BYTES   (16u * 1024u * 1024u)
 #define VGACAP_TRACE_BLOCK_RESERVE (64u * 1024u)    // closing META and the last pair
 #define VGACAP_TRACE_BLOCK_CLOCKS  (1ull << 24)
+#define VGACAP_TRACE_RUNS_MAX      1024u           // runs a vgacap_trace_read_runs batch holds at most
 
 // Fields above `impl` are read by the inline push; do not touch them.
 typedef struct vgacap_trace_writer {
@@ -114,7 +115,7 @@ const vgacap_trace_info_t *vgacap_trace_info(const vgacap_trace_reader_t *r);
 int vgacap_trace_read(vgacap_trace_reader_t *r, uint64_t from, uint64_t to,
                       vgacap_trace_run_fn fn, void *user, char *err, size_t errlen);
 // The same runs, in the same order, in batches: fn gets n >= 1 runs at a
-// time, at most 1,024, the array valid during the call. Return nonzero to
+// time, at most VGACAP_TRACE_RUNS_MAX, the array valid during the call. Return nonzero to
 // stop: no run after that batch is delivered. A read that fails delivers
 // every run before the fault first, as vgacap_trace_read does.
 // (vgacap_trace_read is this with a loop over each batch. One call a batch,

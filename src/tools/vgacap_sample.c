@@ -90,7 +90,7 @@ struct tool {
     int gap, failed;
     char why[512];          // the first failure
     int png_fd;
-    vgasample_run_t cruns[1024];   // a batch's clock runs (vgacap_trace_read_runs: at most 1,024 runs)
+    vgasample_run_t cruns[VGACAP_TRACE_RUNS_MAX];   // a batch's clock runs
 };
 
 static void fail(tool_t *t, const char *fmt, ...) {
