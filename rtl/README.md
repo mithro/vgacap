@@ -58,5 +58,5 @@ run Icarus on the committed `.v` with
 backpressure, and overruns from a slow sink and from full rate, with the
 same hold check), and parse every output with
 [`vgacap.stream.read_chunks`](../python/vgacap/stream.py). CI runs the
-Icarus test in the `gstreamer` job, which installs `iverilog` and fails if
+Icarus test in the [`gstreamer` job](../.github/workflows/ci.yml), which installs `iverilog` and fails if
 the test is skipped.
