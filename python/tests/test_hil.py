@@ -409,6 +409,85 @@ def test_frames_left_by_an_earlier_run_do_not_count(workspace):
     assert result["video"] == "FAIL", second.stdout
 
 
+# ------------------------------------------------------- the MJPEG reader
+
+
+def _mjpeg_server(first_delay: float, later_delay: float, parts: int = 4):
+    """A multipart server: headers at once, the first part after
+    `first_delay`, each later one after `later_delay`, then it closes."""
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - the http.server spelling
+            self.send_response(200)
+            self.send_header("Content-Type",
+                             "multipart/x-mixed-replace; boundary=vgacapframe")
+            self.end_headers()
+            self.wfile.flush()
+            try:
+                for n in range(parts):
+                    time.sleep(first_delay if n == 0 else later_delay)
+                    self.wfile.write(b"--vgacapframe\r\nContent-Type: image/jpeg"
+                                     b"\r\n\r\nJPEG\r\n")
+                    self.wfile.flush()
+            except OSError:
+                pass
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_the_mjpeg_reader_waits_for_a_slow_first_part(monkeypatch):
+    """fpga-1: the first frame waits for the design enable (~4-5 s), longer
+    than the per-part timeout. Scaled down: first 1.0 s, per part 0.5 s."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    monkeypatch.setattr(hil.MjpegReader, "FIRST_PART_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(hil.MjpegReader, "PART_TIMEOUT_S", 0.5)
+    server = _mjpeg_server(first_delay=1.0, later_delay=0.05)
+    try:
+        reader = hil.MjpegReader(server.server_port, budget=4.0)
+        reader.start()
+        reader.join(timeout=15)
+    finally:
+        server.shutdown()
+    assert "timed out" not in reader.note, reader.note
+    assert reader.parts == 4, (reader.parts, reader.note)
+
+
+def test_the_mjpeg_reader_still_bounds_later_parts(monkeypatch):
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    monkeypatch.setattr(hil.MjpegReader, "FIRST_PART_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(hil.MjpegReader, "PART_TIMEOUT_S", 0.5)
+    server = _mjpeg_server(first_delay=0.05, later_delay=1.5)
+    try:
+        reader = hil.MjpegReader(server.server_port, budget=10.0)
+        started = time.monotonic()
+        reader.start()
+        reader.join(timeout=15)
+        took = time.monotonic() - started
+    finally:
+        server.shutdown()
+    assert "read failed: timed out" in reader.note, reader.note
+    assert reader.parts == 1 and took < 5, (reader.parts, took)
+
+
+def test_the_mjpeg_reader_timeouts_fit_a_design_enable():
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    assert hil.MjpegReader.FIRST_PART_TIMEOUT_S >= 20
+    assert hil.MjpegReader.PART_TIMEOUT_S <= 10
+
+
 # ------------------------------------------------- --stop-bridge etiquette
 
 

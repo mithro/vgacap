@@ -924,15 +924,32 @@ class MjpegReader(threading.Thread):
     #: The boundary `multipartmux` and `ttcap.mjpeg` agree on.
     SEPARATOR = b"--vgacapframe"
 
+    #: How long the response and its first part may take. The first frame
+    #: waits for the design to be enabled: ~4-5 s on fpga-1 (2026-11-25),
+    #: which a 5 s read timeout failed as "read failed: timed out".
+    FIRST_PART_TIMEOUT_S = 30.0
+
+    #: How long any later read may block: a stream that stalls is a failure.
+    PART_TIMEOUT_S = 5.0
+
     def run(self) -> None:
         deadline = time.monotonic() + self.budget
-        conn, response = None, None
+        conn, response, sock = None, None, None
         # The server does not exist until the demo has built its pipeline, so
         # connecting is a retry loop, not a single attempt.
         while not self._halt.is_set() and time.monotonic() < deadline:
-            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            conn = http.client.HTTPConnection("127.0.0.1", self.port,
+                                              timeout=self.PART_TIMEOUT_S)
             try:
                 conn.request("GET", "/stream.mjpg")
+                # Connected; now patient until the first part is in, but
+                # never past the budget.
+                # Held here: a response that will close (no keep-alive)
+                # makes getresponse() drop `conn.sock`, though the response
+                # still reads from it.
+                sock = conn.sock
+                sock.settimeout(max(1.0, min(self.FIRST_PART_TIMEOUT_S,
+                                             deadline - time.monotonic())))
                 response = conn.getresponse()
             except OSError as exc:
                 self.note = "%s: %s" % (type(exc).__name__, exc)
@@ -950,12 +967,16 @@ class MjpegReader(threading.Thread):
         tail = b""
         while not self._halt.is_set() and time.monotonic() < deadline:
             try:
-                block = response.read(4096)
+                # read1: what has arrived, not "4096 bytes or EOF" -- so
+                # each part, not each 4 KiB, is what the timeout bounds.
+                block = response.read1(4096)
             except OSError as exc:
                 self.note += "; read failed: %s" % exc
                 break
             if not block:
                 break
+            if sock is not None:
+                sock.settimeout(self.PART_TIMEOUT_S)
             buffered = tail + block
             self.parts += buffered.count(self.SEPARATOR)
             # Keep just enough of the tail to notice a separator split across
