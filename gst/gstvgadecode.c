@@ -100,6 +100,8 @@ struct _GstVgaDecode {
     guint64 frame_clk;   /* clock_pos as the frame being emitted was closed */
     guint64 frames_out;
     guint64 next_slot;   /* next free output-fps slot (repeat-last-frame) */
+    guint32 dropped;     /* the last TIME chunk's cumulative dropped count */
+    gboolean discont;    /* an overrun reset the picture: flag the next buffer */
 
     /* Timeline origin. The elapsed time is *frozen* into pts_base_ns whenever
      * the clock rate changes, and each frame's PTS is measured forward from
@@ -393,6 +395,10 @@ static void on_frame(void *user, const vgaframe_output_t *out)
         memcpy(map.data + (gsize)y * (gsize)dstride, out->rgb24 + (gsize)y * out->stride, row);
     gst_buffer_unmap(buf, &map);
 
+    if (self->discont) {
+        GST_BUFFER_FLAG_SET(buf, GST_BUFFER_FLAG_DISCONT);
+        self->discont = FALSE;
+    }
     GST_BUFFER_OFFSET(buf) = out->frame_counter;
     GST_BUFFER_OFFSET_END(buf) = (guint64)out->frame_counter + 1;
     if (out->partial)
@@ -475,6 +481,19 @@ static void on_event(void *user, const vgacap_event_t *ev)
     case VGACAP_EV_TIME:
         if (ev->u.time.clock_hz)
             set_clock_rate(self, ev->u.time.clock_hz);
+        /* An overrun: the samples before do not continue into those after,
+         * so no picture is built across the gap (see vgacap-frames). */
+        if (self->frame_ready &&
+            (ev->u.time.dropped_samples > self->dropped ||
+             (ev->u.time.msg_len == 7 && memcmp(ev->u.time.msg, "overrun", 7) == 0))) {
+            GST_WARNING_OBJECT(self, "overrun at clock %" G_GUINT64_FORMAT
+                               " (dropped %u): picture reset", self->clock_pos,
+                               (guint)ev->u.time.dropped_samples);
+            vgaframe_reset(&self->frame);
+            self->discont = TRUE;
+        }
+        if (ev->u.time.dropped_samples > self->dropped)
+            self->dropped = ev->u.time.dropped_samples;
         break;
     case VGACAP_EV_RESYNC:
         /* Not fatal: the frame layer re-derives timing from the sync bits, so
@@ -511,6 +530,8 @@ static void reset_stream_state(GstVgaDecode *self)
     self->last_dur_ns = 0;
     self->frames_out = 0;
     self->next_slot = 0;
+    self->dropped = 0;
+    self->discont = FALSE;
     self->have_timing = FALSE;
     self->t_mode = NULL;
     self->sent_segment = FALSE;
