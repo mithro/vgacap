@@ -337,9 +337,8 @@ int hal_stream_full(int i) {
     return S.full[i];
 }
 
-void hal_stream_release(int i) { S.full[i] = 0; }
-
-int hal_stream_take_torn(int i) {
+int hal_stream_release(int i) {
+    S.full[i] = 0;
     int torn = S.torn[i];
     S.torn[i] = 0;
     return torn;
