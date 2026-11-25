@@ -49,7 +49,9 @@ toolchain): `vgacap-fw-sim` and the C tests [`test_fw_units`](../tests/test_fw_u
 
 Toolchain (Debian/Ubuntu): `sudo apt-get install gcc-arm-none-eabi
 libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib ninja-build`, plus a host C/C++
-compiler and CMake for pioasm and picotool, which the SDK builds itself.
+compiler and CMake for
+[pioasm](https://github.com/raspberrypi/pico-sdk/tree/a1438dff1d38bd9c65dbd693f0e5db4b9ae91779/tools/pioasm)
+and picotool, which the SDK builds itself.
 
 The SDK is pinned to [**pico-sdk 2.2.0**](https://github.com/raspberrypi/pico-sdk/releases/tag/2.2.0), commit
 [`a1438dff1d38bd9c65dbd693f0e5db4b9ae91779`](https://github.com/raspberrypi/pico-sdk/tree/a1438dff1d38bd9c65dbd693f0e5db4b9ae91779), with `lib/tinyusb` at its
@@ -106,11 +108,11 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
     The FPGA surviving the switch means the board's pull-up wins there, as
     it did on fpga-4.
   - **This firmware drives GPIO 1 high first thing at boot**
-    (`hal_pico_init()`), level before direction so it never glitches low.
-    That is the level the stock firmware left, so nothing then depends on
-    the pull-up, and on an ASIC breakout it only holds the mux out of
-    reset, the stock firmware's idle level. Only `asic_select` ever drives
-    it low.
+    ([`hal_pico_init()`](pico/hal_pico.c)), level before direction so it
+    never glitches low. That is the level the stock firmware left, so
+    nothing then depends on the pull-up, and on an ASIC breakout it only
+    holds the mux out of reset, the stock firmware's idle level. Only
+    `asic_select` ever drives it low.
   - GPIO 0 (`ctrl_ena`) and GPIO 2 (`ctrl_sel_inc`) are not driven until
     an `asic_select`.
 * **ASIC breakouts lose their project across the switch.** On tt09
@@ -136,11 +138,12 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
 
   The refusal names the boards with an ASIC breakout in the board table
   that can run this firmware (RP2350 only), or says that none is listed.
-  `ttcap.firmware.setup()` called directly does not check; its caller must
-  (`ttcap.demo.check_asic_index()`).
+  [`ttcap.firmware.setup()`](../python/ttcap/firmware.py) called directly
+  does not check; its caller must
+  ([`ttcap.demo.check_asic_index()`](../python/ttcap/demo.py)).
 * `ui_in` and `rst_n` are left untouched until `ui_in` / `reset` commands
   drive them; `ttcap` holds reset while it programs the clock and releases
-  it last, as `select_project()` does.
+  it last, as [`select_project()`](../python/ttcap/capture.py) does.
 * The project clock comes from the PWM on GPIO 16, with the system clock
   set to what the stock firmware picks for that project clock. That is a
   whole multiple of the project clock whenever one exists (100 MHz for
@@ -162,9 +165,9 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
 ## PIO programs
 
 [`pio/vgacap_stream.pio`](pio/vgacap_stream.pio) and [`pio/vgacap_frame.pio`](pio/vgacap_frame.pio) are the programs'
-readable sources, written at the RP2350 board's default operands. The
-operands of one capture (edge, sync polarities, sample delay, system
-clocks per sample) are only known when it starts, so [`core/fw_pio.c`](core/fw_pio.c)
+readable sources, written at the default operands of the demo board's
+RP2350. The operands of one capture (edge, sync polarities, sample delay,
+system clocks per sample) are only known when it starts, so [`core/fw_pio.c`](core/fw_pio.c)
 builds the loaded words at run time, instruction for instruction in the
 same order as the `.pio` source:
 
@@ -209,11 +212,11 @@ there as in
 and the UF2 copied there. `<dev>` is the stock firmware's serial port
 (`/dev/ttboard` on the fpgas.online Pis).
 
-1. With the stock firmware, enable the design to capture (the fpgas-tt
-   daemon's `/designs/<name>/enable`, or `ttcap capture`'s `--design`), and
-   take a reference capture the usual way if wanted.
-2. Stop anything else that owns the port (`sudo systemctl stop fpgas-tt`,
-   after checking the bridge has no clients).
+1. With the stock firmware, enable the design to capture (the fpgas.online
+   bridge (`fpgas-tt`)'s `/designs/<name>/enable`, or `ttcap capture`'s
+   `--design`), and take a reference capture the usual way if wanted.
+2. Stop anything else that owns the port, such as the bridge
+   (`sudo systemctl stop fpgas-tt`, after checking it has no clients).
 3. Into the bootloader:
    `uv run --no-sync ttcap reboot serial:<dev> --to bootsel`. The board
    reappears as a USB drive labeled `RP2350`.
@@ -233,7 +236,7 @@ and the UF2 copied there. `<dev>` is the stock firmware's serial port
        uv run --no-sync ttcap capture --firmware picosdk serial:$FW --clock-hz 750000 --seconds 4 --out stream.vgacap
 
 6. Back to the stock firmware: `uv run --no-sync ttcap reboot serial:$FW`
-   (or reset / power cycle the board), then restart `fpgas-tt`.
+   (or reset / power cycle the board), then restart the bridge.
    `ttcap reboot` asks the board which firmware it runs (the capture
    firmware's `hello`, then the raw REPL); `--firmware picosdk` skips the
    question.
