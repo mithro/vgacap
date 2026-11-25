@@ -118,7 +118,7 @@ command layer, so it neither offers nor needs them.
 ## Building
 
 The steps follow the `mpy-module` job in
-[`ci.yml`](../.github/workflows/ci.yml). `mpy/build-unix.sh` clones
+[`ci.yml`](../.github/workflows/ci.yml). [`mpy/build-unix.sh`](build-unix.sh) clones
 MicroPython into `build/micropython` and pins it, then builds the unix port
 with the module on the simulated board ([`firmware/sim`](../firmware/sim/))
 for the tests:
