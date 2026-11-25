@@ -989,6 +989,10 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
     machine.mem32 = Mem32()
     machine.freq = lambda hz=None: board.sysclk_hz
     machine.idle = lambda: board.advance(board.idle_cycles)
+    # No IRQ can land between two statements of the script here (they run
+    # from DMA activity, not between bytecodes), so masking is a no-op.
+    machine.disable_irq = lambda: 0
+    machine.enable_irq = lambda state: None
 
     # -- micropython --------------------------------------------------------
 

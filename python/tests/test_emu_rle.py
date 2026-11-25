@@ -269,7 +269,7 @@ def _tear_before_the_fix(script: str) -> str:
 
 
 def test_a_tear_that_began_before_the_fix_marks_the_next_chunk_too():
-    stream = counting_capture(stop_bytes=8 * 16_400, patch=_tear_before_the_fix)
+    stream = counting_capture(stop_bytes=20 * 16_400, patch=_tear_before_the_fix)
 
     chunks = damaged_and_reported(stream)
     # The torn chunk itself, and the next one from that buffer (two runs
@@ -277,6 +277,15 @@ def test_a_tear_that_began_before_the_fix_marks_the_next_chunk_too():
     assert chunks[1] == (True, True)
     assert chunks[3][0], "the emulator no longer double-fixes the tear"
     assert all(reported for damaged, reported in chunks if damaged)
+    # And the mark is carried for that one chunk only. The markers are the
+    # two counted overruns (buffer 1's tear, and buffer 0's, which the
+    # held-up loop's send stayed ahead of: chunk 2, intact but reported)
+    # plus the one carried mark; once the loop has caught up, many fills
+    # of both buffers go out clean and unreported.
+    assert len(chunks) >= 16
+    overruns = int(messages(stream)[-1].split()[0].split("=")[1])
+    assert sum(r for _, r in chunks) == overruns + 1
+    assert not any(d or r for d, r in chunks[4:])
 
 
 def test_a_counting_capture_that_keeps_up_damages_and_reports_nothing():
@@ -353,8 +362,13 @@ def test_a_stopped_rle_capture_leaves_no_dma_channel_running(bars_uo, oneshot):
 @pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
 def test_the_uploaded_rle_script_fits_in_the_board(profile):
     assert len(mp.build(rle_cfg(profile, clock_hz=25_000_000), "rle_rp2.py")) < 10_000
-    # And with the longest CFG line the host can send.
-    worst = rle_cfg(profile, clock_hz=100_000_000, buf_words=16384, max_bytes=4_000_000_000,
+    # And with the longest realistic CFG line. clock_hz, max_bytes and
+    # buf_words are unbounded ints on the host, so "realistic" means the
+    # widest each can usefully be: a clock under 1 GHz (9 digits), under
+    # 10 GB (10 digits), a buffer under 100,000 words (5 digits: no RP2
+    # heap holds two of those).
+    # Every other key is at its longest legal value.
+    worst = rle_cfg(profile, clock_hz=999_999_999, buf_words=99_998, max_bytes=9_999_999_999,
                     sample_delay=31, style="locked", oneshot=True, pio=1, sm=3, edge="falling")
     assert len(mp.build(worst, "rle_rp2.py")) < 10_000
 

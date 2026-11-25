@@ -93,11 +93,12 @@ short (fix_runs has already run) and spliced onto old ones; vgacap-frames
 and vgadecode drop the picture in progress at the marker. fix_runs works
 in place, so a tear that began before or during it may have added 1 to
 new run words, which the next fill's fix adds 1 to again: a buffer torn
-by the time its fix is done keeps TORN past its send, so that next chunk
-gets a marker too. (Copying before the fix needs a third buffer the heap
-cannot spare, and fixing on the host would change the wire format.) An overrun's
-lost samples cannot be counted from pairs, so `dropped_samples` is only
-an estimate, one sample per pair of each counted buffer: a pair is often
+by the time its fix is done gets TORN = 2 after its send, a mark for that
+next chunk only (2 is not a handler's True, so it is not carried again).
+(Copying before the fix needs a third buffer the heap cannot spare, and
+fixing on the host would change the wire format.) An overrun's lost
+samples cannot be counted from pairs, so `dropped_samples` is only an
+estimate, one sample per pair of each counted buffer: a pair is often
 many samples, and a tear that never overtook the send lost none.
 """
 
@@ -217,7 +218,7 @@ def write_pairs(out, buf):
             continue
         if pair > start:
             sent += write_rle_chunk(out, view[8 * start :], pair - start)
-        half = buf[at : at + 4] + _le32(0x80000000)  # noqa: F821
+        half = buf[at : at + 4] + b"\0\0\0\x80"  # a run of 2^31
         sent += write_rle_chunk(out, half + half, 2)
         start = pair + 1
     if start < PAIRS_PER_BUF:
@@ -227,12 +228,7 @@ def write_pairs(out, buf):
 
 # --- hard IRQ state: see capture_rp2.py ----------------------------------
 MEM = machine.mem32  # noqa: F821
-WR_A = 0
-WR_B = 0
-TC_A = 0
-TC_B = 0
-ADDR_A = 0
-ADDR_B = 0
+WR_A = WR_B = TC_A = TC_B = ADDR_A = ADDR_B = 0
 FULL = [False, False]
 TORN = [False, False]
 OVERRUNS = [0]
@@ -263,12 +259,12 @@ def choose(sysclk, masked):
     whole = sysclk == period * CLOCK_HZ
     if STYLE != "edge" and whole and LOCKED_MIN_PERIOD[masked] <= period <= LOCKED_MAX_PERIOD:
         return True, period
-    if STYLE == "locked":
-        return None
     # Edge style: the shortest clock it may see (a fractional divider's
     # short period is one system clock under the average), less the delay
     # every loop spends after the edge.
-    if sysclk // CLOCK_HZ - (0 if whole else 1) - SAMPLE_DELAY < EDGE_MIN_PERIOD[masked]:
+    if STYLE == "locked" or (
+        sysclk // CLOCK_HZ - (0 if whole else 1) - SAMPLE_DELAY < EDGE_MIN_PERIOD[masked]
+    ):
         return None
     return False, period
 
@@ -279,7 +275,7 @@ def main(out):
     # -1: the masked form wherever IN_COUNT exists, i.e. on an RP2350.
     masked = MASK if MASK >= 0 else int(hasattr(rp2.PIO, "gpio_base"))  # noqa: F821
     picked = choose(sysclk, masked)
-    if picked is None:
+    if not picked:  # None
         msg = "error=no exact rle style: sysclk %d clock %d style=%s mask=%d delay=%d"
         write_time_chunk(out, 0, (msg % (sysclk, CLOCK_HZ, STYLE, masked, SAMPLE_DELAY)).encode())  # noqa: F821
         return
@@ -323,8 +319,7 @@ def main(out):
             # it stops a few cycles after the last word and RXSTALL keeps
             # meaning a word lost inside the stretch.
             dma_s = rp2.DMA()  # noqa: F821
-            stop_word = bytearray(4)
-            stop_word[0] = 1 << SM_NUM  # noqa: F821
+            stop_word = bytearray(_le32(1 << SM_NUM))  # noqa: F821
             dma_s.config(
                 read=stop_word, write=PIO_BASE + 0x3000, count=1,  # noqa: F821
                 ctrl=dma_s.pack_ctrl(size=2, inc_read=False, inc_write=False, treq_sel=0x3F,
@@ -348,15 +343,15 @@ def main(out):
         dma_b.irq(on_b, hard=True)
 
         MEM[FDEBUG_ADDR] = RXSTALL_BIT  # noqa: F821
-        report = "rle style=%s period=%d mask=%d" % (("edge", "locked")[locked], period, masked)
-        sent = write_time_chunk(out, 0, report.encode())  # noqa: F821
+        sent = write_time_chunk(out, 0, (  # noqa: F821
+            "rle style=%s period=%d mask=%d" % (("edge", "locked")[locked], period, masked)
+        ).encode())
         dma_a.active(1)
         sm.active(1)
 
-        index = 0
-        stopping = False
+        index = stopping = 0
         while True:
-            while not FULL[index] and not MEM[FDEBUG_ADDR] & RXSTALL_BIT:  # noqa: F821
+            while not (FULL[index] or MEM[FDEBUG_ADDR] & RXSTALL_BIT):  # noqa: F821
                 if stop_requested(poller, stdin):  # noqa: F821
                     stopping = True
                     break
@@ -368,15 +363,23 @@ def main(out):
                 break
             buf = bufs[index]
             zeros = fix_runs(buf, BUF_WORDS)
-            torn = TORN[index]  # already torn: the fix may have hit new words
+            # Torn by a handler (True; 2 is a mark carried from the last
+            # chunk): the fix may have hit new words, see OVERRUNS above.
+            carry = TORN[index] == 1
             if zeros:
                 saturated += zeros
                 sent += write_pairs(out, buf)
             else:
                 sent += write_rle_chunk(out, buf, PAIRS_PER_BUF)
-            FULL[index] = False  # first, so a tear in the send is seen below
-            if TORN[index]:
-                TORN[index] = torn  # set: the next chunk is fixed twice, mark it too
+            # FULL and TORN together, with the IRQs off (capture_rp2.py): a
+            # handler sets TORN[index] only while FULL[index], so a tear in
+            # the send is not missed, nor a mark for the next fill wiped.
+            irq = machine.disable_irq()  # noqa: F821
+            FULL[index] = False
+            torn = TORN[index]
+            TORN[index] = carry and 2  # mark the next chunk once, if carried
+            machine.enable_irq(irq)  # noqa: F821
+            if torn:
                 sent += write_time_chunk(out, OVERRUNS[0] * PAIRS_PER_BUF, b"overrun")  # noqa: F821
             index = 1 - index
             if ONESHOT and index == 0:
@@ -401,10 +404,10 @@ def main(out):
         except Exception:
             pass
         stop_dma((dma_a, dma_b, dma_s))  # noqa: F821 - prelude: EN off, then abort
-        summary = "overruns=%d rxstall=%d saturated=%d sysclk_hz=%d" % (
-            overrun_total, rxstall, saturated, machine.freq()  # noqa: F821
-        )
-        write_time_chunk(out, overrun_total * PAIRS_PER_BUF, summary.encode())  # noqa: F821
+        write_time_chunk(out, overrun_total * PAIRS_PER_BUF, (  # noqa: F821
+            "overruns=%d rxstall=%d saturated=%d sysclk_hz=%d"
+            % (overrun_total, rxstall, saturated, machine.freq())  # noqa: F821
+        ).encode())
         if hasattr(out, "flush"):
             out.flush()
         del bufs
