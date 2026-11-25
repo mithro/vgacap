@@ -39,7 +39,7 @@ import threading
 import time
 from typing import Callable, Iterator, Sequence
 
-from .boards import RP2040_TT06, RP2350_DBV3, profile_from_gpio_map
+from .boards import RP2040_TT06, RP2350_DBV3, WELLAND, profile_from_gpio_map
 from vgacap.modes import MODES
 
 from .capture import (
@@ -62,7 +62,7 @@ from .capture import (
 )
 from .firmware import FIRMWARES, FirmwareLink, FirmwareSession
 from . import firmware as fwproto
-from .demo import add_parser as add_demo_parser, demo
+from .demo import add_parser as add_demo_parser, check_asic_index, demo
 from .repl import LinkClosed, RawRepl, ReplFramingError, ReplLink, SerialLink, WebSocketLink
 from .throughput import DEFAULT_BLOCK, DEFAULT_TOTAL, ThroughputResult, measure_throughput
 
@@ -533,12 +533,15 @@ def capture(
     ui_in: int | None = None,
     firmware: str = "micropython",
     asic_index: int | None = None,
+    board: str | None = None,
 ) -> CaptureStats:
     """Run one capture to `out_path` and print what happened.
 
     `firmware` is what runs on the board: "micropython", the stock firmware
     driven through its raw REPL, or "picosdk", the capture firmware in
     `firmware/` (PROTOCOL.md), which cannot select a design itself.
+    `board` is the bench slug at the other end of the link, if known; with
+    `asic_index` an FPGA board is refused (`check_asic_index`).
 
     `mode` picks the board program: "stream" (every sample, at a clock the
     link can carry), "frame" (whole frames at the project's real clock,
@@ -572,6 +575,7 @@ def capture(
     if asic_index is not None and firmware != "picosdk":
         raise ValueError("--asic-index is for --firmware picosdk; the stock "
                          "firmware selects a project with --project")
+    check_asic_index(board, asic_index)
     link = link_from_url(url)
     try:
         driver = _FirmwareBoard(link) if firmware == "picosdk" else _MicroPythonBoard(link)
@@ -956,7 +960,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="--firmware picosdk on an ASIC board: select the project at this "
         "mux index (the stock SDK's tt.shuttle.<name>.count) before capturing; "
         "the selection does not survive the switch to the capture firmware. "
-        "Never on an FPGA board, where the mux reset line erases the FPGA",
+        "Never on an FPGA board, where the mux reset line erases the FPGA: "
+        "refused for one named by --board, or the bench Pi this runs on",
+    )
+    capture_parser.add_argument(
+        "--board",
+        choices=sorted(WELLAND),
+        default=None,
+        help="the bench board at the other end of the link (default: the one "
+        "whose Pi this is, if any), so what it cannot take is refused before "
+        "the board is touched: --asic-index on an FPGA board",
     )
     capture_parser.add_argument(
         "--ui-in",
@@ -1066,6 +1079,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ui_in=args.ui_in,
                 firmware=args.firmware,
                 asic_index=args.asic_index,
+                board=args.board,
             )
         except ConsumerClosed:
             # The normal end of a pull: the pipeline stopped reading. The

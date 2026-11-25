@@ -29,7 +29,7 @@ import numpy as np
 import pytest
 from fw_sim_link import FRAMES, ROOT, SimLink
 
-from ttcap import cli, mp
+from ttcap import cli, demo, mp
 from ttcap.boards import RP2350_DBV3
 from ttcap.capture import (
     CaptureError,
@@ -590,6 +590,37 @@ def test_asic_index_needs_the_capture_firmware(tmp_path):
     with pytest.raises(ValueError, match="--asic-index is for --firmware picosdk"):
         cli.capture("serial:/dev/null", tmp_path / "x.vgacap", clock_hz=100_000,
                     seconds=1, max_bytes=0, asic_index=3)
+
+
+def _no_link(url):
+    raise AssertionError("the board was contacted: %s" % url)
+
+
+def test_asic_index_is_refused_on_an_fpga_board(monkeypatch, tmp_path, capsys):
+    # asic_select pulls GPIO 1, the iCE40's CRESET_B, low: refused before
+    # anything is sent, by the slug.
+    monkeypatch.setattr(cli, "link_from_url", _no_link)
+    with pytest.raises(CaptureError, match="fpga-4 is an FPGA board"):
+        cli.capture("serial:/dev/ttyACM0", tmp_path / "x.vgacap", clock_hz=100_000, seconds=1,
+                    max_bytes=0, firmware="picosdk", asic_index=3, board="fpga-4")
+    assert cli.main(["capture", "serial:/dev/ttyACM0", "--firmware", "picosdk", "--board", "fpga-1",
+                     "--asic-index", "3", "--clock-hz", "100000", "--seconds", "1",
+                     "--out", str(tmp_path / "y.vgacap")]) == 1
+    assert "fpga-1 is an FPGA board" in capsys.readouterr().err
+    assert not list(tmp_path.iterdir())
+
+
+def test_asic_index_is_refused_on_an_fpga_boards_own_pi(monkeypatch):
+    # With no --board, the bench Pi this runs on names the board.
+    monkeypatch.setattr(demo, "_address_is_local", lambda address: False)
+    with pytest.raises(CaptureError, match="fpga-4 is an FPGA board"):
+        demo.check_asic_index(None, 3, hostname="pi-sw2-p35")
+    with pytest.raises(CaptureError, match="fpga-1 is an FPGA board"):
+        demo.check_asic_index(None, 3, hostname="pi-sw2-p34.welland.example")
+    demo.check_asic_index(None, 3, hostname="pi-sw2-p7")  # tt07, an ASIC shuttle
+    demo.check_asic_index(None, 3, hostname="somewhere-else")  # unknown: not refused
+    demo.check_asic_index("tt07", 3, hostname="pi-sw2-p35")  # --board wins
+    demo.check_asic_index("fpga-4", None)  # no asic_select, nothing to refuse
 
 
 def test_cli_reboot_finds_the_capture_firmware(monkeypatch, bars_uo, capsys):

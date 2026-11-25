@@ -71,6 +71,8 @@ fields, or `err` followed by a message for a person.
   low erases the FPGA's configuration; `asic_select` is the only thing that
   ever drives it low. Until the first `asic_select`, GPIO 0 and 2 are left
   alone and GPIO 1 stays high from boot.
+  The firmware cannot tell the carriers apart; `ttcap capture` refuses
+  `--asic-index` for an FPGA bench board (`--board`, or the Pi it runs on).
 * `program_stream` / `program_frame` print the PIO program a capture with
   those operands would load, in hex, with its configuration -- for
   diagnosis and for the tests that compare it with MicroPython's assembler.
