@@ -642,6 +642,109 @@ def test_failed_stop_through_main_writes_a_report(tmp_path, monkeypatch, bridge_
     assert "systemctl stop fpgas-tt` failed" in text
 
 
+def _stopped(bridge_run):
+    """The bridge_run fixture with fpgas-tt stopped by stop_bridge()."""
+    hil, run, systemd, events = bridge_run
+    run.stop_bridge()
+    assert run.bridge_stopped and systemd.state == "inactive"
+    return hil, run, systemd, events
+
+
+def test_the_board_is_restarted_before_the_bridge_starts(bridge_run):
+    _hil, run, systemd, events = _stopped(bridge_run)
+    run.cleanup()
+    assert systemd.state == "active" and not run.bridge_stopped
+    reset = events.index(("board", b"\x04"))
+    start = events.index(("systemctl", "start"))
+    assert events.index(("systemctl", "stop")) < reset < start, events
+    assert events.index(("board", "closed")) < start
+    assert any("Board restarted" in note for note in run.notes), run.notes
+
+
+def test_the_bridge_starts_when_the_restart_raises(bridge_run, monkeypatch):
+    import ttcap.cli
+
+    _hil, run, systemd, events = _stopped(bridge_run)
+
+    def no_link(_url):
+        raise OSError("could not open port /dev/null")
+
+    monkeypatch.setattr(ttcap.cli, "link_from_url", no_link)
+    run.cleanup()
+    assert systemd.state == "active" and events[-1] == ("systemctl", "start")
+    assert any("WARNING: restarting the board" in n and "OSError" in n
+               for n in run.notes), run.notes
+
+
+def test_the_bridge_starts_when_the_restart_sees_no_reboot(bridge_run, monkeypatch):
+    import ttcap.repl
+
+    _hil, run, systemd, events = _stopped(bridge_run)
+    monkeypatch.setattr(ttcap.repl, "restart_sdk", lambda _link: (False, ""))
+    run.cleanup()
+    assert systemd.state == "active" and events[-1] == ("systemctl", "start")
+    assert any("no soft reboot seen" in n for n in run.notes), run.notes
+
+
+@pytest.mark.parametrize("exc", ["KeyboardInterrupt", "Interrupted"])
+def test_the_bridge_starts_when_the_restart_is_interrupted(bridge_run, monkeypatch, exc):
+    """BaseExceptions get past restart_board's `except Exception`; the
+    start is in a `finally`, so they cannot get past it."""
+    import ttcap.repl
+
+    hil, run, systemd, events = _stopped(bridge_run)
+    error = KeyboardInterrupt if exc == "KeyboardInterrupt" else hil.Interrupted
+
+    def interrupted(_link):
+        raise error("SIGHUP")
+
+    monkeypatch.setattr(ttcap.repl, "restart_sdk", interrupted)
+    with pytest.raises(error):
+        run.cleanup()
+    assert systemd.state == "active" and events[-1] == ("systemctl", "start")
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP])
+def test_a_signal_during_cleanup_does_not_stop_it(bridge_run, monkeypatch, sig):
+    """Ctrl-C or a stop signal while the board restarts is ignored: the
+    restart finishes and the bridge is started."""
+    hil, run, systemd, events = _stopped(bridge_run)
+    board = FakeBoard(events)
+    real_write = board.write
+
+    def write(data):
+        if data == b"\x04":
+            os.kill(os.getpid(), sig)
+        real_write(data)
+
+    board.write = write
+    import ttcap.cli
+    monkeypatch.setattr(ttcap.cli, "link_from_url", lambda _url: board)
+    # As main() has it: the stop signals raise Interrupted.
+    saved = {s: signal.getsignal(s) for s in hil.STOP_SIGNALS}
+    for s in hil.STOP_SIGNALS:
+        signal.signal(s, hil._on_stop_signal)
+    try:
+        run.cleanup()
+        # The handlers are back afterwards.
+        assert signal.getsignal(signal.SIGTERM) is hil._on_stop_signal
+    finally:
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+    assert ("board", b"\x04") in events
+    assert systemd.state == "active" and events[-1] == ("systemctl", "start")
+
+
+def test_a_bridge_already_running_again_is_not_reset_under(bridge_run):
+    """Someone started fpgas-tt during the run: the board is its users' now."""
+    _hil, run, systemd, events = _stopped(bridge_run)
+    systemd.state = "active"
+    run.cleanup()
+    assert not any(kind == "board" for kind, _ in events), events
+    assert events[-1] == ("systemctl", "start")
+    assert any("not restarted" in n for n in run.notes), run.notes
+
+
 def test_restart_sdk_leaves_raw_repl_then_soft_resets():
     from ttcap.repl import restart_sdk
 

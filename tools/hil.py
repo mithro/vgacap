@@ -122,6 +122,20 @@ def _on_stop_signal(signum, _frame):
 #: keep holding a shared board.
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
 
+
+@contextlib.contextmanager
+def signals_ignored():
+    """SIGINT and every stop signal ignored, then put back as they were."""
+    saved = {}
+    try:
+        for sig in (signal.SIGINT, *STOP_SIGNALS):
+            saved[sig] = signal.signal(sig, signal.SIG_IGN)
+        yield
+    finally:
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
+
+
 #: How long `--stop-bridge` waits between its two reads of the bridge's
 #: client count. A count of 0 read once can be a visitor between two
 #: connections; it has to stay 0 across this wait as well.
@@ -662,14 +676,29 @@ class Hil:
         self.notes.append("fpgas-tt stopped for this run, and started again after.")
 
     def restore_bridge(self) -> None:
+        """Start `fpgas-tt` again, whatever else goes wrong on the way."""
         if not self.bridge_stopped:
             return
-        self.bridge_stopped = False
-        # Put the board back first. fpgas-tt judges the board when it
-        # starts ("safe start"); started while the capture's design is still
-        # enabled, it reported `left: <design>` on tt09 until restarted
-        # again (2026-11-24).
-        self.restart_board()
+        try:
+            # Put the board back first. fpgas-tt judges the board when it
+            # starts ("safe start"); started while the capture's design is
+            # still enabled, it reported `left: <design>` on tt09 until
+            # restarted again (2026-11-24). Only with the daemon known to be
+            # down: never reset a board under a running bridge's users.
+            state = bridge_state()
+            if state == "inactive":
+                self.restart_board()
+            else:
+                self.notes.append(
+                    "WARNING: fpgas-tt was %s at cleanup, so the board was not "
+                    "restarted under it." % state)
+        finally:
+            # In a `finally`: a restart that raises, or anything that gets
+            # past cleanup's signal guard, must not leave the bridge down.
+            self.bridge_stopped = False
+            self.start_bridge()
+
+    def start_bridge(self) -> None:
         try:
             code = subprocess.run(["sudo", "-n", "systemctl", "start", "fpgas-tt"],
                                   check=False, timeout=120).returncode
@@ -749,10 +778,16 @@ class Hil:
         return ""
 
     def cleanup(self) -> None:
-        """Never leave a capture running, whatever happened above."""
-        for sid in self.sessions:
-            _reap(sid)
-        self.restore_bridge()
+        """Never leave a capture running, whatever happened above.
+
+        Deaf to SIGINT and the stop signals while it runs: a second Ctrl-C
+        or a SIGHUP here would otherwise leave board commands running, or
+        the bridge stopped, with no warning and no report.
+        """
+        with signals_ignored():
+            for sid in self.sessions:
+                _reap(sid)
+            self.restore_bridge()
 
 
 # ------------------------------------------------------------- measurements
