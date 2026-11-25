@@ -35,6 +35,7 @@
 #include <time.h>
 
 #include "hardware/pio.h"
+#include "programs.h"
 #include "vgacap/stream.h"
 
 // One DMA transfer, and one RAW chunk. The rp1-pio driver's transfer size is
@@ -310,17 +311,14 @@ int main(int argc, char **argv)
     uint cap_off = 0, gen_off = 0, cnt_off = 0;
     struct generator gen = {0};
     pthread_t gen_thread;
-    uint16_t gen_insns[2], cnt_insns[2];
-    pio_program_t gen_prog = {.instructions = gen_insns, .length = 2, .origin = -1};
-    pio_program_t cnt_prog = {.instructions = cnt_insns, .length = 2, .origin = -1};
+    uint16_t gen_insns[RP1_GENERATOR_LEN], cnt_insns[RP1_COUNTER_LEN];
+    pio_program_t gen_prog = {.instructions = gen_insns, .length = RP1_GENERATOR_LEN, .origin = -1};
+    pio_program_t cnt_prog = {.instructions = cnt_insns, .length = RP1_COUNTER_LEN, .origin = -1};
 
     // ---- the sampler: the RP2's program, word for word ------------------
-    uint16_t cap_insns[3] = {
-        (uint16_t)pio_encode_wait_gpio(!o.rising, o.clk),
-        (uint16_t)pio_encode_wait_gpio(o.rising, o.clk),
-        (uint16_t)pio_encode_in(pio_pins, 8),
-    };
-    pio_program_t cap_prog = {.instructions = cap_insns, .length = 3, .origin = -1};
+    uint16_t cap_insns[RP1_SAMPLER_LEN];
+    rp1_sampler_program(cap_insns, o.rising, o.clk);
+    pio_program_t cap_prog = {.instructions = cap_insns, .length = RP1_SAMPLER_LEN, .origin = -1};
     if (getenv("VGACAP_RP1_DEBUG"))
         fprintf(stderr, "sampler: %04x %04x %04x\n", cap_insns[0], cap_insns[1], cap_insns[2]);
     cap_sm = pio_claim_unused_sm(pio, true);
@@ -358,9 +356,7 @@ int main(int argc, char **argv)
 
     // ---- the optional generator (test fixture) --------------------------
     if (o.gen) {
-        gen_insns[0] = (uint16_t)(pio_encode_out(pio_pins, 8) | pio_encode_sideset(1, 0) |
-                                  pio_encode_delay(o.gen_delay));
-        gen_insns[1] = (uint16_t)(pio_encode_nop() | pio_encode_sideset(1, 1) | pio_encode_delay(o.gen_delay));
+        rp1_generator_program(gen_insns, o.gen_delay);
         if (getenv("VGACAP_RP1_DEBUG"))
             fprintf(stderr, "generator: %04x %04x\n", gen_insns[0], gen_insns[1]);
         gen_sm = pio_claim_unused_sm(pio, true);
@@ -419,10 +415,7 @@ int main(int argc, char **argv)
         // does. (Loading, unloading and reloading at a fixed origin to learn
         // the offset first left the state machine running another
         // program's `pull block` -- rp1sm showed pc 0x18, outside it.)
-        cnt_insns[0] = (uint16_t)(pio_encode_mov(pio_pins, pio_x) | pio_encode_sideset(1, 0) |
-                                  pio_encode_delay(o.gen_delay));
-        cnt_insns[1] = (uint16_t)(pio_encode_jmp_x_dec(0) | pio_encode_sideset(1, 1) |
-                                  pio_encode_delay(o.gen_delay));
+        rp1_counter_program(cnt_insns, o.gen_delay);
         cnt_off = pio_add_program(pio, &cnt_prog);
         cnt_loaded = true;
         pio_sm_config kc = pio_get_default_sm_config();
