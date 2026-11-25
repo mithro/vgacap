@@ -103,7 +103,9 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   refuses `--asic-index` for an FPGA bench board, named by `--board`, by
   a `ws://` link (the bridge's address, the Pi's name or a tunnel's
   `18000 + octet` port) or by the Pi it runs on (for a `serial:` link, or a
-  loopback `ws://` link that is not a tunnel port: the Pi's own bridge),
+  `ws://` link, not on a tunnel port, whose host resolves to this machine:
+  loopback, 0.0.0.0 or :: in any spelling, or one of its own addresses --
+  the Pi's own bridge; a host that does not resolve is refused),
   and when those disagree. `ttcap.firmware.setup()` called directly does
   not check: its caller must (`ttcap.demo.check_asic_index()`).
 * `ui_in` and `rst_n` are left untouched until `ui_in` / `reset` commands
