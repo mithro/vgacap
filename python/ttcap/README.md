@@ -18,11 +18,13 @@ REPL. The other capture sources have their own READMEs:
 [`capture-rp1/`](../../capture-rp1/README.md) (Raspberry Pi 5) and
 [`rtl/`](../../rtl/README.md) (FPGA).
 
+With a demo board on `/dev/ttyACM0` whose FPGA breakout can enable the
+`tt_um_vga_pattern` bitstream:
+
 ```sh
-ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com   # fpga-1
-uv run ttcap probe ws://127.0.0.1:18034/serial          # sys.version and the GPIO map
-uv run ttcap throughput ws://127.0.0.1:18034/serial     # what clock the link can keep up with
-uv run ttcap capture ws://127.0.0.1:18034/serial --design tt_um_vga_pattern \
+uv run ttcap probe serial:/dev/ttyACM0          # sys.version and the GPIO map
+uv run ttcap throughput serial:/dev/ttyACM0     # what clock the link can keep up with
+uv run ttcap capture serial:/dev/ttyACM0 --design tt_um_vga_pattern \
     --clock-hz 500000 --frames 2 --out capture.vgacap
 mkdir -p out && uv run ttcap png capture.vgacap out/frame   # out/frame-0000.png ...
 ```
@@ -40,10 +42,11 @@ The board has very little heap (about 80 KB on the RP2040 demo board), so
 `ttcap capture` clears the previous run's names and collects garbage before
 it sends anything. A script that fails to compile on the board does not
 always say so, and can halt the firmware outright, so `ttcap capture`
-refuses to start unless the free heap covers the two DMA buffers plus room
-to compile the script: `8 * --buf-words + 24000` bytes, so ~56 KB at the
-default and ~90 KB at `--buf-words 8192`, which an RP2040 demo board does
-not have. If it refuses, reset the board to free its heap.
+refuses to start without enough free heap. In stream mode that is the two
+DMA buffers plus room to compile the script, `8 * --buf-words + 24000`
+bytes: ~56 KB at the default and ~90 KB at `--buf-words 8192`, which an
+RP2040 demo board does not have. In frame and window modes it is 24000
+bytes plus one line. If it refuses, reset the board to free its heap.
 
 `ttcap png` needs [Pillow](https://github.com/python-pillow/Pillow), so it wants the `synth` extra
 (`uv sync --extra synth`) and [a built `build/vgacap-frames`](../../docs/development.md).
@@ -61,7 +64,7 @@ the dev group (pytest, numpy, Pillow) out of the environment; otherwise
 git clone https://github.com/mithro/vgacap.git && cd vgacap
 export UV_NO_DEV=1
 uv sync
-uv run --no-sync ttcap probe ws://127.0.0.1:8765/serial
+uv run --no-sync ttcap probe serial:/dev/ttyACM0
 ```
 
 ## `ttcap demo`: a board in, video out
@@ -114,10 +117,10 @@ The pipeline builds `vgacapttsrc` by name, never as a `vgacapbin` URI
 Every numeric argument is range-checked before the board is contacted, and
 a bad one is refused with the range it takes.
 
-A `--clock-hz` above what the demo board has been measured to keep up with
-*at the default buffer size* (60 kHz on an RP2040 demo board, 750 kHz on an
-RP2350 one) is a **warning**, not an error; a larger `--buf-words` moves
-the ceiling.
+With `--board`, a `--clock-hz` above what the demo board has been measured
+to keep up with *at the default buffer size* (60 kHz on an RP2040 demo
+board, 750 kHz on an RP2350 one) is a **warning**, not an error; a larger
+`--buf-words` moves the ceiling.
 
 ### The output directory
 
@@ -159,8 +162,8 @@ Raspberry Pi, which runs the fpgas.online bridge (`fpgas-tt`).
 [`boards.py`](boards.py), such as `fpga-1`, `fpga-3` or `fpga-4`, and
 resolves it to a link:
 
-* **on the board's own Pi**, `serial:/dev/ttboard`. Stop the fpgas.online
-  bridge first (`sudo systemctl stop fpgas-tt`), since it holds the device
+* **on the board's own Pi**, `serial:/dev/ttboard`. Stop the bridge
+  first (`sudo systemctl stop fpgas-tt`), since it holds the device
   open;
 * **anywhere else**, the bridge at `ws://10.21.2.<octet>:8765/serial`, which
   is on the bench network. The octet is the board's bench port number
