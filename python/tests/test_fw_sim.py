@@ -29,7 +29,7 @@ import numpy as np
 import pytest
 from fw_sim_link import FRAMES, ROOT, SimLink
 
-from ttcap import cli, mp
+from ttcap import cli, demo, mp
 from ttcap.boards import RP2350_DBV3
 from ttcap.capture import (
     CaptureError,
@@ -568,8 +568,14 @@ def test_asic_select_brings_the_design_back(asic_fw, bars_uo, tmp_path):
 
 
 def test_the_wrong_asic_index_selects_another_project(asic_fw):
-    _, data = capture(asic_fw, request(clock_hz=100_000, max_bytes=40_000, asic_index=4))
-    assert not _stream_samples(data).any()
+    req = request(clock_hz=100_000, max_bytes=40_000, asic_index=4)
+    did = setup(asic_fw, req)
+    assert did["asic_index"] == 4  # it was selected, just not the design's index
+    out = io.BytesIO()
+    stats = run_session(FirmwareSession(asic_fw, req), out)
+    assert stats.clean, stats.format()
+    samples = _stream_samples(out.getvalue())
+    assert len(samples) and not samples.any()
 
 
 def test_asic_select_validates_its_index(fw):
@@ -584,3 +590,111 @@ def test_asic_index_needs_the_capture_firmware(tmp_path):
     with pytest.raises(ValueError, match="--asic-index is for --firmware picosdk"):
         cli.capture("serial:/dev/null", tmp_path / "x.vgacap", clock_hz=100_000,
                     seconds=1, max_bytes=0, asic_index=3)
+
+
+def _no_link(url):
+    raise AssertionError("the board was contacted: %s" % url)
+
+
+def test_asic_index_is_refused_on_an_fpga_board(monkeypatch, tmp_path, capsys):
+    # asic_select pulls GPIO 1, the iCE40's CRESET_B, low: refused before
+    # anything is sent, by the slug.
+    monkeypatch.setattr(cli, "link_from_url", _no_link)
+    with pytest.raises(CaptureError, match="fpga-4 is an FPGA board"):
+        cli.capture("serial:/dev/ttyACM0", tmp_path / "x.vgacap", clock_hz=100_000, seconds=1,
+                    max_bytes=0, firmware="picosdk", asic_index=3, board="fpga-4")
+    assert cli.main(["capture", "serial:/dev/ttyACM0", "--firmware", "picosdk", "--board", "fpga-1",
+                     "--asic-index", "3", "--clock-hz", "100000", "--seconds", "1",
+                     "--out", str(tmp_path / "y.vgacap")]) == 1
+    assert "fpga-1 is an FPGA board" in capsys.readouterr().err
+    assert not list(tmp_path.iterdir())
+
+
+def test_asic_index_is_refused_on_an_fpga_boards_own_pi(monkeypatch):
+    # With no --board, the bench Pi this runs on names the board.
+    monkeypatch.setattr(demo, "_address_is_local", lambda address: False)
+    with pytest.raises(CaptureError, match="fpga-4 is an FPGA board"):
+        demo.check_asic_index(None, 3, hostname="pi-sw2-p35")
+    with pytest.raises(CaptureError, match="fpga-1 is an FPGA board"):
+        demo.check_asic_index(None, 3, hostname="pi-sw2-p34.welland.example")
+    demo.check_asic_index(None, 3, hostname="pi-sw2-p7")  # tt07, an ASIC shuttle
+    demo.check_asic_index(None, 3, hostname="somewhere-else")  # unknown: not refused
+    demo.check_asic_index("fpga-4", None)  # no asic_select, nothing to refuse
+    # --board naming an ASIC on an FPGA board's Pi: the Pi's serial port is
+    # the FPGA board's, whatever --board says.
+    with pytest.raises(CaptureError, match="fpga-4 is an FPGA board"):
+        demo.check_asic_index("tt07", 3, link="serial:/dev/ttyACM0", hostname="pi-sw2-p35")
+
+
+def test_board_of_link():
+    assert demo.board_of_link("ws://10.21.2.35:8765/serial") == "fpga-4"
+    assert demo.board_of_link("wss://pi-sw2-p34:8765/serial") == "fpga-1"
+    assert demo.board_of_link("ws://pi-sw2-p7.welland.example:8765/serial") == "tt07"
+    assert demo.board_of_link("ws://127.0.0.1:18035/serial") == "fpga-4"  # tunnel_hint's port
+    assert demo.board_of_link("ws://localhost:18007/serial") == "tt07"
+    assert demo.board_of_link("ws://127.0.0.1:8765/serial") is None
+    assert demo.board_of_link("ws://example.org:18035/serial") is None  # not a tunnel here
+    assert demo.board_of_link("serial:/dev/ttyACM0") is None
+    assert demo.board_of_link(None) is None
+
+
+def test_asic_index_is_refused_by_the_link(monkeypatch):
+    monkeypatch.setattr(demo, "_address_is_local", lambda address: False)
+    for url in ("ws://10.21.2.35:8765/serial", "ws://127.0.0.1:18035/serial"):
+        with pytest.raises(CaptureError, match="fpga-4 is an FPGA board"):
+            demo.check_asic_index(None, 3, link=url, hostname="workstation")
+    demo.check_asic_index(None, 3, link="ws://10.21.2.7:8765/serial", hostname="workstation")
+    demo.check_asic_index("tt07", 3, link="ws://127.0.0.1:18007/serial", hostname="workstation")
+    # Two ASIC boards named for one link: which one is it?
+    with pytest.raises(CaptureError, match="disagree: --board says tt08, the link says tt07"):
+        demo.check_asic_index("tt08", 3, link="ws://10.21.2.7:8765/serial", hostname="workstation")
+    with pytest.raises(CaptureError, match="disagree: --board says tt08, this Pi says tt07"):
+        demo.check_asic_index("tt08", 3, link="serial:/dev/ttyACM0", hostname="pi-sw2-p7")
+    # A ws link from a bench Pi is about the link's board, not the Pi's.
+    demo.check_asic_index(None, 3, link="ws://10.21.2.7:8765/serial", hostname="pi-sw2-p8")
+
+
+def test_capture_refuses_asic_index_over_an_fpga_tunnel(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "link_from_url", _no_link)
+    with pytest.raises(CaptureError, match="fpga-1 is an FPGA board"):
+        cli.capture("ws://127.0.0.1:18034/serial", tmp_path / "x.vgacap", clock_hz=100_000,
+                    seconds=1, max_bytes=0, firmware="picosdk", asic_index=3)
+
+
+def test_cli_reboot_finds_the_capture_firmware(monkeypatch, bars_uo, capsys):
+    # A board left on the capture firmware: a plain `ttcap reboot` asks it
+    # and reboots it, no --firmware needed.
+    link = SimLink(bars_uo[0])
+    monkeypatch.setattr(cli, "link_from_url", lambda url: link)
+    assert cli.main(["reboot", "serial:/dev/ttyACM0"]) == 0
+    out = capsys.readouterr().out
+    assert "the board runs picosdk" in out
+    assert "rebooting to flash" in out
+    assert link.proc.wait(timeout=10) == 0  # the simulated board is gone
+
+
+def test_cli_reboot_falls_back_to_the_raw_repl(monkeypatch, capsys):
+    # The stock firmware never answers hello: after the probe, the raw REPL.
+    from fake_repl import FakeBinaryBoard
+
+    board = FakeBinaryBoard()
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+    monkeypatch.setattr(cli, "FIRMWARE_PROBE_S", 0.2)
+    assert cli.main(["reboot", "serial:/dev/ttboard", "--to", "bootsel"]) == 0
+    assert "the board runs micropython" in capsys.readouterr().out
+    assert board.commands == ["import machine\nmachine.bootloader()"]
+    assert board.closed
+
+
+def test_cli_reboot_with_firmware_given_does_not_probe(monkeypatch, capsys):
+    from fake_repl import FakeBinaryBoard
+
+    board = FakeBinaryBoard()
+    writes = []
+    real_write = board.write
+    board.write = lambda data: (writes.append(bytes(data)), real_write(data))[1]
+    monkeypatch.setattr(cli, "link_from_url", lambda url: board)
+    assert cli.main(["reboot", "serial:/dev/ttboard", "--firmware", "micropython"]) == 0
+    assert "the board runs" not in capsys.readouterr().out
+    assert not any(b"hello" in w for w in writes)
+    assert board.commands == ["import machine\nmachine.reset()"]
