@@ -387,10 +387,7 @@ def main(out):
             rp2.PIO(PIO_NUM).remove_program(program)  # noqa: F821
         except Exception:
             pass
-        for dma in (dma_a, dma_b, dma_s):
-            if dma is not None:
-                dma.active(0)
-                dma.close()
+        stop_dma((dma_a, dma_b, dma_s))  # noqa: F821 - prelude: EN off, then abort
         summary = "overruns=%d rxstall=%d saturated=%d sysclk_hz=%d" % (
             overrun_total, rxstall, saturated, machine.freq()  # noqa: F821
         )

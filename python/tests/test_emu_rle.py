@@ -190,6 +190,21 @@ def test_more_pairs_than_the_link_carries_are_reported_as_overruns(bars_uo):
     assert dropped[-1] == overruns * 4096 // 2
 
 
+@pytest.mark.parametrize("oneshot", [False, True], ids=["stream", "oneshot"])
+def test_a_stopped_rle_capture_leaves_no_dma_channel_running(bars_uo, oneshot):
+    # A and B chain to each other, so on RP2350 aborting one re-triggers
+    # the other (RP2350-E5) unless the prelude's stop_dma clears EN first.
+    profile = RP2350_DBV3
+    board = Board(Waveform(bars_uo, profile.uo_gpios, profile.clk_gpio, period=266),
+                  sysclk_hz=133_000_000)
+    board.stop_after_bytes = 20_000
+    cfg = rle_cfg(profile, clock_hz=500_000, buf_words=2048, oneshot=oneshot)
+
+    board.run_script(mp.build(cfg, "rle_rp2.py"))
+
+    assert [ch.num for ch in board.channels if ch.busy] == []
+
+
 @pytest.mark.parametrize("profile", [RP2040_TT06, RP2350_DBV3], ids=lambda p: p.name)
 def test_the_uploaded_rle_script_fits_in_the_board(profile):
     assert len(mp.build(rle_cfg(profile, clock_hz=25_000_000), "rle_rp2.py")) < 10_000
