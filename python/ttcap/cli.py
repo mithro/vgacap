@@ -53,10 +53,9 @@ from .capture import (
     CaptureStats,
     frame_note,
     frames_to_max_bytes,
-    restore_mode,
     run_capture,
     select_project,
-    stop_clock,
+    undo_selection,
 )
 from .demo import add_parser as add_demo_parser, demo
 from .repl import LinkClosed, RawRepl, ReplFramingError, ReplLink, SerialLink, WebSocketLink
@@ -92,6 +91,8 @@ CAPTURE_FAILURES = (
 def _failed(what: str, exc: BaseException) -> int:
     """Report a subcommand's failure the way `main`'s contract promises."""
     print("%s failed: %s: %s" % (what, type(exc).__name__, exc), file=sys.stderr)
+    for note in getattr(exc, "__notes__", ()):
+        print("  %s" % note, file=sys.stderr)
     return 1
 
 
@@ -556,29 +557,35 @@ def capture(
                     rle_oneshot=rle_oneshot,
                 )
                 selection = select_project(repl, request)
-                print(
-                    "profile=%s project=%s enable=%s"
-                    % (board.name, selection["project"], selection["enable"]),
-                    file=say,
-                )
-                # `run_capture()` writes nothing until the board has been
-                # cleaned up and has the heap for the script, so a run
-                # refused there (or one that dies before the first chunk)
-                # must not leave an empty file behind pretending to be a
-                # capture. Anything that did get written is a valid, if
-                # short, stream and is kept.
-                with _open_output(
-                    out_path, on_consumer_close=flag.set if to_stdout else None
-                ) as fp:
-                    try:
-                        if to_stdout:
-                            stats = _stream_capture(repl, request, fp, flag)
-                        else:
-                            stats = run_capture(repl, request, fp)
-                    except BaseException:
-                        if not to_stdout and fp.tell() == 0:
-                            _discard_empty(out_path)
-                        raise
+                try:
+                    print(
+                        "profile=%s project=%s enable=%s"
+                        % (board.name, selection["project"], selection["enable"]),
+                        file=say,
+                    )
+                    # `run_capture()` writes nothing until the board has been
+                    # cleaned up and has the heap for the script, so a run
+                    # refused there (or one that dies before the first chunk)
+                    # must not leave an empty file behind pretending to be a
+                    # capture. Anything that did get written is a valid, if
+                    # short, stream and is kept.
+                    with _open_output(
+                        out_path, on_consumer_close=flag.set if to_stdout else None
+                    ) as fp:
+                        try:
+                            if to_stdout:
+                                stats = _stream_capture(repl, request, fp, flag)
+                            else:
+                                stats = run_capture(repl, request, fp)
+                        except BaseException:
+                            if not to_stdout and fp.tell() == 0:
+                                _discard_empty(out_path)
+                            raise
+                except BaseException as exc:
+                    # Whatever went wrong, a shared board is not left in the
+                    # mode `--ui-in` switched it to, nor (by default) clocked.
+                    undo_selection(repl, selection, stop=stop_clock_after, error=exc)
+                    raise
             # Reported before anything can be raised about how it ended: a
             # consumer that walked away still produced a real capture, and
             # its stats are the only overruns/rxstall report there is.
@@ -587,10 +594,7 @@ def capture(
                 note = frame_note(stats.messages, request.cfg()["region_lines"])
                 if note:
                     print(note, file=say)
-            if stop_clock_after:
-                stop_clock(repl)
-            if "mode_before" in selection:
-                restore_mode(repl, selection["mode_before"])
+            undo_selection(repl, selection, stop=stop_clock_after)
             if to_stdout and fp.consumer_closed:
                 raise ConsumerClosed()
         finally:
@@ -769,7 +773,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--frames",
         type=int,
         help="stream mode: stop after enough bytes for N frames, assuming "
-        "640x480@60 timing (800x525 clocks) plus one frame of margin; frame "
+        "640x480@60 timing (800x525 clocks) plus two frames of margin; frame "
         "and window modes: stop after N complete pictures",
     )
     capture_parser.add_argument(
@@ -815,7 +819,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=lambda s: int(s, 0),
         default=None,
         help="drive the design's ui_in with this value (the SDK is switched "
-        "to ASIC_RP_CONTROL for the capture and put back afterwards); "
+        "to ASIC_RP_CONTROL for the capture and put back however it ends); "
         "default: leave the board's inputs alone",
     )
     capture_parser.add_argument(
