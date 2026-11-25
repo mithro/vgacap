@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """vgacap-sample (src/tools/vgacap_sample.c): one pass over a simulation
-trace, both samplers, their stores, frames.txt and hash files, against the
+trace, its samplers (centre-v1 by default, both when asked), their stores, frames.txt and hash files, against the
 Python references (vgacap.tbv1 for tb-v1; vgacap.centre's pick over
 build/vgacap-centre-dump's clock-resolution frames for centre-v1, as
 test_samplers.run_centre; vgacap.framesfile for the files). Traces come from
@@ -86,8 +86,13 @@ def trace_blocks(path) -> tuple[int, int]:
     return int(kv["blocks"]), int(kv["samples"])
 
 
-def run_sample(trace, out, *args, env=None, pass_fds=()):
-    return subprocess.run([str(SAMPLE), str(trace), "--out", str(out), "--name", NAME, *args],
+#: Both samplers, asked for: without --sampler only centre-v1 runs (Ruling W:
+#: tb-v1 is legacy and runs only on request).
+BOTH = ("--sampler", "tb-v1", "--sampler", "centre-v1")
+
+
+def run_sample(trace, out, *args, samplers=BOTH, env=None, pass_fds=()):
+    return subprocess.run([str(SAMPLE), str(trace), "--out", str(out), "--name", NAME, *samplers, *args],
                           capture_output=True, text=True, env=env, pass_fds=pass_fds)
 
 
@@ -188,10 +193,25 @@ def test_sample_one_sampler(changing_trace, tmp_path):
     _, trace, _, _, ref = changing_trace
     for s in SAMPLERS:
         out = tmp_path / s
-        proc = run_sample(trace, out, "--sampler", s)
+        proc = run_sample(trace, out, "--sampler", s, samplers=())
         assert proc.returncode == 0, proc.stderr
         check_outputs(out, ref, (s,))
         assert sorted(p.name for p in out.iterdir()) == [s]
+
+
+def test_sample_default_is_centre_only(changing_trace, tmp_path):
+    """Without --sampler only centre-v1 runs, writing what it writes beside
+    tb-v1."""
+    _, trace, _, _, ref = changing_trace
+    out = tmp_path / "out"
+    proc = run_sample(trace, out, samplers=())
+    assert proc.returncode == 0, proc.stderr
+    assert sorted(p.name for p in out.iterdir()) == ["centre-v1"]
+    check_outputs(out, ref, ("centre-v1",))
+    both = tmp_path / "both"
+    assert run_sample(trace, both).returncode == 0
+    for f in (out / "centre-v1").iterdir():
+        assert f.read_bytes() == (both / "centre-v1" / f.name).read_bytes(), f.name
 
 
 def test_sample_rejects_board_capture(tmp_path):
@@ -246,7 +266,7 @@ def test_sample_png_pipe(changing_trace, tmp_path):
     t.start()
     try:
         proc = subprocess.Popen([str(SAMPLE), str(trace), "--out", str(tmp_path / "out"), "--name", NAME,
-                                 "--png-fd", str(w)], pass_fds=(w,), stdout=subprocess.PIPE,
+                                 *BOTH, "--png-fd", str(w)], pass_fds=(w,), stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True)
     finally:
         os.close(w)
@@ -356,8 +376,8 @@ def test_sample_one_pass(changing_trace, tmp_path):
     blocks, _ = trace_blocks(trace)
     assert blocks >= 2
     env = dict(os.environ, VGACAP_SAMPLE_DEBUG="1")
-    for i, args in enumerate(([], ["--sampler", "tb-v1"], ["--sampler", "centre-v1"])):
-        proc = run_sample(trace, tmp_path / f"o{i}", *args, env=env)
+    for i, args in enumerate(([], list(BOTH), ["--sampler", "tb-v1"], ["--sampler", "centre-v1"])):
+        proc = run_sample(trace, tmp_path / f"o{i}", *args, samplers=(), env=env)
         assert proc.returncode == 0, proc.stderr
         assert f"trace_passes=1 blocks_decoded={blocks}\n" in proc.stderr
     proc = run_sample(trace, tmp_path / "quiet")

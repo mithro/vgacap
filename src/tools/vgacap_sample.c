@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// vgacap-sample: a simulation trace to frames, with both samplers, in one pass.
+// vgacap-sample: a simulation trace to frames, centre-v1 (and tb-v1 on request), in one pass.
 //
 //   vgacap-sample TRACE --out DIR --name PREFIX [--sampler tb-v1] [--sampler centre-v1]
 //                 [--centre-window DX,DY] [--store-level N] [--png-fd FD]
@@ -8,8 +8,10 @@
 // with layout=tt-um-43); a board capture is refused (exit 2). One
 // vgacap_trace_read over the whole trace feeds, per run of clk-high samples,
 // the shared calibration, then (from capture_after_clock) the frame clock,
-// then the samplers asked for (default both), in the order vgacap/sample.h
-// gives. centre-v1 is fed from clock 0.
+// then the samplers asked for, in the order vgacap/sample.h gives. Without
+// --sampler only centre-v1 runs: tb-v1 is the legacy sampler (the published
+// tb.cpp hashes) and runs only when asked for; with both options both run.
+// centre-v1 is fed from clock 0.
 //
 // Per sampler, in DIR/<sampler>/:
 //   PREFIX_<sampler>_frames.rgb6.zst   the distinct frames, first-appearance
@@ -345,7 +347,8 @@ static int usage(const char *fmt, ...) {
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fprintf(stderr, "\nusage: " PROG " TRACE --out DIR --name PREFIX [--sampler tb-v1] [--sampler centre-v1]\n"
-                    "       [--centre-window DX,DY] [--store-level N] [--png-fd FD]\n");
+                    "       [--centre-window DX,DY] [--store-level N] [--png-fd FD]\n"
+                    "       (default: centre-v1 only; tb-v1, the legacy sampler, runs only when asked for)\n");
     return 2;
 }
 
@@ -503,7 +506,7 @@ int main(int argc, char **argv) {
     }
     if (!trace || !out || !name) return usage("TRACE, --out and --name are required");
     if (!*name || strpbrk(name, "/\\ \t\n\r")) return usage("--name wants a bare file-name prefix, not '%s'", name);
-    if (!any) want[S_TB] = want[S_CENTRE] = 1;
+    if (!any) want[S_CENTRE] = 1;            // Ruling W: tb-v1 only on request
 
     char err[256] = "";
     vgacap_trace_reader_t *r = vgacap_trace_open(trace, err, sizeof err);

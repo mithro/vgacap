@@ -138,7 +138,15 @@ def traces(tmp_path_factory):
     return t
 
 
+#: The reference's default ran both samplers; since Ruling W the default is
+#: centre-v1 alone, so a case without --sampler asks for both explicitly.
+BOTH = ("--sampler", "tb-v1", "--sampler", "centre-v1")
+
+
 def run(binary, trace, out, args, png):
+    if "--sampler" not in args and "default" not in args:
+        args = (*BOTH, *args)
+    args = tuple(a for a in args if a != "default")
     fd = os.open(png, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     try:
         proc = subprocess.run([str(binary), str(trace), "--out", str(out), "--name", "eq", *args,
@@ -165,6 +173,7 @@ CASES = [
     ("normal", ("--sampler", "tb-v1")), ("normal", ("--sampler", "centre-v1")),
     ("normal", ("--centre-window", "2,1")), ("normal", ("--centre-window", "17,0")),
     ("cpp1.90625", ("--centre-window", "-1,2")), ("normal", ("--store-level", "1")),
+    ("normal", ("default",)), ("cpp1.90625", ("default",)),
 ]
 
 
@@ -173,7 +182,9 @@ def test_same_as_reference(traces, tmp_path, name, args):
     got = {}
     for who, binary in (("ref", REF), ("new", NEW)):
         out = tmp_path / who
-        proc = run(binary, traces[name], out, args, tmp_path / f"{who}.png-pipe")
+        # "default": the new binary's default (centre-v1) against the reference's --sampler centre-v1.
+        a = ("--sampler", "centre-v1") if who == "ref" and args == ("default",) else args
+        proc = run(binary, traces[name], out, a, tmp_path / f"{who}.png-pipe")
         got[who] = (proc.returncode, proc.stderr.replace(str(out), "OUT"), tree(out),
                     (tmp_path / f"{who}.png-pipe").read_bytes())
     ref, new = got["ref"], got["new"]
