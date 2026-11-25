@@ -27,8 +27,8 @@ board can settle and writes a dated Markdown report. The checks are:
 
 `tools/hil.py` lists why each check needs hardware.
 
-The example runs against `fpga-1`, an FPGA board on the shared Welland
-bench (see [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)),
+The example runs against `fpga-1`, a demo board with an FPGA breakout on
+the shared Welland bench (see [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)),
 whose Pi is at 10.21.2.34:
 
 ```sh
