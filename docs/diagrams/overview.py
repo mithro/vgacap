@@ -19,7 +19,7 @@ import re
 from xml.sax.saxutils import escape
 
 HERE = pathlib.Path(__file__).resolve().parent
-W, H = 1154, 1000
+W, H = 1154, 1070
 INK, INK2, MUTED = "#1d2433", "#2b3445", "#5b6577"
 SIG, SIG_FILL, SIG_EDGE = "#1c64d4", "#eaf1fd", "#9dbcef"
 STR, STR_FILL, STR_EDGE = "#f2620c", "#fff2e8", "#f8b48a"
@@ -128,6 +128,16 @@ def doc(x, y, w, h, label):
     text(x + w / 2, y + h + 16, label, "net", "middle", fill=SIG)
 
 
+def flow(x, y, names_widths, gap=22):
+    """Parts in a row, joined by thin arrows; returns the right edge."""
+    for i, (name, w) in enumerate(names_widths):
+        part(x, y, w, 26, name)
+        if i < len(names_widths) - 1:
+            line([(x + w, y + 13), (x + w + gap - 2, y + 13)], "thin")
+        x += w + gap
+    return x - gap
+
+
 # ---- canvas ------------------------------------------------------------------------
 add(f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
     f'font-family="-apple-system, BlinkMacSystemFont, \'Segoe UI\', Helvetica, Arial, sans-serif" '
@@ -158,49 +168,29 @@ add("</defs>")
 add(f'<rect x="0" y="0" width="{W}" height="{H}" fill="#ffffff"/>')
 
 # ---- geometry: data flows down the page ----------------------------------------------
-SRC_Y, SRC_W, SRC_H, GAP = 318, 232, 180, 22
-SRC_XS = [150 + i * (SRC_W + GAP) for i in range(4)]
-CX = [x + SRC_W / 2 for x in SRC_XS]          # centre of each source
-STREAM_Y, STREAM_H = SRC_Y + SRC_H + 64, 106
-LIB_Y = STREAM_Y + STREAM_H + 52
+# Columns: Raspberry Pi 5 | the demo board (two columns wide) | simulator.
+COL_W, GAP = 232, 22
+PI_X = 150
+BOARD_X, BOARD_W = PI_X + COL_W + GAP, 2 * COL_W + GAP
+SIM_X = BOARD_X + BOARD_W + GAP
+LEFT, RIGHT = PI_X, SIM_X + COL_W
+SRC_Y, SRC_H = 236, 240               # the Pi and simulator boxes
+BOARD_Y, BOARD_B = 16, 492            # the demo board container, top and bottom
+HOST_Y = BOARD_B + 22                 # ttcap, on the host
+STREAM_Y, STREAM_H = 600, 124
+LIB_Y = STREAM_Y + STREAM_H + 50
 OUT_Y = LIB_Y + 76 + 52
-LEFT, RIGHT = SRC_XS[0], SRC_XS[3] + SRC_W
 
-# ---- the inputs: the board, and the design's source for the simulator ----------------------
-# Tiny Tapeout's KiCad render of the ETR demo board, no breakout fitted (see NOTICE.md).
-PW, PHH = 200, 200 * 457 / 420
-PH_X, PH_Y = CX[1] - PW / 2 - 40, 16
-board = base64.b64encode((HERE / "images" / "tt-etr-dbv3p2.jpg").read_bytes()).decode()
-add(f'<image x="{PH_X}" y="{PH_Y}" width="{PW}" height="{PHH:.1f}" '
-    f'href="data:image/jpeg;base64,{board}"/>')
-text(PH_X + PW + 18, PH_Y + 92, "Tiny Tapeout demo board", "title")
-text(PH_X + PW + 18, PH_Y + 112, "an ASIC or an FPGA breakout on top;", "detail")
-text(PH_X + PW + 18, PH_Y + 128, "the design drives VGA on uo_out", "detail")
 
-# uo_out leaves the board once, from its OUTPUT header, on one bus into three sources.
-TAP_X = PH_X + PW * 0.76
-TAP_Y = PH_Y + PHH - 4
-BUS_Y = SRC_Y - 40
-add(f'<path d="M{TAP_X:.1f} {TAP_Y:.1f} L{TAP_X:.1f} {BUS_Y}" fill="none" stroke="{SIG}" stroke-width="3"/>')
-add(f'<path d="M{CX[0]} {BUS_Y} L{CX[2]} {BUS_Y}" fill="none" stroke="{SIG}" stroke-width="3"/>')
-add(f'<circle cx="{TAP_X:.1f}" cy="{BUS_Y}" r="4.5" fill="{SIG}"/>')
-text(TAP_X + 10, TAP_Y + 28, "uo_out[7:0]", "net", fill=SIG)
-for cx in CX[:3]:
-    line([(cx, BUS_Y), (cx, SRC_Y - 2)], "sig")
-
-doc(CX[3] - 23, PH_Y + 112, 46, 58, "the design's RTL")
-line([(CX[3], PH_Y + 112 + 58 + 24), (CX[3], SRC_Y - 2)], "sig")
-
-# ---- the capture sources ---------------------------------------------------------------------
 def container(x, title, mark):
-    rect(x, SRC_Y, SRC_W, SRC_H, SIG_FILL, SIG_EDGE)
+    rect(x, SRC_Y, COL_W, SRC_H, SIG_FILL, SIG_EDGE)
     mark(x + 26, SRC_Y + 24)
     text(x + 48, SRC_Y + 29, title, "title")
 
 
 def inner(x, kind, name, parts, sink):
     """A chip (or a simulator box) holding two parts side by side, then down to `sink`."""
-    bx, by, bw, bh = x + 16, SRC_Y + 52, SRC_W - 32, 66
+    bx, by, bw, bh = x + 16, SRC_Y + 60, COL_W - 32, 66
     if kind == "chip":
         chip(bx, by, bw, bh, name)
     else:
@@ -211,47 +201,94 @@ def inner(x, kind, name, parts, sink):
     part(px, by + 26, w1, 28, n1)
     line([(px + w1, by + 40), (px + w1 + 20, by + 40)], "thin")
     part(px + w1 + 22, by + 26, w2, 28, n2)
-    if sink:
-        sx = px + w1 + 22 + w2 / 2
-        line([(sx, by + 54), (sx, SRC_Y + SRC_H - 36)], "thin")
-        part(sx - 40, SRC_Y + SRC_H - 34, 80, 26, sink)
+    sx = px + w1 + 22 + w2 / 2
+    line([(sx, by + 54), (sx, SRC_Y + SRC_H - 44)], "thin")
+    part(sx - 40, SRC_Y + SRC_H - 42, 80, 26, sink)
 
 
-container(SRC_XS[0], "Demo board", lambda x, y: tt_badge(x, y, 14))
-inner(SRC_XS[0], "chip", "RP2040 or RP2350", (("PIO", 54), ("DMA", 54)), "USB")
-container(SRC_XS[1], "Raspberry Pi 5", lambda x, y: nested_svg(
+# ---- the demo board: the design on a breakout, captured by the board's own MCU ---------------
+rect(BOARD_X, BOARD_Y, BOARD_W, BOARD_B - BOARD_Y, SIG_FILL, SIG_EDGE)
+PW, PHH = 150, 150 * 457 / 420
+PH_X, PH_Y = BOARD_X + 16, BOARD_Y + 16
+board = base64.b64encode((HERE / "images" / "tt-etr-dbv3p2.jpg").read_bytes()).decode()
+rect(PH_X - 6, PH_Y - 6, PW + 12, PHH + 12, "#ffffff", SIG_EDGE, rx=8)
+add(f'<image x="{PH_X}" y="{PH_Y}" width="{PW}" height="{PHH:.1f}" '
+    f'href="data:image/jpeg;base64,{board}"/>')
+tx = PH_X + PW + 22
+tt_badge(tx + 14, BOARD_Y + 52, 14)
+text(tx + 36, BOARD_Y + 57, "Tiny Tapeout demo board", "title")
+for i, s in enumerate(("Your design is on a breakout plugged", "into the board. The board's own",
+                       "microcontroller captures its uo_out.")):
+    text(tx, BOARD_Y + 86 + 18 * i, s, "detail")
+
+# Two kinds of breakout: the design alone, or an FPGA with capture logic beside it.
+BK_Y, BK_H = 236, 70
+bw = (BOARD_W - 48) / 2
+A_X, B_X = BOARD_X + 16, BOARD_X + 32 + bw
+chip(A_X, BK_Y, bw, BK_H, "ASIC or FPGA breakout")
+part(A_X + (bw - 110) / 2, BK_Y + 30, 110, 28, "your design")
+chip(B_X, BK_Y, bw, BK_H, "FPGA breakout (iCE40UP5K)")
+flow(B_X + (bw - 168) / 2, BK_Y + 30, (("design", 72), ("capture", 74)))
+
+MCU_Y, MCU_H = 380, 96
+A_C, B_C = A_X + bw / 2, B_X + bw / 2
+line([(A_C, BK_Y + BK_H + 6), (A_C, MCU_Y - 7)], "sig")
+text(A_C + 9, BK_Y + BK_H + 42, "uo_out[7:0]", "net", fill=SIG)
+line([(B_C, BK_Y + BK_H + 6), (B_C, MCU_Y - 7)], "sig")
+text(B_C + 9, BK_Y + BK_H + 34, "framed bytes", "net", fill=SIG)
+text(B_C + 9, BK_Y + BK_H + 50, "on uo_out, uio", "net", fill=SIG)
+
+chip(A_X, MCU_Y, BOARD_W - 32, MCU_H, "RP2040 or RP2350, on the board")
+part(A_X + 24, MCU_Y + 24, BOARD_W - 80, 28, "PIO samples the pins on every project clock")
+mid = BOARD_X + BOARD_W / 2
+line([(mid - 82, MCU_Y + 52), (mid - 82, MCU_Y + 60)], "thin")
+flow(mid - 120, MCU_Y + 62, (("DMA", 76), ("USB", 76)))
+
+# ---- the Raspberry Pi 5, wired to the board's OUTPUT header --------------------------------------
+container(PI_X, "Raspberry Pi 5", lambda x, y: nested_svg(
     HERE / "logos" / "raspberry-pi.svg", x - 12, y - 15, 24, 30))
-inner(SRC_XS[1], "chip", "RP1", (("PIO", 54), ("DMA", 54)), "DRAM")
-container(SRC_XS[2], "FPGA", lambda x, y: tt_badge(x, y, 14))
-inner(SRC_XS[2], "chip", "FPGA", (("project", 66), ("capture", 70)), "I/O pins")
-container(SRC_XS[3], "Simulator", lambda x, y: add(
+inner(PI_X, "chip", "RP1", (("PIO", 54), ("DMA", 54)), "DRAM")
+TAP_X, TAP_Y = PH_X + PW * 0.76, PH_Y + PHH - 6
+WIRE_Y = PH_Y + PHH + 10
+PI_C = PI_X + COL_W / 2
+line([(TAP_X, TAP_Y), (TAP_X, WIRE_Y), (PI_C, WIRE_Y), (PI_C, SRC_Y - 2)], "sig")
+add(f'<circle cx="{TAP_X:.1f}" cy="{TAP_Y:.1f}" r="4.5" fill="{SIG}"/>')
+text(PI_X + 4, WIRE_Y - 30, "uo_out from the board's", "net", fill=SIG)
+text(PI_X + 4, WIRE_Y - 14, "header, wired to its GPIO", "net", fill=SIG)
+
+# ---- the simulator ---------------------------------------------------------------------------------
+container(SIM_X, "Simulator", lambda x, y: add(
     f'<path d="M{x - 11} {y + 4} L{x - 11} {y - 4} L{x - 4} {y - 4} L{x - 4} {y + 4} '
     f'L{x + 3} {y + 4} L{x + 3} {y - 4} L{x + 10} {y - 4}" fill="none" stroke="{SIG}" '
     f'stroke-width="2.25" stroke-linejoin="round"/>'))
-inner(SRC_XS[3], "sim", "Verilator or Icarus", (("design", 66), ("tracer", 66)), "trace file")
+inner(SIM_X, "sim", "Verilator or Icarus", (("design", 66), ("tracer", 66)), "trace file")
+SIM_C = SIM_X + COL_W / 2
+doc(SIM_C - 23, 110, 46, 58, "the design's RTL")
+line([(SIM_C, 110 + 58 + 24), (SIM_C, SRC_Y - 2)], "sig")
 
-# ttcap drives the demo board from the side, clear of the bus.
-laptop(20, SRC_Y + 70, 58, 34)
-text(49, SRC_Y + 132, "ttcap", "title", "middle")
-line([(84, SRC_Y + 87), (SRC_XS[0] - 2, SRC_Y + 87)], "ctl")
-
-# Every source writes the same stream.
-for cx in CX:
+# ---- into the stream: ttcap on the host for the board, the tools themselves elsewhere -------------
+usb_x = mid - 120 + 76 + 22 + 38
+line([(usb_x, MCU_Y + 90), (usb_x, HOST_Y - 2)], "str")
+laptop(usb_x - 29, HOST_Y, 58, 32)
+text(usb_x + 40, HOST_Y + 22, "ttcap, on your computer", "title")
+line([(usb_x, HOST_Y + 40), (usb_x, STREAM_Y - 2)], "str")
+for cx in (PI_C, SIM_C):
     line([(cx, SRC_Y + SRC_H), (cx, STREAM_Y - 2)], "str")
 
-# ---- the stream ----------------------------------------------------------------------------------
+# ---- the stream: one format for every source --------------------------------------------------------
 rect(LEFT, STREAM_Y, RIGHT - LEFT, STREAM_H, "#f7f8fb", INK2, rx=6, sw=2.5)
-text(LEFT + 20, STREAM_Y + 50, "vgacap stream", "title")
-text(LEFT + 20, STREAM_Y + 70, "chunks of these types:", "detail")
-chunks = (("VGCH", "header"), ("RAW", "samples"), ("RLE", "runs"), ("FRAM", "whole frame"),
-          ("EVNT", "events"), ("TIME", "timing notes"))
-pw, pg = 90, 14
-px = RIGHT - 22 - len(chunks) * pw - (len(chunks) - 1) * pg
-for name, meaning in chunks:
-    rect(px, STREAM_Y + 24, pw, 32, "#ffffff", STR, rx=4, sw=1.75)
-    text(px + pw / 2, STREAM_Y + 45, name, "pad", "middle")
-    text(px + pw / 2, STREAM_Y + 78, meaning, "detail", "middle")
-    px += pw + pg
+text(LEFT + 20, STREAM_Y + 34, "vgacap stream: one file format for every source", "title")
+text(LEFT + 20, STREAM_Y + 56, "what uo_out was on each clock: every clock, or compressed into runs, "
+     "or just whole frames", "detail")
+# A strip of recorded samples: colour bars, then the blanking and sync between lines.
+cells = BARS[:-1] * 3 + ["#000000"] * 8
+cw = (RIGHT - LEFT - 40) / len(cells)
+for i, c in enumerate(cells):
+    add(f'<rect x="{LEFT + 20 + i * cw:.1f}" y="{STREAM_Y + 72}" width="{cw - 1.5:.1f}" '
+        f'height="22" rx="2" fill="{c}" stroke="#c9ced8" stroke-width="0.75"/>')
+sx = LEFT + 20 + 21 * cw
+text(sx + 4 * cw, STREAM_Y + 112, "blanking and sync", "detail", "middle")
+text(LEFT + 20 + 10.5 * cw, STREAM_Y + 112, "a line of pixels", "detail", "middle")
 
 # ---- reading it back ---------------------------------------------------------------------------
 MID = (LEFT + RIGHT) / 2
@@ -280,7 +317,7 @@ text(OX[1] + 108, OUT_Y + 74, "against references", "detail")
 
 # ---- legend --------------------------------------------------------------------------------------
 LY = OUT_Y + 90 + 46
-items = (("sig", "signals"), ("str", "stream bytes"), ("pic", "pictures"), ("ctl", "control"))
+items = (("sig", "signals"), ("str", "captured data"), ("pic", "pictures"))
 total = sum(40 + 7.4 * len(label) + 26 for _, label in items) - 26
 x = MID - total / 2
 for kind, label in items:
