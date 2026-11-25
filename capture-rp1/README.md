@@ -11,8 +11,9 @@ RP1 I/O chip has a PIO block like the RP2040's and RP2350's, and
    byte);
 3. DMA the words into DRAM through
    [piolib](https://github.com/raspberrypi/utils/tree/master/piolib);
-4. write a vgacap stream (`VGCH` header, `RAW ` chunks, a closing `TIME`
-   chunk).
+4. write a vgacap stream (`VGCH` header, `RAW` chunks, a closing `TIME`
+   chunk; the four-byte tag of a `RAW` chunk is "RAW" followed by a
+   space).
 
 ```sh
 git clone --depth 1 https://github.com/raspberrypi/utils.git
@@ -30,7 +31,8 @@ board yet, so the pin assignment is a parameter, not a fact.
 `--gen FILE` adds a second state machine that drives FILE's samples (one
 byte each, looped) and a clock onto the same pins. `--gen-counter` drives a
 descending 8-bit counter instead, with no host involvement at all. Results
-on pi-sw2-p4 (a Pi 5 with nothing on its header), 2026-11-24:
+on a Raspberry Pi 5 on the Welland bench with nothing on its GPIO header,
+2026-11-24:
 
 | test | rate | result |
 |---|---|---|
