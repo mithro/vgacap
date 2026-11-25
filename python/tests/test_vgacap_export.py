@@ -8,6 +8,7 @@ VCDs by build/test_export_fst (libfst), and by fst2vcd when it is on PATH.
 """
 from __future__ import annotations
 import gzip
+import math
 import os
 import pathlib
 import re
@@ -315,6 +316,30 @@ def test_range_seeks(busy, tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
+def test_no_clk_no_empty_times(tmp_path):
+    """--no-clk over bench-runs' static trace of 34e6 clocks (3 blocks): every
+    time but the last (the range's end) has a change. Where the trace split a
+    run at a block end only the clock bit differs, which is no change without
+    clk."""
+    path = tmp_path / "static.trace.zst"
+    subprocess.run([str(BENCH), "--clocks", "34000000", "--profile", "static", "--write-trace", str(path)],
+                   check=True, capture_output=True, text=True)
+    env = dict(os.environ, VGACAP_EXPORT_DEBUG="1")
+    out = tmp_path / "n.vcd"
+    proc = run_export(path, out, "--format", "vcd", "--no-clk", env=env)
+    assert proc.returncode == 0, proc.stderr
+    vcd = read_vcd(out)
+    changed = {t for t, _, _ in vcd.changes}
+    assert [t for t in vcd.times[:-1] if t not in changed] == []
+    assert vcd.times == sorted(set(vcd.times))
+    assert debug_counts(proc)[1:] == (len(vcd.times), len(vcd.changes))
+    # With clk the same split is a clk change like any other.
+    proc = run_export(path, out, "--format", "vcd", "--from", "16777000", "--to", "16777500")
+    assert proc.returncode == 0, proc.stderr
+    vcd = read_vcd(out)
+    assert len(vcd.times) == 2 * 500 + 1
+
+
 # ---- the frame signal ------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
@@ -421,8 +446,11 @@ def test_gtkw_written(framed, tmp_path):
                       "--to", "1100")
     assert proc.returncode == 0, proc.stderr
     s = "tt_um_synth_sample"
+    t0, t1 = time_ps(2000, 2, HZ), time_ps(2200, 2, HZ)
     want = (f'[dumpfile] "{out.resolve()}"\n'
-            f"[timestart] {time_ps(2000, 2, HZ)}\n"
+            f"[timestart] {t0}\n"
+            "[size] 1425 800\n"
+            f"*{-math.log2((t1 - t0 + 1) / 1000 * 200):.6f} -1{' -1' * 26}\n"
             "@800200\n-ports\n"
             f"@28\n{s}.clk\n{s}.rst_n\n{s}.ena\n"
             f"@22\n{s}.ui_in[7:0]\n{s}.uio_in[7:0]\n{s}.uo_out[7:0]\n{s}.uio_out[7:0]\n{s}.uio_oe[7:0]\n"
@@ -438,9 +466,16 @@ def test_gtkw_written(framed, tmp_path):
     names = read_vcd(out).names()
     assert sorted(line for line in gtkw.splitlines() if line.startswith(s)) == sorted(names)
     sucl = (tmp_path / "view.sucl").read_text()
+    # Surfer: each group's first variable, grouped while focused; then, that
+    # variable focused, the rest in order. Items: a ports, b clk .. i uio_oe,
+    # j decoded, k hsync ..
     assert sucl == (f"load_file {out.resolve()}\n"
-                    f"scope_add_as_group {s}\n"
-                    f"scope_add_as_group {s}.decoded\n")
+                    f"variable_add {s}.clk\nitem_focus a\ngroup_marked ports\nitem_focus b\n"
+                    + "".join(f"variable_add {s}.{n}\n" for n, _ in PORTS[1:])
+                    + "item_unfocus\n"
+                    f"variable_add {s}.decoded.hsync\nitem_focus j\ngroup_marked decoded\nitem_focus k\n"
+                    + "".join(f"variable_add {s}.decoded.{n}\n" for n in ("vsync", "r", "g", "b", "rgb6", "frame"))
+                    + "item_unfocus\n")
     # An FST names its own file; no extension gets one added.
     proc = run_export(trace, tmp_path / "plain", "--format", "fst", "--from", "1000", "--to", "1100")
     assert proc.returncode == 0, proc.stderr
@@ -491,6 +526,7 @@ def test_usage(small, tmp_path):
                  ["--format", "vcd", "--from", "10", "--to", "10"],
                  ["--format", "vcd", "--to", str(R + 4 * FRAME + 1)],
                  ["--format", "vcd", "--scope", "a b"], ["--format", "vcd", "--scope", ""],
+                 ["--format", "vcd", "--scope", "a/b"],
                  ["--format", "vcd", "--bogus"]):
         proc = run_export(zst, out, *args)
         assert proc.returncode == 2, (args, proc.stderr)

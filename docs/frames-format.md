@@ -178,6 +178,13 @@ over consecutive gaps. The runs are exactly this greedy grouping and cover
 frames 0 to `frames` - 1 in order. A gap carries no start clock or `missing`
 (they read back as 0).
 
+A gap has no start clock of its own, so a reader that needs the frame number
+at each clock (`vgacap-export --frames`) uses this rule: before frame 0 there
+is no frame; frame k holds from its start clock until the next frame starts,
+except that when frame k is followed by gaps, "no frame" starts at frame k's
+start + `frame_clocks` and lasts until the next frame with a picture starts.
+The last frame holds to the end of the trace.
+
 ## frame_hashes.<method>.txt
 
 One file per hash method, `<method>` being `sha256-rgb6` or
