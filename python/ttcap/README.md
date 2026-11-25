@@ -20,14 +20,13 @@ REPL. The other capture sources have their own READMEs:
 
 With a demo board on `/dev/ttyACM0` running a 640x480 VGA design, such as a
 [tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns)
-bitstream on an FPGA breakout:
+bitstream on an FPGA breakout (500 kHz suits an RP2350 demo board; see
+[the fastest clocks](../../README.md#what-is-in-it) for an RP2040):
 
 ```sh
 uv run ttcap probe serial:/dev/ttyACM0          # sys.version and the GPIO map
 uv run ttcap throughput serial:/dev/ttyACM0     # what clock the link can keep up with
-# on an ASIC breakout, --project <tt_um_...> instead of --design <bitstream>
-uv run ttcap capture serial:/dev/ttyACM0 --design <bitstream> \
-    --clock-hz 500000 --frames 2 --out capture.vgacap
+uv run ttcap capture serial:/dev/ttyACM0 --clock-hz 500000 --frames 2 --out capture.vgacap
 mkdir -p out && uv run ttcap png capture.vgacap out/frame   # out/frame-0000.png ...
 ```
 
@@ -50,11 +49,11 @@ bytes: ~56 KB at the default and ~90 KB at `--buf-words 8192`, which an
 RP2040 demo board does not have. In frame and window modes it is 24000
 bytes plus one line. If it refuses, reset the board to free its heap.
 
-`ttcap png` needs [Pillow](https://github.com/python-pillow/Pillow), so it wants the `synth` extra
-(`uv sync --extra synth`) and [a built `build/vgacap-frames`](../../docs/development.md).
+`ttcap png` needs [Pillow](https://github.com/python-pillow/Pillow) and
+[a built `build/vgacap-frames`](../../docs/development.md).
 
 For a board on the Welland bench, see
-[Reaching a Welland board](#reaching-a-welland-board).
+[Reaching a Welland board](#reaching-a-welland-board-bench-access-needed).
 
 ## Running on a Raspberry Pi
 
@@ -69,6 +68,8 @@ uv sync
 uv run --no-sync ttcap probe serial:/dev/ttyACM0
 ```
 
+With `UV_NO_DEV=1`, `ttcap png` needs `uv sync --extra synth`.
+
 ## `ttcap demo`: a board in, video out
 
 ```sh
@@ -79,7 +80,7 @@ uv run ttcap demo --board fpga-1 --clock-hz 500000 --outdir out --dry-run   # ju
 ```
 
 `--board fpga-1` names a board on the Welland bench; see
-[Reaching a Welland board](#reaching-a-welland-board), or use `--link` for
+[Reaching a Welland board](#reaching-a-welland-board-bench-access-needed), or use `--link` for
 a board of your own.
 
 One capture feeds every output, through a `tee`:
@@ -156,9 +157,9 @@ However the demo ends (an exception, a `kill`, a closed terminal), it tears
 down the pipeline's whole process group on the way out, so a capture is
 never left holding a shared bench board.
 
-## Reaching a Welland board
+## Reaching a Welland board (bench access needed)
 
-The Welland boards are a shared, public bench of Tiny Tapeout demo boards,
+The Welland boards are a shared bench of Tiny Tapeout demo boards,
 listed on [tinytapeout.fpgas.online](https://tinytapeout.fpgas.online). Each board is attached to its own
 Raspberry Pi, which runs the fpgas.online bridge (`fpgas-tt`).
 
