@@ -27,7 +27,7 @@ every push and pull request, on a pinned `ubuntu-24.04` image:
 | [`vgacap_fw.uf2`](../firmware/README.md) for the RP2350 | no | yes | no | no | no |
 | MicroPython unix port with the module | no | no | yes | no | no |
 | MicroPython rp2 port with the module | no | no | yes | no | no |
-| GStreamer | absent | -- | absent | absent | installed |
-| plugin | skipped | -- | skipped | skipped | built |
+| GStreamer | absent | -- | -- | absent | installed |
+| plugin | skipped | -- | -- | skipped | built |
 | `ctest` | yes | no | no | no | yes |
 | `pytest` | no | no | [`test_mpy_module.py`](../python/tests/test_mpy_module.py) | all | all |
