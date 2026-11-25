@@ -53,28 +53,27 @@ design must run.
 
 | source | runs on | code | `ttcap` option | fastest stream clock | fastest frame clock |
 |---|---|---|---|---|---|
-| stock firmware | demo board RP2350 | [`python/ttcap/mp/`](python/ttcap/mp/) | `--firmware micropython` | 750 kHz | 40 MHz |
-| stock firmware | demo board RP2040 | [`python/ttcap/mp/`](python/ttcap/mp/) | `--firmware micropython` | 60 kHz | -- |
-| vgacap firmware | demo board RP2350 | [`firmware/`](firmware/README.md) | `--firmware picosdk` | 750 kHz | 25.175 MHz |
-| MicroPython C module | demo board RP2350 | [`mpy/`](mpy/README.md) | `--firmware mpy-module` | 500 kHz | 25 MHz |
-| Raspberry Pi 5 | Raspberry Pi 5 RP1 | [`capture-rp1/`](capture-rp1/README.md) | -- | 500 kHz | -- |
-| FPGA | demo board with an FPGA breakout | [`rtl/`](rtl/README.md) | -- | 250 kHz | -- |
-| simulator | host computer | [`python/vgacap/bin2stream.py`](python/vgacap/bin2stream.py) | -- | -- | -- |
+| stock firmware | RP2350 on the demo board | [`python/ttcap/mp/`](python/ttcap/mp/) | `--firmware micropython` | 750 kHz | 40 MHz |
+| stock firmware | RP2040 on the demo board | [`python/ttcap/mp/`](python/ttcap/mp/) | `--firmware micropython` | 60 kHz | -- |
+| vgacap firmware | RP2350 on the demo board | [`firmware/`](firmware/README.md) | `--firmware picosdk` | 750 kHz | 25.175 MHz |
+| MicroPython C module | RP2350 on the demo board | [`mpy/`](mpy/README.md) | `--firmware mpy-module` | 500 kHz | 25 MHz |
+| Raspberry Pi 5 | RP1 on a Raspberry Pi 5 | [`capture-rp1/`](capture-rp1/README.md) | -- | 500 kHz | -- |
+| FPGA | iCE40UP5K on an FPGA breakout | [`rtl/`](rtl/README.md) | -- | 250 kHz | -- |
+| simulator | host CPU | [`python/vgacap/bin2stream.py`](python/vgacap/bin2stream.py) | -- | -- | -- |
 
 **Verification:**
 
 | source | chip | breakout | stream | frame | window |
 |---|---|---|---|---|---|
 | stock firmware | RP2350 | FPGA | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4) | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-frame-capture-fpga4) | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-frame-capture-fpga4) |
-| stock firmware | RP2350 | ASIC | [clean](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-pio-rle-tt09) | [clean](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4) | not checked |
-| stock firmware | RP2040 | ASIC | [clean](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-first-silicon-capture-tt07-tt_um_rejunity_vga) | emulator only | emulator only |
+| stock firmware | RP2350 | ASIC | [clean](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-pio-rle-tt09) | [clean](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-frame-capture-fpga4/README.md#real-silicon-tt09-at-its-design-clocks) | not checked |
+| stock firmware | RP2040 | ASIC | [clean](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-ttcap-capture-serial-tt07) | emulator only | emulator only |
 | vgacap firmware | RP2350 | FPGA | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-picosdk-firmware-fpga4) | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-picosdk-firmware-fpga4) | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-picosdk-firmware-fpga4) |
 | vgacap firmware | RP2350 | ASIC | [clean](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-picosdk-firmware-fpga4/README.md#asic-board-tt09-silicon-with-asic_select) | [clean](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-picosdk-firmware-fpga4/README.md#asic-board-tt09-silicon-with-asic_select) | [clean](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-picosdk-firmware-fpga4/README.md#asic-board-tt09-silicon-with-asic_select) |
 | MicroPython C module | RP2350 | FPGA | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-mpy-module-fpga1) | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-mpy-module-fpga1) | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-mpy-module-fpga1) |
 | FPGA | RP2350 | FPGA | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-rtl-framer-fpga4) | -- | -- |
 | Raspberry Pi 5 | RP1 | -- | [loopback only](capture-rp1/README.md#proven-on-hardware-the-loopback-fixture) | -- | -- |
 | simulator | -- | -- | [clean](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-sim-tt_um_vga_pattern) | -- | -- |
-| BIO | -- | -- | [simulator only](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-11-24-bio-capture-feasibility.md) | -- | -- |
 
 Run-length capture on the stock firmware
 ([vgacap PR #6](https://github.com/mithro/vgacap/pull/6), not yet merged) was
@@ -101,15 +100,16 @@ See [docs/development.md](docs/development.md).
 
 ## A first capture
 
-With fpga-1 on the Welland bench
+With a demo board on `/dev/ttyACM0` whose FPGA breakout can enable the
+`tt_um_vga_pattern` bitstream, as fpga-1 can
 ([Reaching a Welland board](python/ttcap/README.md#reaching-a-welland-board)):
 
 ```sh
-ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com
-uv run ttcap capture ws://127.0.0.1:18034/serial --design tt_um_vga_pattern \
+uv run ttcap capture serial:/dev/ttyACM0 --design tt_um_vga_pattern \
     --clock-hz 500000 --frames 2 --out capture.vgacap
 mkdir -p out && build/vgacap-frames capture.vgacap out/frame      # out/frame-0000.ppm ...
-uv run ttcap demo --link ws://127.0.0.1:18034/serial --design tt_um_vga_pattern \
+export GST_PLUGIN_PATH=$PWD/build
+uv run ttcap demo --link serial:/dev/ttyACM0 --design tt_um_vga_pattern \
     --clock-hz 500000 --fps 5 --outdir out                         # PNGs + MKV
 ```
 
