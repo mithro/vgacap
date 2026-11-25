@@ -16,7 +16,7 @@ back.
 The hardware notes below name the boards they were measured on: `fpga-4`
 is an FPGA demo board on the shared Welland bench (see
 [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)),
-and `tt09` is an ASIC demo board.
+and `tt09` is the ASIC demo board at Welland that carries a TT09 chip.
 
 ## Layout
 
@@ -79,7 +79,8 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   frame, window and streaming captures of `tt_um_vgacal_bars` were
   pixel-exact, so the iCE40 kept its configuration (tt-vga-capture
   `docs/results/2026-11-24-picosdk-firmware-fpga4/`).
-* GPIO 1 is the iCE40's `CRESET_B` on the FPGA boards (and the mux
+* GPIO 1 is the iCE40's `CRESET_B` on every Tiny Tapeout FPGA breakout
+  board (and the mux
   controller's reset on an ASIC carrier). The stock firmware leaves it
   driven high. While the RP2350 is in reset and in its bootloader it is an
   input with the pad's default pull-down, and this firmware leaves
