@@ -38,7 +38,7 @@ tt-vga-testpatterns'
 [`tools/upload.py`](https://github.com/mithro/tt-vga-testpatterns/blob/main/tools/upload.py):
 
 ```sh
-ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com
+ssh -f -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com
 tools/hil.sh --board fpga-1 --design tt_um_vgacal_bars --clock-hz 500000 \
     --link ws://127.0.0.1:18034/serial docs/results/
 ```
