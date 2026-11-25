@@ -1154,7 +1154,7 @@ static void diff_compare(const char *path, struct diff_stats *st, const char *wh
 // or hostile damage (`fault` < 0), plain or as zstd blocks.
 static void diff_one(const char *path, unsigned bits, int zstd, int fault, struct diff_stats *st, const char *what) {
     vgacap_header_t h;
-    uint8_t clock_bit = bits >= 2 && rnd() % 3 ? (uint8_t)(rnd() % bits) : VGACAP_CLOCK_BIT_NONE;
+    const uint8_t clock_bit = (uint8_t)(bits >= 2 && rnd() % 3 ? rnd() % bits : VGACAP_CLOCK_BIT_NONE);
     vgacap_header_init_v2(&h, (uint8_t)bits, clock_bit == VGACAP_CLOCK_BIT_NONE ? 1 : 2, clock_bit,
                           (uint8_t)(rnd() & 1));
     h.mode = VGACAP_MODE_EVENT; h.clock_hz = 25175000;
