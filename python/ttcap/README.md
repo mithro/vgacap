@@ -19,10 +19,11 @@ REPL. The other capture sources have their own READMEs:
 [`rtl/`](../../rtl/README.md) (FPGA).
 
 ```sh
-uv run ttcap probe serial:/dev/ttyACM0          # sys.version and the GPIO map
-uv run ttcap throughput serial:/dev/ttyACM0     # what clock the link can keep up with
-uv run ttcap capture serial:/dev/ttyACM0 \
-    --project tt_um_rejunity_vga --clock-hz 60000 --seconds 1 --out capture.vgacap
+ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com   # fpga-1
+uv run ttcap probe ws://127.0.0.1:18034/serial          # sys.version and the GPIO map
+uv run ttcap throughput ws://127.0.0.1:18034/serial     # what clock the link can keep up with
+uv run ttcap capture ws://127.0.0.1:18034/serial --design tt_um_vga_pattern \
+    --clock-hz 500000 --frames 2 --out capture.vgacap
 uv run ttcap png capture.vgacap out/frame       # out/frame-0000.png ...
 ```
 
@@ -68,8 +69,8 @@ uv run --no-sync ttcap probe ws://127.0.0.1:8765/serial
 ```sh
 uv run ttcap demo --board fpga-1 --design tt_um_vga_pattern \
     --clock-hz 60000 --seconds 60 --outdir out            # PNGs + out/capture.mkv
-uv run ttcap demo --board fpga-1 --clock-hz 60000 --outdir out --window --serve 8080
-uv run ttcap demo --board fpga-1 --clock-hz 60000 --outdir out --dry-run   # just the pipeline
+uv run ttcap demo --board fpga-1 --clock-hz 500000 --outdir out --window --serve 8080
+uv run ttcap demo --board fpga-1 --clock-hz 500000 --outdir out --dry-run   # just the pipeline
 ```
 
 `--board fpga-1` names a board on the Welland bench; see
