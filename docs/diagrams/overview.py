@@ -16,16 +16,16 @@ from __future__ import annotations
 import base64
 import pathlib
 import re
+import struct
 from xml.sax.saxutils import escape
 
 HERE = pathlib.Path(__file__).resolve().parent
 MARGIN = 16
-W, H = 2 * MARGIN + 2 * 210 + 560 + 2 * 22, 996  # Pi | board | simulator; H ends below the legend
 INK, INK2, MUTED = "#1d2433", "#2b3445", "#5b6577"
 SIG, SIG_FILL, SIG_EDGE = "#1c64d4", "#eaf1fd", "#9dbcef"
 STR, STR_FILL, STR_EDGE = "#f2620c", "#fff2e8", "#f8b48a"
 PIC, PIC_FILL, PIC_EDGE = "#14845a", "#e7f6ef", "#93d3b6"
-CTL, CTL_FILL, CTL_EDGE = "#6b46d6", "#f2eefd", "#c2b2f0"
+CTL = "#6b46d6"                      # ttcap, the host tool
 PART, PART_EDGE = "#ffffff", "#7d8799"
 BARS = ["#ffffff", "#ffff00", "#00ffff", "#00ff00", "#ff00ff", "#ff0000", "#0000ff", "#000000"]
 
@@ -39,20 +39,34 @@ def text(x, y, s, cls="detail", anchor="start", fill=None):
     add(f'<text x="{x}" y="{y}" class="{cls}" text-anchor="{anchor}"{f}>{escape(s)}</text>')
 
 
-def rect(x, y, w, h, fill, edge, rx=8, sw=1.25, dash=None):
-    d = f' stroke-dasharray="{dash}"' if dash else ""
+def rect(x, y, w, h, fill, edge, rx=8, sw=1.25):
     add(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" fill="{fill}" '
-        f'stroke="{edge}" stroke-width="{sw}"{d}/>')
+        f'stroke="{edge}" stroke-width="{sw}"/>')
 
 
-def line(points, kind, head=True):
-    colour, width, marker = {"sig": (SIG, 3, "a-sig"), "str": (STR, 4.5, "a-str"),
-                             "pic": (PIC, 3, "a-pic"), "ctl": (CTL, 1.75, "a-ctl"),
-                             "thin": (SIG, 1.75, "a-thin")}[kind]
+LINES = {"sig": (SIG, 3, 3.4), "str": (STR, 4.5, 3.0), "pic": (PIC, 3, 3.4),
+         "thin": (SIG, 1.75, 4.6)}          # kind: colour, stroke width, arrowhead size
+
+
+def line(points, kind):
+    """A polyline ending in an arrowhead."""
+    colour, width, _ = LINES[kind]
     d = "M" + " L".join(f"{x} {y}" for x, y in points)
-    dash = ' stroke-dasharray="5 4"' if kind == "ctl" else ""
-    end = f' marker-end="url(#{marker})"' if head else ""
-    add(f'<path d="{d}" fill="none" stroke="{colour}" stroke-width="{width}"{dash}{end}/>')
+    add(f'<path d="{d}" fill="none" stroke="{colour}" stroke-width="{width}" '
+        f'marker-end="url(#a-{kind})"/>')
+
+
+def jpeg_size(path):
+    """(width, height) from a baseline or progressive JPEG's SOF segment."""
+    data = path.read_bytes()
+    i = 2
+    while i < len(data):
+        marker, length = data[i + 1], struct.unpack(">H", data[i + 2:i + 4])[0]
+        if marker in (0xC0, 0xC1, 0xC2):
+            h, w = struct.unpack(">HH", data[i + 5:i + 9])
+            return w, h
+        i += 2 + length
+    raise ValueError(f"no SOF segment in {path}")
 
 
 def nested_svg(path, x, y, w, h):
@@ -129,36 +143,37 @@ def doc(x, y, w, h, label):
     text(x + w / 2, y + h + 16, label, "net", "middle", fill=SIG)
 
 
-# ---- canvas ------------------------------------------------------------------------
-add(f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
-    f'font-family="-apple-system, BlinkMacSystemFont, \'Segoe UI\', Helvetica, Arial, sans-serif" '
-    f'role="img" aria-labelledby="t d">')
-add('<title id="t">vgacap overview</title>')
-add('<desc id="d">A Tiny Tapeout demo board\'s uo_out is captured by the board\'s own '
-    'RP2040 or RP2350 (PIO, DMA, USB to ttcap), either straight from the design\'s breakout or '
-    'as framed bytes from capture logic beside the design on an iCE40UP5K FPGA breakout; or by '
-    'a Raspberry Pi 5 wired to the board (RP1 PIO and DMA); or a simulator runs the design\'s '
-    'RTL. All write one vgacap stream, which libvgaframe turns into pictures, video and '
-    'pixel-exact checks.</desc>')
-add(f"""<style>
+# ---- canvas (W and H come from the geometry; see the bottom) -------------------------
+def canvas(w, h):
+    head = []
+    add = head.append
+    add(f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
+        f'font-family="-apple-system, BlinkMacSystemFont, \'Segoe UI\', Helvetica, Arial, sans-serif" '
+        f'role="img" aria-labelledby="t d">')
+    add('<title id="t">vgacap overview</title>')
+    add('<desc id="d">A Tiny Tapeout demo board\'s uo_out is captured by the board\'s own '
+        'RP2040 or RP2350 (PIO, DMA, USB to ttcap), either straight from the design\'s breakout or '
+        'as framed bytes from capture logic beside the design on an iCE40UP5K FPGA breakout; or by '
+        'a Raspberry Pi 5 wired to the board (RP1 PIO and DMA); or a simulator runs the design\'s '
+        'RTL. All write one vgacap stream, which libvgaframe turns into pictures, video and '
+        'pixel-exact checks.</desc>')
+    add(f"""<style>
   .title {{ font-size: 15px; font-weight: 600; fill: {INK}; }}
   .detail {{ font-size: 12.5px; fill: {MUTED}; }}
   .net {{ font-size: 12px; font-weight: 600; }}
-  .head {{ font-size: 12px; font-weight: 700; letter-spacing: 0.08em; fill: {MUTED}; }}
   .chipname {{ font-size: 11px; font-weight: 700; letter-spacing: 0.03em; }}
   .part {{ font-size: 12px; font-weight: 700; fill: {INK}; }}
-  .pad {{ font-size: 12.5px; font-weight: 700; fill: {INK};
-          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
   .legend {{ font-size: 12.5px; fill: {INK}; }}
 </style>""")
-add("<defs>")
-for name, colour, mw in (("a-sig", SIG, 3.4), ("a-str", STR, 3.0), ("a-pic", PIC, 3.4),
-                         ("a-ctl", CTL, 4.1), ("a-thin", SIG, 4.6)):
-    add(f'<marker id="{name}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="{mw}" '
-        f'markerHeight="{mw}" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" '
-        f'fill="{colour}"/></marker>')
-add("</defs>")
-add(f'<rect x="0" y="0" width="{W}" height="{H}" fill="#ffffff"/>')
+    add("<defs>")
+    for kind, (colour, _, mw) in LINES.items():
+        add(f'<marker id="a-{kind}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="{mw}" '
+            f'markerHeight="{mw}" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" '
+            f'fill="{colour}"/></marker>')
+    add("</defs>")
+    add(f'<rect x="0" y="0" width="{w}" height="{h}" fill="#ffffff"/>')
+    return head
+
 
 # ---- geometry: data flows down the page ----------------------------------------------
 # Columns: Raspberry Pi 5 | the demo board | simulator.
@@ -167,8 +182,8 @@ PI_X = MARGIN
 BOARD_X = PI_X + COL_W + GAP
 SIM_X = BOARD_X + BOARD_W + GAP
 LEFT, RIGHT = PI_X, SIM_X + COL_W
-BOARD_Y = 16
-SRC_Y, SRC_H = 222, 236               # the Pi and simulator boxes
+BOARD_Y = MARGIN
+SRC_Y, SRC_H = 240, 236               # the Pi and simulator boxes
 BOARD_B = SRC_Y + SRC_H               # the board box ends level with them
 HOST_Y = BOARD_B + 22                 # ttcap, on the host
 STREAM_Y, STREAM_H = HOST_Y + 84, 96
@@ -205,7 +220,6 @@ def inner(x, kind, name, parts, sink):
     bottom = stack(cx, by + 26, parts)
     line([(cx, bottom), (cx, SRC_Y + SRC_H - 44)], "thin")
     part(cx - 48, SRC_Y + SRC_H - 42, 96, 26, sink)
-    return cx
 
 
 def leader(x1, y1, x2, y2):
@@ -221,8 +235,9 @@ rect(BOARD_X, BOARD_Y, BOARD_W, BOARD_B - BOARD_Y, SIG_FILL, SIG_EDGE)
 tt_badge(BOARD_X + 26, BOARD_Y + 24, 14)
 text(BOARD_X + 48, BOARD_Y + 29, "Tiny Tapeout demo board", "title")
 
+BOARD_IMG = HERE / "images" / "tt-etr-dbv3p2.jpg"
 PW = 180
-PHH = PW * 457 / 420
+PHH = PW * jpeg_size(BOARD_IMG)[1] / jpeg_size(BOARD_IMG)[0]
 INNER_W = BOARD_W - 16 - PW - 28 - 16          # the column of parts
 A_X = BOARD_X + 16
 BK_Y, BK_H = BOARD_Y + 72, 116
@@ -259,7 +274,7 @@ MCU_BOTTOM = stack(mid, MCU_Y + 66, ("DMA", "USB"), w=110, h=26)
 # The board render, with callouts to the breakout socket and to the board's RP2350.
 PH_X = BOARD_X + BOARD_W - 16 - PW
 PH_Y = (BK_Y + BOARD_B - 16) / 2 - PHH / 2
-board = base64.b64encode((HERE / "images" / "tt-etr-dbv3p2.jpg").read_bytes()).decode()
+board = base64.b64encode(BOARD_IMG.read_bytes()).decode()
 rect(PH_X - 6, PH_Y - 6, PW + 12, PHH + 12, "#ffffff", SIG_EDGE, rx=8)
 add(f'<image x="{PH_X}" y="{PH_Y:.1f}" width="{PW}" height="{PHH:.1f}" '
     f'href="data:image/jpeg;base64,{board}"/>')
@@ -271,9 +286,10 @@ leader(PH_X + 0.51 * PW, PH_Y + 0.50 * PHH, mid + MCU_W / 2, MCU_Y + MCU_H / 2)
 # ---- the Raspberry Pi 5, wired to the same uo_out -------------------------------------------------
 container(PI_X, "Raspberry Pi 5", lambda x, y: nested_svg(
     HERE / "logos" / "raspberry-pi.svg", x - 12, y - 15, 24, 30))
-PI_SINK = inner(PI_X, "chip", "RP1", ("PIO", "DMA"), "DRAM")
+inner(PI_X, "chip", "RP1", ("PIO", "DMA"), "DRAM")
 PI_C = PI_X + COL_W / 2
-TAP_Y = BK_Y + BK_H + 18
+TAP_Y = BK_Y + BK_H + 12
+assert TAP_Y < SRC_Y - 16, "the Pi's tap must drop into its box"
 line([(A_C, TAP_Y), (PI_C, TAP_Y), (PI_C, SRC_Y - 2)], "sig")
 add(f'<circle cx="{A_C:.1f}" cy="{TAP_Y}" r="4.5" fill="{SIG}"/>')
 
@@ -282,7 +298,7 @@ container(SIM_X, "Simulator", lambda x, y: add(
     f'<path d="M{x - 11} {y + 4} L{x - 11} {y - 4} L{x - 4} {y - 4} L{x - 4} {y + 4} '
     f'L{x + 3} {y + 4} L{x + 3} {y - 4} L{x + 10} {y - 4}" fill="none" stroke="{SIG}" '
     f'stroke-width="2.25" stroke-linejoin="round"/>'))
-SIM_SINK = inner(SIM_X, "sim", "Verilator or Icarus", ("design", "tracer"), "trace file")
+inner(SIM_X, "sim", "Verilator or Icarus", ("design", "tracer"), "trace file")
 SIM_C = SIM_X + COL_W / 2
 doc(SIM_C - 23, 60, 46, 58, "the design's RTL")
 line([(SIM_C, 60 + 58 + 24), (SIM_C, SRC_Y - 2)], "sig")
@@ -293,21 +309,21 @@ line([(usb_x, MCU_BOTTOM), (usb_x, HOST_Y - 2)], "str")
 laptop(usb_x - 29, HOST_Y, 58, 32)
 text(usb_x + 40, HOST_Y + 22, "ttcap", "title")
 line([(usb_x, HOST_Y + 40), (usb_x, STREAM_Y - 2)], "str")
-for cx in (PI_SINK, SIM_SINK):
+for cx in (PI_C, SIM_C):
     line([(cx, SRC_Y + SRC_H - 16), (cx, STREAM_Y - 2)], "str")
 
 # ---- the stream: one format for every source --------------------------------------------------------
 rect(LEFT, STREAM_Y, RIGHT - LEFT, STREAM_H, "#f7f8fb", INK2, rx=6, sw=2.5)
 text(LEFT + 20, STREAM_Y + 30, "vgacap stream", "title")
 # A strip of recorded samples: colour bars, then the blanking and sync between lines.
-cells = BARS[:-1] * 3 + ["#000000"] * 8
+N_PIXELS, N_SYNC = 3 * (len(BARS) - 1), 8
+cells = BARS[:-1] * 3 + ["#000000"] * N_SYNC
 cw = (RIGHT - LEFT - 40) / len(cells)
 for i, c in enumerate(cells):
     add(f'<rect x="{LEFT + 20 + i * cw:.1f}" y="{STREAM_Y + 44}" width="{cw - 1.5:.1f}" '
         f'height="22" rx="2" fill="{c}" stroke="#c9ced8" stroke-width="0.75"/>')
-sx = LEFT + 20 + 21 * cw
-text(sx + 4 * cw, STREAM_Y + 84, "sync", "detail", "middle")
-text(LEFT + 20 + 10.5 * cw, STREAM_Y + 84, "pixels", "detail", "middle")
+text(LEFT + 20 + (N_PIXELS + N_SYNC / 2) * cw, STREAM_Y + 84, "sync", "detail", "middle")
+text(LEFT + 20 + N_PIXELS / 2 * cw, STREAM_Y + 84, "pixels", "detail", "middle")
 
 # ---- reading it back ---------------------------------------------------------------------------
 MID = (LEFT + RIGHT) / 2
@@ -345,5 +361,8 @@ for kind, label in items:
     x += 40 + 7.4 * len(label) + 26
 
 add("</svg>")
+W = RIGHT + MARGIN
+H = LY + 6 + MARGIN                   # the legend's text sits about 6 px below LY
+out[:0] = canvas(W, H)
 (HERE / "overview.svg").write_text("\n".join(out) + "\n")
 print("wrote", HERE / "overview.svg", (HERE / "overview.svg").stat().st_size, "bytes")
