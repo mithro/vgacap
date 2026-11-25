@@ -90,6 +90,7 @@ typedef struct sig {
     uint64_t mask;
     unsigned bit[6];      // K_PAIR: bit[0] (msb), bit[1]; K_RGB6: r1 r0 g1 g0 b1 b0
     uint8_t gtkw_flags;   // 28, 22 or 24
+    uint64_t deps;        // the sample bits it is made of (0 for frame)
     char id[4];           // VCD identifier
     fstHandle fh;
 } sig_t;
@@ -119,6 +120,10 @@ typedef struct exporter {
     uint64_t next, to;
     int started, gap;
     uint64_t n_changes, n_times;   // for VGACAP_EXPORT_DEBUG
+    uint64_t prev_v;      // the last sample's value, clock bit included
+    int frame_sig;        // index of frame, or -1
+    // A time's decimal digits above the last eight change rarely: cached.
+    uint64_t hi_val; char hi_str[24]; size_t hi_len;
 } exporter_t;
 
 #define VCD_BUF (1u << 20)
@@ -151,6 +156,21 @@ static inline size_t put_u64(char *p, uint64_t v) {
     return 20 - n;
 }
 
+// Decimal of a time t at p, its digits above the last eight from the cache.
+static inline size_t put_time(exporter_t *x, char *p, uint64_t t) {
+    uint64_t hi = t / 100000000u;
+    if (!hi) return put_u64(p, t);
+    uint32_t lo = (uint32_t)(t - hi * 100000000u);
+    if (hi != x->hi_val || !x->hi_len) { x->hi_val = hi; x->hi_len = put_u64(x->hi_str, hi); }
+    memcpy(p, x->hi_str, x->hi_len);
+    p += x->hi_len;
+    for (int i = 3; i >= 0; i--) {
+        unsigned k = (lo % 100u) * 2u; lo /= 100u;
+        p[2 * i] = DIGITS2[k]; p[2 * i + 1] = DIGITS2[k + 1];
+    }
+    return x->hi_len + 8;
+}
+
 // ---- time --------------------------------------------------------------------
 // Sample n's time is round(n * 10^12 / d), d = samples_per_clock * clock_hz,
 // halves up: q + (r >= d - r) for n * 10^12 = q * d + r. Stepping one sample
@@ -165,6 +185,13 @@ static void time_init(exporter_t *x) {
 }
 static void time_advance(exporter_t *x, uint64_t k) {
     x->ts_n += k;
+    if (k <= 16) {   // a few steps cost less than the divisions below
+        for (; k; k--) {
+            x->q += x->sq; x->r += x->sr;
+            if (x->r >= x->d) { x->r -= x->d; x->q++; }
+        }
+        return;
+    }
     while (k) {
         uint64_t c = k > (1ull << 28) ? (1ull << 28) : k;   // c * sr < 2^28 * 2^33
         uint64_t r = x->r + c * x->sr;
@@ -194,7 +221,7 @@ static void out_time(exporter_t *x, uint64_t t) {
     vcd_room(x, 24);
     char *p = x->buf + x->len;
     *p++ = '#';
-    p += put_u64(p, t);
+    p += put_time(x, p, t);
     *p++ = '\n';
     x->len = (size_t)(p - x->buf);
 }
@@ -231,6 +258,7 @@ static void clk_toggles(exporter_t *x, uint64_t k, unsigned b) {
             fstWriterEmitValueChange(x->ctx, s->fh, b ? "1" : "0");
         }
         x->cur[x->clk] = b;
+        x->prev_v ^= (k & 1) ? x->clk_mask : 0;
         return;
     }
     const char id = s->id[0];   // clk is always the first signal: a one-character id
@@ -239,11 +267,12 @@ static void clk_toggles(exporter_t *x, uint64_t k, unsigned b) {
         if (x->len + 32 > VCD_BUF) vcd_flush(x);
         char *p = x->buf + x->len;
         *p++ = '#';
-        p += put_u64(p, time_now(x));
+        p += put_time(x, p, time_now(x));
         p[0] = '\n'; p[1] = (char)('0' + b); p[2] = id; p[3] = '\n';
         x->len = (size_t)(p + 4 - x->buf);
     }
     x->cur[x->clk] = b;
+    x->prev_v ^= (k & 1) ? x->clk_mask : 0;
 }
 
 // ---- values ------------------------------------------------------------------
@@ -265,25 +294,32 @@ static uint64_t sig_value(const exporter_t *x, const sig_t *s, uint64_t v) {
 // Sample n has value v: write the time and what changed (everything, as
 // the dump, for the first sample).
 static void sample_changes(exporter_t *x, uint64_t n, uint64_t v) {
-    uint64_t nv[MAX_SIGS];
-    int any = 0;
-    for (int i = 0; i < x->nsig; i++) {
-        nv[i] = sig_value(x, &x->sig[i], v);
-        any |= nv[i] != x->cur[i];
+    if (!x->started) {
+        time_to(x, n);
+        out_time(x, time_now(x));
+        if (!x->fst) { vcd_room(x, 16); memcpy(x->buf + x->len, "$dumpvars\n", 10); x->len += 10; }
+        for (int i = 0; i < x->nsig; i++) {
+            x->cur[i] = sig_value(x, &x->sig[i], v);
+            out_value(x, &x->sig[i], x->cur[i]);
+        }
+        if (!x->fst) { vcd_room(x, 16); memcpy(x->buf + x->len, "$end\n", 5); x->len += 5; }
+        x->started = 1; x->prev_v = v;
+        return;
     }
-    if (!any && x->started) return;
+    // A signal changes exactly when one of its bits does (each is a
+    // one-to-one function of its bits), and frame when the frame does.
+    const uint64_t delta = v ^ x->prev_v;
+    const int fch = x->frame_sig >= 0 && x->cur[x->frame_sig] != x->frame;
+    if (!delta && !fch) return;
     time_to(x, n);
     out_time(x, time_now(x));
-    if (!x->started) {
-        if (!x->fst) { vcd_room(x, 16); memcpy(x->buf + x->len, "$dumpvars\n", 10); x->len += 10; }
-        for (int i = 0; i < x->nsig; i++) out_value(x, &x->sig[i], nv[i]);
-        if (!x->fst) { vcd_room(x, 16); memcpy(x->buf + x->len, "$end\n", 5); x->len += 5; }
-        x->started = 1;
-    } else {
-        for (int i = 0; i < x->nsig; i++)
-            if (nv[i] != x->cur[i]) out_value(x, &x->sig[i], nv[i]);
+    for (int i = 0; i < x->nsig; i++) {
+        if (!(delta & x->sig[i].deps)) continue;
+        x->cur[i] = sig_value(x, &x->sig[i], v);
+        out_value(x, &x->sig[i], x->cur[i]);
     }
-    memcpy(x->cur, nv, sizeof nv[0] * (size_t)x->nsig);
+    if (fch) { x->cur[x->frame_sig] = x->frame; out_value(x, &x->sig[x->frame_sig], x->frame); }
+    x->prev_v = v;
 }
 
 static int on_runs(void *user, const vgacap_trace_run_t *runs, size_t nr) {
@@ -555,6 +591,16 @@ int main(int argc, char **argv) {
             }
         if (frame_events(x, &fr, err, sizeof err)) { fprintf(stderr, PROG ": %s: %s\n", frames, err); return 1; }
         add_sig(x, "frame", 32, 1, K_FRAME);
+    }
+    x->frame_sig = -1;
+    for (int i = 0; i < x->nsig; i++) {   // each signal's bits
+        sig_t *s = &x->sig[i];
+        switch (s->kind) {
+        case K_FIELD: s->deps = s->mask << s->shift; break;
+        case K_PAIR: s->deps = 1ull << s->bit[0] | 1ull << s->bit[1]; break;
+        case K_RGB6: for (int j = 0; j < 6; j++) s->deps |= 1ull << s->bit[j]; break;
+        case K_FRAME: s->deps = 0; x->frame_sig = i; break;
+        }
     }
     for (int i = 0; i < x->nsig; i++) {   // VCD ids '!' onwards: one character each
         x->sig[i].id[0] = (char)('!' + i); x->sig[i].id[1] = 0;
