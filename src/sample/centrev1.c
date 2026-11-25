@@ -242,7 +242,7 @@ void centrev1_calibrated(centrev1_t *s, const vgacal_t *cal, const vgafc_t *fc) 
     }
 }
 
-void centrev1_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks) {
+static inline void cv_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks) {
     if (!clocks) return;
     if (first != s->next) {
         fprintf(stderr, "centrev1_push: clock %llu, expected %llu\n",
@@ -267,6 +267,14 @@ void centrev1_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64_t clock
     } else if (s->vf.in_frame && !s->v_found && l->prev_v != l->t.vsync_positive) {
         s->v_found = 1; s->v_clock = first;         // the first row out of the vsync pulse
     }
+}
+
+void centrev1_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks) {
+    cv_push(s, uo_out, first, clocks);
+}
+
+void centrev1_push_runs(centrev1_t *s, const vgasample_run_t *runs, size_t n) {
+    for (size_t i = 0; i < n; i++) cv_push(s, runs[i].uo_out, runs[i].first, runs[i].clocks);
 }
 
 // The latest frame-clock end in [lo, hi], as its index; -1 if none.

@@ -71,6 +71,12 @@ uint64_t vgacal_push(vgacal_t *c, uint8_t uo_out, uint8_t rst_n, uint64_t first,
 void vgacal_end_of_trace(vgacal_t *c, uint64_t clocks_in_trace);
 void vgacal_free(vgacal_t *c);
 
+// A run of clocks for the batched pushes (vgafc_push_runs, tbv1_push_runs,
+// centrev1_push_runs): `clocks` clocks from `first`, all with this clk-high
+// uo_out. Each batched push is its single-run push applied to each run in
+// order, with one call a batch.
+typedef struct vgasample_run { uint64_t first, clocks; uint8_t uo_out; } vgasample_run_t;
+
 typedef struct vgafc {           // frame clock
     uint8_t v_active_low, prev_v;
     uint64_t *ends; size_t n, cap;  // ends[k]: clock of frame k's vsync end
@@ -81,6 +87,7 @@ void vgafc_init(vgafc_t *fc, const vgacal_t *c);
 // An end is a clock e >= capture_after_clock + 1 whose uo_out is outside the
 // vsync pulse while clock e - 1's was inside it (tb.cpp:520).
 void vgafc_push(vgafc_t *fc, uint8_t uo_out, uint64_t first, uint64_t clocks);
+void vgafc_push_runs(vgafc_t *fc, const vgasample_run_t *runs, size_t n);
 void vgafc_free(vgafc_t *fc);
 
 // ---- samplers: trace clocks to frames -------------------------------------
@@ -127,6 +134,7 @@ uint64_t tbv1_frames(const tbv1_t *s);
 // Feeds a run, in order and without gaps; clocks before capture_after_clock
 // are ignored. No-op when !ok or once capture has stopped.
 void tbv1_push(tbv1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks);   // clocks >= capture_after_clock
+void tbv1_push_runs(tbv1_t *s, const vgasample_run_t *runs, size_t n);
 void tbv1_free(tbv1_t *s);
 
 // centre-v1: libvgaframe's timing learner finds the lines and frames, at
@@ -195,6 +203,7 @@ centrev1_t *centrev1_create(int dx, int dy, vgasample_frame_fn fn, void *user);
 // of the run to the frame clock fc, then to centrev1. A trace that ends
 // before calibration does: vgacal_end_of_trace, then centrev1_calibrated.
 void centrev1_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks);
+void centrev1_push_runs(centrev1_t *s, const vgasample_run_t *runs, size_t n);
 // The calibration is done (or the trace ended first): fixes the geometry.
 // fc is kept and read at every frame. Frames ending before this are dropped.
 // Aborts if the calibration is not done, on a second call, or if a clock at

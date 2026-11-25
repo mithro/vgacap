@@ -197,7 +197,7 @@ static inline void pixel_at(tbv1_t *s, uint64_t c, uint8_t colour) {
         s->frame[(size_t)py * (size_t)s->width + (size_t)px] = colour;
 }
 
-void tbv1_push(tbv1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks) {
+static inline void tb_push(tbv1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks) {
     if (!s->geo.ok || s->stopped || !clocks) return;
     uint64_t end = first + clocks;
     if (end <= s->from) return;
@@ -230,6 +230,14 @@ void tbv1_push(tbv1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks) {
     if (py < 0 || py >= s->height) return;
     for (uint64_t c = first + 1; c < stop; c++) pixel_at(s, c, colour);
     if (stop < end) s->stopped = 1;
+}
+
+void tbv1_push(tbv1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks) {
+    tb_push(s, uo_out, first, clocks);
+}
+
+void tbv1_push_runs(tbv1_t *s, const vgasample_run_t *runs, size_t n) {
+    for (size_t i = 0; i < n && !s->stopped; i++) tb_push(s, runs[i].uo_out, runs[i].first, runs[i].clocks);
 }
 
 void tbv1_free(tbv1_t *s) {

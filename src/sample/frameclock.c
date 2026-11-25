@@ -18,7 +18,7 @@ void vgafc_init(vgafc_t *fc, const vgacal_t *c) {
     fc->from = c->capture_after_clock;
 }
 
-void vgafc_push(vgafc_t *fc, uint8_t uo_out, uint64_t first, uint64_t clocks) {
+static inline void fc_push(vgafc_t *fc, uint8_t uo_out, uint64_t first, uint64_t clocks) {
     uint64_t end = first + clocks;
     if (end <= fc->from) return;
     if (first < fc->from) first = fc->from;
@@ -33,6 +33,14 @@ void vgafc_push(vgafc_t *fc, uint8_t uo_out, uint64_t first, uint64_t clocks) {
         fc->ends[fc->n++] = first;
     }
     fc->prev_v = v;
+}
+
+void vgafc_push(vgafc_t *fc, uint8_t uo_out, uint64_t first, uint64_t clocks) {
+    fc_push(fc, uo_out, first, clocks);
+}
+
+void vgafc_push_runs(vgafc_t *fc, const vgasample_run_t *runs, size_t n) {
+    for (size_t i = 0; i < n; i++) fc_push(fc, runs[i].uo_out, runs[i].first, runs[i].clocks);
 }
 
 void vgafc_free(vgafc_t *fc) {

@@ -90,6 +90,7 @@ struct tool {
     int gap, failed;
     char why[512];          // the first failure
     int png_fd;
+    vgasample_run_t cruns[1024];   // a batch's clock runs (vgacap_trace_read_runs: at most 1,024 runs)
 };
 
 static void fail(tool_t *t, const char *fmt, ...) {
@@ -291,11 +292,49 @@ static inline int on_run(tool_t *t, uint64_t s, uint64_t value, uint64_t r) {
     return t->failed;
 }
 
+// Clock runs after the capture started: all of them to the frame clock,
+// then to the samplers, one call a sampler. tb-v1 emits a frame only at a
+// frame-clock end, at the run that starts there, and per run it went before
+// centre-v1; so the runs are cut at each end, and up to it tb-v1 then
+// centre-v1 take them. Every frame (and so the PNG pipe) comes out in the
+// order run-at-a-time feeding gives.
+static void dispatch(tool_t *t, const vgasample_run_t *r, size_t k) {
+    if (!k) return;
+    size_t e = t->fc.n, a = 0;
+    vgafc_push_runs(&t->fc, r, k);
+    if (t->tb && t->cs) {
+        for (; e < t->fc.n; e++) {
+            const uint64_t c = t->fc.ends[e];
+            size_t j = a;
+            while (j < k && r[j].first + r[j].clocks <= c) j++;
+            if (j > a) {
+                tbv1_push_runs(t->tb, r + a, j - a);
+                centrev1_push_runs(t->cs, r + a, j - a);
+                a = j;
+            }
+        }
+    }
+    if (t->tb) tbv1_push_runs(t->tb, r + a, k - a);
+    if (t->cs) centrev1_push_runs(t->cs, r + a, k - a);
+}
+
 static int on_runs(void *user, const vgacap_trace_run_t *runs, size_t n) {
     tool_t *t = user;
-    for (size_t i = 0; i < n; i++)
+    size_t i = 0;
+    for (; i < n && !t->started; i++)          // calibration: run by run
         if (on_run(t, runs[i].first_sample, runs[i].value, runs[i].run)) return 1;
-    return 0;
+    size_t k = 0;
+    int stop = 0;
+    for (; i < n; i++) {
+        const uint64_t c0 = runs[i].first_sample >> 1, c1 = (runs[i].first_sample + runs[i].run) >> 1;
+        if (c1 <= c0) continue;
+        if (c0 != t->next) { t->gap = 1; stop = 1; break; }
+        t->next = c1;
+        t->cruns[k].first = c0; t->cruns[k].clocks = c1 - c0; t->cruns[k].uo_out = (uint8_t)(runs[i].value & 0xFF);
+        k++;
+    }
+    dispatch(t, t->cruns, k);
+    return stop || t->failed;
 }
 
 // ---- arguments and META ------------------------------------------------------
