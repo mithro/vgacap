@@ -31,9 +31,10 @@ mkdir -p out && uv run ttcap png capture.vgacap out/frame   # out/frame-0000.png
 the RP2040 or RP2350 layout from it.
 
 The capture stops at the first of `--seconds` (default 5; 0 for no limit),
-`--max-bytes N` or `--frames N`. `--frames N` captures N + 2 frame periods
-at 640x480@60 timing
-([When frames appear](../../src/tools/README.md#when-frames-appear)).
+`--max-bytes N` or `--frames N`. In stream mode, `--frames N` captures N + 2
+frame periods at 640x480@60 timing
+([When frames appear](../../src/tools/README.md#when-frames-appear)); in
+frame and window modes it stops after N complete pictures.
 
 The board has very little heap (about 80 KB on the RP2040 demo board), so
 `ttcap capture` clears the previous run's names and collects garbage before
