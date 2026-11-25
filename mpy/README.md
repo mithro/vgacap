@@ -114,11 +114,16 @@ command layer, so it neither offers nor needs them.
 
 ## Building
 
-For the demo board, build MicroPython's rp2 port (RP2350B, board
-definition [`psychogenic/tinytapeout_rp2350b`](https://github.com/psychogenic/tinytapeout_rp2350b), checked out into a directory
-named `tt_rp2350_board`, which is the MicroPython `BOARD` name) with the
-module:
+For the demo board, build MicroPython's rp2 port (RP2350B) with the
+board definition
+[`psychogenic/tinytapeout_rp2350b`](https://github.com/psychogenic/tinytapeout_rp2350b)
+in `micropython/ports/rp2/boards/tt_rp2350_board`, as the `mpy-module` job
+in [`ci.yml`](../.github/workflows/ci.yml) does:
 
+    git clone https://github.com/psychogenic/tinytapeout_rp2350b.git tt_rp2350_board
+    git -C tt_rp2350_board checkout 596f456
+    cp -r tt_rp2350_board micropython/ports/rp2/boards/tt_rp2350_board
+    make -C micropython/ports/rp2 BOARD=tt_rp2350_board submodules
     make -C micropython/ports/rp2 BOARD=tt_rp2350_board \
         USER_C_MODULES=<vgacap>/mpy/micropython.cmake
 
