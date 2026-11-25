@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // frames.txt and frame_hashes.<method>.txt (src/sample/outputs.c). The
 // Python reader and byte-identical rewrite are in python/tests/test_framesfile.py.
+#define _POSIX_C_SOURCE 200809L   // fmemopen: the read tests keep their files in memory
 #include "harness.h"
 #include "vgacap/outputs.h"
 #include <stdint.h>
@@ -197,13 +198,15 @@ TEST(rejects_backwards_starts) {
 
 // ---- vgaout_read_frame_runs ----
 
-// `text` as a FILE (tmpfile), rewound.
+// `text` as a FILE, read from memory.
 static FILE *text_file(const char *text) {
-    FILE *f = tmpfile();
-    if (!f) return NULL;
-    if (fputs(text, f) < 0) { fclose(f); return NULL; }
-    rewind(f);
-    return f;
+    return fmemopen((void *)text, strlen(text), "r");
+}
+// A FILE in memory for vgaout_frames_txt to write and the reader to read back.
+static char membuf[1 << 16];
+static FILE *mem_file(void) {
+    memset(membuf, 0, sizeof membuf);
+    return fmemopen(membuf, sizeof membuf, "w+");
 }
 
 TEST(read_runs_from_writer) {   // the C writer's frames.txt, gap runs included, centre-v1 keys too
@@ -211,9 +214,11 @@ TEST(read_runs_from_writer) {   // the C writer's frames.txt, gap runs included,
                            F(-1, 0, 0), F(-1, 0, 0), F(0, 1700, 0)};
     vgaout_t o; base(&o, fr, 9);
     o.sampler = "centre-v1"; o.has_centre = 1; o.colour_changes_off_grid = UINT64_MAX;
-    FILE *f = tmpfile(); ASSERT_TRUE(f);
+    FILE *f = mem_file(); ASSERT_TRUE(f);
     ASSERT_TRUE(vgaout_frames_txt(f, &o) == 0);
-    rewind(f);
+    fflush(f); fseek(f, 0, SEEK_SET);
+    long n = (long)strlen(membuf);
+    fclose(f); f = fmemopen(membuf, (size_t)n, "r"); ASSERT_TRUE(f);
     vgaout_frame_runs_t r; char err[200] = "";
     int rc = vgaout_read_frame_runs(f, &r, err, sizeof err);
     fclose(f);
@@ -237,9 +242,11 @@ TEST(read_runs_from_writer) {   // the C writer's frames.txt, gap runs included,
 TEST(read_runs_no_frames) {
     vgaout_t o; base(&o, NULL, 0);
     o.sampler_status = "no-sync"; o.n_distinct = 0;
-    FILE *f = tmpfile(); ASSERT_TRUE(f);
+    FILE *f = mem_file(); ASSERT_TRUE(f);
     ASSERT_TRUE(vgaout_frames_txt(f, &o) == 0);
-    rewind(f);
+    fflush(f); fseek(f, 0, SEEK_SET);
+    long n = (long)strlen(membuf);
+    fclose(f); f = fmemopen(membuf, (size_t)n, "r"); ASSERT_TRUE(f);
     vgaout_frame_runs_t r; char err[200] = "";
     ASSERT_TRUE(vgaout_read_frame_runs(f, &r, err, sizeof err) == 0);
     fclose(f);
