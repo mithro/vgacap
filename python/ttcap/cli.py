@@ -761,7 +761,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--frames",
         type=int,
         help="stream mode: stop after enough bytes for N frames, assuming "
-        "640x480@60 timing (800x525 clocks) plus one frame of margin; frame "
+        "640x480@60 timing (800x525 clocks) plus two frames of margin; frame "
         "and window modes: stop after N complete pictures",
     )
     capture_parser.add_argument(
