@@ -19,7 +19,7 @@ import re
 from xml.sax.saxutils import escape
 
 HERE = pathlib.Path(__file__).resolve().parent
-W, H = 1154, 1070
+W, H = 1154, 1042
 INK, INK2, MUTED = "#1d2433", "#2b3445", "#5b6577"
 SIG, SIG_FILL, SIG_EDGE = "#1c64d4", "#eaf1fd", "#9dbcef"
 STR, STR_FILL, STR_EDGE = "#f2620c", "#fff2e8", "#f8b48a"
@@ -144,9 +144,11 @@ add(f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="
     f'role="img" aria-labelledby="t d">')
 add('<title id="t">vgacap overview</title>')
 add('<desc id="d">A Tiny Tapeout demo board\'s uo_out is captured by the board\'s own '
-    'RP2040 or RP2350 (PIO and DMA), a Raspberry Pi 5 (RP1 PIO and DMA), capture logic in an '
-    'FPGA, or a simulator; all write one vgacap stream, which libvgaframe turns into pictures, '
-    'video and pixel-exact checks.</desc>')
+    'RP2040 or RP2350 (PIO, DMA, USB to ttcap), either straight from the design\'s breakout or '
+    'as framed bytes from capture logic beside the design on an iCE40UP5K FPGA breakout; or by '
+    'a Raspberry Pi 5 wired to the board (RP1 PIO and DMA); or a simulator runs the design\'s '
+    'RTL. All write one vgacap stream, which libvgaframe turns into pictures, video and '
+    'pixel-exact checks.</desc>')
 add(f"""<style>
   .title {{ font-size: 15px; font-weight: 600; fill: {INK}; }}
   .detail {{ font-size: 12.5px; fill: {MUTED}; }}
@@ -177,7 +179,7 @@ LEFT, RIGHT = PI_X, SIM_X + COL_W
 SRC_Y, SRC_H = 236, 240               # the Pi and simulator boxes
 BOARD_Y, BOARD_B = 16, 492            # the demo board container, top and bottom
 HOST_Y = BOARD_B + 22                 # ttcap, on the host
-STREAM_Y, STREAM_H = 600, 124
+STREAM_Y, STREAM_H = 600, 96
 LIB_Y = STREAM_Y + STREAM_H + 50
 OUT_Y = LIB_Y + 76 + 52
 
@@ -215,11 +217,8 @@ rect(PH_X - 6, PH_Y - 6, PW + 12, PHH + 12, "#ffffff", SIG_EDGE, rx=8)
 add(f'<image x="{PH_X}" y="{PH_Y}" width="{PW}" height="{PHH:.1f}" '
     f'href="data:image/jpeg;base64,{board}"/>')
 tx = PH_X + PW + 22
-tt_badge(tx + 14, BOARD_Y + 52, 14)
-text(tx + 36, BOARD_Y + 57, "Tiny Tapeout demo board", "title")
-for i, s in enumerate(("Your design is on a breakout plugged", "into the board. The board's own",
-                       "microcontroller captures its uo_out.")):
-    text(tx, BOARD_Y + 86 + 18 * i, s, "detail")
+tt_badge(tx + 14, PH_Y + PHH / 2 - 5, 14)
+text(tx + 36, PH_Y + PHH / 2, "Tiny Tapeout demo board", "title")
 
 # Two kinds of breakout: the design alone, or an FPGA with capture logic beside it.
 BK_Y, BK_H = 236, 70
@@ -229,17 +228,20 @@ chip(A_X, BK_Y, bw, BK_H, "ASIC or FPGA breakout")
 part(A_X + (bw - 110) / 2, BK_Y + 30, 110, 28, "your design")
 chip(B_X, BK_Y, bw, BK_H, "FPGA breakout (iCE40UP5K)")
 flow(B_X + (bw - 168) / 2, BK_Y + 30, (("design", 72), ("capture", 74)))
+OR_X = A_X + bw + 8
+add(f'<circle cx="{OR_X}" cy="{BK_Y + BK_H / 2}" r="14" fill="#ffffff" stroke="{SIG_EDGE}" '
+    f'stroke-width="1.25"/>')
+text(OR_X, BK_Y + BK_H / 2 + 4.5, "or", "part", "middle")
 
 MCU_Y, MCU_H = 380, 96
 A_C, B_C = A_X + bw / 2, B_X + bw / 2
 line([(A_C, BK_Y + BK_H + 6), (A_C, MCU_Y - 7)], "sig")
 text(A_C + 9, BK_Y + BK_H + 42, "uo_out[7:0]", "net", fill=SIG)
 line([(B_C, BK_Y + BK_H + 6), (B_C, MCU_Y - 7)], "sig")
-text(B_C + 9, BK_Y + BK_H + 34, "framed bytes", "net", fill=SIG)
-text(B_C + 9, BK_Y + BK_H + 50, "on uo_out, uio", "net", fill=SIG)
+text(B_C + 9, BK_Y + BK_H + 42, "uo_out + uio", "net", fill=SIG)
 
-chip(A_X, MCU_Y, BOARD_W - 32, MCU_H, "RP2040 or RP2350, on the board")
-part(A_X + 24, MCU_Y + 24, BOARD_W - 80, 28, "PIO samples the pins on every project clock")
+chip(A_X, MCU_Y, BOARD_W - 32, MCU_H, "RP2040 or RP2350")
+part(A_X + 24, MCU_Y + 24, BOARD_W - 80, 28, "PIO")
 mid = BOARD_X + BOARD_W / 2
 line([(mid - 82, MCU_Y + 52), (mid - 82, MCU_Y + 60)], "thin")
 flow(mid - 120, MCU_Y + 62, (("DMA", 76), ("USB", 76)))
@@ -253,8 +255,7 @@ WIRE_Y = PH_Y + PHH + 10
 PI_C = PI_X + COL_W / 2
 line([(TAP_X, TAP_Y), (TAP_X, WIRE_Y), (PI_C, WIRE_Y), (PI_C, SRC_Y - 2)], "sig")
 add(f'<circle cx="{TAP_X:.1f}" cy="{TAP_Y:.1f}" r="4.5" fill="{SIG}"/>')
-text(PI_X + 4, WIRE_Y - 30, "uo_out from the board's", "net", fill=SIG)
-text(PI_X + 4, WIRE_Y - 14, "header, wired to its GPIO", "net", fill=SIG)
+text(PI_C + 9, WIRE_Y + 24, "uo_out", "net", fill=SIG)
 
 # ---- the simulator ---------------------------------------------------------------------------------
 container(SIM_X, "Simulator", lambda x, y: add(
@@ -270,25 +271,23 @@ line([(SIM_C, 110 + 58 + 24), (SIM_C, SRC_Y - 2)], "sig")
 usb_x = mid - 120 + 76 + 22 + 38
 line([(usb_x, MCU_Y + 90), (usb_x, HOST_Y - 2)], "str")
 laptop(usb_x - 29, HOST_Y, 58, 32)
-text(usb_x + 40, HOST_Y + 22, "ttcap, on your computer", "title")
+text(usb_x + 40, HOST_Y + 22, "ttcap", "title")
 line([(usb_x, HOST_Y + 40), (usb_x, STREAM_Y - 2)], "str")
 for cx in (PI_C, SIM_C):
     line([(cx, SRC_Y + SRC_H), (cx, STREAM_Y - 2)], "str")
 
 # ---- the stream: one format for every source --------------------------------------------------------
 rect(LEFT, STREAM_Y, RIGHT - LEFT, STREAM_H, "#f7f8fb", INK2, rx=6, sw=2.5)
-text(LEFT + 20, STREAM_Y + 34, "vgacap stream: one file format for every source", "title")
-text(LEFT + 20, STREAM_Y + 56, "what uo_out was on each clock: every clock, or compressed into runs, "
-     "or just whole frames", "detail")
+text(LEFT + 20, STREAM_Y + 30, "vgacap stream", "title")
 # A strip of recorded samples: colour bars, then the blanking and sync between lines.
 cells = BARS[:-1] * 3 + ["#000000"] * 8
 cw = (RIGHT - LEFT - 40) / len(cells)
 for i, c in enumerate(cells):
-    add(f'<rect x="{LEFT + 20 + i * cw:.1f}" y="{STREAM_Y + 72}" width="{cw - 1.5:.1f}" '
+    add(f'<rect x="{LEFT + 20 + i * cw:.1f}" y="{STREAM_Y + 44}" width="{cw - 1.5:.1f}" '
         f'height="22" rx="2" fill="{c}" stroke="#c9ced8" stroke-width="0.75"/>')
 sx = LEFT + 20 + 21 * cw
-text(sx + 4 * cw, STREAM_Y + 112, "blanking and sync", "detail", "middle")
-text(LEFT + 20 + 10.5 * cw, STREAM_Y + 112, "a line of pixels", "detail", "middle")
+text(sx + 4 * cw, STREAM_Y + 84, "sync", "detail", "middle")
+text(LEFT + 20 + 10.5 * cw, STREAM_Y + 84, "pixels", "detail", "middle")
 
 # ---- reading it back ---------------------------------------------------------------------------
 MID = (LEFT + RIGHT) / 2
