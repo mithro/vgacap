@@ -25,6 +25,3 @@ on a pinned `ubuntu-24.04` image:
 | `c` | the C libraries and tools build and pass `ctest` on a machine with **no GStreamer** (`PKG_CONFIG_LIBDIR` is emptied), and the plugin is *skipped* there rather than failing the build |
 | `python` | the Python suite passes without GStreamer, with the plugin tests skipped; `build/vgacap-frames` is built first because several tests compare against it |
 | `gstreamer` | with GStreamer installed (the apt list in the workflow says what each package is for), the plugin is built, and its `ctest` and both pytest suites (`python/tests`, `gst/tests`) run for real |
-
-The plugin is optional by design, so CI tests both configurations. To
-change what CI covers, change that workflow file.
