@@ -267,11 +267,16 @@ def main(out):
             if stopping:
                 break
             sent += write_raw_chunk(out, bufs[index], SAMPLES_PER_CHUNK)
-            # FULL first: once it is clear no handler can set TORN[index],
-            # so a tear during the send above cannot be missed below.
+            # FULL and TORN together, with the IRQs off: a handler sets
+            # TORN[index] only while FULL[index], so a tear during the send
+            # above cannot be missed, and a mark for the next contents (a
+            # main loop held up for over a fill) is not wiped.
+            irq = machine.disable_irq()
             FULL[index] = False
-            if TORN[index]:
-                TORN[index] = False
+            torn = TORN[index]
+            TORN[index] = False
+            machine.enable_irq(irq)
+            if torn:
                 # Cumulative, not an increment: see write_time_chunk().
                 sent += write_time_chunk(
                     out, OVERRUNS[0] * SAMPLES_PER_CHUNK, b"overrun"

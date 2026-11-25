@@ -899,6 +899,8 @@ class CaptureSession:
         self._timed_out = False
         self._error = ""
         self._mem_free = 0
+        #: The built board script (`_prepare()`), sent by `_start_stream()`.
+        self._script = ""
 
     # -- public API -------------------------------------------------------
 
@@ -1089,44 +1091,73 @@ class CaptureSession:
         self._finished = True
         self._stats = self._snapshot()
 
+    def _prepare(self) -> None:
+        """Get the board ready, before a byte of the stream is produced.
+
+        The MicroPython board: clear the previous run's names and refuse a
+        heap that could not compile the script. A subclass for another
+        board protocol overrides this and `_start_stream()`.
+        """
+        req, repl = self._req, self._repl
+        self._script = mp.build(req.cfg(), req.script)
+        needed = req.min_free()
+        self._mem_free = prepare_board(repl, cleanup_names(req.cfg()))
+        if self._mem_free < needed:
+            if req.is_frame:
+                why = "one line of frame buffer plus %d to compile the script" % (
+                    COMPILE_HEADROOM_BYTES
+                )
+            else:
+                why = (
+                    "2 x %d bytes of DMA buffer for --buf-words %d, plus %d to "
+                    "compile the script" % (4 * req.buf_words, req.buf_words, COMPILE_HEADROOM_BYTES)
+                )
+            raise CaptureError(
+                "board has only %d bytes of free heap after a collect, "
+                "need %d (%s); compiling it there can fail without a "
+                "clean error (tt07 printed 'FATAL: uncaught exception' "
+                "and halted). Reset the board%s, and try again."
+                % (
+                    self._mem_free,
+                    needed,
+                    why,
+                    "" if req.is_frame else ", or ask for fewer buffer words",
+                )
+            )
+
+    def _start_stream(self) -> Iterator[tuple[bytes, bytes]]:
+        """The board's chunks as `(tag, payload)`, ending with its output.
+
+        `exec_chunks()` is a generator: nothing is sent to the board until
+        the first `next()`.
+        """
+        return self._repl.exec_chunks(self._script, timeout=self._chunk_timeout)
+
+    def _abandon_prepared(self) -> None:
+        """Undo `_prepare()` when the stream ends before it started.
+
+        Nothing to do here: the script is only sent by the first read of
+        `_start_stream()`'s generator. A protocol whose `_prepare()` starts
+        the capture stops it again here.
+        """
+
     def _iter(self) -> Iterator[bytes]:
         """The stream itself. See `run_capture` for what the protocol is."""
         try:
             req, repl = self._req, self._repl
-            script = mp.build(req.cfg(), req.script)
-
-            needed = req.min_free()
-            self._mem_free = prepare_board(repl, cleanup_names(req.cfg()))
-            if self._mem_free < needed:
-                if req.is_frame:
-                    why = "one line of frame buffer plus %d to compile the script" % (
-                        COMPILE_HEADROOM_BYTES
-                    )
-                else:
-                    why = (
-                        "2 x %d bytes of DMA buffer for --buf-words %d, plus %d to "
-                        "compile the script" % (4 * req.buf_words, req.buf_words, COMPILE_HEADROOM_BYTES)
-                    )
-                raise CaptureError(
-                    "board has only %d bytes of free heap after a collect, "
-                    "need %d (%s); compiling it there can fail without a "
-                    "clean error (tt07 printed 'FATAL: uncaught exception' "
-                    "and halted). Reset the board%s, and try again."
-                    % (
-                        self._mem_free,
-                        needed,
-                        why,
-                        "" if req.is_frame else ", or ask for fewer buffer words",
-                    )
-                )
+            self._prepare()
 
             # Nothing reaches the consumer until the board has been cleaned
             # up and has the heap to compile the script, so a refused run
             # leaves no header-only file (and no header-only pipe) behind.
-            yield stream_header_bytes(req)
+            try:
+                yield stream_header_bytes(req)
+            except BaseException:
+                self._abandon_prepared()
+                raise
 
             self._start = time.monotonic()
-            stream = repl.exec_chunks(script, timeout=self._chunk_timeout)
+            stream = self._start_stream()
             try:
                 for tag, payload in stream:
                     self._account(tag, payload)
@@ -1248,7 +1279,16 @@ def run_capture(
     `session.close()` stops the board before it is re-raised, exactly as a
     failure inside the loop would.
     """
-    session = CaptureSession(repl, req, chunk_timeout=chunk_timeout)
+    return run_session(CaptureSession(repl, req, chunk_timeout=chunk_timeout), out)
+
+
+def run_session(session: CaptureSession, out) -> CaptureStats:
+    """Pour `session`'s stream into `out`; `run_capture()` for any session.
+
+    The board protocol is the session's (`CaptureSession` for the
+    MicroPython raw REPL, `ttcap.firmware.FirmwareSession` for the pico-sdk
+    firmware); the file sink and its failure handling are the same.
+    """
     try:
         for block in session.chunks():
             out.write(block)

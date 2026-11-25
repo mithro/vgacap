@@ -1,0 +1,32 @@
+; SPDX-License-Identifier: Apache-2.0
+;
+; The streaming sampler: one sample of uo_out per project clock, for ever.
+;
+; Shared source of the capture programs (firmware/README.md, "PIO
+; programs"). The same instructions, in the same order, are
+;
+;   python/ttcap/mp/capture_rp2.py   make_sampler()   (MicroPython asm_pio)
+;   firmware/core/fw_pio.c           fw_pio_sampler() (built at run time)
+;
+; This file is written for the demo board v3 at its defaults -- project
+; clock on GPIO 16, 8 bits of uo_out from GPIO 33, the falling edge --
+; and assembled by pioasm in the firmware build; vgacap_stream.hex is that
+; output, checked in, and the build fails if the two ever differ. The
+; tests hold fw_pio_sampler() to the .hex at these operands and to
+; MicroPython's words at every edge (python/tests/test_fw_sim.py).
+;
+; Operands fw_pio_sampler() sets per capture:
+;   the two wait polarities   swapped for the rising edge
+;   the wait GPIO             the board's project clock
+;   in pins N                 the board's uo_out width
+;
+; Configuration (not in the words; fw_pio_program_t.shiftctrl): ISR
+; shifting LEFT, autopush at 32 bits (4 samples), RX FIFO joined.
+
+.pio_version 0
+.program vgacap_stream
+.wrap_target
+    wait 1 gpio 16      ; clock high ...
+    wait 0 gpio 16      ; ... then low: the falling edge, outputs settled
+    in pins, 8          ; uo_out[7:0]
+.wrap

@@ -275,6 +275,16 @@ class RawRepl:
         self.last_stderr = stderr.decode("utf-8", "replace")
         return self.last_stderr
 
+    def start(self, code: str, timeout: float = 10.0) -> None:
+        """Send `code` and wait only for the board's `OK`, not for it to end.
+
+        For code that never returns a prompt -- `machine.reset()`,
+        `machine.bootloader()` -- where waiting for the end of its output
+        would only ever time out.
+        """
+        self._write(code.encode("utf-8") + CTRL_D)
+        self._read_until(b"OK", timeout)
+
     def exec(self, code: str, timeout: float = 10.0) -> tuple[str, str]:
         self._write(code.encode("utf-8") + CTRL_D)
         self._read_until(b"OK", timeout)

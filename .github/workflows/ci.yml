@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Three jobs, because the GStreamer plugin is optional by design and both
-# configurations have to keep working:
+# The GStreamer plugin is optional by design and both configurations have
+# to keep working (`firmware` is separate: the RP2350 capture firmware):
 #
 #   c, python     -- no GStreamer at all. The core libraries, the tools and the
 #                    Python suite must build and pass, and the plugin must be
@@ -58,6 +58,34 @@ jobs:
           git -C utils fetch -q --depth 1 origin "$PIOLIB_COMMIT"
           git -C utils checkout -q FETCH_HEAD
           make -C capture-rp1 PIOLIB="$PWD/utils/piolib" CFLAGS="-O2 -Wall -Wextra -Werror"
+
+  # The capture firmware (firmware/), cross-compiled for the RP2350 against
+  # the pico-sdk it is pinned to. Its own job: the other jobs never need
+  # the ARM toolchain, and the host-side firmware core and simulator are
+  # built and tested by them. The build also checks pioasm's output for
+  # firmware/pio/*.pio against the checked-in .hex files.
+  firmware:
+    name: Capture firmware (pico-sdk, ARM)
+    runs-on: ubuntu-24.04
+    env:
+      PICO_SDK_COMMIT: a1438dff1d38bd9c65dbd693f0e5db4b9ae91779  # 2.2.0
+    steps:
+      - uses: actions/checkout@v5
+      - name: install the ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib ninja-build
+      - name: pico-sdk
+        run: |
+          git init -q pico-sdk
+          git -C pico-sdk remote add origin https://github.com/raspberrypi/pico-sdk.git
+          git -C pico-sdk fetch -q --depth 1 origin "$PICO_SDK_COMMIT"
+          git -C pico-sdk checkout -q FETCH_HEAD
+          git -C pico-sdk submodule update --init --depth 1 lib/tinyusb
+      - run: cmake -S firmware -B firmware/build -G Ninja -DPICO_SDK_PATH="$PWD/pico-sdk"
+      - run: cmake --build firmware/build
+      - run: test -s firmware/build/vgacap_fw.uf2
 
   python:
     name: Python suite, no GStreamer

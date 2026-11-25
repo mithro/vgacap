@@ -1,0 +1,52 @@
+; SPDX-License-Identifier: Apache-2.0
+;
+; The frame trigger and phase-locked sampler: wait for the vsync leading
+; edge, count hsync leading edges to the first line wanted, sync to one
+; project-clock edge, then sample uo_out once every P system clocks for
+; ever (the DMA's stopper channel disables the state machine after the
+; window).
+;
+; Shared source of the capture programs (firmware/README.md, "PIO
+; programs"). The same instructions, in the same order, are
+;
+;   python/ttcap/mp/frame_rp2.py   make_trigger()   (MicroPython asm_pio)
+;   firmware/core/fw_pio.c         fw_pio_frame()   (built at run time)
+;
+; This file is written for the demo board v3 at the operands of a
+; 640x480@60 capture at 25 MHz -- both syncs active low, the rising edge,
+; no extra delay, 100 MHz / 25 MHz = 4 system clocks a sample -- and
+; assembled by pioasm in the firmware build; vgacap_frame.hex is that
+; output, checked in, and the build fails if the two ever differ.
+;
+; Operands fw_pio_frame() sets per capture:
+;   vsync / hsync wait polarities   the measured (or given) active levels
+;   the clock wait polarities       the sampled edge
+;   [delay] on the clock edge       sample_delay system clocks
+;   [P - 1] on `in`                 P = system clocks per project clock
+;
+; GPIO numbers are absolute: hsync is uo_out[7] = GPIO 40 and vsync
+; uo_out[3] = GPIO 36, past GPIO 31, which needs `.pio_version 1` here and
+; a PIO block whose GPIO window is based at 16 on the RP2350.
+;
+; Configuration (fw_pio_program_t.shiftctrl): ISR shifting LEFT, autopush
+; at 32 bits, FIFOs not joined (the skip count arrives on the TX FIFO).
+
+.pio_version 1
+.program vgacap_frame
+    pull                ; lines to skip after the vsync edge
+    mov x, osr
+    wait 1 gpio 36      ; vsync idle ...
+    wait 0 gpio 36      ; ... then active: the vsync leading edge
+skip:
+    jmp x-- line        ; lines still to skip?
+    jmp go
+line:
+    wait 1 gpio 40      ; hsync idle ...
+    wait 0 gpio 40      ; ... then active: an hsync leading edge
+    jmp skip
+go:
+    wait 0 gpio 16      ; clock low ...
+    wait 1 gpio 16 [0]  ; ... then high, then [delay] more system clocks
+.wrap_target
+    in pins, 8 [3]      ; one sample every P = 4 system clocks
+.wrap
