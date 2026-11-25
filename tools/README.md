@@ -14,10 +14,13 @@ CI cannot see a board, so `tools/hil.py` runs the checks that only a real
 board can settle and writes a dated Markdown report. The checks are:
 
 - `probe`: profile auto-detection;
-- `capture`: overruns and `rxstall`, from the closing `TIME` chunk;
+- `capture`: overruns and
+  [`rxstall`](../firmware/PROTOCOL.md#capture-output), from the closing
+  `TIME` chunk;
 - `reconstruct`: frame count against the project clock;
 - `reference`: pixel-exact against a `tt-vga-testpatterns` calibration
   render;
+- `frame`: whole frames at the design's real clock, each one pixel-exact;
 - `demo-frames`, `video` and `serve`;
 - `stop`: cooperative stop latency, and no orphaned processes;
 - `board-usable`: the board still answers afterwards.
