@@ -6,7 +6,7 @@ Scripts that work against real [Tiny Tapeout](https://tinytapeout.com) demo boar
   REPL.
 - [`board_restart.py`](board_restart.py) puts a demo board back to the [SDK](https://github.com/TinyTapeout/tt-micropython-firmware)'s start state
   (Ctrl-B, Ctrl-D).
-- [`hil.py`](hil.py) is the hardware-in-the-loop check, described next.
+- [`hil.py`](hil.py) is the [hardware-in-the-loop check](#hardware-in-the-loop-check).
 
 ## Hardware-in-the-loop check
 
@@ -21,20 +21,21 @@ board can settle and writes a dated Markdown report. The checks are:
 - `reference`: pixel-exact against a [`tt-vga-testpatterns`](https://github.com/mithro/tt-vga-testpatterns) calibration
   render;
 - `frame`: whole frames at the design's real clock, each one pixel-exact;
-- `demo-frames`, `video` and `serve`;
+- `demo-frames`: a `ttcap demo` run writes PNGs at the requested frame rate;
+- `video`: its video opens, at the requested rate and the expected length;
+- `serve`: its MJPEG stream delivers at least two parts;
 - `stop`: cooperative stop latency, and no orphaned processes;
 - `board-usable`: the board still answers afterwards.
 
 `tools/hil.py` lists why each check needs hardware.
 
 The example runs against `fpga-1`, a demo board with an FPGA breakout on
-the shared Welland bench (see [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)),
-whose Pi is at 10.21.2.34. It needs the calibration bitstream uploaded and
-enabled first, with tt-vga-testpatterns'
+the shared Welland bench (see [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)).
+It needs the calibration bitstream uploaded and enabled first, with
+tt-vga-testpatterns'
 [`tools/upload.py`](https://github.com/mithro/tt-vga-testpatterns/blob/main/tools/upload.py):
 
 ```sh
-# from a workstation: a tunnel to the board's bridge (local port 18000 + the last octet of the Pi's address)
 ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com
 tools/hil.sh --board fpga-1 --design tt_um_vgacal_bars --clock-hz 500000 \
     --link ws://127.0.0.1:18034/serial docs/results/
