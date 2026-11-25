@@ -116,7 +116,8 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
 * Project clocks above 66.5 MHz raise the system clock to twice the
   project clock (up to 250 MHz), as the stock firmware does; like
   MicroPython's `machine.freq`, nothing raises the
-  core voltage for that. Only 100 MHz has been used on the boards so far.
+  core voltage for that. No project clock above 66.5 MHz has been tried on
+  a board.
 * The capture buffer is a 440 KB static array: a whole 640x480@60 picture
   region (481 lines of 800 samples) is one capture; 800x600 takes two
   windows per picture.
@@ -148,7 +149,7 @@ program could load the `.pio` files' words the same way.
 
 ## Off-hardware tests
 
-    cmake -S . -B build -G Ninja && cmake --build build && (cd build && ctest)
+    cmake -S . -B build && cmake --build build && ctest --test-dir build
     cd python && uv run pytest -q tests/test_fw_sim.py
 
 * `test_fw_units`: argument parsing; the clock plans against the clocks
