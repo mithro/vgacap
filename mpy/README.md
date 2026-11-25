@@ -82,7 +82,8 @@ window takes and in how many blocks. The FRAM chunks are the firmware's
 (one chunk per window, whatever N is); the firmware's own `buffers` is
 always 1 (its 440 KB static arena).
 
-**Output:** vgacap chunks only, `RAW `/`FRAM`/`TIME`, exactly as the firmware
+**Output:** vgacap chunks only, `RAW`/`FRAM`/`TIME` (the `RAW` chunk's
+four-byte tag is "RAW" followed by a space), exactly as the firmware
 writes them after its `ok` (PROTOCOL.md, "Capture output"), and no `DONE`
 marker: the raw REPL's own end of output ends a capture. The host writes
 the `VGCH` header, as on the other two paths.
