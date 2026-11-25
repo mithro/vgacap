@@ -20,7 +20,7 @@ from xml.sax.saxutils import escape
 
 HERE = pathlib.Path(__file__).resolve().parent
 MARGIN = 16
-W, H = 2 * MARGIN + 4 * 232 + 3 * 22, 1032  # four columns (COL_W, GAP below); H ends below the legend
+W, H = 2 * MARGIN + 4 * 232 + 3 * 22, 1090  # four columns (COL_W, GAP below); H ends below the legend
 INK, INK2, MUTED = "#1d2433", "#2b3445", "#5b6577"
 SIG, SIG_FILL, SIG_EDGE = "#1c64d4", "#eaf1fd", "#9dbcef"
 STR, STR_FILL, STR_EDGE = "#f2620c", "#fff2e8", "#f8b48a"
@@ -129,16 +129,6 @@ def doc(x, y, w, h, label):
     text(x + w / 2, y + h + 16, label, "net", "middle", fill=SIG)
 
 
-def flow(x, y, names_widths, gap=22):
-    """Parts in a row, joined by thin arrows; returns the right edge."""
-    for i, (name, w) in enumerate(names_widths):
-        part(x, y, w, 26, name)
-        if i < len(names_widths) - 1:
-            line([(x + w, y + 13), (x + w + gap - 2, y + 13)], "thin")
-        x += w + gap
-    return x - gap
-
-
 # ---- canvas ------------------------------------------------------------------------
 add(f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
     f'font-family="-apple-system, BlinkMacSystemFont, \'Segoe UI\', Helvetica, Arial, sans-serif" '
@@ -177,10 +167,10 @@ PI_X = MARGIN
 BOARD_X, BOARD_W = PI_X + COL_W + GAP, 2 * COL_W + GAP
 SIM_X = BOARD_X + BOARD_W + GAP
 LEFT, RIGHT = PI_X, SIM_X + COL_W
-SRC_Y, SRC_H = 236, 240               # the Pi and simulator boxes
-BOARD_Y, BOARD_B = 16, 492            # the demo board container, top and bottom
+SRC_Y, SRC_H = 236, 316               # the Pi and simulator boxes
+BOARD_Y, BOARD_B = 16, SRC_Y + SRC_H  # the demo board container, top and bottom
 HOST_Y = BOARD_B + 22                 # ttcap, on the host
-STREAM_Y, STREAM_H = 600, 96
+STREAM_Y, STREAM_H = HOST_Y + 84, 96
 LIB_Y = STREAM_Y + STREAM_H + 50
 OUT_Y = LIB_Y + 76 + 52
 
@@ -191,23 +181,29 @@ def container(x, title, mark):
     text(x + 48, SRC_Y + 29, title, "title")
 
 
+def stack(cx, y, names, w=110, h=28, gap=18):
+    """Parts one above the other, joined by thin downward arrows; returns the bottom edge."""
+    for i, name in enumerate(names):
+        part(cx - w / 2, y, w, h, name)
+        if i < len(names) - 1:
+            line([(cx, y + h), (cx, y + h + gap - 2)], "thin")
+        y += h + gap
+    return y - gap
+
+
 def inner(x, kind, name, parts, sink):
-    """A chip (or a simulator box) holding two parts side by side, then down to `sink`."""
-    bx, by, bw, bh = x + 16, SRC_Y + 60, COL_W - 32, 66
+    """A chip (or a simulator box) holding parts stacked top to bottom, then down to `sink`."""
+    bx, by, bw, bh = x + 16, SRC_Y + 56, COL_W - 32, 116
+    cx = x + COL_W / 2
     if kind == "chip":
         chip(bx, by, bw, bh, name)
     else:
         rect(bx, by, bw, bh, "#ffffff", PART_EDGE, rx=4, sw=1.25)
         text(bx + 8, by + 15, name, "chipname", fill=MUTED)
-    (n1, w1), (n2, w2) = parts
-    px = bx + (bw - (w1 + 22 + w2)) / 2
-    part(px, by + 26, w1, 28, n1)
-    line([(px + w1, by + 40), (px + w1 + 20, by + 40)], "thin")
-    part(px + w1 + 22, by + 26, w2, 28, n2)
-    sx = px + w1 + 22 + w2 / 2
-    line([(sx, by + 54), (sx, SRC_Y + SRC_H - 44)], "thin")
-    part(sx - 40, SRC_Y + SRC_H - 42, 80, 26, sink)
-    return sx
+    bottom = stack(cx, by + 26, parts)
+    line([(cx, bottom), (cx, SRC_Y + SRC_H - 44)], "thin")
+    part(cx - 48, SRC_Y + SRC_H - 42, 96, 26, sink)
+    return cx
 
 
 # ---- the demo board: the design on a breakout, captured by the board's own MCU ---------------
@@ -223,35 +219,35 @@ tt_badge(tx + 14, PH_Y + PHH / 2 - 5, 14)
 text(tx + 36, PH_Y + PHH / 2, "Tiny Tapeout demo board", "title")
 
 # Two kinds of breakout: the design alone, or an FPGA with capture logic beside it.
-BK_Y, BK_H = 236, 70
+BK_Y, BK_H = SRC_Y, 116
 bw = (BOARD_W - 48) / 2
 A_X, B_X = BOARD_X + 16, BOARD_X + 32 + bw
 chip(A_X, BK_Y, bw, BK_H, "ASIC or FPGA breakout")
-part(A_X + (bw - 110) / 2, BK_Y + 30, 110, 28, "your design")
+part(A_X + (bw - 110) / 2, BK_Y + 49, 110, 28, "your design")
 chip(B_X, BK_Y, bw, BK_H, "FPGA breakout (iCE40UP5K)")
-flow(B_X + (bw - 168) / 2, BK_Y + 30, (("design", 72), ("capture", 74)))
+stack(B_X + bw / 2, BK_Y + 26, ("design", "capture"))
 OR_X = A_X + bw + 8
 add(f'<circle cx="{OR_X}" cy="{BK_Y + BK_H / 2}" r="14" fill="#ffffff" stroke="{SIG_EDGE}" '
     f'stroke-width="1.25"/>')
 text(OR_X, BK_Y + BK_H / 2 + 4.5, "or", "part", "middle")
 
-MCU_Y, MCU_H = 380, 96
+MCU_Y, MCU_H = BK_Y + BK_H + 52, 146
 A_C, B_C = A_X + bw / 2, B_X + bw / 2
 line([(A_C, BK_Y + BK_H + 6), (A_C, MCU_Y - 7)], "sig")
-text(A_C + 9, BK_Y + BK_H + 42, "uo_out[7:0]", "net", fill=SIG)
+text(A_C + 9, BK_Y + BK_H + 31, "uo_out[7:0]", "net", fill=SIG)
 line([(B_C, BK_Y + BK_H + 6), (B_C, MCU_Y - 7)], "sig")
-text(B_C + 9, BK_Y + BK_H + 42, "uo_out + uio", "net", fill=SIG)
+text(B_C + 9, BK_Y + BK_H + 31, "uo_out + uio", "net", fill=SIG)
 
 chip(A_X, MCU_Y, BOARD_W - 32, MCU_H, "RP2040 or RP2350")
-part(A_X + 24, MCU_Y + 24, BOARD_W - 80, 28, "PIO")
+part(A_X + 24, MCU_Y + 22, BOARD_W - 80, 28, "PIO")
 mid = BOARD_X + BOARD_W / 2
-line([(mid - 82, MCU_Y + 52), (mid - 82, MCU_Y + 60)], "thin")
-flow(mid - 120, MCU_Y + 62, (("DMA", 76), ("USB", 76)))
+line([(mid, MCU_Y + 50), (mid, MCU_Y + 64)], "thin")
+MCU_BOTTOM = stack(mid, MCU_Y + 66, ("DMA", "USB"), w=110, h=26)
 
 # ---- the Raspberry Pi 5, wired to the board's OUTPUT header --------------------------------------
 container(PI_X, "Raspberry Pi 5", lambda x, y: nested_svg(
     HERE / "logos" / "raspberry-pi.svg", x - 12, y - 15, 24, 30))
-PI_SINK = inner(PI_X, "chip", "RP1", (("PIO", 54), ("DMA", 54)), "DRAM")
+PI_SINK = inner(PI_X, "chip", "RP1", ("PIO", "DMA"), "DRAM")
 TAP_X, TAP_Y = PH_X + PW * 0.76, PH_Y + PHH - 6
 WIRE_Y = PH_Y + PHH + 10
 PI_C = PI_X + COL_W / 2
@@ -264,14 +260,14 @@ container(SIM_X, "Simulator", lambda x, y: add(
     f'<path d="M{x - 11} {y + 4} L{x - 11} {y - 4} L{x - 4} {y - 4} L{x - 4} {y + 4} '
     f'L{x + 3} {y + 4} L{x + 3} {y - 4} L{x + 10} {y - 4}" fill="none" stroke="{SIG}" '
     f'stroke-width="2.25" stroke-linejoin="round"/>'))
-SIM_SINK = inner(SIM_X, "sim", "Verilator or Icarus", (("design", 66), ("tracer", 66)), "trace file")
+SIM_SINK = inner(SIM_X, "sim", "Verilator or Icarus", ("design", "tracer"), "trace file")
 SIM_C = SIM_X + COL_W / 2
 doc(SIM_C - 23, 110, 46, 58, "the design's RTL")
 line([(SIM_C, 110 + 58 + 24), (SIM_C, SRC_Y - 2)], "sig")
 
 # ---- into the stream: ttcap on the host for the board, the tools themselves elsewhere -------------
-usb_x = mid - 120 + 76 + 22 + 38
-line([(usb_x, MCU_Y + 90), (usb_x, HOST_Y - 2)], "str")
+usb_x = mid
+line([(usb_x, MCU_BOTTOM), (usb_x, HOST_Y - 2)], "str")
 laptop(usb_x - 29, HOST_Y, 58, 32)
 text(usb_x + 40, HOST_Y + 22, "ttcap", "title")
 line([(usb_x, HOST_Y + 40), (usb_x, STREAM_Y - 2)], "str")
