@@ -537,12 +537,19 @@ class Board:
     PIO block and four more DMA channels). `heap_blocks` lists the free
     heap as contiguous blocks, largest first; the default is fpga-1's
     measured state. `cycles_per_byte` prices USB output (the default,
-    190, is ~700 KB/s at 133 MHz, the RP2350's measured CDC rate).
+    190, is ~700 KB/s at 133 MHz, the RP2350's measured CDC rate); a write
+    goes out `USB_PIECE` bytes at a time and reads its buffer as it goes,
+    so a DMA that rewrites a buffer mid-send tears the chunk as it would
+    on the board. `usb_stalls` lists (output offset, cycles): the link
+    stops for that long once that many bytes have gone out -- a host that
+    stopped reading for a while.
 
     `pwm` is the clock pin's PWM slice as (CSR, DIV, TOP) register values;
     the default is the free-running integer divider that makes `wave`'s
     clock exactly (DIV_INT 1, TOP period - 1).
     """
+
+    USB_PIECE = 512
 
     def __init__(
         self,
@@ -568,6 +575,7 @@ class Board:
         self.channels = [_Channel(i) for i in range(16 if chip == "rp2350" else 12)]
         self.heap = list(heap_blocks)
         self.output = bytearray()
+        self.usb_stalls: list[tuple[int, int]] = []
         self.stop_after_bytes: int | None = None
         self.stop_when: Callable[["Board"], bool] | None = None
         self._stop_sent = False
@@ -926,10 +934,17 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
 
     class Stdout:
         def write(self, data):
-            data = bytes(data)
-            board.output += data
-            board.advance(len(data) * board.cycles_per_byte)
-            return len(data)
+            # Piece by piece from the live buffer: what the DMA rewrites
+            # while a chunk is going out goes out too, as on the board.
+            with memoryview(data) as view:
+                n = len(view)
+                for at in range(0, n, board.USB_PIECE):
+                    while board.usb_stalls and len(board.output) >= board.usb_stalls[0][0]:
+                        board.advance(board.usb_stalls.pop(0)[1])
+                    piece = bytes(view[at : at + board.USB_PIECE])
+                    board.output += piece
+                    board.advance(len(piece) * board.cycles_per_byte)
+            return n
 
         def flush(self):
             pass

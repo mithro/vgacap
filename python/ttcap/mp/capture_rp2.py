@@ -27,15 +27,21 @@ and every address they touch are module-level, because a hard IRQ runs with
 the heap locked and a nested closure over main()'s locals raises
 MemoryError at its first statement -- see the "hard IRQ state" block below.
 
-There is therefore at most one buffer of latency. If a handler
-finds its buffer still marked full, the main loop did not consume it in
-time: the DMA is now overwriting data the host never saw. That is counted
-as an overrun and reported in a `TIME` chunk whose `dropped_samples` is the
-CUMULATIVE total so far, `overruns * buf_words * samples_per_word` -- every
-`TIME` chunk here carries a running total, never an increment, so a reader
-takes the last value instead of summing. `FDEBUG`'s
-RXSTALL bit is cleared at the start and read back at the end -- if it is
-set, the RX FIFO overflowed and samples were lost regardless.
+OVERRUNS. The partner chain starts rewriting a buffer the moment the
+other one completes, so the main loop has one buffer's fill time to send
+a buffer, and the send reads the live buffer. So the overrun is counted
+when the DMA *starts* on a buffer still marked full (in the completion
+handler of the buffer before it): from then on that buffer's chunk mixes
+old and new samples, whether or not it is still being sent. The handler
+marks the buffer `TORN`, and the main loop, after sending a buffer, emits
+an `overrun` TIME chunk straight after it if it was torn -- so a torn
+chunk is never followed by another chunk without its report. The chunk is
+already on the wire by then; the report says it is not contiguous. Its
+`dropped_samples` is the CUMULATIVE total so far, `overruns * buf_words *
+samples_per_word` -- every `TIME` chunk here carries a running total, never
+an increment, so a reader takes the last value instead of summing.
+`FDEBUG`'s RXSTALL bit is cleared at the start and read back at the end --
+if it is set, the RX FIFO overflowed and samples were lost regardless.
 
 MEMORY: this script's `finally` drops the two DMA buffers (32 KB at the
 default `buf_words`) and collects before the host's next command.
@@ -139,7 +145,9 @@ ADDR_A = 0
 ADDR_B = 0
 #: Whether each buffer holds samples the main loop has not written out yet.
 FULL = [False, False]
-#: Buffers the main loop failed to drain before the DMA came round again.
+#: Whether the DMA started rewriting each buffer while it was still FULL.
+TORN = [False, False]
+#: Times the DMA started on a buffer the main loop had not finished sending.
 OVERRUNS = [0]
 
 
@@ -150,16 +158,19 @@ def on_a(_channel):
     # starting it.
     MEM[WR_A] = ADDR_A
     MEM[TC_A] = BUF_WORDS
-    if FULL[0]:
+    # A's chain has just started B on buffer 1 (see OVERRUNS above).
+    if FULL[1]:
         OVERRUNS[0] += 1
+        TORN[1] = True
     FULL[0] = True
 
 
 def on_b(_channel):
     MEM[WR_B] = ADDR_B
     MEM[TC_B] = BUF_WORDS
-    if FULL[1]:
+    if FULL[0]:
         OVERRUNS[0] += 1
+        TORN[0] = True
     FULL[1] = True
 
 
@@ -174,8 +185,7 @@ def main(out):
     global WR_A, WR_B, TC_A, TC_B, ADDR_A, ADDR_B
 
     bufs = [bytearray(BUF_BYTES), bytearray(BUF_BYTES)]
-    FULL[0] = False
-    FULL[1] = False
+    FULL[0] = FULL[1] = TORN[0] = TORN[1] = False
     OVERRUNS[0] = 0
     dma_a = None
     dma_b = None
@@ -240,7 +250,6 @@ def main(out):
         sm.active(1)
 
         sent = 0
-        reported = 0
         index = 0
         stopping = False
         while True:
@@ -252,13 +261,15 @@ def main(out):
             if stopping:
                 break
             sent += write_raw_chunk(out, bufs[index], SAMPLES_PER_CHUNK)
+            # FULL first: once it is clear no handler can set TORN[index],
+            # so a tear during the send above cannot be missed below.
             FULL[index] = False
-            if OVERRUNS[0] > reported:
+            if TORN[index]:
+                TORN[index] = False
                 # Cumulative, not an increment: see write_time_chunk().
                 sent += write_time_chunk(
                     out, OVERRUNS[0] * SAMPLES_PER_CHUNK, b"overrun"
                 )
-                reported = OVERRUNS[0]
             index = 1 - index
             # Both stop checks are here, between whole chunks: MAX_BYTES so
             # the board can finish on its own if the host never asks, and
