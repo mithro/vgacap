@@ -143,7 +143,7 @@ same order as the `.pio` source:
 The tests hold `fw_pio.c` to both: to pioasm's words for the `.pio` files
 (through the checked-in `.hex`) and to MicroPython's `rp2.asm_pio` words
 for every operand combination they try, configuration registers included
-(`python/tests/test_fw_sim.py`, [`tests/test_fw_units.c`](../tests/test_fw_units.c)). A MicroPython
+([`python/tests/test_fw_sim.py`](../python/tests/test_fw_sim.py), [`tests/test_fw_units.c`](../tests/test_fw_units.c)). A MicroPython
 program could load the `.pio` files' words the same way.
 
 ## Off-hardware tests
