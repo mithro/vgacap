@@ -78,7 +78,10 @@ DIV_INT * (TOP + 1) system clocks, doubled in phase-correct mode (RP2040
 and RP2350 datasheets, PWM), and main() refuses a fractional divider (the
 clock would drift against the sampler), a slice that is off or not
 free-running, a P outside 2..32 (the delay field's reach; slower clocks are
-what stream mode is for), or one that is not sysclk / clock_hz rounded.
+what stream mode is for), or a clock more than 0.5% from clock_hz.
+MicroPython's PWM (machine_pwm.c) makes any of these clocks with DIV 1 and
+TOP = round(sysclk / freq) - 1, so the period is always whole; that last
+check is what refuses 25 MHz at a 133 MHz sysclk (TOP 4: 26.6 MHz).
 
 HEAP. One frame of 640x480 is 420,000 samples, and fpga-1 has ~414 KB free
 but in pieces: the largest block measured 142 KB (2026-11-24). So a
@@ -248,7 +251,7 @@ def main(out):
     csr = MEM[CLK_PWM]
     div = MEM[CLK_PWM + 4]
     period = (div >> 4 & 255) * ((MEM[CLK_PWM + 16] & 65535) + 1) * (2 if csr & 2 else 1)
-    if (csr & 49) != 1 or div & 15 or not 2 <= period <= 32 or period != (sysclk + CLOCK_HZ // 2) // CLOCK_HZ:
+    if (csr & 49) != 1 or div & 15 or not 2 <= period <= 32 or abs(sysclk - period * CLOCK_HZ) * 200 > sysclk:
         msg = "error=project clock is not 2..32 whole system clocks of %d for %d Hz: pwm csr=%x div=%x"
         write_time_chunk(out, 0, (msg % (sysclk, CLOCK_HZ, csr, div)).encode())  # noqa: F821
         return
