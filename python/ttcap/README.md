@@ -162,8 +162,9 @@ The Welland boards are a shared, public bench of Tiny Tapeout demo boards,
 listed on [tinytapeout.fpgas.online](https://tinytapeout.fpgas.online). Each board is attached to its own
 Raspberry Pi, which runs the fpgas.online bridge (`fpgas-tt`).
 
-`--board` takes a slug from the `WELLAND` table in [`boards.py`](boards.py),
-such as `fpga-1`, `fpga-3` or `fpga-4`, and resolves it to a link:
+`ttcap demo --board` takes a slug from the `WELLAND` table in
+[`boards.py`](boards.py), such as `fpga-1`, `fpga-3` or `fpga-4`, and
+resolves it to a link:
 
 * **on the board's own Pi**, `serial:/dev/ttboard`. Stop the fpgas.online
   bridge first (`sudo systemctl stop fpgas-tt`), since it holds the device
