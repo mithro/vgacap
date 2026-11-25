@@ -38,7 +38,7 @@ calibration designs and their reference renders live in
 | stream format | [`include/vgacap/stream.h`](include/vgacap/stream.h) | [`src/stream/`](src/stream/) | [`python/vgacap/stream.py`](python/vgacap/stream.py) |
 | reconstruction (`libvgaframe`) | [`include/vgacap/frame.h`](include/vgacap/frame.h) | [`src/frame/`](src/frame/) | -- |
 | synthetic VGA signals | -- | -- | [`python/vgacap/synth.py`](python/vgacap/synth.py) |
-| simulator dump to stream (`vgacap-bin2stream`) | -- | -- | [`python/vgacap/bin2stream.py`](python/vgacap/bin2stream.py) |
+| one-byte-per-clock simulator dump to stream (`vgacap-bin2stream`) | -- | -- | [`python/vgacap/bin2stream.py`](python/vgacap/bin2stream.py) |
 
 - The stream has a `VGCH` header and `RAW`, `RLE`, `FRAM`, `EVNT` and
   `TIME` chunks. The writer is callback-based C99 with no allocation, so it
@@ -46,7 +46,6 @@ calibration designs and their reference renders live in
 - The reconstruction learns the sync timing and polarity from the signal,
   tolerates glitch pulses, matches a mode table, and rebuilds frames from
   continuous streams and from the whole frames or windows in `FRAM` chunks.
-- `vgacap-bin2stream` wraps a one-byte-per-clock simulator dump.
 
 **Capture sources.** Pick one by the hardware you have and how fast the
 design must run.
@@ -100,15 +99,17 @@ See [docs/development.md](docs/development.md).
 
 ## A first capture
 
-With a demo board on `/dev/ttyACM0` whose FPGA breakout can enable the
-`tt_um_vga_pattern` bitstream:
+With a demo board on `/dev/ttyACM0` running a 640x480 VGA design, such as a
+[tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns)
+bitstream on an FPGA breakout:
 
 ```sh
-uv run ttcap capture serial:/dev/ttyACM0 --design tt_um_vga_pattern \
+# on an ASIC breakout, --project <tt_um_...> instead of --design <bitstream>
+uv run ttcap capture serial:/dev/ttyACM0 --design <bitstream> \
     --clock-hz 500000 --frames 2 --out capture.vgacap
 mkdir -p out && build/vgacap-frames capture.vgacap out/frame      # out/frame-0000.ppm ...
 export GST_PLUGIN_PATH=$PWD/build
-uv run ttcap demo --link serial:/dev/ttyACM0 --design tt_um_vga_pattern \
+uv run ttcap demo --link serial:/dev/ttyACM0 --design <bitstream> \
     --clock-hz 500000 --fps 5 --outdir out                         # PNGs + MKV
 ```
 
