@@ -10,7 +10,7 @@ same tools as the MicroPython ones.
 
 It is built **no_flash**: the UF2 is loaded into SRAM by the RP2350's
 bootloader and runs from there, and flash is never written. A reset, a
-power cycle or `ttcap reboot --firmware picosdk` brings the board's stock
+power cycle or `ttcap reboot` brings the board's stock
 firmware back.
 
 ## Layout
@@ -179,5 +179,7 @@ fpgas.online Pis).
        ttcap capture --firmware picosdk serial:$FW --clock-hz 750000 --seconds 4 --out stream.vgacap
        ttcap png frame.vgacap frame
 
-6. Back to the stock firmware: `ttcap reboot serial:$FW --firmware picosdk`
-   (or reset / power cycle the board), then restart `fpgas-tt`.
+6. Back to the stock firmware: `ttcap reboot serial:$FW` (or reset / power
+   cycle the board), then restart `fpgas-tt`. `ttcap reboot` asks the board
+   which firmware it runs (the capture firmware's `hello`, then the raw
+   REPL); `--firmware picosdk` skips the question.
