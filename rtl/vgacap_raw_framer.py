@@ -20,16 +20,30 @@ writes (it knows the signal map, the mode and the clock):
   `fifo_words` words and never holds a whole chunk to learn its length.
 * `TIME` chunks reporting overruns: a chunk is admitted at its first sample
   only if the FIFO has room for all of it; otherwise its samples are dropped
-  and counted, and the next chunk out is followed by a `TIME` chunk whose
-  `dropped_samples` is the CUMULATIVE total and whose message is `overrun`.
-  So a stalled sink never corrupts the stream and never makes a silent gap.
-  (Same convention as the RP2 board scripts: readers take the last value.)
+  and counted, and a `TIME` chunk follows the next RAW chunk to finish going
+  out (or goes out at once if the output is idle). Its `dropped_samples` is
+  the CUMULATIVE number of samples dropped as of the clock the `TIME` chunk
+  starts, and its message is `overrun`. Only that total is meaningful, not
+  where the `TIME` chunk sits: RAW chunks admitted before a drop can still
+  come out after the `TIME` chunk that counts it. So a stalled sink never
+  corrupts the stream and never makes a silent gap, but the stream does not
+  say which chunks are missing. (Same convention as the RP2 board scripts:
+  readers take the last value.)
 
-Throughput: one byte a clock out, so with a sample every clock the output
-needs (samples_per_chunk + 12) / samples_per_chunk bytes a clock -- more than
-it has. A sink that keeps up therefore needs samples on no more than about
-95% of clocks at 256 samples a chunk; anything slower than that is what
-the overrun accounting is for.
+No flush: the RAW header goes out as soon as a chunk is admitted, so if
+`sample_valid` stops mid-chunk the stream ends in a truncated RAW chunk
+(which `vgacap.stream.read_chunks` rejects as truncated), and a `TIME`
+report still due behind it is never sent. Everything before that last chunk
+parses; a capture should stop on a chunk boundary (a multiple of
+`samples_per_chunk` samples) to end cleanly.
+
+Throughput: one byte a clock out, at best. Each chunk costs its
+samples_per_chunk data bytes, 12 header bytes and 4 FSM clocks with nothing
+out (IDLE, the first WORD_LOAD and WORD_WAIT, and the last WORD_LOAD), so
+256 samples take 272 clocks back to back. A sink that is always ready
+therefore keeps up with samples on at most 256/272 (about 94.1%) of clocks
+at 256 samples a chunk; anything faster, or a slower sink, is what the
+overrun accounting is for.
 
 Not here (by design): RLE (the compact chunk is undecided), hashing (done
 host-side), and the sampler itself (`UoSampler`, contributed separately).
