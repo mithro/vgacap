@@ -242,14 +242,17 @@ add(f'<circle cx="{OR_X}" cy="{BK_Y + BK_H / 2}" r="14" fill="#ffffff" stroke="{
 text(OR_X, BK_Y + BK_H / 2 + 4.5, "or", "part", "middle")
 
 A_C, B_C = A_X + bw / 2, B_X + bw / 2
-line([(A_C, BK_Y + BK_H + 6), (A_C, MCU_Y - 7)], "sig")
-text(A_C + 9, MCU_Y - 22, "uo_out[7:0]", "net", fill=SIG)
-line([(B_C, BK_Y + BK_H + 6), (B_C, MCU_Y - 7)], "sig")
-text(B_C + 9, MCU_Y - 22, "uo_out + uio", "net", fill=SIG)
-
-chip(A_X, MCU_Y, INNER_W, MCU_H, "RP2040 or RP2350")
-part(A_X + 16, MCU_Y + 22, INNER_W - 32, 28, "PIO")
 mid = A_X + INNER_W / 2
+JOIN_Y = MCU_Y - 24
+add(f'<path d="M{A_C} {BK_Y + BK_H + 6} L{A_C} {JOIN_Y} L{B_C} {JOIN_Y} L{B_C} {BK_Y + BK_H + 6}" '
+    f'fill="none" stroke="{SIG}" stroke-width="3" stroke-linejoin="round"/>')
+text(A_C + 9, (BK_Y + BK_H + JOIN_Y) / 2 + 18, "uo_out[7:0]", "net", fill=SIG)
+text(B_C + 9, (BK_Y + BK_H + JOIN_Y) / 2 + 18, "uo_out + uio", "net", fill=SIG)
+
+MCU_W = 220
+chip(mid - MCU_W / 2, MCU_Y, MCU_W, MCU_H, "RP2040 or RP2350")
+line([(mid, JOIN_Y), (mid, MCU_Y - 7)], "sig")
+part(mid - 55, MCU_Y + 22, 110, 28, "PIO")
 line([(mid, MCU_Y + 50), (mid, MCU_Y + 64)], "thin")
 MCU_BOTTOM = stack(mid, MCU_Y + 66, ("DMA", "USB"), w=110, h=26)
 
@@ -263,7 +266,7 @@ add(f'<image x="{PH_X}" y="{PH_Y:.1f}" width="{PW}" height="{PHH:.1f}" '
 # Spots on the render (fractions of its width and height): the breakout's left
 # connector, and the RP2350B under the breakout.
 leader(PH_X + 0.31 * PW, PH_Y + 0.34 * PHH, B_X + bw, BK_Y + BK_H / 2)
-leader(PH_X + 0.51 * PW, PH_Y + 0.50 * PHH, A_X + INNER_W, MCU_Y + MCU_H / 2)
+leader(PH_X + 0.51 * PW, PH_Y + 0.50 * PHH, mid + MCU_W / 2, MCU_Y + MCU_H / 2)
 
 # ---- the Raspberry Pi 5, wired to the same uo_out -------------------------------------------------
 container(PI_X, "Raspberry Pi 5", lambda x, y: nested_svg(
