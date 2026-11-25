@@ -109,6 +109,26 @@ TEST(clock_reports_its_plan) {
     ASSERT_TRUE(streq(line(), "ok clock_hz=0 sysclk_hz=133000000"));
 }
 
+// set_sys_clock_hz() can fail. hal_clock() has stopped the PWM by then, so
+// the firmware must not go on believing the old clock runs: status says 0
+// and a capture is refused. A plan the firmware cannot make leaves the
+// running clock alone.
+TEST(clock_a_failed_system_clock_stops_the_clock) {
+    boot(1, 1e-6);
+    pos = 0;
+    send_at("clock hz=25000000\nclock hz=2\nstatus\n", 0);
+    run();
+    ASSERT_TRUE(streq(line(), "ok clock_hz=25000000 actual_hz=25000000 sysclk_hz=100000000 period=4"));
+    ASSERT_TRUE(streq(line(), "err clock 2: no system clock for that project clock (3 Hz .. 125 MHz)"));
+    ASSERT_TRUE(streq(line(), "ok clock_hz=25000000 sysclk_hz=100000000 reset=0 ui_in=-1"));
+    sim_refuse_sysclk(1);
+    send_at("clock hz=36000000\nstatus\nstream buf_words=16 max_bytes=0 edge=falling pio=1 sm=0\n", 0);
+    run();
+    ASSERT_TRUE(streq(line(), "err clock 36000000: the system clock cannot be set to that frequency"));
+    ASSERT_TRUE(streq(line(), "ok clock_hz=0 sysclk_hz=100000000 reset=0 ui_in=-1"));
+    ASSERT_TRUE(streq(line(), "err the project clock is stopped: send 'clock hz=N' first"));
+}
+
 TEST(overlong_line_is_refused_whole) {
     boot(1, 1e-6);
     pos = 0;
@@ -121,6 +141,29 @@ TEST(overlong_line_is_refused_whole) {
     run();
     ASSERT_TRUE(streq(line(), "err line longer than 256 bytes"));
     ASSERT_TRUE(strncmp(line(), "ok vgacap-fw", 12) == 0);
+}
+
+// An idle stop byte discards a half-received line, so a host's
+// "\x03\nhello\n" resync never completes what an earlier host left
+// half-sent ("reboo" + "t\n" would otherwise reboot the board). It also
+// clears an overlong line.
+TEST(idle_stop_byte_discards_the_line_so_far) {
+    boot(1, 1e-6);
+    pos = 0;
+    send_at("reboo\x03t\nsta\x03\nhello\n", 0);
+    char big[300];
+    memset(big, 'x', sizeof big - 1);
+    big[sizeof big - 1] = 0;
+    send_at(big, 0);
+    send_at("\x03status\n", 0);
+    run();
+    ASSERT_TRUE(!fw_reboot_requested());
+    ASSERT_TRUE(streq(line(), "err unknown command 't'"));
+    ASSERT_TRUE(strncmp(line(), "ok vgacap-fw", 12) == 0);
+    ASSERT_TRUE(streq(line(), "ok clock_hz=0 sysclk_hz=150000000 reset=0 ui_in=-1"));
+    size_t len;
+    sim_output(&len);
+    ASSERT_EQ_U(pos, len);
 }
 
 TEST(program_commands_print_the_words) {
@@ -241,6 +284,112 @@ TEST(stream_overruns_are_cumulative) {
     ASSERT_TRUE(raws >= 2);
     ASSERT_TRUE(reports >= 1);
     ASSERT_TRUE(last_dropped > 0);
+}
+
+// Whether a RAW chunk's samples are consecutive clocks of the ramp() design
+// (uo[i] = 7i + 3 is a bijection on 0..255, so each value names its clock).
+static int raw_is_contiguous(void) {
+    uint32_t n = u32_at(payload);
+    uint8_t first = payload[4 + 3];
+    size_t at = 0;
+    while (uo[at] != first) at++;
+    for (uint32_t s = 0; s < n; s++) {
+        if (payload[4 + 4 * (s / 4) + (3 - s % 4)] != uo[(at + s) % 256]) return 0;
+    }
+    return 1;
+}
+
+// The DMA starts rewriting a buffer as soon as the other one fills, so a
+// slow send of buffer 0 is overtaken part way through: its chunk goes out
+// mixed. That is the overrun (counted as the fill starts, not when it
+// completes), and the `overrun` TIME follows that very chunk. Ground
+// truth: every RAW chunk that is not contiguous is followed straight away
+// by its report, and the first one here is.
+TEST(stream_a_chunk_torn_mid_send_is_reported_after_it) {
+    ramp(256);
+    // 2 ms per 76-byte chunk, a buffer of 64 samples fills in 0.64 ms:
+    // buffer 0 is full at 0.64 ms and sent until 2.64 ms; the fill after
+    // buffer 1 rewrites it from 1.28 ms at a word per 40 us, faster than
+    // the send reads it (a word per 105 us), so it overtakes the send.
+    boot(256, 2e-3 / 76.0);
+    pos = 0;
+    send_at("clock hz=100000\nstream buf_words=16 max_bytes=600 edge=falling pio=1 sm=0\n", 0);
+    run();
+    line();
+    ASSERT_TRUE(streq(line(), "ok stream"));
+    ASSERT_TRUE(streq(chunk(), "RAW "));
+    ASSERT_TRUE(!raw_is_contiguous());
+    ASSERT_TRUE(streq(chunk(), "TIME"));
+    ASSERT_TRUE(streq(time_msg(), "overrun"));
+    // Cumulative: the fills that overran during that slow send, so far.
+    uint32_t last_dropped = u32_at(payload + 12);
+    ASSERT_TRUE(last_dropped >= 64 && last_dropped % 64 == 0);
+    uint32_t raws = 1, torn = 1, reports = 1;
+    const char *tag;
+    while (!strcmp(tag = chunk(), "RAW ")) {
+        raws++;
+        int contiguous = raw_is_contiguous();
+        tag = chunk();
+        if (!strcmp(tag, "TIME") && !strcmp(time_msg(), "overrun")) {
+            reports++;
+            ASSERT_TRUE(u32_at(payload + 12) >= last_dropped);
+            last_dropped = u32_at(payload + 12);
+        } else {
+            ASSERT_TRUE(contiguous);  // a torn chunk without its report
+            pos -= 8u + paylen;       // not ours: read it again above
+        }
+        if (!contiguous) torn++;
+    }
+    // The summary: a buffer torn but never sent before max_bytes is counted
+    // there too.
+    ASSERT_TRUE(streq(tag, "TIME"));
+    uint32_t total = u32_at(payload + 12);
+    ASSERT_TRUE(total >= last_dropped);
+    char want[96];
+    snprintf(want, sizeof want, "overruns=%u rxstall=0 sysclk_hz=133000000", total / 64);
+    ASSERT_TRUE(streq(time_msg(), want));
+    ASSERT_TRUE(raws >= 4);
+    ASSERT_TRUE(torn >= 2);
+    ASSERT_TRUE(reports >= torn);
+}
+
+// The case counting at completion misses: the host stops reading in the
+// middle of buffer 0's chunk, the next fill of buffer 0 overtakes the send
+// and the send then finishes, releasing the buffer, before that fill
+// completes. The overrun is counted as the fill starts, so the mixed chunk
+// is still followed by its report; nothing else is torn or reported.
+TEST(stream_a_host_stall_mid_chunk_is_reported) {
+    ramp(256);
+    // A 1 MB/s link: the stream starts at ~0.07 ms, buffer 0 is full at
+    // ~0.71 ms and its send reaches word 8 at ~0.75 ms, where the host
+    // stops reading for 1 ms. Buffer 0's next fill runs from ~1.35 ms to
+    // ~1.99 ms, a word per 40 us, so by ~1.75 ms it has rewritten words
+    // 0..10; the send finishes at ~1.78 ms, before that fill completes.
+    sim_config_t cfg = { .uo = uo, .uo_len = 256, .seconds_per_byte = 1e-6, .arena_bytes = 0,
+                         .stall_at = 0.74e-3, .stall_seconds = 1e-3 };
+    sim_init(&cfg);
+    sim_io_memory();
+    fw_init();
+    pos = 0;
+    send_at("clock hz=100000\nstream buf_words=16 max_bytes=600 edge=falling pio=1 sm=0\n", 0);
+    run();
+    line();
+    ASSERT_TRUE(streq(line(), "ok stream"));
+    ASSERT_TRUE(streq(chunk(), "RAW "));
+    ASSERT_TRUE(!raw_is_contiguous());
+    ASSERT_TRUE(streq(chunk(), "TIME"));
+    ASSERT_TRUE(streq(time_msg(), "overrun"));
+    ASSERT_EQ_U(u32_at(payload + 12), 64);
+    uint32_t raws = 1;
+    const char *tag;
+    while (!strcmp(tag = chunk(), "RAW ")) {
+        raws++;
+        ASSERT_TRUE(raw_is_contiguous());
+    }
+    ASSERT_TRUE(raws >= 4);
+    ASSERT_TRUE(streq(tag, "TIME"));
+    ASSERT_TRUE(streq(time_msg(), "overruns=1 rxstall=0 sysclk_hz=133000000"));
+    ASSERT_EQ_U(u32_at(payload + 12), 64);
 }
 
 // The stop byte is noticed between chunks, never inside one, and the
@@ -497,16 +646,63 @@ TEST(frame_stops_on_the_stop_byte_and_on_max_bytes) {
     ASSERT_TRUE(streq(time_msg(), "frames=1 stalls=0 rxstall=0 sysclk_hz=100000000"));
 }
 
+// A host that drops DTR (closes the port, is unplugged) mid-capture: the
+// capture stops by itself, without a stop byte or max_bytes, and writes
+// nothing more -- a stream that would otherwise run for ever, and a frame
+// capture waiting for a vsync that never comes.
+static void host_leaves(size_t uo_len, double at) {
+    sim_config_t cfg = { .uo = uo, .uo_len = uo_len, .seconds_per_byte = 1e-6, .arena_bytes = 0,
+                         .host_gone_at = at };
+    sim_init(&cfg);
+    sim_io_memory();
+    fw_init();
+    pos = 0;
+}
+
+TEST(capture_ends_when_the_host_goes) {
+    ramp(256);
+    host_leaves(256, 5e-3);
+    send_at("clock hz=100000\nstream buf_words=16 max_bytes=0 edge=falling pio=1 sm=0\n", 0);
+    run();
+    ASSERT_TRUE(sim_now() >= 5e-3);
+    line();
+    ASSERT_TRUE(streq(line(), "ok stream"));
+    size_t len;
+    sim_output(&len);
+    uint32_t raws = 0;
+    while (pos + 8 <= len) {
+        ASSERT_TRUE(streq(chunk(), "RAW "));  // no summary, no DONE
+        raws++;
+    }
+    ASSERT_TRUE(raws >= 5 && raws <= 9);  // ~4.9 ms of 0.64 ms buffers
+
+    memset(uo, 0, 16);  // no sync at all: the window never comes
+    host_leaves(16, 5e-3);
+    send_at("clock hz=25000000\nframe cpl=16 region_first=3 region_lines=5 window_lines=0 "
+            "hsync_active=1 vsync_active=1 max_frames=0 max_bytes=0 edge=rising sample_delay=0 pio=1 sm=0\n", 0);
+    run();
+    ASSERT_TRUE(sim_now() >= 5e-3);
+    line();
+    ASSERT_TRUE(streq(line(), "ok frame"));
+    ASSERT_TRUE(streq(chunk(), "TIME"));  // the opening one, then nothing
+    sim_output(&len);
+    ASSERT_EQ_U(pos, len);
+}
+
 int main(void) {
     RUN(hello_status_and_errors);
     RUN(clock_reports_its_plan);
+    RUN(clock_a_failed_system_clock_stops_the_clock);
     RUN(overlong_line_is_refused_whole);
+    RUN(idle_stop_byte_discards_the_line_so_far);
     RUN(program_commands_print_the_words);
     RUN(reboot_answers_then_stops);
     RUN(stream_needs_a_clock);
     RUN(stream_rejects_a_buffer_the_arena_cannot_hold_twice);
     RUN(stream_to_max_bytes);
     RUN(stream_overruns_are_cumulative);
+    RUN(stream_a_chunk_torn_mid_send_is_reported_after_it);
+    RUN(stream_a_host_stall_mid_chunk_is_reported);
     RUN(stream_stops_on_the_stop_byte);
     RUN(frame_whole_region_measures_polarity);
     RUN(frame_windows_sweep_the_region);
@@ -515,5 +711,6 @@ int main(void) {
     RUN(frame_rxstall_is_reported_per_window_and_in_the_summary);
     RUN(frame_refusals);
     RUN(frame_stops_on_the_stop_byte_and_on_max_bytes);
+    RUN(capture_ends_when_the_host_goes);
     RUN_TESTS_END();
 }

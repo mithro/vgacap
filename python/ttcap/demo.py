@@ -52,6 +52,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 
 from .boards import WELLAND, bridge_ws_url
@@ -394,6 +395,90 @@ def check_board_wants(board: str | None, project: str | None, design: str | None
         raise CaptureError(
             "--project is for the ASIC shuttles (%s); %s is an FPGA board, so "
             "name the bitstream with --design instead" % (asic_slugs(), board)
+        )
+
+
+def board_of_this_pi(hostname: str | None = None) -> str | None:
+    """The bench slug whose Pi this process runs on, or None."""
+    for slug in sorted(WELLAND):
+        if running_on_board_pi(slug, hostname):
+            return slug
+    return None
+
+
+#: Host names a tunnel's near end is reached by (`tunnel_hint`).
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def board_of_link(url: str | None) -> str | None:
+    """The bench slug a `ws://` link points at, or None.
+
+    The bridge's own address (`bridge_host`, 10.21.2.<octet>), the Pi's
+    name (`pi_hostname`), or a tunnel's near end on this machine at the
+    board's `tunnel_port` (TUNNEL_PORT_BASE + octet, as `tunnel_hint`
+    suggests). A `serial:` link names no board.
+    """
+    if not url or not (url.startswith("ws://") or url.startswith("wss://")):
+        return None
+    parsed = urllib.parse.urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    for slug in sorted(WELLAND):
+        if host == bridge_host(slug) or host.split(".", 1)[0] == pi_hostname(slug).lower():
+            return slug
+        if host in LOOPBACK_HOSTS and port == tunnel_port(slug):
+            return slug
+    return None
+
+
+def check_asic_index(
+    board: str | None,
+    asic_index: int | None,
+    link: str | None = None,
+    hostname: str | None = None,
+) -> None:
+    """Refuse `--asic-index` on an FPGA board, or where the board is in doubt.
+
+    `asic_select` pulls GPIO 1 low, and on an FPGA breakout that is the
+    iCE40's CRESET_B: the shared FPGA's configuration is erased, for every
+    later visitor too. The firmware cannot tell the carriers apart, so the
+    host refuses it here, as `check_board_wants` refuses --project, by the
+    slug -- from every source that names one: `--board`, the link
+    (`board_of_link`: a bridge address, a Pi name or a tunnel port), and,
+    for a `serial:` link (or none), the bench Pi this runs on, whose board
+    that serial port is. Refused when any of them is an FPGA board, or when
+    they disagree (which board is it?). With none of them there is no
+    knowing what is on the other end, and nothing is refused.
+
+    `ttcap capture` calls this; a caller of `firmware.setup()` /
+    `FirmwareSession` directly must call it itself.
+    """
+    if asic_index is None:
+        return
+    named = {}
+    if board is not None:
+        named["--board"] = board
+    from_link = board_of_link(link)
+    if from_link is not None:
+        named["the link"] = from_link
+    if link is None or link.startswith("serial:"):
+        here = board_of_this_pi(hostname)
+        if here is not None:
+            named["this Pi"] = here
+    fpgas = sorted({s for s in named.values() if board_takes_a_design(s)})
+    if fpgas:
+        raise CaptureError(
+            "--asic-index is for the ASIC shuttles (%s); %s is an FPGA board, "
+            "where asic_select pulls GPIO 1 -- the iCE40's CRESET_B -- low and "
+            "erases the FPGA" % (asic_slugs(), " and ".join(fpgas))
+        )
+    if len(set(named.values())) > 1:
+        raise CaptureError(
+            "--asic-index needs to know which board it is for, and %s disagree: %s"
+            % (", ".join(named), ", ".join("%s says %s" % kv for kv in named.items()))
         )
 
 
