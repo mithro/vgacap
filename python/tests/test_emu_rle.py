@@ -165,6 +165,18 @@ def test_the_edge_style_counts_the_sample_delay_in_its_shortest_clock(masked, pe
     assert len(got) > 10_000 and matches_signal(got, want)[0]
 
 
+def test_a_clock_a_fraction_off_a_whole_ratio_is_not_phase_locked(bars_uo):
+    # 150 MHz / 6 is 25 MHz; 25.1 MHz is 5.98 system clocks, which a loop
+    # padded to 6 would drift against by a sample every 250. Only an exact
+    # ratio gets the locked style; this one waits for each edge -- and 6
+    # is too short for that, so it is refused.
+    near = run(RP2350_DBV3, bars_uo, 6, 150_000_000, stop_bytes=1000, clock=25_100_000)
+    assert messages(near)[0].startswith("error=no exact rle style")
+    # 13.3 MHz is 11.28 at 150 MHz: edge, a cycle under the shortest allowed.
+    edge = run(RP2350_DBV3, bars_uo, 11, 150_000_000, stop_bytes=1000, clock=13_300_000)
+    assert messages(edge)[0] == "rle style=edge period=11 mask=1"
+
+
 def test_more_pairs_than_the_link_carries_are_reported_as_overruns(bars_uo):
     # 25 MHz bars at the modelled USB rate: ~2 MB/s of pairs for 0.7 MB/s.
     stream = run(RP2350_DBV3, bars_uo, 6, 150_000_000, stop_bytes=200_000,

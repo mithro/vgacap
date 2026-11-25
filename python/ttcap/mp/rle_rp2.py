@@ -70,7 +70,8 @@ frames of every calibration pattern. P must be at least the longest path:
 (EDGE_MIN_PERIOD below, measured on the emulator, plus sample_delay: the
 second wait's delay is spent on every clock); it is what a reduced
 streaming clock with a fractional divider needs. "auto" takes locked when
-the ratio is whole and in range, edge otherwise.
+the ratio is exactly whole (sysclk == P * clock_hz: 0.4% off drifts a
+sample every 250 clocks) and in range, edge otherwise.
 
 A push to a full RX FIFO is `noblock`: the word is dropped but the phase
 is kept, and FDEBUG.RXSTALL is set (RP2040 datasheet, FDEBUG), which the
@@ -241,7 +242,8 @@ def on_b(_channel):
 def choose(sysclk, masked):
     """(locked, period) for this clock, or None when no style is exact."""
     period = (sysclk + CLOCK_HZ // 2) // CLOCK_HZ
-    whole = abs(sysclk - period * CLOCK_HZ) * 200 <= sysclk
+    # Exactly whole, or the padded loop drifts against the clock.
+    whole = sysclk == period * CLOCK_HZ
     lo = LOCKED_MIN_PERIOD[masked]
     if STYLE != "edge" and whole and lo <= period <= LOCKED_MAX_PERIOD:
         return True, period
