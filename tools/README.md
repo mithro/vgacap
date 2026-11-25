@@ -29,12 +29,13 @@ board can settle and writes a dated Markdown report. The checks are:
 
 The example runs against `fpga-1`, a demo board with an FPGA breakout on
 the shared Welland bench (see [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board)),
-whose Pi is at 10.21.2.34:
+whose Pi is at 10.21.2.34. It needs the calibration bitstream uploaded and
+enabled first, with tt-vga-testpatterns'
+[`tools/upload.py`](https://github.com/mithro/tt-vga-testpatterns/blob/main/tools/upload.py):
 
 ```sh
 # from a workstation: a tunnel to the board's bridge (local port 18000 + the last octet of the Pi's address)
 ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com
-# upload and enable the calibration bitstream (tt-vga-testpatterns/tools/upload.py), then
 tools/hil.sh --board fpga-1 --design tt_um_vgacal_bars --clock-hz 500000 \
     --link ws://127.0.0.1:18034/serial docs/results/
 ```
