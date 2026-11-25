@@ -56,6 +56,7 @@ import time
 import urllib.parse
 from dataclasses import dataclass, field
 
+from .firmware import FIRMWARES
 from .boards import RP2350_DBV3, WELLAND, bridge_ws_url
 # Same package, and the octet is the one part of a Welland address the tunnel
 # hint has to spell out; `bridge_ws_url` hands back a whole URL.
@@ -573,6 +574,27 @@ def check_asic_index(
         )
 
 
+def check_firmware_wants(firmware: str, project: str | None, design: str | None) -> None:
+    """Refuse `--project` / `--design` on the pico-sdk capture firmware.
+
+    That firmware runs in place of the stock one, which is what knows the
+    shuttle, so it keeps whatever design was enabled before it was loaded
+    and selects none itself (`ttcap.firmware.setup` refuses any selection).
+    Left to it, the refusal arrives several GStreamer ERROR blocks deep,
+    after the board has been opened; the flags alone already say it will.
+    """
+    if firmware == "micropython":
+        return
+    given = [flag for flag, value in (("--project", project), ("--design", design)) if value]
+    if given:
+        raise CaptureError(
+            "%s needs the stock firmware: the %s capture firmware keeps whatever "
+            "design was enabled before it was loaded and cannot select one. Enable "
+            "the design with the stock firmware first (firmware/README.md), then "
+            "run without %s" % (" and ".join(given), firmware, " / ".join(given))
+        )
+
+
 # ------------------------------------------------------------- the numbers
 
 
@@ -750,6 +772,7 @@ def source_properties(
     capture_mode: str = "stream",
     vga_mode: str | None = None,
     window_lines: int = 0,
+    firmware: str = "micropython",
 ) -> list[str]:
     """`vgacapttsrc`'s settings, as `name=value` tokens.
 
@@ -772,6 +795,8 @@ def source_properties(
     # Only what differs from the element's own defaults, like buf-words.
     if capture_mode != "stream":
         props.append("capture-mode=%s" % capture_mode)
+    if firmware != "micropython":
+        props.append("firmware=%s" % firmware)
     if vga_mode:
         props.append("vga-mode=%s" % vga_mode)
     if window_lines:
@@ -868,6 +893,7 @@ def build_pipeline(
     capture_mode: str = "stream",
     vga_mode: str | None = None,
     window_lines: int = 0,
+    firmware: str = "micropython",
 ) -> tuple[list[str], list[str]]:
     """The `gst-launch-1.0` argument vector, and what it writes.
 
@@ -935,6 +961,7 @@ def build_pipeline(
             capture_mode=capture_mode,
             vga_mode=vga_mode,
             window_lines=window_lines,
+            firmware=firmware,
         ),
         "!",
         "vgadecode",
@@ -1433,6 +1460,7 @@ def plan_demo(
     # person can fix without installing anything.
     link = resolve_link(args.board, args.link)
     check_board_wants(args.board, args.project, args.design)
+    check_firmware_wants(args.firmware, args.project, args.design)
     # Before the GStreamer check: a mistyped number is the person's to fix
     # and should not wait on anything being installed.
     for warning in check_numbers(args):
@@ -1471,6 +1499,7 @@ def plan_demo(
             capture_mode=args.mode,
             vga_mode=args.vga_mode,
             window_lines=args.window_lines,
+            firmware=args.firmware,
             png=args.png,
             video=args.video,
             video_encoder=args.video_encoder,
@@ -1694,6 +1723,14 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--vga-mode", help="frame/window modes: the VGA timing to expect (ttcap's default 640x480@60)"
+    )
+    parser.add_argument(
+        "--firmware", choices=list(FIRMWARES), default="micropython",
+        help="what runs on the board: the stock MicroPython firmware (default), or "
+        "vgacap's pico-sdk capture firmware, which must already be running: "
+        "`ttcap reboot --to bootsel` and then copy vgacap_fw.uf2 onto the RP2350 "
+        "drive by hand (firmware/README.md). It keeps the design enabled before "
+        "it was loaded and cannot take --project/--design",
     )
     parser.add_argument(
         "--window-lines", type=int, default=0,
