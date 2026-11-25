@@ -104,7 +104,8 @@ jobs:
             xvfb \
             gir1.2-gstreamer-1.0 \
             python3-gi \
-            strace
+            strace \
+            iverilog
       # What each package is for, so a future trim can be reasoned about:
       #   libgstreamer1.0-dev, libgstreamer-plugins-base1.0-dev
       #       the headers and .pc files gst/CMakeLists.txt looks for
@@ -134,6 +135,11 @@ jobs:
       #       from a real pipeline instead of gst-launch
       #   strace                        the test that proves no signal is sent
       #                                 to a reaped process group
+      #   iverilog                      Icarus, which simulates the committed
+      #                                 rtl/vgacap_raw_framer.v (the file a
+      #                                 yosys-only flow uses); this is the one
+      #                                 job that runs it, so the skip guard
+      #                                 below covers it too
       - run: cmake -S . -B build && cmake --build build -j
       - name: the plugin must have been built here
         run: test -e build/libgstvgacap.so
@@ -148,13 +154,14 @@ jobs:
       # pyproject's testpaths covers python/tests and gst/tests, so one run
       # is both suites. A skip is a pass to pytest, so the plugin and
       # hardware-check tests skipping here -- a missing package, a plugin
-      # that failed to load -- would go unnoticed; -rs lists every skip and
-      # the next step refuses any in those suites.
+      # that failed to load -- would go unnoticed, and so would the RTL
+      # framer's (no migen, no iverilog); -rs lists every skip and the next
+      # step refuses any in those suites.
       - name: pytest
         env:
           GST_PLUGIN_FEATURE_RANK: ximagesink:MAX
         run: |
           set -o pipefail
           xvfb-run -a uv run pytest -q -rs 2>&1 | tee pytest.log
-      - name: nothing GStreamer-dependent was skipped
-        run: "! grep -E '^SKIPPED .*(gst/tests/|test_hil.py)' pytest.log"
+      - name: nothing GStreamer- or Icarus-dependent was skipped
+        run: "! grep -E '^SKIPPED .*(gst/tests/|test_hil.py|test_rtl_raw_framer.py)' pytest.log"
