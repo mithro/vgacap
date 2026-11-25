@@ -927,6 +927,103 @@ def test_deferred_signals_survive_a_live_second_thread(monkeypatch, mode):
             signal.signal(s, handler)
 
 
+@pytest.mark.parametrize("mode", ["midrestore", "swallow"])
+def test_a_stop_signal_during_the_restore_keeps_its_own_word(monkeypatch, mode):
+    """Modelled on the review's probe_stop.py, with hil's real handlers.
+
+    midrestore: a SIGTERM taken by another thread runs _on_stop_signal
+    inside the restore; it sets every stop signal to SIG_IGN, and the
+    restore must not re-arm them. swallow: a SIGINT was deferred as well;
+    its KeyboardInterrupt, delivered when the mask lifts, must not replace
+    the Interrupted that names the real cause."""
+    import threading
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    stop = threading.Event()
+    other = threading.Thread(target=lambda: stop.wait(30), daemon=True)  # unmasked
+    other.start()
+    saved = {s: signal.getsignal(s) for s in (signal.SIGINT, *hil.STOP_SIGNALS)}
+    real_signal = signal.signal
+    fired = []
+
+    def hook(sig, handler):
+        old = real_signal(sig, handler)
+        if sig == signal.SIGTERM and handler is hil._on_stop_signal and not fired:
+            fired.append(1)
+            os.kill(os.getpid(), signal.SIGTERM)  # process-directed
+            time.sleep(0.05)  # main has it blocked: the other thread takes it
+        return old
+
+    raised = []
+    try:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        for s in hil.STOP_SIGNALS:
+            signal.signal(s, hil._on_stop_signal)
+        monkeypatch.setattr(hil.signal, "signal", hook)
+        try:
+            try:
+                with hil.signals_deferred():
+                    if mode == "swallow":
+                        os.kill(os.getpid(), signal.SIGINT)
+                        time.sleep(0.05)
+                time.sleep(0.1)
+            except BaseException as exc:  # noqa: BLE001
+                raised.append(exc)
+            time.sleep(0.1)
+        except BaseException as exc:  # noqa: BLE001
+            raised.append(exc)
+        monkeypatch.undo()
+        assert fired
+        assert len(raised) == 1 and isinstance(raised[0], hil.Interrupted), raised
+        assert str(raised[0]) == "SIGTERM"
+        if mode == "swallow":
+            assert isinstance(raised[0].__context__, KeyboardInterrupt), raised[0].__context__
+        for s in hil.STOP_SIGNALS:
+            assert signal.getsignal(s) == signal.SIG_IGN, signal.Signals(s).name
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == set()
+    finally:
+        stop.set()
+        monkeypatch.undo()
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+
+
+def test_the_mjpeg_reader_is_born_with_signals_blocked():
+    """No window between start() returning and run() blocking them."""
+    import socket
+    import threading
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    real_run = hil.MjpegReader.run
+    gate = threading.Event()
+
+    class Late(hil.MjpegReader):
+        def run(self):
+            gate.wait(10)  # run() has not blocked anything yet
+            real_run(self)
+
+    reader = Late(port, budget=1.0)
+    reader.start()
+    try:
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == set()  # main's
+        status = pathlib.Path("/proc/self/task/%d/status" % reader.native_id).read_text()
+        blocked = int(next(line.split()[1] for line in status.splitlines()
+                           if line.startswith("SigBlk:")), 16)
+        for sig in (signal.SIGINT, *hil.STOP_SIGNALS):
+            assert blocked & (1 << (sig - 1)), (signal.Signals(sig).name, hex(blocked))
+    finally:
+        gate.set()
+        reader.stop()
+
+
 def test_the_mjpeg_reader_thread_leaves_signals_to_main():
     sys.path.insert(0, str(ROOT / "tools"))
     import hil

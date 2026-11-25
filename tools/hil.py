@@ -147,12 +147,14 @@ def signals_deferred():
     """
     pending: list[int] = []
     saved = {}
+    deferring = {}
     try:
         for sig in (signal.SIGINT, *STOP_SIGNALS):
-            saved[sig] = signal.signal(sig, lambda signum, _f: pending.append(signum))
+            deferring[sig] = lambda signum, _f: pending.append(signum)
+            saved[sig] = signal.signal(sig, deferring[sig])
         yield
     finally:
-        _restore_deferred(saved, pending)
+        _restore_deferred(saved, deferring, pending)
 
 
 #: Attempts at putting one handler back. `signal.signal()` runs any
@@ -161,7 +163,7 @@ def signals_deferred():
 _RESTORE_ATTEMPTS = 50
 
 
-def _restore_deferred(saved: dict, pending: list[int]) -> None:
+def _restore_deferred(saved: dict, deferring: dict, pending: list[int]) -> None:
     """Put `saved` back and re-send `pending`, whatever arrives meanwhile.
 
     The signals are blocked here, but only in this thread: another thread
@@ -183,13 +185,16 @@ def _restore_deferred(saved: dict, pending: list[int]) -> None:
         except BaseException as exc:  # noqa: BLE001 - raised after the restore
             first = first or exc
         for sig, handler in saved.items():
+            # Retried only while it is still ours: a real handler run in
+            # here (_on_stop_signal sets every stop signal to SIG_IGN)
+            # has the last word on its disposition.
             for _attempt in range(_RESTORE_ATTEMPTS):
+                if signal.getsignal(sig) is not deferring[sig]:
+                    break
                 try:
                     signal.signal(sig, handler)
                 except BaseException as exc:  # noqa: BLE001 - raised after the restore
                     first = first or exc
-                if signal.getsignal(sig) is handler:
-                    break
         # To this thread, which has them blocked: each waits in the kernel
         # until the mask is lifted, then goes to the real handler.
         for sig in dict.fromkeys(list(pending)):
@@ -198,8 +203,23 @@ def _restore_deferred(saved: dict, pending: list[int]) -> None:
             except BaseException as exc:  # noqa: BLE001 - one cannot stop the rest
                 first = first or exc
     finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+        # Lifting the mask delivers the re-sent signals, and their handlers
+        # run -- and may raise -- inside the call or just after it. Run them
+        # all here; the first exception from above still names the cause.
+        later: list[BaseException] = []
+        for _attempt in range(_RESTORE_ATTEMPTS):
+            try:
+                if signal.pthread_sigmask(signal.SIG_BLOCK, []) != old_mask:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+                _run_pending_signal_handlers()
+                break
+            except BaseException as exc:  # noqa: BLE001 - chained below
+                later.append(exc)
+    if first is None and later:
+        first = later.pop(0)
     if first is not None:
+        if later and first.__context__ is None:
+            first.__context__ = later[0]
         raise first
 
 
@@ -944,6 +964,17 @@ class MjpegReader(threading.Thread):
         # Not `_stop`: threading.Thread has its own `_stop()` method, which
         # join() calls, and an Event under that name makes join() raise.
         self._halt = threading.Event()
+
+    def start(self) -> None:
+        """Start the thread with SIGINT and the stop signals already
+        blocked: a new thread inherits its creator's mask, and run()'s own
+        block comes too late for a signal sent as start() returns."""
+        sigs = (signal.SIGINT, *STOP_SIGNALS)
+        old = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
+        try:
+            super().start()
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old)
 
     def stop(self) -> None:
         self._halt.set()
