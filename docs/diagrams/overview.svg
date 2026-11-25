@@ -246,8 +246,8 @@
 <text x="663.0" y="534.0" class="part" text-anchor="middle" fill="#6b46d6">&gt;_</text>
 <text x="703.0" y="536" class="title" text-anchor="start">ttcap</text>
 <path d="M663.0 554 L663.0 598" fill="none" stroke="#f2620c" stroke-width="4.5" marker-end="url(#a-str)"/>
-<path d="M266.0 476 L266.0 598" fill="none" stroke="#f2620c" stroke-width="4.5" marker-end="url(#a-str)"/>
-<path d="M1028.0 476 L1028.0 598" fill="none" stroke="#f2620c" stroke-width="4.5" marker-end="url(#a-str)"/>
+<path d="M304.0 460 L304.0 598" fill="none" stroke="#f2620c" stroke-width="4.5" marker-end="url(#a-str)"/>
+<path d="M1072.0 460 L1072.0 598" fill="none" stroke="#f2620c" stroke-width="4.5" marker-end="url(#a-str)"/>
 <rect x="150" y="600" width="994" height="96" rx="6" fill="#f7f8fb" stroke="#2b3445" stroke-width="2.5"/>
 <text x="170" y="630" class="title" text-anchor="start">vgacap stream</text>
 <rect x="170.0" y="644" width="31.4" height="22" rx="2" fill="#ffffff" stroke="#c9ced8" stroke-width="0.75"/>
