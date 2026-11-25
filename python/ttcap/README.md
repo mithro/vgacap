@@ -11,22 +11,21 @@ run them on.
 ## Capturing with the stock firmware
 
 This capture source needs nothing installed on the board: `ttcap` pushes
-the capture program through the stock Tiny Tapeout firmware's MicroPython
+the capture program through the
+[stock Tiny Tapeout firmware](https://github.com/TinyTapeout/tt-micropython-firmware)'s MicroPython
 REPL. The other capture sources have their own READMEs:
-[`firmware/`](../../firmware/README.md) (pico-sdk firmware),
+[`firmware/`](../../firmware/README.md) (the vgacap firmware),
 [`mpy/`](../../mpy/README.md) (MicroPython C module),
 [`capture-rp1/`](../../capture-rp1/README.md) (Raspberry Pi 5) and
 [`rtl/`](../../rtl/README.md) (FPGA).
 
-With a demo board on `/dev/ttyACM0` running a 640x480 VGA design, such as a
-[tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns)
-bitstream on an FPGA breakout (500 kHz suits an RP2350 demo board; see
-[the fastest clocks](../../README.md#what-is-in-it) for an RP2040):
+These commands assume the board and clock described in
+[A first capture](../../README.md#a-first-capture):
 
 ```sh
 uv run ttcap probe serial:/dev/ttyACM0          # sys.version and the GPIO map
 uv run ttcap throughput serial:/dev/ttyACM0     # what clock the link can keep up with
-uv run ttcap capture serial:/dev/ttyACM0 --clock-hz 500000 --frames 2 --out capture.vgacap
+uv run ttcap capture serial:/dev/ttyACM0 --clock-hz 500000 --frames 2 --seconds 0 --out capture.vgacap
 mkdir -p out && uv run ttcap png capture.vgacap out/frame   # out/frame-0000.png ...
 ```
 
@@ -74,9 +73,9 @@ With `UV_NO_DEV=1`, `ttcap png` needs `uv sync --extra synth`.
 
 ```sh
 uv run ttcap demo --board fpga-1 --design tt_um_vga_pattern \
-    --clock-hz 60000 --seconds 60 --outdir out            # PNGs + out/capture.mkv
-uv run ttcap demo --board fpga-1 --clock-hz 500000 --outdir out --window --serve 8080
-uv run ttcap demo --board fpga-1 --clock-hz 500000 --outdir out --dry-run   # just the pipeline
+    --clock-hz 60000 --seconds 60 --outdir video          # PNGs + video/capture.mkv
+uv run ttcap demo --board fpga-1 --clock-hz 500000 --outdir live --window --serve 8080
+uv run ttcap demo --board fpga-1 --clock-hz 500000 --outdir dry --dry-run   # just the pipeline
 ```
 
 `--board fpga-1` names a board on the Welland bench; see
@@ -176,8 +175,8 @@ resolves it to a link:
   tunnel:
 
 ```sh
-ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com   # fpga-1; 18000 + the octet
-uv run ttcap demo --link ws://127.0.0.1:18034/serial --design tt_um_vga_pattern --clock-hz 60000 --outdir out
+ssh -f -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com   # fpga-1; 18000 + the octet
+uv run ttcap demo --link ws://127.0.0.1:18034/serial --design tt_um_vga_pattern --clock-hz 500000 --outdir tunnel
 ```
 
 Any free local port works, and one per board keeps two tunnels from
