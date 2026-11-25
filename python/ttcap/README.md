@@ -141,7 +141,7 @@ error (a board error exits 1).
 
 Ctrl-C ends the run cleanly. The demo forwards the signal once to
 `gst-launch-1.0 -e`, which turns it into an end-of-stream, so the board winds
-down through `vgacapttsrc`'s cooperative stop and the Matroska file is
+down through [`vgacapttsrc`'s cooperative stop](../../gst/README.md#stopping-matters) and the Matroska file is
 finalized rather than truncated. Allow one DMA buffer for that: with the
 default `--buf-words`, about 22 ms on an RP2350 at 750 kHz and about
 137 ms on an RP2040 at 60 kHz. `SIGTERM`, `SIGHUP` and `SIGQUIT` do the
