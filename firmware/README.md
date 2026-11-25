@@ -92,8 +92,10 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
 * **ASIC boards lose their project across the switch.** On tt09
   (2026-11-24) the stock firmware's frame capture of
   `tt_um_rejunity_vga_logo` was clean, and this firmware's, after the
-  switch, saw no sync at all: the mux lines float in the bootloader and
-  the mux comes back with nothing selected. So this firmware selects the
+  switch, saw no sync at all: nothing drives the mux lines while the
+  RP2350 is in reset and in its bootloader (pad pull-downs), so the mux
+  comes back with nothing selected, and driving GPIO 1 high at boot does
+  not select anything. So this firmware selects the
   project itself with `asic_select index=N`, the stock SDK's sequence
   (PROTOCOL.md); `ttcap capture --firmware picosdk --asic-index N` sends
   it. N is `tt.shuttle.<name>.count` under the stock firmware.

@@ -62,12 +62,15 @@ fields, or `err` followed by a message for a person.
   does: `ctrl_sel_inc` (GPIO 2), `ctrl_sel_nrst` (GPIO 1) and `ctrl_ena`
   (GPIO 0) low, 10 ms, `ctrl_sel_nrst` high, 10 ms, N pulses on
   `ctrl_sel_inc` (1 ms high, 1 ms low), then `ctrl_ena` high. N is the
-  stock SDK's `tt.shuttle.<name>.count`. It is needed because those lines
-  float while the RP2350 is in its bootloader, so an ASIC board comes back
-  with no project selected (tt09, 2026-11-24). **Never on an FPGA
-  carrier**: GPIO 1 is the iCE40's `CRESET_B` there, and pulling it low
-  erases the FPGA's configuration. Until the first `asic_select` the three
-  pins are left alone.
+  stock SDK's `tt.shuttle.<name>.count`. It is needed because nothing
+  drives those lines while the RP2350 is in reset and in its bootloader
+  (they are inputs with the pad pull-down then), so an ASIC board comes
+  back with no project selected (tt09, 2026-11-24); the firmware's boot
+  only drives GPIO 1 high again, which does not select one. **Never on an
+  FPGA carrier**: GPIO 1 is the iCE40's `CRESET_B` there, and pulling it
+  low erases the FPGA's configuration; `asic_select` is the only thing that
+  ever drives it low. Until the first `asic_select`, GPIO 0 and 2 are left
+  alone and GPIO 1 stays high from boot.
 * `program_stream` / `program_frame` print the PIO program a capture with
   those operands would load, in hex, with its configuration -- for
   diagnosis and for the tests that compare it with MicroPython's assembler.
