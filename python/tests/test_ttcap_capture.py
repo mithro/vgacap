@@ -926,3 +926,19 @@ def test_a_request_with_a_bad_cfg_is_refused_when_it_is_built():
     with pytest.raises(ValueError, match="sample_delay"):
         request(script="frame_rp2.py", sample_delay=40, ui_in=3)
 
+
+def test_the_cleanup_clears_the_other_programs_names_too():
+    # Stream then frame (or back) on one board: the names the previous
+    # program left must go, not only those the next one is about to define.
+    board = FakeChunkBoard([], mem_free=120_000)
+    repl = connect(board)
+    req = request(script="frame_rp2.py", max_frames=1, max_bytes=0)
+
+    run_capture(repl, req, io.BytesIO())
+
+    cleanup = board.commands[0]
+    assert cleanup.startswith("for _n in ")
+    for stream_only in ("on_a", "FULL", "OVERRUNS"):
+        assert repr(stream_only) in cleanup
+    for frame_only in ("plan_buffers", "make_trigger", "DONE"):
+        assert repr(frame_only) in cleanup

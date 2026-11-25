@@ -307,11 +307,9 @@ def test_a_run_that_wrote_something_keeps_its_file(monkeypatch, tmp_path):
 
 def cli_cleanup_command(profile) -> str:
     """The exact cleanup snippet `run_capture` will send for `profile`."""
-    from ttcap import mp
-    from ttcap.capture import _CLEANUP, capture_cfg
+    from ttcap.capture import _CLEANUP, capture_cfg, cleanup_names
 
-    script = mp.build(capture_cfg(profile), "capture_rp2.py")
-    return _CLEANUP % (mp.module_level_names(script),)
+    return _CLEANUP % (cleanup_names(capture_cfg(profile)),)
 
 
 def test_capture_reports_a_link_failure_without_a_traceback(monkeypatch, capsys, tmp_path):

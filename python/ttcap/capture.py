@@ -637,13 +637,23 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
     return did
 
 
+def cleanup_names(cfg: dict) -> list[str]:
+    """What `prepare_board` deletes: the module-level names of EVERY capture
+    program, not just the next one, so switching between stream and frame
+    mode does not leave the other program's globals holding the heap."""
+    names: set[str] = set()
+    for script in CAPTURE_SCRIPTS:
+        names.update(mp.module_level_names(mp.build(cfg, script)))
+    return sorted(names)
+
+
 def prepare_board(repl: RawRepl, names: list[str], timeout: float = 10.0) -> int:
     """Clear a previous run's leftovers and return the free heap in bytes.
 
-    Deletes every module-level name the script is about to define, collects,
-    and reads `gc.mem_free()`. On tt07 that recovered about 5 KB (79,296 ->
-    84,208 free), which was the difference between a capture script that
-    compiled and one that did not.
+    Deletes `names` (every capture program's module-level names, from
+    `cleanup_names`), collects, and reads `gc.mem_free()`. On tt07 that
+    recovered about 5 KB (79,296 -> 84,208 free), which was the difference
+    between a capture script that compiled and one that did not.
     """
     stdout, stderr = repl.exec(_CLEANUP % (names,), timeout=timeout)
     if stderr.strip():
@@ -1085,7 +1095,7 @@ class CaptureSession:
             script = mp.build(req.cfg(), req.script)
 
             needed = req.min_free()
-            self._mem_free = prepare_board(repl, mp.module_level_names(script))
+            self._mem_free = prepare_board(repl, cleanup_names(req.cfg()))
             if self._mem_free < needed:
                 if req.is_frame:
                     why = "one line of frame buffer plus %d to compile the script" % (
