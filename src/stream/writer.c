@@ -23,16 +23,10 @@ void vgacap_header_init_v2(vgacap_header_t *h, uint8_t sample_bits, uint8_t samp
     h->samples_per_clock = samples_per_clock; h->clock_bit = clock_bit; h->clock_first = clock_first;
 }
 
-size_t vgacap_leb128_put(uint8_t *p, uint64_t v) {
-    size_t n = 0;
-    while (v >= 0x80u) { p[n++] = (uint8_t)(v | 0x80u); v >>= 7; }
-    p[n++] = (uint8_t)v;
-    return n;
-}
+size_t vgacap_leb128_put(uint8_t *p, uint64_t v) { return vgacap_leb128_put_inline(p, v); }
 
 size_t vgacap_run_pair_put(uint8_t *p, uint64_t value, unsigned vbytes, uint64_t run) {
-    for (unsigned i = 0; i < vbytes; i++) p[i] = (uint8_t)(value >> (8u * i));
-    return vbytes + vgacap_leb128_put(p + vbytes, run);
+    return vgacap_run_pair_put_inline(p, value, vbytes, run);
 }
 
 static int write_chunk_head(vgacap_writer_t *w, const char tag[4], uint32_t length) {

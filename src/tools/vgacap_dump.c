@@ -6,6 +6,16 @@
 // bytes. A version 2 stream's is crc64=: FNV-1a 64 (basis
 // 0xcbf29ce484222325) over each sample as (sample_bits + 7) / 8
 // little-endian bytes, the clock bit toggling sample by sample within a run.
+//
+// A simulation trace (zstd magic) is read when built with VGACAP_HOST_EXTRAS
+// (VGACAP_DUMP_TRACES): a `trace` line from the trace reader, then each
+// complete block's chunks, then the summary of all of them read in order --
+// the same lines as for the stream `zstd -d` gives, cut to the complete
+// blocks. Without it a zstd file is refused with a message saying so.
+#ifdef VGACAP_DUMP_TRACES
+#define _POSIX_C_SOURCE 200809L   // fmemopen
+#include "vgacap/trace.h"
+#endif
 #include "vgacap/stream.h"
 #include <inttypes.h>
 #include <stdio.h>
@@ -60,9 +70,10 @@ static int walk_runs(FILE *fp, uint32_t pairs, unsigned vbytes, uint32_t *left, 
     return 0;
 }
 
-static void print_chunks(FILE *fp) {
+// `vbytes`: RUNS value bytes, from the last VGCH (carried across a trace's blocks).
+static void print_chunks(FILE *fp, unsigned *vbytes_io) {
     uint8_t head[8];
-    unsigned vbytes = 0;   // from the last VGCH: RUNS value bytes
+    unsigned vbytes = *vbytes_io;   // stored back after each chunk
     while (fread(head, 1, 8, fp) == 8) {
         uint32_t length = rd_u32(head + 4);
         if (memcmp(head, VGACAP_TAG_HEADER, 4) == 0) {
@@ -172,6 +183,7 @@ static void print_chunks(FILE *fp) {
             // error and must say so like every other tag does.
             if (skip_bytes(fp, length)) { fprintf(stderr, "error: truncated unknown chunk\n"); return; }
         }
+        *vbytes_io = vbytes;
     }
 }
 
@@ -210,34 +222,89 @@ static void on_event(void *user, const vgacap_event_t *ev) {
     }
 }
 
+static void dump_init(vgacap_reader_t *r, struct dump_state *st) {
+    memset(st, 0, sizeof *st);
+    st->hash = 0x811C9DC5u; st->hash64 = 0xCBF29CE484222325u;
+    vgacap_reader_init(r, on_event, st);
+}
+
+// The summary once the whole input has been fed.
+static int dump_summary(const vgacap_reader_t *r, const struct dump_state *st) {
+    if (st->error) return 1;
+    // Input ended while still hunting for a chunk header: the tail is lost
+    // and no RESYNC event will ever report it.
+    if (r->scanning)
+        printf("resync skipped=%u reason=%s (not regained before end of input)\n",
+               (unsigned)(r->skipped + r->scanfill), r->resync_what ? r->resync_what : "?");
+    if (st->v2) printf("total_samples=%" PRIu64 " crc64=%016" PRIx64 "\n", st->total, st->hash64);
+    else printf("total_samples=%" PRIu64 " crc32=%08x\n", st->total, st->hash);
+    return 0;
+}
+
 // Second pass: feed the real reader to expand runs and compute the
 // cross-check hash. Only the final summary line comes from this pass.
 static int dump_samples(FILE *fp) {
-    vgacap_reader_t r;
-    struct dump_state st; memset(&st, 0, sizeof st);
-    st.hash = 0x811C9DC5u; st.hash64 = 0xCBF29CE484222325u;
-    vgacap_reader_init(&r, on_event, &st);
+    static vgacap_reader_t r;
+    struct dump_state st;
+    dump_init(&r, &st);
     uint8_t buf[65536];
     size_t n;
     while (!st.error && (n = fread(buf, 1, sizeof buf, fp)) > 0) {
         if (vgacap_reader_feed(&r, buf, n)) break;
     }
-    if (st.error) return 1;
-    // Input ended while still hunting for a chunk header: the tail is lost
-    // and no RESYNC event will ever report it.
-    if (r.scanning)
-        printf("resync skipped=%u reason=%s (not regained before end of input)\n",
-               (unsigned)(r.skipped + r.scanfill), r.resync_what ? r.resync_what : "?");
-    if (st.v2) printf("total_samples=%" PRIu64 " crc64=%016" PRIx64 "\n", st.total, st.hash64);
-    else printf("total_samples=%" PRIu64 " crc32=%08x\n", st.total, st.hash);
-    return 0;
+    return dump_summary(&r, &st);
 }
+
+#ifdef VGACAP_DUMP_TRACES
+static int dump_trace(const char *path) {
+    char err[512];
+    vgacap_trace_reader_t *t = vgacap_trace_open(path, err, sizeof err);
+    if (!t) { fprintf(stderr, "error: %s\n", err); return 1; }
+    const vgacap_trace_info_t *in = vgacap_trace_info(t);
+    printf("trace blocks=%u samples=%" PRIu64 " table_rebuilt=%u closed=%u\n",
+           in->blocks, in->samples, in->table_rebuilt, in->close_meta ? 1u : 0u);
+    unsigned vbytes = 0;
+    int rc = 0;
+    for (uint32_t i = 0; i < in->blocks && !rc; i++) {
+        const uint8_t *p; size_t n;
+        if (vgacap_trace_block_data(t, i, &p, &n, err, sizeof err)) { fprintf(stderr, "error: %s\n", err); rc = 1; break; }
+        FILE *fp = fmemopen((void *)(uintptr_t)p, n, "rb");
+        if (!fp) { fprintf(stderr, "error: fmemopen\n"); rc = 1; break; }
+        print_chunks(fp, &vbytes);
+        fclose(fp);
+    }
+    static vgacap_reader_t r;
+    struct dump_state st;
+    dump_init(&r, &st);
+    for (uint32_t i = 0; i < in->blocks && !rc && !st.error; i++) {
+        const uint8_t *p; size_t n;
+        if (vgacap_trace_block_data(t, i, &p, &n, err, sizeof err)) { fprintf(stderr, "error: %s\n", err); rc = 1; break; }
+        if (vgacap_reader_feed(&r, p, n)) break;
+    }
+    if (!rc) rc = dump_summary(&r, &st);
+    vgacap_trace_close(t);
+    return rc;
+}
+#endif
 
 int main(int argc, char **argv) {
     if (argc != 2) { fprintf(stderr, "usage: %s <file>\n", argv[0]); return 1; }
     FILE *fp = fopen(argv[1], "rb");
     if (!fp) { fprintf(stderr, "error: cannot open %s\n", argv[1]); return 1; }
-    print_chunks(fp);
+    static const uint8_t zstd_magic[4] = { 0x28, 0xb5, 0x2f, 0xfd };
+    uint8_t magic[4];
+    if (fread(magic, 1, 4, fp) == 4 && memcmp(magic, zstd_magic, 4) == 0) {
+        fclose(fp);
+#ifdef VGACAP_DUMP_TRACES
+        return dump_trace(argv[1]);
+#else
+        fprintf(stderr, "vgacap-dump: built without VGACAP_HOST_EXTRAS; decompress with zstd -d first\n");
+        return 1;
+#endif
+    }
+    rewind(fp);
+    unsigned vbytes = 0;
+    print_chunks(fp, &vbytes);
     rewind(fp);
     int rc = dump_samples(fp);
     fclose(fp);

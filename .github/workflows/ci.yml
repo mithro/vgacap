@@ -5,8 +5,9 @@
 #
 #   c, python     -- no GStreamer at all. The core libraries, the tools and the
 #                    Python suite must build and pass, and the plugin must be
-#                    *skipped* rather than failed.
-#   gstreamer     -- the full set installed: the plugin is built and its
+#                    *skipped* rather than failed. `c` also builds and tests
+#                    with VGACAP_HOST_EXTRAS=OFF (no vendored libraries).
+#   gstreamer    -- the full set installed: the plugin is built and its
 #                    ctest and pytest suites run for real.
 #
 # The runner image is pinned (ubuntu-24.04, not ubuntu-latest) and so are the
@@ -41,12 +42,19 @@ jobs:
           set -o pipefail
           cmake -S . -B build 2>&1 | tee configure.log
       - run: cmake --build build -j
-      - run: ctest --test-dir build --output-on-failure
+      - run: ctest --test-dir build --output-on-failure -LE perf
       - name: the plugin is optional, so this build must have skipped it
         run: |
           grep -q 'skipping the plugin' configure.log
           test ! -e build/libgstvgacap.so
           ! ctest --test-dir build -N | grep -q gst_plugin_inspect
+      # The board-facing build: no vendored host libraries, no trace code.
+      # vgacap-dump must still build, read plain streams, and refuse a
+      # trace with a message (the vgacap_dump_refuses_zstd test).
+      - name: configure without the host extras
+        run: cmake -S . -B build-off -DVGACAP_HOST_EXTRAS=OFF
+      - run: cmake --build build-off -j
+      - run: ctest --test-dir build-off --output-on-failure -LE perf
       # The RP1 (Pi 5) capture tool cannot run here, but it must keep
       # compiling against the piolib it was proven with on pi-sw2-p4
       # (capture-rp1/README.md); -Werror so a warning is a failure. The
@@ -205,7 +213,7 @@ jobs:
       - run: cmake -S . -B build && cmake --build build -j
       - name: the plugin must have been built here
         run: test -e build/libgstvgacap.so
-      - run: ctest --test-dir build --output-on-failure
+      - run: ctest --test-dir build --output-on-failure -LE perf
       - name: piolib, for the RP1 sampler test
         run: |
           git init -q utils

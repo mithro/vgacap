@@ -33,6 +33,23 @@ add_subdirectory(gst)
 option(VGACAP_HOST_EXTRAS "Build the vendored host-only libraries" ON)
 if(VGACAP_HOST_EXTRAS)
   add_subdirectory(third_party)
+  # --- trace: the simulation trace writer (src/trace), host only ---
+  find_package(Threads REQUIRED)
+  add_library(vgacap_trace STATIC src/trace/trace_write.c src/trace/blocks.c src/trace/trace_read.c)
+  target_link_libraries(vgacap_trace PUBLIC vgacap_stream vgacap_zstd Threads::Threads)
+  # The slow path reads fields the inline push has just stored one by one;
+  # SLP vectorisation would read two of them as one 16-byte load, which
+  # cannot be forwarded from those stores and stalls on every call.
+  set_source_files_properties(src/trace/trace_write.c PROPERTIES COMPILE_OPTIONS
+    "$<$<C_COMPILER_ID:GNU>:-fno-tree-slp-vectorize>;$<$<C_COMPILER_ID:Clang,AppleClang>:-fno-slp-vectorize>")
+  # vgacap-dump reads traces too (a .trace.zst prints its blocks' chunks).
+  # Without the host extras it reads plain streams only and refuses a zstd
+  # file with a message saying so.
+  target_link_libraries(vgacap-dump PRIVATE vgacap_trace)
+  target_compile_definitions(vgacap-dump PRIVATE VGACAP_DUMP_TRACES)
+  # Test-only helper for python/tests/test_roundtrip_c.py: writes a trace.
+  add_executable(trace-make tests/trace_make.c)
+  target_link_libraries(trace-make PRIVATE vgacap_trace)
 endif()
 
 function(vgacap_add_test name)
@@ -61,6 +78,32 @@ vgacap_add_test(test_stream_v2)
 if(VGACAP_HOST_EXTRAS)
   vgacap_add_test(test_third_party)
   target_link_libraries(test_third_party PRIVATE vgacap_zstd vgacap_zlib vgacap_fst vgacap_sha256)
+  # The trace writer: a zstd seekable file of VGCH v2 blocks (src/trace).
+  vgacap_add_test(test_trace_write)
+  target_link_libraries(test_trace_write PRIVATE vgacap_trace)
+  set_tests_properties(test_trace_write PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+  # The trace reader: ranges, a rebuilt seek table, plain VGCH streams.
+  vgacap_add_test(test_trace_read)
+  target_link_libraries(test_trace_read PRIVATE vgacap_trace vgacap_zlib)
+  target_include_directories(test_trace_read PRIVATE src/trace)
+  target_compile_definitions(test_trace_read PRIVATE
+    VGACAP_DUMP_PATH="$<TARGET_FILE:vgacap-dump>" VGACAP_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
+  add_dependencies(test_trace_read vgacap-dump)
+  set_tests_properties(test_trace_read PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+  # Timing, meaningful only on big-storage: labelled perf, kept out of CI
+  # (ctest -LE perf) and run by hand.
+  add_test(NAME test_trace_push_speed COMMAND test_trace_write --speed)
+  set_tests_properties(test_trace_push_speed PROPERTIES
+    LABELS perf WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+else()
+  # Without the host extras vgacap-dump cannot read a trace and must say so.
+  # PASS_REGULAR_EXPRESSION replaces the exit-code check, so the wrapper
+  # prints the exit code after the message, and the pattern needs both.
+  add_test(NAME vgacap_dump_refuses_zstd COMMAND sh -c
+    "printf '\\050\\265\\057\\375' > dump_refuses_zstd.zst && \"$<TARGET_FILE:vgacap-dump>\" dump_refuses_zstd.zst 2>&1; echo \"exit=$?\""
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+  set_tests_properties(vgacap_dump_refuses_zstd PROPERTIES PASS_REGULAR_EXPRESSION
+    "vgacap-dump: built without VGACAP_HOST_EXTRAS; decompress with zstd -d first\nexit=1\n")
 endif()
 
 # --- firmware: the pico-sdk capture firmware's portable core (firmware/core),
