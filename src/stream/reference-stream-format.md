@@ -29,7 +29,7 @@ All integers are unsigned and little-endian. In the byte tables, Offset is the b
 - Chunks follow each other with no padding and no sync word.
 - The first chunk is `VGCH`. A later `VGCH` starts the stream again: the sample index goes back to 0.
 - Tags end in a space where the name is three letters: `RAW ` and `RLE `.
-- A tag the reader does not know is skipped by its length, except under a header with a clock bit, where it is reported (see [what a reader does](#what-a-reader-does-with-a-bad-chunk)).
+- A tag the reader does not know is skipped by its length. Under a header with a clock bit, it is also reported ([what a reader does](#what-a-reader-does-with-a-bad-chunk)).
 
 ## Chunk types
 
@@ -50,12 +50,12 @@ All integers are unsigned and little-endian. In the byte tables, Offset is the b
 | Offset | Type | Field | Version 1 | Version 2 |
 |---|---|---|---|---|
 | 0 | u16 | `version` | 1 | 2 |
-| 2 | u8 | `sample_bits` | see [field values](#vgch-field-values) | 1 to 64 |
-| 3 | u8 | `mode` | see [mode](#mode) | see [mode](#mode) |
+| 2 | u8 | `sample_bits` | see field values below | 1 to 64 |
+| 3 | u8 | `mode` | see mode below | see mode below |
 | 4 | u32 | `clock_hz` | the project clock in Hz; 0 is unknown | the same |
-| 8 | u8[8] | `signal_map` | see [signal map](#signal-map) | the same |
-| 16 | u8 | `samples_per_word` | see [field values](#vgch-field-values) | see [field values](#vgch-field-values) |
-| 17 | u8 | `flags` | see [flags](#flags) | the same |
+| 8 | u8[8] | `signal_map` | see signal map below | the same |
+| 16 | u8 | `samples_per_word` | see field values below | see field values below |
+| 17 | u8 | `flags` | see flags below | the same |
 | 18 | u16 | `desc_len` | 0 to 255 | 0 to 251 |
 | 20 | u8 | `samples_per_clock` | absent: reads as 1 | 1 without a clock bit; 2 with one |
 | 21 | u8 | `clock_bit` | absent: reads as none | 0 to `sample_bits` - 1; `0xFF` for none |
@@ -285,4 +285,4 @@ The C reader reports a loss as a resync event, with the bytes lost and a reason,
 
 Under a header with a clock bit, n becomes unknown after any loss that could have carried samples. Until the next `BLKH`, every `RUNS` chunk is skipped. A lost `META`, or a scan that lost exactly one `TIME` chunk, leaves n known.
 
-[`vgacap-dump`](../tools/reference-options.md#vgacap-dump) prints each resync as a `resync skipped=N reason=...` line. The Python reader raises `ValueError` instead of going on. Its message is the C reason text for a chunk the header does not allow, a bad `RUNS` pair, and a bad `BLKH` or `META` length or text. For every other fault, a non-following `BLKH` included, its wording differs.
+[`vgacap-dump`](../tools/reference-options.md#vgacap-dump) prints each resync as a `resync skipped=N reason=...` line. The Python reader raises `ValueError` instead of going on. Its message matches the C reason for a chunk the header forbids, a bad `RUNS` pair, and a bad `BLKH` or `META`. For every other fault, a non-following `BLKH` included, its wording differs.

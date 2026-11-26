@@ -34,7 +34,7 @@ tt_um_vgacal_bars: captured 640x480, reference 640x480 (fixed picture)
 PASS: 307200 pixels identical to the reference render
 ```
 
-Compare a frame after the first: the first frame of a board capture is the likeliest to hold what the board did as the sampler started.
+Compare a frame after the first. The first frame of a board capture is the likeliest to hold what the board did as the sampler started.
 
 ## If it fails
 

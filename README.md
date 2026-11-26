@@ -16,13 +16,13 @@ vgacap captures the VGA output of a [Tiny Tapeout](https://tinytapeout.com) desi
 
 ## What it captures
 
-A design that drives the [Tiny VGA Pmod](https://github.com/mole99/tiny-vga) puts its VGA signals on its eight `uo_out` pins. vgacap records those pins and rebuilds the screen from them. It needs no VGA monitor and no video capture card. The pins themselves are the record.
+A design that drives the [Tiny VGA Pmod](https://github.com/mole99/tiny-vga) puts its VGA signals on its `uo_out` pins. The capture records those pins, and the screen is rebuilt from them. It needs no VGA monitor and no video capture card. The pins themselves are the record.
 
 ## Where a capture comes from
 
 The demo board's own microcontroller, an RP2040 or RP2350, records `uo_out` once a project clock. It runs the stock firmware, the vgacap firmware or the vgacap MicroPython module. On a demo board with an FPGA breakout, capture logic can sit beside the design in the FPGA instead. A simulator records a design's RTL with no hardware: every pin of the design, twice a clock.
 
-A Raspberry Pi 5 capture tool exists, but it has been shown only on a loopback fixture, not on a Tiny Tapeout board ([#27](https://github.com/mithro/vgacap/issues/27)). Each source's proof is on [Capture sources compared](docs/reference-capture-sources.md).
+A Raspberry Pi 5 capture tool exists too. It has been shown only on a loopback fixture, not on a Tiny Tapeout board ([#27](https://github.com/mithro/vgacap/issues/27)). Each source's speed and proof are on [Capture sources compared](docs/reference-capture-sources.md).
 
 ## One stream, then pictures
 
@@ -33,4 +33,4 @@ Every source writes the same format, the [vgacap stream](src/stream/explanation-
 
 ## Where the rest lives
 
-The design, research notes, measurements and work log are in [mithro/tt-vga-capture](https://github.com/mithro/tt-vga-capture). The calibration designs and their reference renders are in [mithro/tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns). vgacap is licensed under Apache-2.0: see [LICENSE](LICENSE).
+The design, research notes, measurements and work log are in [mithro/tt-vga-capture](https://github.com/mithro/tt-vga-capture). The calibration designs and their reference renders are in [mithro/tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns). Both are separate repositories, linked from these pages where a fact comes from them. vgacap is licensed under Apache-2.0: see [LICENSE](LICENSE).
