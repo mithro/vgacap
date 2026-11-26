@@ -19,7 +19,7 @@ answer:
 | `demo-frames` | `ttcap demo`'s "nothing was captured" verdict (exit 3) and its `--fps` re-timing were both built and re-worked against a fake. |
 | `video` | Task 3's PTS bug made `matroskamux` produce a file with no usable duration; only a real clock rate exercises the timeline. |
 | `serve` | the MJPEG view drops frames for a viewer that falls behind, which needs a producer running at the board's own rate. |
-| `stop` | Task 5 finding F1: a `SIGTERM` used to orphan `gst-launch` and `ttcap capture`, leaving them holding a shared bench board. Task 4 Important 1: `stop()` could hang for ever. And the stop latency itself -- 2.2 s at a 60 kHz project clock, 0.2 s in the fake -- is the one number host tests cannot stand in for. |
+| `stop` | Task 5 finding F1: a `SIGTERM` used to orphan `gst-launch` and `ttcap capture`, leaving them holding a shared bench board. Task 4 Important 1: `stop()` could hang for ever. And the stop latency itself -- one DMA buffer, about 137 ms on an RP2040 at 60 kHz, 0.2 s in the fake -- is the one number host tests cannot stand in for. |
 | `board-usable` | after all of the above the board must still answer, which is what says the run left nothing behind on it. |
 
 Safety on a shared bench:
@@ -28,8 +28,8 @@ Safety on a shared bench:
 * every board command runs in its own session, and whatever is left of that
   session is killed on the way out, however this script ends short of SIGKILL (SIGTERM, SIGHUP and
   SIGQUIT are caught and turned into an orderly stop);
-* `--stop-bridge` is the only thing that touches `fpgas-tt`, and it always
-  starts it again.
+* `--stop-bridge` is the only thing that touches `fpgas-tt`, and it starts
+  it again if it stopped it.
 
 A board that does not answer is a clear failure naming the board, never a
 hang: every command has a timeout.
