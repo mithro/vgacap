@@ -40,7 +40,14 @@ Plug the demo board in by USB. It appears as a serial device, `/dev/ttyACM0` whe
 uv run ttcap probe serial:/dev/ttyACM0
 ```
 
-It answers with two lines: `sys.version:` and the firmware's version, then `GPIOMap.all():` and its pin map. On an RP2040 demo board the map holds `'rp_projclk': 0` and `'uo_out0': 5`. `ttcap` reads the same map during a capture to pick the board's pin layout. A `probe failed:` line means the port is wrong or busy; [How to probe a demo board](how-to-probe-board.md) lists the causes.
+It answers with two lines, its firmware's version and its pin map. The tt07 board answered like this ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
+
+```text
+sys.version: 3.4.0; MicroPython v1.24.0 on 2024-10-25
+GPIOMap.all(): {'uio1': 22, 'uio5': 26, ... 'rp_projclk': 0, ... 'uo_out0': 5, ...}
+```
+
+`'rp_projclk': 0` and `'uo_out0': 5` mark an RP2040 demo board. `ttcap` reads the same map during a capture to pick the board's pin layout. A `probe failed:` line means the port is wrong or busy; [How to probe a demo board](how-to-probe-board.md) lists the causes.
 
 ## 3. Capture two frames
 
@@ -60,7 +67,7 @@ bytes=... samples=... chunks=... seconds=... overruns=0 dropped=0 rxstall=0 ...
 wrote capture.vgacap
 ```
 
-`overruns=0`, `dropped=0` and `rxstall=0` say no sample was lost.
+`overruns=0`, `dropped=0` and `rxstall=0` say no sample was lost. The same command on the same board was clean again on 2026-11-26, after a restart ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)).
 
 ## 4. Turn the capture into a PNG
 
@@ -71,17 +78,29 @@ mkdir -p out
 uv run ttcap png capture.vgacap out/frame
 ```
 
-Each frame found is listed, then the count written. For the capture pictured above it printed this:
+Each frame found is listed, then the count written. On the tt07 board it printed this ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
 
 ```text
-frame 0: 640x480 mode=640x480@60 cpl=800 lpf=525 hsync=pos vsync=pos partial=0 glitches=2
-frames=1 glitches_total=10
-wrote 1 png(s)
+frame 0: 640x480 mode=640x480@60 cpl=800 lpf=525 hsync=pos vsync=pos partial=0 glitches=0
+frame 1: 640x480 mode=640x480@60 cpl=800 lpf=525 hsync=pos vsync=pos partial=0 glitches=0
+frame 2: 640x480 mode=640x480@60 cpl=800 lpf=525 hsync=pos vsync=pos partial=0 glitches=0
+frames=3 glitches_total=0
+wrote 3 png(s)
 ```
 
-Open `out/frame-0000.png`. It is the picture your design drew, rebuilt from its sync signals and its six colour bits. The first frame of a capture is never whole, so a two-frame capture gives one or two PNGs.
+Open `out/frame-0000.png`. It is the picture your design drew, rebuilt from its sync signals and its six colour bits. The first frame of a capture is never whole, so a two-frame capture gives one to three PNGs.
 
-`glitches=2` counts the sync pulses the rebuild rejected as too short since the previous frame, and `glitches_total` counts them over the whole capture. Real chips put out a few such pulses, and the picture is still rebuilt whole ([Glitches](../../src/tools/README.md#glitches)). `partial=0` says every line of the frame was captured.
+`glitches=` counts the sync pulses the rebuild rejected as too short since the previous frame, and `glitches_total` counts them over the whole capture. A real chip can put out such pulses: the capture pictured above had `glitches_total=10`. The picture is still rebuilt whole ([Glitches](../../src/tools/README.md#glitches)). `partial=0` says every line of the frame was captured.
+
+## If a step fails
+
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 2 | `probe failed:` | the port is wrong or busy | see [How to probe a demo board](how-to-probe-board.md) |
+| 3 | `board error: MemoryError`, with `bytes=0` | the firmware's heap is too full for the capture buffers | restart the SDK, then repeat step 3 |
+| 4 | `png failed:` | the capture holds no whole frame | see [How to turn a capture into PNG images](how-to-render-png.md) |
+
+To restart the SDK, run `uv run python tools/board_restart.py serial:/dev/ttyACM0`, or press Ctrl-C, Ctrl-B and Ctrl-D in a serial terminal. A failed capture still prints `wrote capture.vgacap`, but exits 1 and holds no samples. On tt07 the first capture failed this way with `mem_free=74880`, and the retry after a restart succeeded ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)).
 
 ## Next
 

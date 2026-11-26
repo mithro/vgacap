@@ -33,11 +33,13 @@ review: 2027-05-27
 
 ## Check
 
-Step 3 lists each picture with `partial=0`, and `out/frame-0000.png` shows the design. On the tt09 chip, the command in step 1 gave two clean pictures of `tt_um_rejunity_vga_logo` ([result](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-frame-capture-fpga4/README.md#real-silicon-tt09-at-its-design-clocks)). When the heap holds fewer lines than the picture, `ttcap` adds a line after the stats:
+Step 3 lists each picture with `partial=0`, and `out/frame-0000.png` shows the design. When the heap holds fewer lines than the picture, `ttcap` adds a note after the stats. On the tt09 chip, the command in step 1 printed this ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
 
 ```text
-note: each picture is assembled from 2 captured frames (451 of its 481 lines per frame): exact for a static design, torn for one that changes from frame to frame
+note: each picture is assembled from 2 captured frames (410 of its 481 lines per frame): exact for a static design, torn for one that changes from frame to frame
 ```
+
+Each picture then joins two captured frames where the first one's window ends. `tt_um_rejunity_vga_logo` dithers every frame, so its picture changes below about line 410. A still picture comes out clean: on an FPGA breakout, `tt_um_vgacal_bars` at 25.175 MHz gave 2 pictures from 478-line windows, each `partial=0` ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)).
 
 ## If it fails
 
