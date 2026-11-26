@@ -43,8 +43,9 @@ def phrase(words):
     return r"\s+".join(re.escape(w) for w in words.split())
 
 
+# Not after "/": a path such as /etc/hosts is not the word.
 BANNED_RE = re.compile(
-    r"\b(?:" + "|".join(phrase(w) for w in BANNED_WORDS) + r")(?!\w)"
+    r"(?<!/)\b(?:" + "|".join(phrase(w) for w in BANNED_WORDS) + r")(?!\w)"
     r"|\b(?:" + "|".join(re.escape(w) for w in BANNED_DOTTED) + r")",
     re.IGNORECASE)
 # 6.3: labels, so matched as written at the start of a paragraph or line.
@@ -73,13 +74,14 @@ def is_bare_url(node):
 
 def prose_text(node, code="skip"):
     """The node's text without markup or bare URLs. Code is left out, or,
-    with code="word", counted as one word."""
+    with code="word", counted as one word, "Code", capitalised so that a
+    sentence starting with code still begins a new sentence."""
     parts = []
 
     def walk(n):
         if isinstance(n, CODE):
             if code == "word":
-                parts.append(" code ")
+                parts.append(" Code ")
             return
         if isinstance(n, NOT_PROSE) or is_bare_url(n):
             return
@@ -278,7 +280,7 @@ def check_raw_html(page):
     """An <img> or <picture> MyST left as raw HTML ships unchecked and
     without its file: on the site it is a broken image."""
     for raw in page.doctree.findall(nodes.raw):
-        text = raw.astext().lower()
+        text = re.sub(r"<!--.*?-->", "", raw.astext(), flags=re.S).lower()
         if raw.get("format") == "html" and ("<img" in text or "<picture" in text):
             page.fail("10.8", "an image in raw HTML is not checked or copied: write a "
                       "standalone <img> or a <picture> element after a blank line, "
@@ -291,7 +293,7 @@ def check_structure(page, page_type):
         page.fail("10.11", f"{levels} heading levels, over {HEADING_LEVELS_MAX}")
     # 10.10: the sidebar heading this page makes holds all its toctree entries.
     entries = sum(len(t.get("entries", [])) for t in page.doctree.findall(addnodes.toctree))
-    if entries > SIDEBAR_MAX and page.docname != page.app.config.root_doc:
+    if entries > SIDEBAR_MAX:
         page.fail("10.10", f"{entries} sidebar entries under this page, over {SIDEBAR_MAX}")
     if page_type == "landing":
         return
