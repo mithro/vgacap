@@ -7,9 +7,9 @@ review: 2027-05-27
 
 # The vgacap firmware's GPIOs, USB identity, buffer and clocks
 
-This page lists the fixed facts of the vgacap firmware on the Tiny Tapeout demo board v3 (RP2350B): the GPIOs it
-uses, how it appears on USB, its capture buffer and its clock limits. It is for someone looking one of them up.
-The commands that use them are on [The vgacap firmware protocol](PROTOCOL.md).
+This page lists the fixed facts of the vgacap firmware on the Tiny Tapeout demo board v3 (RP2350B). They are the
+GPIOs it uses, how it appears on USB, its capture buffer and its clock limits. The commands that use them are on
+[The vgacap firmware protocol](PROTOCOL.md).
 
 ## GPIOs
 
@@ -25,12 +25,25 @@ command that changes it.
 | 14 | `rst_n` | as the bootloader left it | `reset` |
 | 16 | project clock | as the bootloader left it | `clock` |
 | 17 to 24 | `ui_in[0]` to `ui_in[7]` | as the bootloader left them | `ui_in` |
-| 33 to 40 | `uo_out[0]` to `uo_out[7]` | inputs | never: read by the PIO |
-| 36 | `uo_out[3]`, vsync | input | never: waited on by the frame trigger |
-| 40 | `uo_out[7]`, hsync | input | never: waited on by the frame trigger |
+| 33 to 40 | `uo_out[0]` to `uo_out[7]` | inputs | never |
+| 36 | `uo_out[3]`: vsync | input | never |
+| 40 | `uo_out[7]`: hsync | input | never |
 
-GPIO 1 is the iCE40's `CRESET_B` on an FPGA breakout, and the project mux's reset on an ASIC breakout. Low erases
-the FPGA or resets the mux; only `asic_select` drives it low.
+GPIO 1 is wired differently on the two breakouts. Breakout names the breakout, Function what GPIO 1 is there, and
+Low what driving it low does.
+
+| Breakout | Function | Low |
+|---|---|---|
+| FPGA | the iCE40's `CRESET_B` | erases the FPGA's configuration |
+| ASIC | the project mux's reset | resets the mux |
+
+Item names a fact about GPIO 1, and Value gives it.
+
+| Item | Value |
+|---|---|
+| Level the stock firmware leaves | high |
+| Level the firmware drives at boot | high, set before the pin becomes an output |
+| The only command that drives it low | `asic_select` |
 
 ## PIO and DMA
 
@@ -40,13 +53,16 @@ Item names a resource a capture uses, and Value gives it.
 |---|---|
 | PIO blocks | 0 to 2 |
 | State machines in a block | 0 to 3 |
-| PIO GPIO window | based at GPIO 16, reaching GPIO 16 to 47 |
+| PIO GPIO window base | GPIO 16 |
+| PIO GPIO window | GPIO 16 to 47 |
 | Inputs | 8 pins from GPIO 33 |
 | Samples in a FIFO word | 4 |
-| DMA channels | 2, any free ones |
-| DMA interrupt | `DMA_IRQ_0`, a shared handler |
-| ttcap's PIO block | 1, unless `--pio` says otherwise |
-| PIO block 0 through ttcap | refused, as for the stock firmware ([issue #44](https://github.com/mithro/vgacap/issues/44)) |
+| DMA channels | 2 |
+| Which DMA channels | any free ones |
+| DMA interrupt | `DMA_IRQ_0` |
+| DMA interrupt handler | shared |
+| ttcap's default PIO block | 1 |
+| PIO block 0 through ttcap | refused ([issue #44](https://github.com/mithro/vgacap/issues/44)) |
 | PIO block 0 through the protocol | accepted |
 
 ## USB identity
@@ -61,8 +77,10 @@ gives it.
 | Device release | `0x0100` |
 | Manufacturer | `vgacap` |
 | Product | `vgacap capture firmware` |
-| Serial number | the chip's unique ID, 16 hexadecimal digits |
-| Interface | one CDC ACM, named `vgacap capture` |
+| Serial number | the chip's unique ID |
+| Serial number length | 16 hexadecimal digits |
+| Interface | one CDC ACM |
+| Interface name | `vgacap capture` |
 | Speed | full speed |
 | Linux path | `/dev/serial/by-id/usb-vgacap_vgacap_capture_firmware_<serial>-if00` |
 | Receive buffer | 256 bytes |
@@ -77,13 +95,21 @@ Item names a part of the firmware's memory, and Value gives its size.
 
 | Item | Value |
 |---|---|
-| Build type | `no_flash`: code, data and stacks in SRAM |
+| Build type | `no_flash` |
+| Code, data and stacks | in SRAM |
 | Load address | `0x20000000` |
-| UF2 family | `rp2350-arm-s`, `0xe48bff59` |
-| Capture buffer (`arena_bytes`) | 450,560 bytes (440 KB), one static block |
-| Largest `buf_words` | 56,320, two buffers of 225,280 bytes |
-| Lines in one frame window | `arena_bytes` / `cpl`: 563 at `cpl=800` |
-| 640x480@60 region | 481 lines of 800 samples, 384,800 bytes: one window |
+| UF2 family name | `rp2350-arm-s` |
+| UF2 family ID | `0xe48bff59` |
+| Capture buffer, the arena (`arena_bytes`) | 450560 bytes (440 KB) |
+| Arena | one static block |
+| Stream buffers | two halves of the arena at most |
+| Largest `buf_words` | 56320 |
+| Largest stream buffer | 225280 bytes |
+| Lines in one frame window | at most `arena_bytes` / `cpl` |
+| Lines at `cpl=800` | 563 |
+| 640x480@60 region | 481 lines of 800 samples |
+| 640x480@60 region in bytes | 384800 |
+| Windows for a 640x480@60 picture | 1 |
 | Frame buffers | 1 |
 | Flash written | never |
 
@@ -94,22 +120,27 @@ Item names a clock limit, from [`firmware/core/fw_clock.c`](core/fw_clock.c), an
 | Item | Value |
 |---|---|
 | Project clock accepted | 3 Hz to 125 MHz |
-| System clock for a project clock up to 66.5 MHz | the stock firmware's choice, at most 133 MHz |
-| System clock for a project clock above 66.5 MHz | the stock firmware's choice, at most twice the project clock and 250 MHz |
+| System clock | the stock firmware's choice for the project clock |
+| Highest system clock up to 66.5 MHz project clock | 133 MHz |
+| Highest system clock above 66.5 MHz project clock | twice the project clock |
+| Highest system clock | 250 MHz |
 | Lowest system clock | 48 MHz |
 | Core voltage | never changed |
 | Fastest project clock run on a board | 25.175 MHz ([issue #32](https://github.com/mithro/vgacap/issues/32)) |
 | Frame capture | needs 2 to 32 whole system clocks per project clock, within 0.5% |
 
 Project clock is the clock asked for, System clock what the firmware sets, and Period the system clocks per
-project clock. These are the clocks the stock firmware picked on fpga-4, which
-[`tests/test_fw_units.c`](../tests/test_fw_units.c) holds the firmware to.
+project clock. Source is where the pair was seen: the stock firmware's choice on fpga-4
+([frame capture result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-frame-capture-fpga4)),
+or the vgacap firmware's own run there
+([firmware result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-picosdk-firmware-fpga4)).
+[`tests/test_fw_units.c`](../tests/test_fw_units.c) holds the firmware to every row.
 
-| Project clock | System clock | Period |
-|---|---|---|
-| 25 MHz | 100 MHz | 4 |
-| 31.5 MHz | 126 MHz | 4 |
-| 36 MHz | 72 MHz | 2 |
-| 40 MHz | 80 MHz | 2 |
-| 28.322 MHz | 113 MHz | 4 |
-| 750 kHz | 132 MHz | 0 |
+| Project clock | System clock | Period | Source |
+|---|---|---|---|
+| 25 MHz | 100 MHz | 4 | stock firmware |
+| 31.5 MHz | 126 MHz | 4 | stock firmware |
+| 36 MHz | 72 MHz | 2 | stock firmware |
+| 40 MHz | 80 MHz | 2 | stock firmware |
+| 28.322 MHz | 113 MHz | 4 | stock firmware |
+| 750 kHz | 132 MHz | 0 | vgacap firmware, `sysclk_hz=132000000` |
