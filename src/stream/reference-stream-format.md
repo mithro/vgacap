@@ -189,7 +189,7 @@ The chunk's length is exactly 4 + 8 × `pair_count`.
 | 0 | u32 | `pair_count`: at least 1 |
 | 4 | pairs | `value`, then `run` |
 
-- `value` is ceil(`sample_bits` / 8) bytes, little-endian: 6 bytes for a simulation trace's 43-bit samples.
+- `value` is ceil(`sample_bits` / 8) bytes, little-endian.
 - In `value`, the clock bit is stored as 0, and no bit at or above `sample_bits` is set.
 - `run` is unsigned LEB128: 7 bits a byte, least significant group first, the top bit set when another byte follows.
 - `run` is 1 to 10 bytes, at least 1, minimally encoded (no final `0x00`), and below 2^64; a 10th byte is at most `0x01`.
