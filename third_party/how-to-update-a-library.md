@@ -19,7 +19,7 @@ This page replaces one library's files with those of a newer upstream version, a
 ## Steps
 
 1. In the upstream clone, run `git checkout <tag or commit>` to get the version to take.
-2. For each file in the library's row of the Files taken table, copy the upstream file over the one under `third_party/`.
+2. For each of the library's rows in the Files copied table, copy the upstream file over the one under `third_party/`.
 3. If the library has a row under Local changes, make that change again in the new files.
 4. If the new version adds or removes source files, change the library's list in [`third_party/CMakeLists.txt`](CMakeLists.txt) to match.
 5. In [Vendored libraries](reference-vendored-libraries.md), change the library's version and any file or change that moved.
@@ -34,7 +34,7 @@ This page replaces one library's files with those of a newer upstream version, a
 | Step | What you see | Likely cause | Fix |
 |---|---|---|---|
 | 6 | `undefined reference to` a library function | a source file the new version added is not built | Add it to the library's list in `CMakeLists.txt` |
-| 6 | `No such file or directory` for a header | a header the new version added is not copied | Copy it, and add it to the Files taken table |
+| 6 | `No such file or directory` for a header | a header the new version added is not copied | Copy it, and add it to the Files copied table |
 
 ## Next
 

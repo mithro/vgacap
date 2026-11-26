@@ -7,9 +7,11 @@ review: 2027-05-27
 
 # How to run the hardware-in-the-loop check on the board's Pi
 
-**You want the hardware-in-the-loop check run on the Raspberry Pi that the demo board is plugged into, on its serial port, with the bridge out of the way.**
+**You want the hardware-in-the-loop check run on the board's own Raspberry Pi, on its serial port, with the bridge out of the way.**
 
-This page runs [`tools/hil.py`](hil.py) with `--stop-bridge` on fpga-1's Pi. The check stops the fpgas.online bridge (`fpgas-tt`), which holds `/dev/ttboard`, restarts the board and starts the bridge again. The four GStreamer checks and the two reference checks are left out here. A run of this page on a bench Pi is tracked in [vgacap #47](https://github.com/mithro/vgacap/issues/47). Step 3 calls `hil.py` with `uv run --no-dev` and not through `hil.sh`, which installs the dev group: [vgacap #48](https://github.com/mithro/vgacap/issues/48). Running from a workstation is [How to run the hardware-in-the-loop check through a tunnel](how-to-run-hil-through-a-tunnel.md).
+This page runs [`tools/hil.py`](hil.py) with `--stop-bridge` on fpga-1's Pi. The check stops the fpgas.online bridge (`fpgas-tt`), which holds `/dev/ttboard`. It then restarts the board and starts the bridge again. A run of this page on a bench Pi is tracked in [vgacap #47](https://github.com/mithro/vgacap/issues/47).
+
+`--no-demo` skips the four GStreamer checks. The `reference` and `frame` checks skip because no tt-vga-testpatterns checkout sits next to vgacap on the Pi. Step 3 runs `hil.py` under `uv run --no-dev`, not `hil.sh`, which would install the dev group: [vgacap #48](https://github.com/mithro/vgacap/issues/48). Running from a workstation is [How to run the hardware-in-the-loop check through a tunnel](how-to-run-hil-through-a-tunnel.md).
 
 ## What you need
 
@@ -27,7 +29,18 @@ This page runs [`tools/hil.py`](hil.py) with `--stop-bridge` on fpga-1's Pi. The
 
 ## Check
 
-Step 3 prints `PASS` for `probe`, `capture`, `reconstruct` and `board-usable`, and `SKIP` with its reason for the other six. Its report, named on its last line, lists under Notes that `fpgas-tt` was stopped and started again, and that the board was restarted first. Step 4 prints `active`, and the board's `status.json` shows `"reachable": true`.
+Step 3 prints `PASS` for `probe`, `capture`, `reconstruct` and `board-usable`. It prints `SKIP` for the other six with these reasons, where `<parent>` holds the vgacap checkout:
+
+```text
+SKIP  reference      tt-vga-testpatterns is not next door: no <parent>/tt-vga-testpatterns/tools/compare_capture.py
+SKIP  frame          tt-vga-testpatterns is not next door: no <parent>/tt-vga-testpatterns/tools/compare_capture.py
+SKIP  demo-frames    --no-demo: the board checks only
+SKIP  video          --no-demo: the board checks only
+SKIP  serve          --no-demo: the board checks only
+SKIP  stop           --no-demo: the board checks only
+```
+
+ Its report, named on its last line, lists under Notes that `fpgas-tt` was stopped and started again, and that the board was restarted first. Step 4 prints `active`, and the board's `status.json` shows `"reachable": true`.
 
 ## If it fails
 

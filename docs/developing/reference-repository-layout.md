@@ -40,5 +40,5 @@ Addition is what you add, and Where the place it is registered.
 | a C source file of a library or tool | its section of the top-level [`CMakeLists.txt`](../../CMakeLists.txt) |
 | a C test | a `tests/test_*.c` file and one `vgacap_add_test` line in `CMakeLists.txt` |
 | a Python test | a `test_*.py` file in `python/tests/` or `gst/tests/`, found by pytest |
-| a page | beside its code, and one line on its section's landing page |
+| a page | beside its code, with its one line on its component's README, the landing page above it |
 | a CI step | its job in [`ci.yml`](../../.github/workflows/ci.yml) |

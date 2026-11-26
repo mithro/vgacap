@@ -14,7 +14,7 @@ This page runs a file with [`tools/board_exec.py`](board_exec.py), over the same
 ## What you need
 
 - A link to the board: `serial:<port>` for a board on a USB port of this machine, or the bridge's `ws://.../serial` address through a tunnel.
-- For a Welland bench board, the client check and the tunnel of [How to run the hardware-in-the-loop check through a tunnel](how-to-run-hil-through-a-tunnel.md) steps 1 and 2.
+- For a Welland bench board, the client check and the tunnel: steps 1 and 2 of [the tunnel how-to](how-to-run-hil-through-a-tunnel.md).
 - A MicroPython file small enough for the board's memory.
 
 ## Steps

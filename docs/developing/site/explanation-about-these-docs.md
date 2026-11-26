@@ -19,8 +19,10 @@ A page here is a Markdown file in the repository, beside the code it is about. G
 
 ## What the build checks and what a person checks
 
-A machine can decide some rules, such as a title's length, a banned word or a missing heading. The build checks those on every change and fails on them, as [Page rules the build enforces](reference-page-rules.md) lists. Where a table comes from a file in the repository, such as `ci.yml` or a command's options, the build makes the table from that file, so it cannot go stale. The rest is judged by people, as [Review and verification of a page](https://docs.fpgas.online/en/latest/developer/about-these-docs/review.html) describes: a reviewer who is not the author, and a run of every procedure as written.
+A machine can decide some rules, such as a title's length, a banned word or a missing heading. The build checks those on every change and fails on them, as [Page rules the build enforces](reference-page-rules.md) lists. A table that comes from a file, such as `ci.yml`, is made from that file by the build, so it cannot go stale.
+
+The rest is judged by people, as [Review and verification of a page](https://docs.fpgas.online/en/latest/developer/about-these-docs/review.html) describes. A reviewer who is not the author reads each page, and someone runs every procedure as written. Those two hold the rules that no machine can decide, such as whether a step can be followed.
 
 ## Drawings in two themes
 
-The site has a light and a dark theme, and a drawing made on white is a bright slab on the dark one. So each drawing is made twice by a generator, from one palette, and shown with a `<picture>` element. GitHub picks the twin that fits the viewer's theme, and the build turns the element into the pair the site switches between. Each drawing is also shown to a reader who has not seen the page, who says what it shows, and a confusion is fixed in the drawing.
+The site has a light and a dark theme, and a drawing made on white is a bright slab on the dark one. So each drawing is made twice by a generator, from one palette, and shown with a `<picture>` element. GitHub picks the twin that fits the viewer's theme, and the build turns the element into the pair the site switches between. Each drawing is also shown to a reader who has not seen the page. That reader says what it shows, and a confusion is fixed in the drawing.
