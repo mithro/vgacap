@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="664" viewBox="0 0 500 664">
+<rect width="500" height="664" fill="#131722"/>
+<rect x="110" y="8" width="280" height="56" rx="6" fill="#182640" stroke="#34558f" stroke-width="1.5"/>
+<text x="250" y="33" font-size="16" fill="#e6e9ef" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">Tiny Tapeout design</text>
+<text x="250" y="53" font-size="13" fill="#9aa3b5" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">ASIC or FPGA breakout</text>
+<rect x="30" y="128" width="440" height="362" rx="8" fill="#2a3142" stroke="#2a3142" stroke-width="1.5"/>
+<text x="50" y="152" font-size="14" fill="#e6e9ef" text-anchor="start" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">RP2040 or RP2350, stock firmware</text>
+<path d="M250 64 L250 172" fill="none" stroke="#6ea2f5" stroke-width="3"/>
+<path d="M250 172 L245.2 162.1 L254.8 162.1 Z" fill="#6ea2f5"/>
+<text x="260" y="92" font-size="13" fill="#6ea2f5" text-anchor="start" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">uo_out[7:0]</text>
+<rect x="403" y="184" width="44" height="26" rx="4" fill="#1c2230" stroke="#5b6577" stroke-width="1.2"/>
+<text x="425" y="202" font-size="12" fill="#e6e9ef" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">PWM</text>
+<path d="M425 184 L425 104 L360 104 L360 68" fill="none" stroke="#6ea2f5" stroke-width="2"/>
+<path d="M360 68 L363.9 76.1 L356.1 76.1 Z" fill="#6ea2f5"/>
+<text x="370" y="96" font-size="13" fill="#6ea2f5" text-anchor="start" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">project clock</text>
+<rect x="110" y="176" width="280" height="52" rx="5" fill="#1c2230" stroke="#5b6577" stroke-width="1.2"/>
+<text x="250" y="198" font-size="15" fill="#e6e9ef" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">PIO sampler</text>
+<text x="250" y="217" font-size="13" fill="#9aa3b5" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">one sample a clock edge</text>
+<path d="M250 228 L250 262" fill="none" stroke="#ff8c45" stroke-width="3"/>
+<path d="M250 262 L245.2 252.1 L254.8 252.1 Z" fill="#ff8c45"/>
+<text x="260" y="250" font-size="13" fill="#e6e9ef" text-anchor="start" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">RX FIFO</text>
+<rect x="110" y="266" width="280" height="112" rx="5" fill="#1c2230" stroke="#5b6577" stroke-width="1.2"/>
+<text x="250" y="288" font-size="15" fill="#e6e9ef" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">DMA ring</text>
+<rect x="136" y="302" width="90" height="40" rx="4" fill="#3a2414" stroke="#8a4a22" stroke-width="1.2"/>
+<text x="181" y="327" font-size="13" fill="#e6e9ef" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">buffer A</text>
+<rect x="274" y="302" width="90" height="40" rx="4" fill="#3a2414" stroke="#8a4a22" stroke-width="1.2"/>
+<text x="319" y="327" font-size="13" fill="#e6e9ef" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">buffer B</text>
+<path d="M228 314 L272 314" fill="none" stroke="#ff8c45" stroke-width="2"/>
+<path d="M272 314 L263.9 317.9 L263.9 310.1 Z" fill="#ff8c45"/>
+<path d="M272 332 L228 332" fill="none" stroke="#ff8c45" stroke-width="2"/>
+<path d="M228 332 L236.1 328.1 L236.1 335.9 Z" fill="#ff8c45"/>
+<text x="250" y="365" font-size="12" fill="#9aa3b5" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">fill ⇄ send</text>
+<path d="M250 378 L250 412" fill="none" stroke="#ff8c45" stroke-width="3"/>
+<path d="M250 412 L245.2 402.1 L254.8 402.1 Z" fill="#ff8c45"/>
+<rect x="110" y="416" width="280" height="56" rx="5" fill="#1c2230" stroke="#5b6577" stroke-width="1.2"/>
+<text x="250" y="438" font-size="15" fill="#e6e9ef" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">MicroPython loop</text>
+<text x="250" y="457" font-size="13" fill="#9aa3b5" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">RAW chunks · TIME reports</text>
+<path d="M250 472 L250 552" fill="none" stroke="#ff8c45" stroke-width="3"/>
+<path d="M250 552 L245.2 542.1 L254.8 542.1 Z" fill="#ff8c45"/>
+<text x="260" y="520" font-size="13" fill="#ff8c45" text-anchor="start" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">USB serial</text>
+<rect x="110" y="556" width="280" height="48" rx="6" fill="#251d40" stroke="#5a47a0" stroke-width="1.5"/>
+<text x="250" y="586" font-size="15" fill="#a98bff" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">ttcap on the host</text>
+<path d="M250 604 L250 626" fill="none" stroke="#ff8c45" stroke-width="3"/>
+<path d="M250 626 L245.2 616.1 L254.8 616.1 Z" fill="#ff8c45"/>
+<text x="250" y="652" font-size="15" fill="#ff8c45" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">capture.vgacap</text>
+</svg>
