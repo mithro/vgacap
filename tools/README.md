@@ -21,7 +21,7 @@ board can settle and writes a dated Markdown report. The checks are:
 - `reference`: pixel-exact against a [`tt-vga-testpatterns`](https://github.com/mithro/tt-vga-testpatterns) calibration
   render;
 - `frame`: whole frames at the design's real clock, each one pixel-exact;
-- `demo-frames`: a [`ttcap demo`](../python/ttcap/README.md#ttcap-demo-a-board-in-video-out)
+- `demo-frames`: a [`ttcap demo`](../python/ttcap/how-to-make-video.md)
   run writes PNGs at the requested frame rate;
 - `video`: its video opens, at the requested rate and the expected length;
 - `serve`: its MJPEG stream delivers at least two parts;
@@ -32,7 +32,7 @@ board can settle and writes a dated Markdown report. The checks are:
 
 The example runs against `fpga-1`, a demo board with an FPGA breakout on
 the shared Welland bench, and needs bench access (see
-[python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed)).
+[python/ttcap/README.md](../python/ttcap/how-to-capture-welland-bridge.md)).
 It needs the calibration bitstream uploaded first, with
 tt-vga-testpatterns'
 [`tools/upload.py`](https://github.com/mithro/tt-vga-testpatterns/blob/main/tools/upload.py):
@@ -74,4 +74,4 @@ The Welland bench is shared, so `hil.py` is careful with its boards:
   report).
 
 Before running against a bench board, do the checks in
-[Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed).
+[Reaching a Welland board](../python/ttcap/how-to-capture-welland-bridge.md).

@@ -18,7 +18,7 @@ review: 2027-05-27
 
 ## Steps
 
-1. In the checkout, run the capture with the value, in decimal or with a `0x` or `0b` prefix, which drives the inputs and starts the design:
+1. In the checkout, run the capture with the value in decimal, `0x` or `0b` form, which drives the inputs and starts the design:
 
    ```sh
    uv run ttcap capture serial:/dev/ttyACM0 --design tt_um_vgacal_modes --ui-in 1 \
@@ -39,9 +39,8 @@ Step 2 shows the picture for that input value. On an FPGA breakout, `tt_um_vgaca
 |---|---|---|---|
 | 1 | `ui_in must be 0..255` | the value is outside a byte | give a value from 0 to 255 |
 | 1 | `argument --ui-in: invalid` | the value is not a number | write it as `5`, `0x05` or `0b101` |
-| 2 | the picture of the default inputs | the design reads its inputs only at reset | check the design reads `ui_in` after reset |
 
 ## Next
 
 - [How to capture whole frames at the design's own clock](how-to-capture-frames.md)
-- [ttcap commands and options](reference-commands.md#ttcap-capture)
+- [ttcap commands and options](reference-commands.md)

@@ -14,7 +14,7 @@ review: 2027-05-27
 ## What you need
 
 - An RP2350 demo board running the stock firmware, set up as in [How to capture a stream from a demo board](how-to-capture-stream.md).
-- A design whose timing is one of the base modes `--vga-mode` lists on [ttcap commands and options](reference-commands.md#ttcap-capture).
+- A design whose timing is one of the base modes `--vga-mode` lists on [ttcap commands and options](reference-commands.md).
 - The design's pixel clock, which is the clock `--clock-hz` sets.
 
 ## Steps

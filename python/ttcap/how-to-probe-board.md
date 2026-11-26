@@ -24,7 +24,7 @@ review: 2027-05-27
    uv run ttcap probe serial:/dev/ttyACM0
    ```
 
-2. In the output, find `rp_projclk` and `uo_out0`, whose GPIO numbers tell the board's profile: 0 and 5 on an RP2040 demo board, 16 and 33 on an RP2350 one.
+2. In the output, read `rp_projclk` and `uo_out0`: GPIO 0 and 5 mean an RP2040 demo board, 16 and 33 an RP2350.
 
 ## Check
 

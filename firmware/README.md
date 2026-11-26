@@ -16,7 +16,7 @@ or `ttcap reboot` brings the board's stock firmware back.
 The [hardware notes](#hardware-notes-and-assumptions) name the boards they
 were measured on: `fpga-4` is a demo board with an FPGA breakout on the
 Welland bench (see
-[python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed)),
+[python/ttcap/README.md](../python/ttcap/how-to-capture-welland-bridge.md)),
 and `tt09` is a demo board with an ASIC breakout (a TT09 chip) on the Welland bench.
 
 ## Layout
@@ -197,10 +197,10 @@ The simulator models what the PIO and DMA deliver, not their cycles; see
 
 These steps run on the machine the board is plugged into, with this
 repository checked out there as in
-[Running on a Raspberry Pi](../python/ttcap/README.md#running-on-a-raspberry-pi)
+[Running on a Raspberry Pi](../python/ttcap/how-to-run-on-raspberry-pi.md)
 and `firmware/build/vgacap_fw.uf2` built or copied there. `<dev>` is the
 stock firmware's serial port. On the
-[Welland bench](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed),
+[Welland bench](../python/ttcap/how-to-capture-welland-bridge.md),
 that machine is the board's own Pi and `<dev>` is `/dev/ttboard`; the
 fpgas.online bridge (`fpgas-tt`) can also enable a design
 (`/designs/<name>/enable`), and holds the port until stopped

@@ -41,11 +41,11 @@ review: 2027-05-27
 |---|---|---|---|
 | 2 | `erroneous pipeline: no element "vgadecode"` | `GST_PLUGIN_PATH` does not name the plugin's directory | build the plugin and repeat step 1 |
 | 2 | `the capture would never stop` | `--seconds 0` with a file in `--out` | use `--out -` or give a limit |
-| 2 | no PNG appears | the capture has not yet closed a frame | wait for three frame periods |
+| 2 | no PNG appears | no frame has closed so far | wait for three frame periods |
 | 3 | `rxstall=1` in the stats | samples were lost on the board | lower `--clock-hz` |
 
 ## Next
 
 - [How to make a video of a design with ttcap demo](how-to-make-video.md)
 - [The GStreamer plugin](../../gst/README.md)
-- [ttcap commands and options](reference-commands.md#ttcap-capture)
+- [ttcap commands and options](reference-commands.md)

@@ -60,4 +60,4 @@ After an RX stall the board stops at once, so the file holds every pair up to th
 
 - [Run-length capture](explanation-run-length-capture.md)
 - [How to capture whole frames at the design's own clock](how-to-capture-frames.md)
-- [ttcap commands and options](reference-commands.md#ttcap-capture)
+- [ttcap commands and options](reference-commands.md)

@@ -9,7 +9,7 @@ review: 2027-05-27
 
 **You want every sample of your design's `uo_out` in a `.vgacap` file, from a demo board running the stock firmware.**
 
-A stream holds one sample per project clock, so the design runs at a clock the USB link can carry. For a design at its real VGA clock, capture whole frames instead ([How to capture whole frames at the design's own clock](how-to-capture-frames.md)). Every option is on [ttcap commands and options](reference-commands.md#ttcap-capture).
+A stream holds one sample per project clock, so the design runs at a clock the USB link can carry. For a design at its real VGA clock, capture whole frames instead ([How to capture whole frames at the design's own clock](how-to-capture-frames.md)). Every option is on [ttcap commands and options](reference-commands.md).
 
 ## What you need
 
