@@ -372,6 +372,7 @@ TEST(test_trace_sigkill_keeps_blocks) {
     pid_t pid = fork();
     ASSERT_TRUE(pid >= 0);
     if (pid == 0) {
+        alarm(120);   // never outlives a dead parent
         vgacap_header_t h; header43(&h);
         char err[256] = "";
         vgacap_trace_writer_t *t = vgacap_trace_create(path, &h, OPEN_META, 3, err, sizeof err);
@@ -383,18 +384,25 @@ TEST(test_trace_sigkill_keeps_blocks) {
         for (;;) pause();   // never finish: the parent kills this process
     }
     char err[256] = "";
-    int seen = 0;
-    for (int i = 0; i < 1000 && !seen; i++) {   // up to 10 s
+    int seen = 0, st = 0, exited = 0;
+    for (int i = 0; i < 6000 && !seen && !exited; i++) {   // up to 60 s
+        exited = waitpid(pid, &st, WNOHANG) == pid;   // the child must still be running
         vgacap_trace_reader_t *r = vgacap_trace_open(path, err, sizeof err);
         if (r) { seen = vgacap_trace_info(r)->blocks == 2; vgacap_trace_close(r); }
-        if (!seen) { struct timespec ts = {0, 10 * 1000 * 1000}; nanosleep(&ts, NULL); }
+        if (!seen && !exited) { struct timespec ts = {0, 10 * 1000 * 1000}; nanosleep(&ts, NULL); }
     }
-    kill(pid, SIGKILL);
-    int st = 0;
-    ASSERT_TRUE(waitpid(pid, &st, 0) == pid);
+    if (!exited) {
+        kill(pid, SIGKILL);
+        if (waitpid(pid, &st, 0) != pid) { trace_rm(path); ASSERT_TRUE(0); }
+    }
+    // The file goes at once, so a failed assert below leaves nothing behind
+    // (the reader's mapping keeps it readable).
+    vgacap_trace_reader_t *r = vgacap_trace_open(path, err, sizeof err);
+    trace_rm(path);
+    if (exited) fprintf(stderr, "  the child exited before it was killed (status %d)\n", st);
+    ASSERT_TRUE(!exited);
     ASSERT_TRUE(WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL);
     ASSERT_TRUE(seen);
-    vgacap_trace_reader_t *r = vgacap_trace_open(path, err, sizeof err);
     if (!r) fprintf(stderr, "  open: %s\n", err);
     ASSERT_TRUE(r != NULL);
     const vgacap_trace_info_t *in = vgacap_trace_info(r);
@@ -403,7 +411,6 @@ TEST(test_trace_sigkill_keeps_blocks) {
     ASSERT_TRUE(in->close_meta == NULL);   // truncated: no META(close)
     ASSERT_EQ_U(in->samples, 4 * VGACAP_TRACE_BLOCK_CLOCKS);
     vgacap_trace_close(r);
-    trace_rm(path);
 }
 
 TEST(test_trace_bad_meta) {
