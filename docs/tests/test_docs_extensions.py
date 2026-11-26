@@ -75,6 +75,7 @@ def build(tmp_path, pages, pending=None, files=None, parallel=0, src=None, fresh
         source_suffix = {{".md": "markdown"}}
         myst_enable_extensions = ["html_image", "linkify"]
         myst_linkify_fuzzy_links = False
+        html_theme = "furo"   # the site's theme: its sidebar shows every level
         vgacap_rules_pending = {pending or {}!r}
         import datetime
         vgacap_today = datetime.date(2026, 11, 27)
@@ -421,3 +422,116 @@ def test_an_incremental_build_tells_a_fixed_pending_page_to_leave(tmp_path):
     warnings, _, _ = build(tmp_path, {"page": front() + "# A page\n\n" + PROSE},
                            pending={"page": "why"}, src=src, fresh=False)
     assert "take it out of vgacap_rules_pending" in warnings
+
+
+# -- the sidebar from the landing pages (vgacap_landing) ----------------------
+
+A = front() + "# Page A\n\n" + PROSE
+B = front() + "# Page B\n\n" + PROSE
+
+
+def sidebar(out, name="index"):
+    """The (level, title) entries of the built page's sidebar."""
+    html = (out / f"{name}.html").read_text()
+    return re.findall(r'class="toctree-l(\d)[^"]*"><a class="reference internal" '
+                      r'href="[^"]*">([^<]*)<', html)
+
+
+def two_sections(s1_lines, s2_lines="- [A](../a.md): page A.\n"):
+    return {
+        "a": A, "b": B,
+        "s1/index": front("landing") + "# One\n\n" + s1_lines,
+        "s2/index": front("landing") + "# Two\n\n" + s2_lines,
+        "index": front("landing") + "# Root\n\n- [One](s1/index.md): one.\n"
+                 "- [Two](s2/index.md): two.\n",
+    }
+
+
+def build_tree(tmp_path, pages, **kw):
+    for name in pages:
+        (tmp_path / "src" / name).parent.mkdir(parents=True, exist_ok=True)
+    return build(tmp_path, pages, **kw)
+
+
+def test_a_line_back_up_is_a_cross_link(tmp_path):
+    pages = two_sections("- [B](../b.md): page B.\n- [Up](../index.md): the site.\n")
+    warnings, _, out = build_tree(tmp_path, pages)
+    assert warnings == ""
+    assert sidebar(out) == [("1", "One"), ("2", "Page B"), ("1", "Two"), ("2", "Page A")]
+
+
+def test_a_page_on_two_landing_pages_fails(tmp_path):
+    pages = two_sections("- [B](../b.md): page B.\n- [A](../a.md): page A.\n")
+    warnings, _, _ = build_tree(tmp_path, pages)
+    assert "a is a line on s1/index and on s2/index" in warnings
+
+
+def test_a_cross_link_is_not_a_line(tmp_path):
+    pages = two_sections("- [B](../b.md): page B.\n- Page A is also under [Two](../a.md).\n")
+    warnings, _, out = build_tree(tmp_path, pages)
+    assert warnings == ""
+    assert sidebar(out) == [("1", "One"), ("2", "Page B"), ("1", "Two"), ("2", "Page A")]
+
+
+def test_a_toctree_in_a_code_example_is_allowed(tmp_path):
+    text = page("````markdown\n```{toctree}\nother\n```\n````")
+    pages = {"page": text, "other": B,
+             "index": front("landing") + "# Root\n\n- [P](page.md): p.\n- [O](other.md): o.\n"}
+    warnings, _, _ = build(tmp_path, pages)
+    assert warnings == ""
+
+
+def test_a_line_to_a_file_name_with_a_space(tmp_path):
+    pages = {"a b": A, "index": front("landing") + "# Root\n\n- [A](<a b.md>): page A.\n"}
+    warnings, _, out = build(tmp_path, pages)
+    assert warnings == "" and ("1", "Page A") in sidebar(out)
+
+
+@pytest.mark.parametrize("line", [
+    '- [B](../b.md "Page B"): with a title.',
+    "- **[B](../b.md)**: in bold.",
+    "- [B](/b.md): from the repository root.",
+    "- [B [the second]](../b.md): brackets in the text.",
+])
+def test_line_forms(tmp_path, line):
+    warnings, _, out = build_tree(tmp_path, two_sections(line + "\n"))
+    assert warnings == "" and ("2", "Page B") in sidebar(out)
+
+
+def test_another_site_and_code_are_not_lines(tmp_path):
+    lines = ("- [B](../b.md): page B.\n- [Upstream](https://example.com/r/README.md): elsewhere.\n"
+             "\n```\n- [A](../a.md): in code.\n```\n")
+    warnings, _, out = build_tree(tmp_path, two_sections(lines, "- [A](../a.md): page A.\n"))
+    assert warnings == ""
+    assert sidebar(out) == [("1", "One"), ("2", "Page B"), ("1", "Two"), ("2", "Page A")]
+
+
+def test_a_line_to_no_page_names_the_line(tmp_path):
+    pages = two_sections("- [B](../b.md): page B.\n- [C](../c.md): not a page.\n")
+    warnings, _, _ = build_tree(tmp_path, pages)
+    assert "landing line" in warnings and "../c.md is not a page" in warnings
+
+
+def test_a_page_writes_no_toctree(tmp_path):
+    text = page("```{toctree}\n:hidden:\n\nother\n```")
+    warnings, _, _ = build(tmp_path, {"page": text, "other": B})
+    assert "writes no toctree" in warnings
+
+
+def test_a_step_starting_with_code_is_its_own_sentence(tmp_path):
+    first = "At the bench, " + " ".join(["connect"] * 14) + " the board."
+    second = "`ttcap` prints " + " ".join(["word"] * 14) + " here."
+    text = front("how-to") + HOWTO.replace(
+        "At the bench, connect the board, and its light comes on.", first + " " + second)
+    warnings, _, _ = build(tmp_path, {"page": text})
+    assert warnings == ""
+
+
+def test_a_path_is_not_a_banned_word(tmp_path):
+    warnings, _, _ = build(tmp_path, {"page": page("The file lives in /etc/hosts on the Pi.")})
+    assert warnings == ""
+
+
+def test_an_image_in_an_html_comment_is_not_an_image(tmp_path):
+    warnings, _, _ = build(tmp_path, {"page": page('<!-- <img src="x.png"> was here -->')})
+    assert warnings == ""
