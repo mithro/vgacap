@@ -9,7 +9,7 @@ review: 2027-05-27
 
 **You want the hardware-in-the-loop check run on the Raspberry Pi that the demo board is plugged into, on its serial port, with the bridge out of the way.**
 
-This page runs [`tools/hil.py`](hil.py) with `--stop-bridge` on fpga-1's Pi. The check stops the fpgas.online bridge (`fpgas-tt`), which holds `/dev/ttboard`, restarts the board and starts the bridge again. The four GStreamer checks and the two reference checks are left out here. Running from a workstation is [How to run the hardware-in-the-loop check through a tunnel](how-to-run-hil-through-a-tunnel.md).
+This page runs [`tools/hil.py`](hil.py) with `--stop-bridge` on fpga-1's Pi. The check stops the fpgas.online bridge (`fpgas-tt`), which holds `/dev/ttboard`, restarts the board and starts the bridge again. The four GStreamer checks and the two reference checks are left out here. A run of this page on a bench Pi is tracked in [vgacap #47](https://github.com/mithro/vgacap/issues/47). Step 3 calls `hil.py` with `uv run --no-dev` and not through `hil.sh`, which installs the dev group: [vgacap #48](https://github.com/mithro/vgacap/issues/48). Running from a workstation is [How to run the hardware-in-the-loop check through a tunnel](how-to-run-hil-through-a-tunnel.md).
 
 ## What you need
 
