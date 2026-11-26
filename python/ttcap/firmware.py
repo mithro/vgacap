@@ -100,8 +100,8 @@ class FirmwareLink:
 
         A stop byte first, in case a capture is still running from a host
         that went away; that capture then finishes its chunk, writes its
-        trailer and goes idle, and a stray 0x03 to an idle firmware is
-        ignored. Then an empty line (ends any half-sent command) and
+        trailer and goes idle; to an idle firmware the 0x03 discards any
+        half-sent command. Then an empty line (which does nothing) and
         `hello`, and everything before the hello reply is discarded.
         """
         self._buf = b""
@@ -232,6 +232,9 @@ def capture_args(req: CaptureRequest) -> tuple[str, dict]:
     """
     if req.profile != RP2350_DBV3:
         raise CaptureError("the capture firmware is built for %s only" % RP2350_DBV3.name)
+    if req.is_rle:
+        # Its CFG has buf_words like a stream's, and would quietly become one.
+        raise CaptureError("the capture firmware has no rle mode; use --firmware micropython")
     cfg = req.cfg()
     name = "frame" if req.is_frame else "stream"
     return name, {key: cfg[key] for key in CAPTURE_KEYS[name]}
@@ -251,6 +254,11 @@ def setup(link: FirmwareLink, req: CaptureRequest) -> dict:
     released last. The firmware cannot select a design: it runs in place of
     the stock firmware, which is what knows the shuttle, so `--project` /
     `--design` are refused rather than ignored.
+
+    `req.asic_index` is sent as is: nothing here knows which board is on
+    the link, and on an FPGA breakout `asic_select` erases the FPGA. A
+    caller other than `ttcap capture` must call
+    `ttcap.demo.check_asic_index()` first (as `cli.capture()` does).
     """
     if req.selection:
         raise CaptureError(
@@ -261,8 +269,9 @@ def setup(link: FirmwareLink, req: CaptureRequest) -> dict:
     link.command("clock hz=0")
     link.command("reset hold=1")
     if req.asic_index is not None:
-        # The mux lines float while the RP2350 is in its bootloader, so an
-        # ASIC board comes back with no project selected (tt09, 2026-11-24).
+        # Nothing drives the mux lines while the RP2350 is in its
+        # bootloader, so an ASIC board comes back with no project selected
+        # (tt09, 2026-11-24).
         link.command("asic_select index=%d" % req.asic_index, timeout=30.0)
         did["asic_index"] = req.asic_index
     if req.ui_in is not None:

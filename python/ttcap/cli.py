@@ -17,10 +17,12 @@ Subcommands:
   video file, a window and a browser-viewable MJPEG stream (`ttcap.demo`).
 
 Exit codes: 0 success, 1 a board, link or tool error (including a capture
-that ended through `CaptureStats.error`/`timed_out`), 2 a usage error
-(argparse's own), 3 a capture that produced no samples at all -- the one
-failure worth telling apart, because it means the sampler never saw a clock
-edge.
+that ended through `CaptureStats.error`/`timed_out`, one whose board
+raised or sent an `error=` message (`CaptureStats.board_error`, printed),
+and an `--mode rle` capture whose board reported an RX stall), 2 a usage
+error (argparse's own), 3 a capture that produced no samples at all and
+no board error -- the one failure worth telling apart, because it means
+the sampler never saw a clock edge.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ import threading
 import time
 from typing import Callable, Iterator, Sequence
 
-from .boards import RP2040_TT06, RP2350_DBV3, profile_from_gpio_map
+from .boards import RP2040_TT06, RP2350_DBV3, WELLAND, profile_from_gpio_map
 from vgacap.modes import MODES
 
 from .capture import (
@@ -55,16 +57,15 @@ from .capture import (
     CaptureStats,
     frame_note,
     frames_to_max_bytes,
-    restore_mode,
     run_capture,
     run_session,
     select_project,
-    stop_clock,
+    undo_selection,
 )
 from .firmware import FIRMWARES, FirmwareLink, FirmwareSession
 from . import firmware as fwproto
 from . import module as mpmodule
-from .demo import add_parser as add_demo_parser, demo
+from .demo import add_parser as add_demo_parser, check_asic_index, demo
 from .repl import LinkClosed, RawRepl, ReplFramingError, ReplLink, SerialLink, WebSocketLink
 from .throughput import DEFAULT_BLOCK, DEFAULT_TOTAL, ThroughputResult, measure_throughput
 
@@ -98,13 +99,19 @@ CAPTURE_FAILURES = (
 def _failed(what: str, exc: BaseException) -> int:
     """Report a subcommand's failure the way `main`'s contract promises."""
     print("%s failed: %s: %s" % (what, type(exc).__name__, exc), file=sys.stderr)
+    for note in getattr(exc, "__notes__", ()):
+        print("  %s" % note, file=sys.stderr)
     return 1
 
 
-def link_from_url(url: str) -> ReplLink:
-    """Build a ReplLink from `serial:<port>` or `ws://...` / `wss://...`."""
+def link_from_url(url: str, write_timeout: float | None = None) -> ReplLink:
+    """Build a ReplLink from `serial:<port>` or `ws://...` / `wss://...`.
+
+    `write_timeout` bounds each serial write (None: block, the default for
+    captures); a WebSocket link ignores it.
+    """
     if url.startswith("serial:"):
-        return SerialLink(url[len("serial:") :])
+        return SerialLink(url[len("serial:") :], write_timeout=write_timeout)
     if url.startswith("ws://") or url.startswith("wss://"):
         return WebSocketLink(url)
     raise ValueError(f"unsupported link url {url!r}: expected serial:<port> or ws(s)://...")
@@ -468,11 +475,10 @@ class _MicroPythonBoard:
     def run_to_file(self, request: CaptureRequest, fp) -> CaptureStats:
         return run_capture(self.repl, request, fp)
 
-    def teardown(self, selection: dict, stop_clock_after: bool) -> None:
-        if stop_clock_after:
-            stop_clock(self.repl)
-        if "mode_before" in selection:
-            restore_mode(self.repl, selection["mode_before"])
+    def teardown(
+        self, selection: dict, stop_clock_after: bool, error: BaseException | None = None
+    ) -> None:
+        undo_selection(self.repl, selection, stop=stop_clock_after, error=error)
 
     def close(self) -> None:
         self.repl.exit()
@@ -520,8 +526,15 @@ class _FirmwareBoard:
     def run_to_file(self, request: CaptureRequest, fp) -> CaptureStats:
         return run_session(self.session(request), fp)
 
-    def teardown(self, selection: dict, stop_clock_after: bool) -> None:
-        fwproto.teardown(self.link, selection, stop_clock_after)
+    def teardown(
+        self, selection: dict, stop_clock_after: bool, error: BaseException | None = None
+    ) -> None:
+        try:
+            fwproto.teardown(self.link, selection, stop_clock_after)
+        except Exception as exc:  # noqa: BLE001 - noted on the capture's own error
+            if error is None:
+                raise
+            error.add_note(f"putting the board back failed too: {exc}")
 
     def close(self) -> None:
         pass
@@ -548,14 +561,19 @@ def capture(
     window_lines: int = 0,
     sample_delay: int = 0,
     ui_in: int | None = None,
+    rle_mask: int = -1,
+    rle_oneshot: bool = False,
     firmware: str = "micropython",
     asic_index: int | None = None,
+    board: str | None = None,
 ) -> CaptureStats:
     """Run one capture to `out_path` and print what happened.
 
     `firmware` is what runs on the board: "micropython", the stock firmware
     driven through its raw REPL, or "picosdk", the capture firmware in
     `firmware/` (PROTOCOL.md), which cannot select a design itself.
+    `board` is the bench slug at the other end of the link, if known; with
+    `asic_index` an FPGA board is refused (`check_asic_index`).
 
     `mode` picks the board program: "stream" (every sample, at a clock the
     link can carry), "frame" (whole frames at the project's real clock,
@@ -589,6 +607,7 @@ def capture(
     if asic_index is not None and firmware != "picosdk":
         raise ValueError("--asic-index is for --firmware picosdk; the stock "
                          "firmware selects a project with --project")
+    check_asic_index(board, asic_index, link=url)
     link = link_from_url(url)
     try:
         drivers = {"picosdk": _FirmwareBoard, mpmodule.FIRMWARE: _ModuleBoard}
@@ -599,13 +618,17 @@ def capture(
                 raise ValueError(f"mode must be one of {sorted(CAPTURE_MODES)}, got {mode!r}")
             script = CAPTURE_MODES[mode]
             framed = script == "frame_rp2.py"
+            rle = script == "rle_rp2.py"
             if edge is None:
-                edge = FRAME_EDGE if framed else "falling"
+                edge = FRAME_EDGE if framed or rle else "falling"
             if mode == "window" and not window_lines:
                 window_lines = DEFAULT_WINDOW_LINES
             max_frames = 0
             if framed and frames is not None:
                 max_frames = frames
+            elif rle and frames is not None:
+                # A frame's bytes depend on the picture under RLE.
+                raise ValueError("--frames does not apply to --mode rle; use --max-bytes or --seconds")
             elif frames is not None:
                 # `buf_words` sizes the chunks, and the byte budget has to
                 # allow for each chunk's 12 non-sample bytes.
@@ -639,31 +662,39 @@ def capture(
                     sample_delay=sample_delay,
                     ui_in=ui_in,
                     asic_index=asic_index,
+                    rle_mask=rle_mask,
+                    rle_oneshot=rle_oneshot,
                 )
                 selection = driver.setup(request)
-                print(
-                    "profile=%s project=%s enable=%s"
-                    % (board.name, selection["project"], selection["enable"]),
-                    file=say,
-                )
-                # `run_capture()` writes nothing until the board has been
-                # cleaned up and has the heap for the script, so a run
-                # refused there (or one that dies before the first chunk)
-                # must not leave an empty file behind pretending to be a
-                # capture. Anything that did get written is a valid, if
-                # short, stream and is kept.
-                with _open_output(
-                    out_path, on_consumer_close=flag.set if to_stdout else None
-                ) as fp:
-                    try:
-                        if to_stdout:
-                            stats = _stream_capture(driver.session(request), fp, flag)
-                        else:
-                            stats = driver.run_to_file(request, fp)
-                    except BaseException:
-                        if not to_stdout and fp.tell() == 0:
-                            _discard_empty(out_path)
-                        raise
+                try:
+                    print(
+                        "profile=%s project=%s enable=%s"
+                        % (board.name, selection["project"], selection["enable"]),
+                        file=say,
+                    )
+                    # `run_capture()` writes nothing until the board has been
+                    # cleaned up and has the heap for the script, so a run
+                    # refused there (or one that dies before the first chunk)
+                    # must not leave an empty file behind pretending to be a
+                    # capture. Anything that did get written is a valid, if
+                    # short, stream and is kept.
+                    with _open_output(
+                        out_path, on_consumer_close=flag.set if to_stdout else None
+                    ) as fp:
+                        try:
+                            if to_stdout:
+                                stats = _stream_capture(driver.session(request), fp, flag)
+                            else:
+                                stats = driver.run_to_file(request, fp)
+                        except BaseException:
+                            if not to_stdout and fp.tell() == 0:
+                                _discard_empty(out_path)
+                            raise
+                except BaseException as exc:
+                    # Whatever went wrong, a shared board is not left in the
+                    # mode `--ui-in` switched it to, nor (by default) clocked.
+                    driver.teardown(selection, stop_clock_after, error=exc)
+                    raise
             # Reported before anything can be raised about how it ended: a
             # consumer that walked away still produced a real capture, and
             # its stats are the only overruns/rxstall report there is.
@@ -704,7 +735,29 @@ def _report(stats: CaptureStats, out_path: str, stream=None) -> None:
 REBOOT_TARGETS = ("flash", "bootsel")
 
 
-def reboot(url: str, firmware: str = "micropython", to: str = "flash") -> None:
+#: How long `reboot` without `--firmware` waits for the capture firmware's
+#: `hello` reply before taking the board for MicroPython.
+FIRMWARE_PROBE_S = 2.0
+
+
+def detect_firmware(link: ReplLink, timeout: float | None = None) -> str:
+    """Which of `FIRMWARES` runs on the board at the end of `link`.
+
+    The capture firmware's resync first (`FirmwareLink.sync`: 0x03, an empty
+    line, `hello`), because it is harmless to MicroPython: the Ctrl-C
+    interrupts whatever runs (as entering the raw REPL does anyway), and at
+    the friendly REPL `hello` is a NameError; in the raw REPL the Ctrl-C
+    that `RawRepl.enter()` sends next discards it. The other order would
+    make the capture firmware wait out the raw REPL banner's timeout.
+    """
+    try:
+        FirmwareLink(link).sync(timeout=FIRMWARE_PROBE_S if timeout is None else timeout)
+    except TimeoutError:
+        return "micropython"
+    return "picosdk"
+
+
+def reboot(url: str, firmware: str | None = None, to: str = "flash") -> None:
     """Restart the board: into its flash firmware, or its USB bootloader.
 
     `bootsel` from the stock firmware is how the capture firmware is loaded
@@ -713,11 +766,19 @@ def reboot(url: str, firmware: str = "micropython", to: str = "flash") -> None:
     stock firmware comes back, without a power cycle. Either way the USB
     device goes away, so nothing waits for the board after it has accepted
     the command.
+
+    `firmware` is what runs on the board now; None asks the board
+    (`detect_firmware`), so a board left on either firmware reboots.
     """
     if to not in REBOOT_TARGETS:
         raise ValueError(f"to must be one of {REBOOT_TARGETS}, got {to!r}")
+    if firmware is not None and firmware not in FIRMWARES:
+        raise ValueError(f"firmware must be one of {FIRMWARES}, got {firmware!r}")
     link = link_from_url(url)
     try:
+        if firmware is None:
+            firmware = detect_firmware(link)
+            print("the board runs %s" % firmware)
         if firmware == "picosdk":
             fw = FirmwareLink(link)
             fw.sync()
@@ -894,7 +955,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--frames",
         type=int,
         help="stream mode: stop after enough bytes for N frames, assuming "
-        "640x480@60 timing (800x525 clocks) plus one frame of margin; frame "
+        "640x480@60 timing (800x525 clocks) plus two frames of margin; frame "
         "and window modes: stop after N complete pictures",
     )
     capture_parser.add_argument(
@@ -914,7 +975,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_parser.add_argument(
         "--edge", choices=["falling", "rising"], default=None,
         help="project-clock edge to sample (default: falling in stream mode, "
-        f"where outputs have long settled; {FRAME_EDGE} in frame/window modes, "
+        f"where outputs have long settled; {FRAME_EDGE} in frame/window/rle modes, "
         "measured at 25 MHz)",
     )
     capture_parser.add_argument("--desc", default="", help="note to store in the header")
@@ -925,7 +986,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="stream: every sample, at a clock the USB link can carry "
         "(~750 kHz RP2350, ~60 kHz RP2040); frame: whole frames at the "
         "project's real clock, sent between frames; window: the same, "
-        "--window-lines lines per frame (default stream)",
+        "--window-lines lines per frame; rle: every sample, run-length "
+        "encoded by the PIO, as fast as the picture's runs let the link "
+        "keep up (default stream)",
     )
     capture_parser.add_argument(
         "--vga-mode",
@@ -940,23 +1003,49 @@ def build_parser() -> argparse.ArgumentParser:
         help="--firmware picosdk on an ASIC board: select the project at this "
         "mux index (the stock SDK's tt.shuttle.<name>.count) before capturing; "
         "the selection does not survive the switch to the capture firmware. "
-        "Never on an FPGA board, where the mux reset line erases the FPGA",
+        "Never on an FPGA board, where the mux reset line erases the FPGA: "
+        "refused for one named by --board, the link (a bridge address, Pi name "
+        "or tunnel port) or the bench Pi this runs on, or when they disagree",
+    )
+    capture_parser.add_argument(
+        "--board",
+        choices=sorted(WELLAND),
+        default=None,
+        help="the bench board at the other end of the link (default: the one "
+        "whose Pi this is, if any), so what it cannot take is refused before "
+        "the board is touched: --asic-index on an FPGA board",
     )
     capture_parser.add_argument(
         "--ui-in",
         type=lambda s: int(s, 0),
         default=None,
         help="drive the design's ui_in with this value (the SDK is switched "
-        "to ASIC_RP_CONTROL for the capture and put back afterwards); "
+        "to ASIC_RP_CONTROL for the capture and put back however it ends); "
         "default: leave the board's inputs alone",
     )
     capture_parser.add_argument(
         "--sample-delay",
         type=int,
         default=0,
-        help="frame/window modes: system clocks to wait after --edge before "
+        help="frame/window/rle modes: system clocks to wait after --edge before "
         "reading uo_out, to sample where it is stable at a real VGA clock "
         "(default 0)",
+    )
+    capture_parser.add_argument(
+        "--rle-mask",
+        type=int,
+        choices=[-1, 0, 1],
+        default=-1,
+        help="rle mode: 1 = one-instruction sample under SHIFTCTRL.IN_COUNT "
+        "(RP2350), 0 = two instructions through the OSR (any RP2), -1 = the "
+        "board picks (default -1)",
+    )
+    capture_parser.add_argument(
+        "--rle-oneshot",
+        action="store_true",
+        help="rle mode: fill the two --buf-words buffers once at full speed, "
+        "then send them -- one unbroken stretch at a clock the link could "
+        "never stream",
     )
     capture_parser.add_argument(
         "--window-lines",
@@ -984,8 +1073,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reboot_parser.add_argument("link", help="serial:/dev/ttyACM0 or ws://host:8765/serial")
     reboot_parser.add_argument(
-        "--firmware", choices=FIRMWARES, default="micropython",
-        help="what runs on the board now (default micropython)",
+        "--firmware", choices=FIRMWARES, default=None,
+        help="what runs on the board now (default: ask it -- the capture "
+        "firmware's hello, then the raw REPL)",
     )
     reboot_parser.add_argument(
         "--to", choices=REBOOT_TARGETS, default="flash",
@@ -1047,8 +1137,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 window_lines=args.window_lines,
                 sample_delay=args.sample_delay,
                 ui_in=args.ui_in,
+                rle_mask=args.rle_mask,
+                rle_oneshot=args.rle_oneshot,
                 firmware=args.firmware,
                 asic_index=args.asic_index,
+                board=args.board,
             )
         except ConsumerClosed:
             # The normal end of a pull: the pipeline stopped reading. The
@@ -1077,6 +1170,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             # left to say is why it stopped.
             return _failed("capture", exc)
         if stats.error or stats.timed_out:
+            return 1
+        if args.mode == "rle" and stats.rxstall:
+            # A lost word puts every later pair out of step, so the board
+            # stopped there (rle_rp2.py, RX STALLS ARE FATAL): what was
+            # written is good, but the capture did not finish.
+            print(
+                "rx stall: the RX FIFO overflowed and the RLE capture stopped there",
+                file=sys.stderr,
+            )
+            return 1
+        if stats.board_error:
+            # The board's own reason (a MemoryError for the buffers, a
+            # refused clock), not the no-clock-edge guess below.
+            print("board error: %s" % stats.board_error, file=sys.stderr)
             return 1
         if stats.samples == 0:
             print(

@@ -208,6 +208,24 @@ int vgacap_trace_slow(vgacap_trace_writer_t *t, uint64_t v) {
     return slow_rare(t, v);
 }
 
+// repeat2's slow path: its two pushes, written out. The last sample is the
+// current run's value with the clock bit before clk_expect's.
+int vgacap_trace_repeat2_slow(vgacap_trace_writer_t *t) {
+    if (t->impl->failed) return -1;
+    if (t->run == 0)   // only before the first sample
+        return fail(t, "sample %llu: vgacap_trace_repeat2 before the first sample", (unsigned long long)t->n);
+    uint64_t last = t->cur | (t->clk_expect ^ t->clk_mask);
+    if (vgacap_trace_push(t, last ^ t->clk_mask)) return -1;
+    return vgacap_trace_push(t, last);
+}
+
+// push2's slow path: its two pushes. A failed push leaves the writer as it
+// was but failed, so the second, which would return -1, is skipped.
+int vgacap_trace_push2_slow(vgacap_trace_writer_t *t, uint64_t v0, uint64_t v1) {
+    if (vgacap_trace_push(t, v0)) return -1;
+    return vgacap_trace_push(t, v1);
+}
+
 // Stops the thread (after it has written every block handed to it), closes
 // the file and frees everything. Returns -1 if closing the file failed.
 static int teardown(vgacap_trace_writer_t *t, int write_seek_table, char *msg, size_t msglen) {
