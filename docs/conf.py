@@ -67,10 +67,13 @@ root_doc = "docs/index"
 def markdown_files():
     """Every Markdown file git tracks or would track, so a new page builds
     before it is committed and nothing .gitignore'd is read."""
-    listed = subprocess.run(
+    result = subprocess.run(
         ["git", "-C", str(REPO), "ls-files", "--cached", "--others", "--exclude-standard",
-         "--", "*.md"], capture_output=True, text=True, check=True).stdout.split("\n")
-    return sorted(f for f in listed if f and (REPO / f).is_file())
+         "--", "*.md"], capture_output=True, text=True)
+    if result.returncode:
+        raise SystemExit(f"the docs build reads its page list from git, which failed in "
+                         f"{REPO}: {result.stderr.strip()}")
+    return sorted(f for f in result.stdout.split("\n") if f and (REPO / f).is_file())
 
 
 include_patterns = [
