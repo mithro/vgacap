@@ -15,6 +15,14 @@
 name: ci
 on: [push, pull_request]
 
+env:
+  # raspberrypi/utils' piolib, at the commit vgacap-rp1 was proven with on
+  # pi-sw2-p4 (capture-rp1/README.md). The c job compiles the tool against
+  # it; the pytest jobs build capture-rp1/print_programs.c against its
+  # headers, and python/tests/test_rp1_sampler.py fails rather than skips
+  # under CI without it.
+  PIOLIB_COMMIT: 05e8808e84ed99b168b14a4025dddb9118fa1c17
+
 jobs:
   c:
     name: C libraries, no GStreamer
@@ -49,10 +57,9 @@ jobs:
       - run: ctest --test-dir build-off --output-on-failure -LE perf
       # The RP1 (Pi 5) capture tool cannot run here, but it must keep
       # compiling against the piolib it was proven with on pi-sw2-p4
-      # (capture-rp1/README.md); -Werror so a warning is a failure.
+      # (capture-rp1/README.md); -Werror so a warning is a failure. The
+      # default target builds vgacap-rp1-programs too.
       - name: vgacap-rp1 compiles against piolib
-        env:
-          PIOLIB_COMMIT: 05e8808e84ed99b168b14a4025dddb9118fa1c17
         run: |
           git init -q utils
           git -C utils remote add origin https://github.com/raspberrypi/utils.git
@@ -135,6 +142,13 @@ jobs:
         run: |
           ! command -v gst-launch-1.0
           test ! -e build/libgstvgacap.so
+      - name: piolib, for the RP1 sampler test
+        run: |
+          git init -q utils
+          git -C utils remote add origin https://github.com/raspberrypi/utils.git
+          git -C utils fetch -q --depth 1 origin "$PIOLIB_COMMIT"
+          git -C utils checkout -q FETCH_HEAD
+          echo "VGACAP_PIOLIB=$PWD/utils/piolib" >> "$GITHUB_ENV"
       - run: uv run pytest -q
 
   gstreamer:
@@ -160,7 +174,8 @@ jobs:
             xvfb \
             gir1.2-gstreamer-1.0 \
             python3-gi \
-            strace
+            strace \
+            iverilog
       # What each package is for, so a future trim can be reasoned about:
       #   libgstreamer1.0-dev, libgstreamer-plugins-base1.0-dev
       #       the headers and .pc files gst/CMakeLists.txt looks for
@@ -190,20 +205,33 @@ jobs:
       #       from a real pipeline instead of gst-launch
       #   strace                        the test that proves no signal is sent
       #                                 to a reaped process group
+      #   iverilog                      Icarus, which simulates the committed
+      #                                 rtl/vgacap_raw_framer.v (the file a
+      #                                 yosys-only flow uses); this is the one
+      #                                 job that runs it, so the skip guard
+      #                                 below covers it too
       - run: cmake -S . -B build && cmake --build build -j
       - name: the plugin must have been built here
         run: test -e build/libgstvgacap.so
       - run: ctest --test-dir build --output-on-failure -LE perf
+      - name: piolib, for the RP1 sampler test
+        run: |
+          git init -q utils
+          git -C utils remote add origin https://github.com/raspberrypi/utils.git
+          git -C utils fetch -q --depth 1 origin "$PIOLIB_COMMIT"
+          git -C utils checkout -q FETCH_HEAD
+          echo "VGACAP_PIOLIB=$PWD/utils/piolib" >> "$GITHUB_ENV"
       # pyproject's testpaths covers python/tests and gst/tests, so one run
       # is both suites. A skip is a pass to pytest, so the plugin and
       # hardware-check tests skipping here -- a missing package, a plugin
-      # that failed to load -- would go unnoticed; -rs lists every skip and
-      # the next step refuses any in those suites.
+      # that failed to load -- would go unnoticed, and so would the RTL
+      # framer's (no migen, no iverilog); -rs lists every skip and the next
+      # step refuses any in those suites.
       - name: pytest
         env:
           GST_PLUGIN_FEATURE_RANK: ximagesink:MAX
         run: |
           set -o pipefail
           xvfb-run -a uv run pytest -q -rs 2>&1 | tee pytest.log
-      - name: nothing GStreamer-dependent was skipped
-        run: "! grep -E '^SKIPPED .*(gst/tests/|test_hil.py)' pytest.log"
+      - name: nothing GStreamer- or Icarus-dependent was skipped
+        run: "! grep -E '^SKIPPED .*(gst/tests/|test_hil.py|test_rtl_raw_framer.py)' pytest.log"
