@@ -82,15 +82,14 @@ With `UV_NO_DEV=1`, `ttcap png` needs `uv sync --extra synth`.
 ## `ttcap demo`: a board in, video out
 
 ```sh
-uv run ttcap demo --board fpga-1 --design tt_um_vga_pattern \
+uv run ttcap demo --link serial:/dev/ttyACM0 \
     --clock-hz 60000 --seconds 60 --outdir video          # PNGs + video/capture.mkv
-uv run ttcap demo --board fpga-1 --clock-hz 500000 --outdir live --window --serve 8080
-uv run ttcap demo --board fpga-1 --clock-hz 500000 --outdir dry --dry-run   # just the pipeline
+uv run ttcap demo --link serial:/dev/ttyACM0 --clock-hz 500000 --outdir live --window --serve 8080
+uv run ttcap demo --link serial:/dev/ttyACM0 --clock-hz 500000 --outdir dry --dry-run   # just the pipeline
 ```
 
-`--board fpga-1` names a board on the Welland bench; see
-[Reaching a Welland board](#reaching-a-welland-board-bench-access-needed), or use `--link` for
-a board of your own.
+On the Welland bench, `--board SLUG` replaces `--link`; see
+[Reaching a Welland board](#reaching-a-welland-board-bench-access-needed).
 
 One capture feeds every output, through a `tee`:
 
@@ -170,8 +169,9 @@ never left holding a shared bench board.
 
 Before running against a bench board, check its page on
 [tinytapeout.fpgas.online](https://tinytapeout.fpgas.online)
-(`/board/<slug>/status.json`) for other clients, and confirm the board's
-USB serial: boards move between ports.
+(`/board/<slug>/status.json`) for other clients, and confirm
+[the board's USB serial](boards.py) (`status.json` shows the live value):
+boards move between ports.
 
 The Welland bench is a shared set of Tiny Tapeout demo boards,
 listed on tinytapeout.fpgas.online. Each board is attached to its own
@@ -183,8 +183,7 @@ resolves it to a link:
 
 * **on the board's own Pi**, `serial:/dev/ttboard`. Stop the bridge first
   (`sudo systemctl stop fpgas-tt`), since it holds the device open, after
-  checking it has no clients
-  ([Running on shared boards](../../tools/README.md#running-on-shared-boards));
+  [checking it has no clients](#reaching-a-welland-board-bench-access-needed);
 * **anywhere else**, the bridge at `ws://10.21.2.<octet>:8765/serial`, which
   is on the bench network. The octet is the board's bench port number
   (7 for tt07, 34 for fpga-1). From a workstation that means an SSH
