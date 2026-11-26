@@ -78,7 +78,7 @@ Run-length capture on the stock firmware
 ([`ttcap capture --mode rle`](python/ttcap/README.md#run-length-capture)) was
 exact up to
 [25 MHz](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-11-24-pio-run-counting.md)
-with an FPGA breakout and
+in one-shot bursts (`--rle-oneshot`) with an FPGA breakout and
 [matched RAW capture at 100 kHz with an ASIC breakout](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-pio-rle-tt09).
 
 **Consumers and tools:**
