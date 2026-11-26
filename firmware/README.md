@@ -84,12 +84,14 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   clock GPIO 16, `rst_n` GPIO 14, `ui_in` GPIO 17..24. Captures use a PIO
   block whose GPIO window is moved to 16 (PIO1 by default, as on the
   MicroPython path; with nothing else loaded any block works).
-* **The firmware cannot select a design.** It runs instead of the stock
-  firmware, and the stock firmware is what knows the shuttle and loads FPGA
-  bitstreams. So the design has to be enabled with the stock firmware
-  first and still be there after the switch. With an FPGA breakout, that
+* **The firmware cannot load a bitstream or enable a design by name.** It
+  runs instead of the stock firmware, which knows the shuttle and loads
+  FPGA bitstreams. With an FPGA breakout, the design has to be enabled with
+  the stock firmware first and still be there after the switch, which
   relies on the iCE40 keeping its configuration while the RP2350 resets
-  into its bootloader and then into this firmware.
+  into its bootloader and then into this firmware. With an ASIC breakout,
+  the firmware selects the project by mux index instead (`asic_select`,
+  below).
 * **Verified on fpga-4 (2026-11-24)**: after BOOTSEL and this firmware,
   frame, window and streaming captures of `tt_um_vgacal_bars` were
   pixel-exact, so the iCE40 kept its configuration (tt-vga-capture
