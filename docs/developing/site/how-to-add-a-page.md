@@ -34,11 +34,11 @@ The build of [How to build the documentation site](how-to-build-docs.md) ends wi
 
 | Step | What you see | Likely cause | Fix |
 |---|---|---|---|
-| 2 | `rule 1.3: front matter is missing ...` | a key left out or empty | Add the key the message names |
+| 2 | `rule 10.14: front matter is missing ...` | a key left out or empty | Add the key the message names |
 | 3 | `rule 10.3: title ... is also the title of ...` | another page has the title | Choose a title that says what only this page covers |
 | 4 | `rule 10.5` or `rule 10.6` | a how-to heading missing or added | Use exactly the five headings |
 | 6 | `rule 10.9: drawing ... is not a light and dark pair` | an SVG shown with `![]()` or `<img>` alone | Show it with a `<picture>` element |
-| 7 | `rule 10.10` | the landing page has more than seven lines | Group the lines under a child landing page |
+| 7 | `rule 10.10: 8 sidebar entries under this page, over 7` | the landing page has more than seven lines | Group the lines under a child landing page |
 
 ## Next
 
