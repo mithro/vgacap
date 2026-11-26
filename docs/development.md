@@ -1,10 +1,13 @@
 # Developing vgacap
 
-Building, testing and CI. The [top-level README](../README.md) has the overview.
+How to build and test vgacap, and what CI checks.
 
 ## Building and testing
 
-The core libraries are C99 with no dependencies beyond libc.
+The core libraries are C99 with no dependencies beyond libc. The
+[GStreamer plugin](../gst/README.md) is optional: CMake builds it only when
+the GStreamer development files are present. The Python side runs under
+[uv](https://docs.astral.sh/uv/).
 
 ```sh
 cmake -S . -B build && cmake --build build
@@ -14,14 +17,19 @@ uv run pytest -q
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs three jobs on every push and pull request,
-on a pinned `ubuntu-24.04` image:
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs these jobs on
+every push and pull request, on a pinned `ubuntu-24.04` image:
 
-| job | what it proves |
-|---|---|
-| `c` | the C libraries and tools build and pass `ctest` on a machine with **no GStreamer** (`PKG_CONFIG_LIBDIR` is emptied), and the plugin is *skipped* there rather than failing the build |
-| `python` | the Python suite passes without GStreamer; plugin tests skip, `build/vgacap-frames` is built first because several tests compare against it |
-| `gstreamer` | with GStreamer installed (the apt list in the workflow says what each package is for), the plugin is built, and its `ctest` and both pytest suites (`python/tests`, `gst/tests`) run for real |
-
-The plugin is optional by design, so both configurations are tested. A
-change in what CI covers is a change to that file.
+| step | `c` | `firmware` | `mpy-module` | `python` | `gstreamer` |
+|---|---|---|---|---|---|
+| host CMake build | yes | no | yes | yes | yes |
+| [`vgacap-rp1`](../capture-rp1/README.md) against [piolib](https://github.com/raspberrypi/utils/tree/master/piolib) | yes | no | no | no | no |
+| piolib for the RP1 sampler test | no | no | no | yes | yes |
+| [`vgacap_fw.uf2`](../firmware/README.md) for the RP2350 | no | yes | no | no | no |
+| MicroPython unix port with the module | no | no | yes | no | no |
+| MicroPython rp2 port with the module | no | no | yes | no | no |
+| GStreamer installed | no | no | no | no | yes |
+| plugin built | no | no | no | no | yes |
+| Icarus (`iverilog`) for the RTL test | no | no | no | no | yes |
+| `ctest` | yes | no | no | no | yes |
+| `pytest` | no | no | [`test_mpy_module.py`](../python/tests/test_mpy_module.py) | all | all |
