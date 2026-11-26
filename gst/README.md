@@ -20,7 +20,7 @@ gst-inspect-1.0 vgadecode
 gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! \
     pngenc ! multifilesink location=frame-%04d.png
 
-# ...or straight off a board, through either link.
+# ...or straight off a board, through the bridge:
 gst-launch-1.0 vgacapbin \
     'uri="tt-ws://127.0.0.1:18034/serial?design=tt_um_vga_pattern&clock-hz=60000"' ! \
     videoconvert ! autovideosink
@@ -97,8 +97,7 @@ when the pipeline runs from elsewhere.
 
 On stop the element asks `ttcap` to finish its chunk and closing `TIME`
 chunk, waiting up to `stop-timeout` before closing the pipe and then
-killing the process group
-([how long a stop takes](../python/ttcap/README.md#stopping)).
+killing the process group.
 
 ### A live capture cannot be paused, only stopped
 
