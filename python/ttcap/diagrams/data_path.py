@@ -32,7 +32,8 @@ def draw(theme):
 
     # The microcontroller, holding the capture.
     s.rect(30, 128, 440, 362, c["chip"], c["chip"], rx=8)
-    s.label(50, 152, "RP2040 or RP2350, stock firmware", 14, c["chip_text"], "start", "bold")
+    s.label(44, 152, "RP2040 or RP2350", 14, c["chip_text"], "start", "bold")
+    s.label(44, 170, "stock firmware", 13, c["chip_text"], "start")
 
     # uo_out down into the PIO; the project clock up to the design.
     s.arrow([(CX, 64), (CX, 172)], c["sig"], 3)

@@ -33,19 +33,23 @@ The cost follows the picture, not the clock. For a 640x480 frame, which a stream
 | `tt_um_vgacal_grid` | 138100 | 132% |
 | `tt_um_vgacal_prbs` | 597966 | 570% |
 
-So a picture of large areas streams at a clock the link could never carry sample by sample, and a busy one is better streamed plainly. On the tt09 chip, 1.5 million samples of `tt_um_vga_clock` came in 82 KB, against 1.4 MB for a stream of about the same length ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-pio-rle-tt09)).
+So a picture of large areas streams at a clock the link could not carry sample by sample. A busy one is better streamed plainly. On the tt09 chip, 1.5 million samples of `tt_um_vga_clock` came in 82 KB, against 1.4 MB for a stream of about the same length ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-pio-rle-tt09)).
 
 ## Counting in the PIO
 
-The PIO program, [`mp/rle_rp2.py`](mp/rle_rp2.py), reads the pins once a project clock and compares them with the current run's value. Equal adds one to the run; different pushes the value and the run and starts a new run. Each path through the loop is five or six instructions long. The board adds back one clock to each run before it sends a buffer, because the loop does not count a run's first sample. A run that reaches 2^32 samples is sent as two pairs.
+The PIO program, [`mp/rle_rp2.py`](mp/rle_rp2.py), reads the pins once a project clock and compares them with the current run's value. Equal adds one to the run; different pushes the value and the run and starts a new run. Each path through the loop is five or six instructions when the sample takes one instruction, which only an RP2350 can do. It is one instruction longer when the sample takes two, which works on either chip; an RP2040 has run it only in the emulator ([#38](https://github.com/mithro/vgacap/issues/38)). 
+
+The loop does not count a run's first sample, so the board adds one to each run before it sends a buffer. A run that reaches 2^32 samples is sent as two pairs.
 
 ## Two ways to keep in step
 
-The program must take exactly one sample a clock. In the locked style, it waits for one clock edge and then counts system clocks: the system clock must be a whole multiple of the project clock, at least 6 times it. In the edge style, it waits for every clock edge, which needs no whole ratio but a slower project clock. The board picks locked when the ratio is whole and in range, and edge otherwise; its first report names the style and the ratio. On an RP2350, `ttcap` lets the firmware raise the system clock to 150 MHz, so a 25 MHz design gets a ratio of 6.
+The program must take exactly one sample a clock. In the locked style, it waits for one clock edge and then counts system clocks. The system clock must be a whole multiple of the project clock. It must be at least 6 times the project clock with a one-instruction sample, and 7 times with a two-instruction one.
+
+In the edge style, it waits for every clock edge, which needs no whole ratio but a slower project clock. The board picks locked when the ratio is whole and in range, and edge otherwise. Its first report names the style and the ratio. On an RP2350, `ttcap` lets the firmware raise the system clock to 150 MHz, so a 25 MHz design gets a ratio of 6.
 
 ## One burst at full speed
 
-`--rle-oneshot` has the board fill its two buffers once, with no sending between, and then send them. That gives an unbroken stretch at the design's real clock, however busy the picture, as long as the pairs fit in the buffers. On an FPGA breakout, one-shot bursts at 25 MHz matched the design exactly.
+`--rle-oneshot` has the board fill its two buffers once, with no sending between, and then send them. That gives an unbroken stretch at the design's real clock, however busy the picture. The stretch ends when the buffers are full of pairs. On an FPGA breakout, one-shot bursts at 25 MHz matched the design exactly.
 
 ## Why an RX stall ends the capture
 

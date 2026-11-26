@@ -13,7 +13,7 @@ review: 2027-05-27
 
 ## What you need
 
-- An RP2350 demo board running the stock firmware, set up as in [How to capture a stream from a demo board](how-to-capture-stream.md).
+- An RP2350 demo board running the stock firmware, set up as in [How to capture a stream from a demo board](how-to-capture-stream.md). On an RP2040 demo board, run-length capture has run only in the emulator ([#38](https://github.com/mithro/vgacap/issues/38)).
 - A stop limit in seconds or bytes: `--frames` does not apply, because a frame's size depends on its picture.
 
 ## Steps
@@ -50,11 +50,11 @@ bytes=82117 samples=1513243 chunks=7 seconds=15.619 overruns=0 dropped=0 rxstall
 |---|---|---|---|
 | 1 | `--frames does not apply to --mode rle` | `--frames` was given | use `--seconds` or `--max-bytes` |
 | 1 | `the capture firmware has no rle mode` | `--firmware` is not `micropython` | leave `--firmware` at its default |
-| 2 | `error=no exact rle style` | the board cannot count runs at this clock | pick a clock that divides its system clock in 6 or more |
+| 2 | `error=no exact rle style` | the board cannot count runs at this clock | pick a clock at most a sixth of the system clock with `--rle-mask 1`, a seventh with `0` |
 | 2 | `error=SHIFTCTRL.IN_COUNT not set` | the one-instruction sample is not available | add `--rle-mask 0` |
 | 3 | `rx stall: the RX FIFO overflowed`, exit 1 | pairs came faster than the link took them | lower `--clock-hz` or use `--rle-oneshot` |
 
-After an RX stall the board stops at once, so the file holds every pair up to the stall and nothing after it. `--rle-mask 1` reads a sample in one instruction on an RP2350, `0` in two on either chip, and `-1`, the default, lets the board choose.
+After an RX stall the board stops at once, so the file holds every pair up to the stall and nothing after it. `--rle-mask 1` reads a sample in one instruction, on an RP2350 only. `--rle-mask 0` reads it in two, on either chip; on an RP2040 that has run only in the emulator ([#38](https://github.com/mithro/vgacap/issues/38)). `-1`, the default, lets the board choose.
 
 ## Next
 

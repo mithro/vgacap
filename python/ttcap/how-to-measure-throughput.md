@@ -7,7 +7,7 @@ review: 2027-05-27
 
 # How to measure a demo board's link throughput
 
-**You want to know how many bytes a second your demo board sends over its link, which sets the fastest clock a stream keeps up with.**
+**You want the bytes a second your demo board sends over its link, which set the fastest clock a stream keeps up with.**
 
 `ttcap throughput` runs a pattern generator on the board, times the bytes that arrive, and checks each one. The project clock a stream can carry is the rate in bytes a second divided by the bytes one sample takes. It changes nothing on the board.
 

@@ -7,7 +7,7 @@ review: 2027-05-27
 
 # How to set a design's inputs during a capture
 
-**You want your design to start with a chosen value on its `ui_in` pins, such as the switch setting that picks its VGA mode, for one capture.**
+**You want your design to start one capture with a chosen value on its `ui_in` pins, such as the setting that picks its VGA mode.**
 
 `ttcap capture --ui-in VALUE` sets the inputs while the design is held in reset, so the design starts in the state they select. The board's input mode is put back however the capture ends. Without `--ui-in`, the board's inputs are left as they are.
 

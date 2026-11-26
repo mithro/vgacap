@@ -7,7 +7,7 @@ review: 2027-05-27
 
 # Capture on the demo board
 
-**This page explains how a capture with the stock firmware gets from a design's pins to a `.vgacap` file, and how samples can be lost on the way.**
+**How a capture with the stock firmware gets from a design's pins to a `.vgacap` file, and how samples can be lost on the way.**
 
 It is for someone who has run `ttcap capture` and wants to know what the board and the host do. It does not give the steps, which are on [How to capture a stream from a demo board](how-to-capture-stream.md), nor the stream's byte layout.
 

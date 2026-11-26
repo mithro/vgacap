@@ -57,8 +57,10 @@ Message is the start of what `ttcap png` prints. The other columns are as above.
 | Message | Exit | Cause | Fix |
 |---|---|---|---|
 | `png failed: cannot find vgacap-frames` | 1 | the C tools are not built | build them or pass `--vgacap-frames` |
-| `png failed: ... exited 2: no frame decoded` | 1 | the stream holds no complete frame | capture at least three frame periods |
+| `png failed: ... exited 2:` | 1 | `vgacap-frames` decoded no whole frame | capture at least three frame periods |
 | `png failed: Pillow is needed to write PNGs` | 1 | Pillow is not installed | run `uv sync --extra synth` |
+
+After `exited 2:` comes what `vgacap-frames` printed on its error output, or `no frame decoded` when it printed nothing.
 
 ## Demo
 

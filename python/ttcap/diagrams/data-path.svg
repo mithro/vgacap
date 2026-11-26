@@ -4,7 +4,8 @@
 <text x="250" y="33" font-size="16" fill="#1d2433" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">Tiny Tapeout design</text>
 <text x="250" y="53" font-size="13" fill="#5b6577" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">ASIC or FPGA breakout</text>
 <rect x="30" y="128" width="440" height="362" rx="8" fill="#2b3445" stroke="#2b3445" stroke-width="1.5"/>
-<text x="50" y="152" font-size="14" fill="#ffffff" text-anchor="start" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">RP2040 or RP2350, stock firmware</text>
+<text x="44" y="152" font-size="14" fill="#ffffff" text-anchor="start" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">RP2040 or RP2350</text>
+<text x="44" y="170" font-size="13" fill="#ffffff" text-anchor="start" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">stock firmware</text>
 <path d="M250 64 L250 172" fill="none" stroke="#1c64d4" stroke-width="3"/>
 <path d="M250 172 L245.2 162.1 L254.8 162.1 Z" fill="#1c64d4"/>
 <text x="260" y="92" font-size="13" fill="#1c64d4" text-anchor="start" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">uo_out[7:0]</text>

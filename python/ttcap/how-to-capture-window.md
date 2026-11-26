@@ -13,7 +13,7 @@ review: 2027-05-27
 
 ## What you need
 
-- A frame capture that works, as in [How to capture whole frames at the design's own clock](how-to-capture-frames.md).
+- An RP2350 demo board, where a frame capture works as in [How to capture whole frames at the design's own clock](how-to-capture-frames.md). On an RP2040 demo board, window capture has run only in the emulator ([#37](https://github.com/mithro/vgacap/issues/37)).
 - A design that draws the same picture on successive frames, or a reason to want a torn one.
 
 ## Steps
@@ -38,7 +38,7 @@ Step 2 prints a note such as this one, from a 640x480 design:
 note: each picture is assembled from 11 captured frames (48 of its 481 lines per frame): exact for a static design, torn for one that changes from frame to frame
 ```
 
-On an FPGA breakout, a 48-line window of `tt_um_vgacal_grid` at 25 MHz was pixel-identical to its reference ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-frame-capture-fpga4)). The same window of `tt_um_vgacal_counter`, which changes every frame, was torn as expected.
+On an FPGA breakout, a 48-line window of `tt_um_vgacal_grid` at 25 MHz was pixel-identical to its reference ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-frame-capture-fpga4)). The same window of `tt_um_vgacal_counter`, which changes every frame, was torn as expected. Window capture with an ASIC breakout has not been checked ([#41](https://github.com/mithro/vgacap/issues/41)).
 
 ## If it fails
 

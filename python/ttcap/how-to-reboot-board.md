@@ -31,11 +31,11 @@ review: 2027-05-27
    uv run ttcap reboot serial:/dev/ttyACM0 --firmware picosdk --to flash
    ```
 
-Without `--firmware`, `ttcap` asks the board which firmware runs: it waits two seconds for the vgacap firmware's `hello` reply, then takes the board for the stock firmware. `--to` is `flash` unless given. The stock firmware reboots through `machine.bootloader()` or `machine.reset()`, and the vgacap firmware through its `bootsel` and `reboot` commands.
+Without `--firmware`, `ttcap` asks the board which firmware runs. It waits two seconds for the vgacap firmware's `hello` reply, and otherwise takes the board for the stock firmware. `--to` is `flash` unless given. The stock firmware reboots through `machine.bootloader()` or `machine.reset()`, and the vgacap firmware through its `bootsel` and `reboot` commands. `--to flash` on the stock firmware has no recorded run on hardware ([#40](https://github.com/mithro/vgacap/issues/40)).
 
 ## Check
 
-Each step prints `rebooting to bootsel` or `rebooting to flash` and exits 0. After step 1 the board appears as a USB drive, and `lsusb` lists `Raspberry Pi RP2350 Boot`. After step 2 the board's serial device answers `ttcap probe` again ([How to probe a demo board](how-to-probe-board.md)). Both were run on the tt09 board on its own Pi ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-picosdk-firmware-fpga4)).
+Each step prints `rebooting to bootsel` or `rebooting to flash` and exits 0. After step 1 the board appears as a USB drive, and `lsusb` lists `Raspberry Pi RP2350 Boot`. After step 2 the board's serial device answers `ttcap probe` again ([How to probe a demo board](how-to-probe-board.md)). Both steps were run on the fpga-4 and tt09 boards, each on its own Pi ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-picosdk-firmware-fpga4)).
 
 ## If it fails
 

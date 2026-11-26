@@ -9,7 +9,7 @@ review: 2027-05-27
 
 **You want a capture to flow into another program as it arrives, such as a GStreamer pipeline, rather than into a file.**
 
-`ttcap capture --out -` writes the stream to standard output and every message to standard error. This page pipes it into GStreamer's `vgadecode`; `ttcap demo` builds such a pipeline for you ([How to make a video of a design with ttcap demo](how-to-make-video.md)).
+`ttcap capture --out -` writes the stream to standard output and every message to standard error. This page pipes it into GStreamer's `vgadecode`. `ttcap demo` builds such a pipeline for you ([How to make a video of a design with ttcap demo](how-to-make-video.md)).
 
 ## What you need
 
@@ -29,7 +29,7 @@ review: 2027-05-27
 
 3. In the same terminal, press Ctrl-C once when you have enough frames, and the board finishes its chunk and the stream ends.
 
-`--seconds 0` with no other limit is allowed only with `--out -`, where Ctrl-C stops the run. The first Ctrl-C asks the board to stop at the end of its DMA buffer: about 22 ms on an RP2350 at 750 kHz, and 137 ms on an RP2040 at 60 kHz, at the default `--buf-words`. A second Ctrl-C stops the capture at once and loses the board's closing report. A program that stops reading ends the capture the same clean way.
+`--seconds 0` with no other limit is allowed only with `--out -`, where Ctrl-C stops the run. The first Ctrl-C asks the board to stop at the end of its DMA buffer. At the default `--buf-words` that takes about 22 ms on an RP2350 at 750 kHz, and 137 ms on an RP2040 at 60 kHz. A second Ctrl-C stops the capture at once and loses the board's closing report. A program that stops reading ends the capture the same clean way.
 
 ## Check
 

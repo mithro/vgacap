@@ -55,7 +55,7 @@ capture finished after 13.9s (gst-launch exit 0)
 | 2 | `warning: --clock-hz N is above` | the clock is above the measured ceiling | lower `--clock-hz`, or accept overruns |
 | 3 | `nothing was captured`, exit 3 | no frame closed before the end | raise `--seconds` to three frame periods or more |
 
-`--force` deletes only the earlier run's `frame-*.png` files and `capture.mkv`, and names them. The clock warning appears with `--board`, where the demo knows the board: the ceilings are 60 kHz on an RP2040 demo board and 750 kHz on an RP2350 one. Every message is on [ttcap exit codes and messages](reference-exit-codes.md#demo).
+`--force` deletes only the earlier run's `frame-*.png` files and `capture.mkv`, and names them. The clock warning appears only with `--board`, where the demo knows the board. Its ceilings are 60 kHz on an RP2040 demo board and 750 kHz on an RP2350 one. Every message is on [ttcap exit codes and messages](reference-exit-codes.md#demo).
 
 ## Next
 

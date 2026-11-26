@@ -43,8 +43,10 @@ wrote 2 png(s)
 | Step | What you see | Likely cause | Fix |
 |---|---|---|---|
 | 2 | `png failed: cannot find vgacap-frames` | the C tools are not built | run `cmake --build build` or pass `--vgacap-frames` |
-| 2 | `png failed: ... exited 2: no frame decoded` | the capture holds no whole frame | capture at least three frame periods |
+| 2 | `png failed: ... exited 2:` | `vgacap-frames` decoded no whole frame | capture at least three frame periods |
 | 2 | `png failed: Pillow is needed to write PNGs` | Pillow is not installed | run `uv sync --extra synth` |
+
+After `exited 2:` comes what `vgacap-frames` printed on its error output, or `no frame decoded` when it printed nothing.
 
 ## Next
 

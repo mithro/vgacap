@@ -13,7 +13,7 @@ review: 2027-05-27
 
 ## What you need
 
-- An RP2350 demo board running the stock firmware, set up as in [How to capture a stream from a demo board](how-to-capture-stream.md).
+- An RP2350 demo board running the stock firmware, set up as in [How to capture a stream from a demo board](how-to-capture-stream.md). On an RP2040 demo board, frame capture has run only in the emulator ([#37](https://github.com/mithro/vgacap/issues/37)).
 - A design whose timing is one of the base modes `--vga-mode` lists on [ttcap commands and options](reference-commands.md).
 - The design's pixel clock, which is the clock `--clock-hz` sets.
 
@@ -49,7 +49,7 @@ note: each picture is assembled from 2 captured frames (451 of its 481 lines per
 | 2 | `rxstall=1` | samples were lost inside a capture, so its picture is wrong | capture again |
 | 3 | stray pixels at colour edges | the sample point is where `uo_out` changes | try `--edge falling --sample-delay 1` |
 
-The sample point was swept on an FPGA breakout at 25 MHz: rising edge with no delay and falling edge with one cycle of delay were both exact ([sweep](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-frame-capture-fpga4/README.md#what-it-took-in-the-order-the-board-taught-it)).
+The sample point was swept on an FPGA breakout at 25 MHz. The rising edge with no delay was exact, and so was the falling edge with one cycle of delay ([sweep](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-frame-capture-fpga4/README.md#what-it-took-in-the-order-the-board-taught-it)).
 
 ## Next
 
