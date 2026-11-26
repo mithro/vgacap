@@ -302,6 +302,79 @@ def test_unsupported_instructions_are_refused_not_guessed():
         rp2.StateMachine(4, program(rp2))
 
 
+# -- instructions the PIO run-length program added --------------------------
+
+
+def _sm_with(board, build, in_base, pio=0):
+    rp2 = board.modules()["rp2"]
+    machine = board.modules()["machine"]
+    return rp2.StateMachine(4 * pio, build(rp2), in_base=machine.Pin(in_base)), board.blocks[pio].sms[0]
+
+
+def _mov_isr_pins(rp2):
+    @rp2.asm_pio(push_thresh=32)
+    def p():
+        mov(isr, pins)  # noqa: F821
+        push(noblock)  # noqa: F821
+
+    return p
+
+
+def test_mov_from_pins_reads_32_pins_from_in_base_round_the_window():
+    # RP2040 datasheet 3.4.8: `mov` from PINS uses the IN mapping, 32 pins
+    # from IN_BASE wrapping modulo 32. Pad 3 is uo_out bit 0 and pad 1 a
+    # constant 1, so with in_base 3 the constant lands at bit 30; bit 29
+    # is the clock pad (GPIO 0), high in the first half of the period.
+    wave = Waveform(bytes([1]), uo_gpios=[3], clk_gpio=0, period=4, constants={1: 1})
+    board = Board(wave, chip="rp2040")
+    sm, pio_sm = _sm_with(board, _mov_isr_pins, 3)
+    sm.active(1)
+    board.advance(2)
+    assert pio_sm.rx[0] == 1 | (1 << 29) | (1 << 30)
+
+
+def test_in_count_masks_mov_from_pins_on_rp2350_only():
+    wave = Waveform(bytes([0xA5]), uo_gpios=list(range(33, 41)), clk_gpio=16, period=4,
+                    constants={41: 1, 17: 1})
+    board = Board(wave)
+    mem32 = board.modules()["machine"].mem32
+    board.modules()["rp2"].PIO(1).gpio_base(16)
+    sm, pio_sm = _sm_with(board, _mov_isr_pins, 33, pio=1)
+    shiftctrl = 0x50300000 + 0xD0
+    mem32[shiftctrl | 0x2000] = 8  # the atomic SET alias
+    assert mem32[shiftctrl] & 0x1F == 8
+    sm.active(1)
+    board.advance(2)
+    assert pio_sm.rx == [0xA5]
+
+    other = Board(wave, chip="rp2040")
+    with pytest.raises(BoardError, match="RP2040"):
+        other.modules()["machine"].mem32[(0x50200000 + 0xD0) | 0x2000] = 8
+
+
+def test_a_nonblocking_push_to_a_full_fifo_drops_the_word_and_sets_rxstall():
+    # RP2040 datasheet, FDEBUG.RXSTALL: "also set when a nonblocking PUSH
+    # to a full FIFO took place, in which case the state machine has
+    # dropped data".
+    wave = Waveform(b"\0", uo_gpios=[], clk_gpio=0, period=4)
+    board = Board(wave)
+
+    def build(rp2):
+        @rp2.asm_pio()
+        def p():
+            set(x, 7)  # noqa: F821
+            in_(x, 32)  # noqa: F821
+            push(noblock)  # noqa: F821
+
+        return p
+
+    sm, pio_sm = _sm_with(board, build, 0)
+    sm.active(1)
+    board.advance(3 * 6)
+    assert pio_sm.rx == [7, 7, 7, 7]
+    assert board.blocks[0].fdebug & 1
+
+
 @pytest.mark.parametrize("ratio", [1.5, 4.0])
 def test_the_overrun_count_covers_every_lost_buffer(monkeypatch, ratio):
     # Ground truth from the emulator: words the DMA wrote into the buffers,
