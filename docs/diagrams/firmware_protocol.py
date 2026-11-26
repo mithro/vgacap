@@ -21,15 +21,15 @@ MARGIN = 16
 THEMES = {
     "light": dict(bg="#ffffff", ink="#1d2433", muted="#5b6577", cmd="#1c64d4",
                   reply="#14845a", data="#f2620c", data_fill="#fff2e8", data_edge="#f8b48a",
-                  lane="#9aa3b5", band="#f3f5f9", head_fill="#eaf1fd", head_edge="#9dbcef"),
+                  lane="#9aa3b5", band="#f3f5f9", end="#5b6577", head_fill="#eaf1fd", head_edge="#9dbcef"),
     "dark": dict(bg="#131416", ink="#e6e9ef", muted="#a3acbd", cmd="#6ea8ff",
                  reply="#4cc790", data="#ff8a3d", data_fill="#2e1d10", data_edge="#7a4520",
-                 lane="#5d6578", band="#1b1e24", head_fill="#15233b", head_edge="#34507e"),
+                 lane="#5d6578", band="#1b1e24", end="#a3acbd", head_fill="#15233b", head_edge="#34507e"),
 }
 
-HOST_X, FW_X = 150, 610          # the two lifelines
+HOST_X, FW_X = 112, 432          # the two lifelines
 ROW = 30                          # one message
-W = FW_X + 150
+W = FW_X + 70 + MARGIN
 
 # (phase, kind, label, dashed): kind is cmd (host to firmware), reply
 # (firmware to host) or data (a chunk, firmware to host).
@@ -52,7 +52,7 @@ SEQUENCE = [
     ("capture", "data", "FRAM  picture 0", False),
     ("capture", "data", "FRAM  picture 1", False),
     ("capture", "data", "TIME  frames=2 stalls=0 ...", False),
-    ("capture", "data", "DONE", False),
+    ("capture", "end", "DONE", False),
     ("teardown", "cmd", "clock hz=0", False),
     ("teardown", "reply", "ok clock_hz=0 ...", False),
 ]
@@ -82,12 +82,12 @@ def draw(theme: str) -> str:
         'chunks, then the clock stopped.</desc>')
     add(f"""<style>
   .head {{ font-size: 15px; font-weight: 600; fill: {c['ink']}; }}
-  .phase {{ font-size: 12px; font-weight: 700; fill: {c['muted']}; letter-spacing: 0.04em; }}
-  .msg {{ font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
+  .phase {{ font-size: 10.5px; font-weight: 700; fill: {c['muted']}; letter-spacing: 0.04em; }}
+  .msg {{ font-size: 13.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
   .legend {{ font-size: 12.5px; fill: {c['ink']}; }}
 </style>""")
     add("<defs>")
-    for kind in ("cmd", "reply", "data"):
+    for kind in ("cmd", "reply", "data", "end"):
         mw = 2.4 if kind == "data" else 4
         add(f'<marker id="m-{kind}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="{mw}" '
             f'markerHeight="{mw}" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" '
@@ -104,11 +104,13 @@ def draw(theme: str) -> str:
         if True:
             add(f'<rect x="{MARGIN}" y="{y0}" width="{W - 2 * MARGIN}" height="{y1 - y0}" '
                 f'rx="6" fill="{c["band"]}"/>')
-        text(MARGIN + 10, (y0 + y1) / 2 + 4, phase, "phase")
+        ty = (y0 + y1) / 2
+        add(f'<text x="{MARGIN + 14}" y="{ty}" class="phase" text-anchor="middle" '
+            f'transform="rotate(-90 {MARGIN + 14} {ty})">{phase}</text>')
 
     # lifeline heads and lines
     for x, name in ((HOST_X, "ttcap (host)"), (FW_X, "vgacap firmware")):
-        add(f'<rect x="{x - 80}" y="{head_y}" width="160" height="{head_h}" rx="8" '
+        add(f'<rect x="{x - 70}" y="{head_y}" width="140" height="{head_h}" rx="8" '
             f'fill="{c["head_fill"]}" stroke="{c["head_edge"]}" stroke-width="1.25"/>')
         text(x, head_y + 27, name, "head", "middle")
         add(f'<line x1="{x}" y1="{head_y + head_h}" x2="{x}" y2="{bottom}" stroke="{c["lane"]}" '
@@ -119,10 +121,12 @@ def draw(theme: str) -> str:
         x1, x2 = (HOST_X, FW_X - 4) if kind == "cmd" else (FW_X, HOST_X + 4)
         width = 4 if kind == "data" else 1.75
         dash = ' stroke-dasharray="6 4"' if dashed else ""
+        if kind == "end":
+            dash = ' stroke-dasharray="2 3"'
         add(f'<line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" stroke="{c[kind]}" '
             f'stroke-width="{width}"{dash} marker-end="url(#m-{kind})"/>')
         if kind == "data":
-            tw = 7.6 * len(label) + 18
+            tw = 8.2 * len(label) + 18
             add(f'<rect x="{mid - tw / 2}" y="{y - 11}" width="{tw}" height="22" rx="4" '
                 f'fill="{c["data_fill"]}" stroke="{c["data_edge"]}" stroke-width="1"/>')
             text(mid, y + 4.5, label, "msg", "middle", fill=c["ink"])
@@ -131,13 +135,14 @@ def draw(theme: str) -> str:
 
     # legend
     ly = bottom + 24
-    items = (("cmd", "command"), ("reply", "reply line"), ("data", "chunk"))
-    x = mid - 190
+    items = (("cmd", "command"), ("reply", "reply"), ("data", "chunk"), ("end", "end marker"))
+    x = MARGIN + 20
     for kind, label in items:
         add(f'<line x1="{x}" y1="{ly}" x2="{x + 32}" y2="{ly}" stroke="{c[kind]}" '
-            f'stroke-width="{4 if kind == "data" else 1.75}" marker-end="url(#m-{kind})"/>')
+            f'stroke-width="{4 if kind == "data" else 1.75}"'
+            f'{chr(32) + "stroke-dasharray=" + chr(34) + "2 3" + chr(34) if kind == "end" else ""} marker-end="url(#m-{kind})"/>')
         text(x + 40, ly + 4.5, label, "legend")
-        x += 40 + 7.4 * len(label) + 40
+        x += 40 + 7.4 * len(label) + 22
     add("</svg>")
     return "\n".join(out) + "\n"
 

@@ -96,25 +96,20 @@ def draw(theme: str) -> str:
     arrow(CX, py + 30, py + 46, "data", 2.5)
     py += 48
     part(parts_x, py, 180, 30, "DMA, 2 channels")
-    split = py + 30 + 14
-    bw, gap = 150, 40
+    # the arena: one SRAM block, used as two buffers (stream) or one window (frame)
+    ar_y = py + 30 + 16
+    arrow(CX, py + 30, ar_y - 2, "data", 2.5)
+    AW = 336
+    rect(CX - AW / 2, ar_y, AW, 92, c["data_fill"], c["data_edge"], rx=6)
+    text(CX, ar_y + 20, "440 KB arena", "part")
+    bw, gap = 136, 36
     lx, rx = CX - gap / 2 - bw, CX + gap / 2
-    buf_y = split + 16
-    ends = []
-    for bx in (lx, rx):
-        ends.append(bx + bw / 2)
-    add(f'<path d="M{CX} {py + 30} L{CX} {split} M{ends[0]} {split} L{ends[1]} {split}" '
-        f'fill="none" stroke="{c["data"]}" stroke-width="2.5"/>')
-    for e in ends:
-        arrow(e, split, buf_y - 2, "data", 2.5)
-    part(lx, buf_y, bw, 42, "2 buffers", "stream")
-    part(rx, buf_y, bw, 42, "440 KB arena", "frame")
-    add(f'<circle cx="{CX}" cy="{buf_y + 21}" r="13" fill="{c["part"]}" stroke="{c["part_edge"]}"/>')
-    text(CX, buf_y + 25.5, "or", "part")
-    join = buf_y + 42 + 14
-    for e in ends:
-        add(f'<line x1="{e}" y1="{buf_y + 42}" x2="{e}" y2="{join}" stroke="{c["data"]}" stroke-width="2.5"/>')
-    add(f'<line x1="{ends[0]}" y1="{join}" x2="{ends[1]}" y2="{join}" stroke="{c["data"]}" stroke-width="2.5"/>')
+    buf_y = ar_y + 34
+    part(lx, buf_y, bw, 44, "2 buffers", "stream")
+    part(rx, buf_y, bw, 44, "1 window", "frame")
+    add(f'<circle cx="{CX}" cy="{buf_y + 22}" r="13" fill="{c["part"]}" stroke="{c["part_edge"]}"/>')
+    text(CX, buf_y + 26.5, "or", "part")
+    join = ar_y + 92
     arrow(CX, join, join + 14, "data", 2.5)
     py = join + 16
     part(parts_x, py, 180, 30, "TinyUSB serial port")
@@ -169,8 +164,8 @@ def draw(theme: str) -> str:
         f'role="img" aria-labelledby="t d">',
         '<title id="t">The vgacap firmware data path</title>',
         '<desc id="d">uo_out from the design on the breakout enters PIO block 1 of the RP2350B, '
-        'then its RX FIFO and two DMA channels, into two buffers for a stream or one 440 KB arena '
-        'for a frame, then out of the TinyUSB serial port over USB to ttcap, which writes a '
+        'then its RX FIFO and two DMA channels, into a 440 KB arena used as two buffers for a stream '
+        'or one window for a frame, then out of the TinyUSB serial port over USB to ttcap, which writes a '
         '.vgacap file.</desc>',
         f"""<style>
   .title {{ font-size: 15px; font-weight: 600; fill: {c['ink']}; }}
