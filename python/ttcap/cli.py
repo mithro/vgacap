@@ -1080,7 +1080,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reboot_parser.add_argument(
         "--to", choices=REBOOT_TARGETS, default="flash",
-        help="flash: the firmware in flash, which is the stock firmware (default); "
+        help="flash: the firmware in flash (the stock firmware, unless another was flashed; default); "
         "bootsel: the RP2350's USB bootloader, which takes a UF2",
     )
 
