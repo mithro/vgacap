@@ -17,8 +17,8 @@ firmware back.
 
 | Path | What |
 |---|---|
-| `core/` | Portable C, no pico-sdk: the command loop and argument parser (`fw.c`, `fw_args.c`), the stream and frame engines (`fw.c`), the PIO program builder (`fw_pio.c`), the project clock plan (`fw_clock.c`), the board's pins (`fw_board.c`), and the HAL contract (`fw_hal.h`). |
-| `pico/` | The pico-sdk HAL (`hal_pico.c`), USB descriptors, TinyUSB config, `main.c`, and the board header `boards/tt_demoboard_v3.h`. |
+| `core/` | Portable C, no pico-sdk: the command loop and argument parser (`fw.c`, `fw_args.c`), the stream and frame engines (`fw_capture.c`, which the MicroPython module in `../mpy/` drives too), the PIO program builder (`fw_pio.c`), the project clock plan (`fw_clock.c`), the board's pins (`fw_board.c`), and the HAL contract (`fw_hal.h`). |
+| `pico/` | The pico-sdk HAL: the capture half shared with the MicroPython module (`hal_rp2.c`: PIO, DMA) and the firmware's own half (`hal_pico.c`: USB, clock, reset, ui_in, reboot); USB descriptors, TinyUSB config, `main.c`, and the board header `boards/tt_demoboard_v3.h`. |
 | `pio/` | The PIO programs' readable sources and pioasm's output for them. |
 | `sim/` | The HAL on a host: a simulated board (`hal_sim.c`) and `vgacap-fw-sim`, the firmware speaking the protocol on stdin/stdout. |
 | `CMakeLists.txt` | The firmware build: a pico-sdk project of its own. |

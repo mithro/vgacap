@@ -365,6 +365,32 @@ class RawRepl:
         self._read_until(b"OK", timeout)
         yield from self._chunk_stream(timeout)
 
+    def begin_chunks(self, code: str, timeout: float = 10.0) -> str | None:
+        """Run `code` and wait for the first byte of its output.
+
+        For a command that either streams chunks or refuses with an
+        exception before writing anything (the `vgacap` module's captures):
+        if its stdout ends at once, the command produced nothing and this
+        returns its stderr (also left in `last_stderr`), with the link at
+        the next prompt. Otherwise it returns None with that first byte
+        still to be read, and `chunk_stream()` reads the chunks.
+        """
+        self.last_stderr = ""
+        self._write(code.encode("utf-8") + CTRL_D)
+        self._read_until(b"OK", timeout)
+        first = self.read_exact(1, timeout)
+        if first == CTRL_D:
+            stderr_and_marker = self._read_until(CTRL_D, timeout)
+            self.last_stderr = stderr_and_marker[:-1].decode("utf-8")
+            self._read_until(b">", timeout)
+            return self.last_stderr
+        self._buf = first + self._buf
+        return None
+
+    def chunk_stream(self, timeout: float = 10.0) -> Iterator[tuple[bytes, bytes]]:
+        """The running command's chunks (after `begin_chunks()`), to its end."""
+        return self._chunk_stream(timeout)
+
     def _chunk_stream(self, timeout: float) -> Iterator[tuple[bytes, bytes]]:
         """Yield chunks until the end of the running command's stdout.
 

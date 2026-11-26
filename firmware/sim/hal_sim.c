@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "fw_board.h"
@@ -181,6 +182,15 @@ static void advance(double seconds) {
 }
 
 // ---- the host link --------------------------------------------------------------
+//
+// A front end that brings its own link (the MicroPython module's unix build,
+// mpy/: its link is a MicroPython stream) builds this file with
+// VGACAP_SIM_NO_LINK, which leaves out the hal_* link functions below and
+// has it report what it sends through sim_link_sent().
+
+void sim_link_sent(size_t len) { advance((double)len * S.cfg.seconds_per_byte); }
+
+#ifndef VGACAP_SIM_NO_LINK
 
 static int fd_fill(int timeout_ms) {
     if (S.fdbuf_pos < S.fdbuf_len) return 1;
@@ -246,7 +256,7 @@ static int write_piece(const uint8_t *buf, size_t len) {
         memcpy(S.out + S.out_len, buf, len);
         S.out_len += len;
     }
-    advance((double)len * S.cfg.seconds_per_byte);
+    sim_link_sent(len);
     return 0;
 }
 
@@ -262,6 +272,7 @@ int hal_write(const uint8_t *buf, size_t len) {
 
 void hal_flush(void) {}
 int hal_host_gone(void) { return S.cfg.host_gone_at > 0 && S.now >= S.cfg.host_gone_at; }
+#endif  // VGACAP_SIM_NO_LINK
 
 // ---- the board ------------------------------------------------------------------
 
@@ -311,14 +322,22 @@ void hal_idle(void) {
     if (S.framing && S.done_at < next) next = S.done_at;
     if (!S.fds && S.in_pos < S.in_len && S.in[S.in_pos].at < next) next = S.in[S.in_pos].at;
     if (S.cfg.host_gone_at > S.now && S.cfg.host_gone_at < next) next = S.cfg.host_gone_at;
-    if (next < INFINITY) {
+    if (!isinf(next)) {
         if (next > S.now) advance(next - S.now);
         return;
     }
+#ifdef VGACAP_SIM_NO_LINK
+    // Nothing to wait for but the front end's own link: let real time pass
+    // so that it can notice a stop byte.
+    struct timespec ms = { 0, 1000000 };
+    nanosleep(&ms, NULL);
+    return;
+#else
     if (S.fds) {
         fd_fill(100);  // nothing to wait for but the host
         return;
     }
+#endif
     fprintf(stderr, "sim: the firmware is waiting for something that can never happen\n");
     exit(3);
 }

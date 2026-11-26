@@ -186,6 +186,7 @@ class FakeBinaryBoard:
     MicroPython script source is exercised. Anything the script writes to
     `sys.stdout.buffer` becomes the command's stdout, framed exactly as a
     board frames it: ``OK<stdout>\\x04<stderr>\\x04>``.
+    A `modules` entry that is an exception makes importing that name raise it.
 
     `corrupt` is an optional callable taking the stdout `bytearray`; it may
     mutate it in place to simulate a lossy or corrupting link.
@@ -213,6 +214,9 @@ class FakeBinaryBoard:
 
         def _import(name, *args, **kwargs):
             if name in self._modules:
+                # An exception instead of a module: that import fails.
+                if isinstance(self._modules[name], BaseException):
+                    raise self._modules[name]
                 return self._modules[name]
             return real_import(name, *args, **kwargs)
 

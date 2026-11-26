@@ -32,12 +32,14 @@ endif()
 set(VGACAP_ROOT ${CMAKE_CURRENT_LIST_DIR}/..)
 set(FW_SOURCES
   ${CMAKE_CURRENT_LIST_DIR}/core/fw.c
+  ${CMAKE_CURRENT_LIST_DIR}/core/fw_capture.c
   ${CMAKE_CURRENT_LIST_DIR}/core/fw_args.c
   ${CMAKE_CURRENT_LIST_DIR}/core/fw_board.c
   ${CMAKE_CURRENT_LIST_DIR}/core/fw_clock.c
   ${CMAKE_CURRENT_LIST_DIR}/core/fw_pio.c
   ${CMAKE_CURRENT_LIST_DIR}/pico/main.c
   ${CMAKE_CURRENT_LIST_DIR}/pico/hal_pico.c
+  ${CMAKE_CURRENT_LIST_DIR}/pico/hal_rp2.c
   ${CMAKE_CURRENT_LIST_DIR}/pico/usb_descriptors.c
   ${VGACAP_ROOT}/src/stream/writer.c)
 
