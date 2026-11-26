@@ -1137,6 +1137,7 @@ docs = [
     { name = "furo" },
     { name = "linkify-it-py" },
     { name = "myst-parser" },
+    { name = "pytest" },
     { name = "sphinx", version = "9.0.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "sphinx", version = "9.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.12.*'" },
     { name = "sphinx", version = "9.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
@@ -1163,6 +1164,7 @@ docs = [
     { name = "furo", specifier = ">=2024.8" },
     { name = "linkify-it-py", specifier = ">=2" },
     { name = "myst-parser", specifier = ">=4" },
+    { name = "pytest", specifier = ">=8" },
     { name = "sphinx", specifier = ">=8.2" },
 ]
 
