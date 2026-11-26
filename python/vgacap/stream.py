@@ -293,9 +293,9 @@ def parse_header(payload: bytes) -> Header:
     if (spw != 0) if bits > 32 else not spw_ok:
         raise ValueError(f"bad samples_per_word {spw} for sample_bits {bits}")
     spc, cb, cf, rsv = payload[20:24]
-    clock = cb != CLOCK_BIT_NONE
-    if (spc not in (1, 2) or (clock and cb >= bits) or clock != (spc == 2) or cf > 1
-            or (not clock and cf) or rsv):
+    has_clock = cb != CLOCK_BIT_NONE
+    if (spc not in (1, 2) or (has_clock and cb >= bits) or has_clock != (spc == 2) or cf > 1
+            or (not has_clock and cf) or rsv):
         raise ValueError(f"bad VGCH v2 clock fields: samples_per_clock {spc}, clock_bit {cb}, "
                          f"clock_first {cf}, reserved {rsv}")
     return Header(version, bits, mode, clock, tuple(smap), spw, flags, payload[24:24 + dl].decode(),

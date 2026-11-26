@@ -23,8 +23,9 @@
 //                    the more significant; rgb6 = r<<4 | g<<2 | b; a signal
 //                    whose bits the map leaves out is not written), and with
 //                    --frames frame[31:0].
-// <scope> is --scope, else META(open)'s project with '/', '.', whitespace and
-// control characters made '_', else "trace".
+// <scope> is --scope (no whitespace, '/', '.' or '$'), else META(open)'s
+// project with '/', '.', '$', whitespace and control characters made '_',
+// else "trace".
 //
 // frame[31:0], from the runs of a frames.txt (any sampler's: its `sampler`
 // key names it, and a VCD says so in a $comment): frame k's number from its
@@ -41,12 +42,14 @@
 //
 // Beside FILE (its extension replaced, or added when it has none):
 //   .gtkw  GTKWave: [dumpfile] FILE's absolute path, [timestart] the first
-//          sample's time, groups "ports" and "decoded"; single bits @28,
-//          buses @22, frame @24
+//          sample's time, a zoom that fits the range in a 1000-pixel wave
+//          pane, groups "ports" and "decoded"; single bits @28, buses
+//          @22, frame @24
 //   .sucl  a Surfer command file (Surfer's docs/commands/README.md at
-//          v0.7.0): load_file, then scope_add_as_group for each scope;
-//          not written (with a note on stderr) when FILE's path has
-//          whitespace, which the command file cannot quote
+//          v0.7.0): load_file, then the .gtkw's signals in its order and
+//          groups (see write_sucl); not written (with a note on stderr)
+//          when FILE's path has whitespace, which the command file
+//          cannot quote
 //
 // Exit: 0; 2 for usage errors (nothing is written); 1 for I/O, trace and
 // frames.txt errors (a partly written FILE is removed).
@@ -65,6 +68,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -122,6 +126,7 @@ typedef struct exporter {
     uint64_t n_changes, n_times;   // for VGACAP_EXPORT_DEBUG
     uint64_t prev_v;      // the last sample's value, clock bit included
     int frame_sig;        // index of frame, or -1
+    uint64_t deps_all;    // the sample bits some signal is made of
     // A time's decimal digits above the last eight change rarely: cached.
     uint64_t hi_val; char hi_str[24]; size_t hi_len;
 } exporter_t;
@@ -317,7 +322,9 @@ static void sample_changes(exporter_t *x, uint64_t n, uint64_t v) {
     }
     // A signal changes exactly when one of its bits does (each is a
     // one-to-one function of its bits), and frame when the frame does.
-    const uint64_t delta = v ^ x->prev_v;
+    // Only bits some signal is made of count: with --no-clk the clock bit
+    // alone (a run the trace split at a chunk or block end) is no change.
+    const uint64_t delta = (v ^ x->prev_v) & x->deps_all;
     const int fch = x->frame_sig >= 0 && x->cur[x->frame_sig] != x->frame;
     if (!delta && !fch) return;
     time_to(x, n);
@@ -398,9 +405,9 @@ static int meta_get(const char *meta, const char *key, char *out, size_t outlen)
     return -1;
 }
 
-static int name_ok(const char *s) {   // a scope name: printable, no whitespace, '.' or '$'
+static int name_ok(const char *s) {   // a scope name: printable, no whitespace, '/', '.' or '$'
     if (!*s) return 0;
-    for (; *s; s++) if (!isgraph((unsigned char)*s) || *s == '.' || *s == '$') return 0;
+    for (; *s; s++) if (!isgraph((unsigned char)*s) || *s == '/' || *s == '.' || *s == '$') return 0;
     return 1;
 }
 
@@ -433,10 +440,27 @@ static int beside(char *dst, size_t len, const char *out, const char *ext) {
     return 0;
 }
 
-static int write_gtkw(const exporter_t *x, const char *path, const char *abs, const char *scope, uint64_t t0) {
+// GTKWave's zoom for a range of `span` ps across a wave pane of GTKWAVE_PANE
+// pixels. In the save file's "*" line (then the primary marker and the 26
+// named ones, -1 for none) the zoom z makes 200 pixels 2^-z time units (1 ps
+// here): GTKWave 3.3's calczoom, whose zoom-fit is z = -log2((last - first +
+// 1) / width * 200), never above 0. [size] makes the window wide enough for
+// that pane beside GTKWave's default tree and signal panes.
+#define GTKWAVE_PANE 1000.0
+static void gtkw_zoom(FILE *f, uint64_t span) {
+    double z = -log2(((double)span + 1.0) / GTKWAVE_PANE * 200.0);
+    if (z > 0) z = 0;
+    fprintf(f, "[size] 1425 800\n*%.6f -1", z);
+    for (int i = 0; i < 26; i++) fprintf(f, " -1");
+    fprintf(f, "\n");
+}
+
+static int write_gtkw(const exporter_t *x, const char *path, const char *abs, const char *scope, uint64_t t0,
+                      uint64_t t1) {
     FILE *f = fopen(path, "w");
     if (!f) return -1;
     fprintf(f, "[dumpfile] \"%s\"\n[timestart] %" PRIu64 "\n", abs, t0);
+    gtkw_zoom(f, t1 - t0);
     for (int g = 0; g < 2; g++) {
         const char *group = g ? "decoded" : "ports";
         fprintf(f, "@800200\n-%s\n", group);
@@ -454,11 +478,46 @@ static int write_gtkw(const exporter_t *x, const char *path, const char *abs, co
     return fclose(f) ? -1 : 0;
 }
 
-static int write_sucl(const char *path, const char *abs, const char *scope, int has_decoded) {
+// Surfer's name for displayed item i in item_focus: i in hex, its digits
+// written a to p.
+static void surfer_idx(char *out, unsigned i) {
+    char hex[16];
+    int n = snprintf(hex, sizeof hex, "%x", i);
+    for (int k = 0; k < n; k++) out[k] = (char)('a' + (hex[k] <= '9' ? hex[k] - '0' : hex[k] - 'a' + 10));
+    out[n] = 0;
+}
+
+// The Surfer command file: the signals in the .gtkw's order, in groups
+// "ports" and "decoded". scope_add_as_group would sort a scope's variables
+// by name, so each is added by name: the group's first variable is added
+// and grouped (group_marked groups the focused item), then, with that
+// variable focused, the rest are added, each going after the one before
+// (Surfer 0.7.0 inserts after the focused item and moves on with the
+// insert). Items are numbered as displayed: a group, then its members.
+// Surfer shows the time from 0 to the file's end either way, so there is
+// no zoom command.
+static int write_sucl(const exporter_t *x, const char *path, const char *abs, const char *scope) {
     FILE *f = fopen(path, "w");
     if (!f) return -1;
-    fprintf(f, "load_file %s\nscope_add_as_group %s\n", abs, scope);
-    if (has_decoded) fprintf(f, "scope_add_as_group %s.decoded\n", scope);
+    fprintf(f, "load_file %s\n", abs);
+    unsigned shown = 0;   // items displayed so far
+    for (int g = 0; g < 2; g++) {
+        int first = -1, last = -1;
+        for (int i = 0; i < x->nsig; i++)
+            if (x->sig[i].decoded == g) { if (first < 0) first = i; last = i; }
+        if (first < 0) continue;
+        const char *sub = g ? ".decoded" : "";
+        char idx[16];
+        fprintf(f, "variable_add %s%s.%s\n", scope, sub, x->sig[first].name);
+        surfer_idx(idx, shown);
+        fprintf(f, "item_focus %s\ngroup_marked %s\n", idx, g ? "decoded" : "ports");
+        surfer_idx(idx, shown + 1);   // the variable, now inside its group
+        fprintf(f, "item_focus %s\n", idx);
+        for (int i = first + 1; i <= last; i++)
+            if (x->sig[i].decoded == g) fprintf(f, "variable_add %s%s.%s\n", scope, sub, x->sig[i].name);
+        fprintf(f, "item_unfocus\n");
+        shown += 1 + (unsigned)(last - first + 1);
+    }
     return fclose(f) ? -1 : 0;
 }
 
@@ -516,36 +575,41 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--to")) { if (parse_u64(v, &to)) return usage("--to wants a clock, not '%s'", v); have_to = 1; }
         else if (!strcmp(a, "--frames")) frames = v;
         else if (!strcmp(a, "--scope")) {
-            if (!name_ok(v)) return usage("--scope wants a name without whitespace, '.' or '$', not '%s'", v);
+            if (!name_ok(v)) return usage("--scope wants a name without whitespace, '/', '.' or '$', not '%s'", v);
             scope_arg = v;
         } else return usage("unknown option '%s'", a);
     }
     if (!trace || !out || !format) return usage("TRACE, --format and --out are required");
 
     bin8_init();
+    // Every exit from here on goes through `done`, which frees what was made.
+    int status = 1;
+    exporter_t *x = NULL;
+    vgaout_frame_runs_t fr;
+    memset(&fr, 0, sizeof fr);
     char err[512] = "";
     vgacap_trace_reader_t *rd = vgacap_trace_open(trace, err, sizeof err);
-    if (!rd) { fprintf(stderr, PROG ": %s\n", err); return 1; }
+    if (!rd) { fprintf(stderr, PROG ": %s\n", err); goto done; }
     const vgacap_trace_info_t *info = vgacap_trace_info(rd);
     const vgacap_header_t *h = &info->header;
-    exporter_t *x = calloc(1, sizeof *x);
-    if (!x) { fprintf(stderr, PROG ": out of memory\n"); return 1; }
+    x = calloc(1, sizeof *x);
+    if (!x) { fprintf(stderr, PROG ": out of memory\n"); goto done; }
     x->fst = !strcmp(format, "fst");
     x->clk = -1;
     x->spc = h->samples_per_clock ? h->samples_per_clock : 1;
     x->hz = h->clock_hz;
     const char *dbg = getenv("VGACAP_EXPORT_DEBUG");
     x->debug = dbg && !strcmp(dbg, "1");
-    if (!x->hz) { fprintf(stderr, PROG ": %s: the header has no clock_hz, so samples have no time\n", trace); return 1; }
+    if (!x->hz) { fprintf(stderr, PROG ": %s: the header has no clock_hz, so samples have no time\n", trace); goto done; }
 
     // The range, in samples.
     if (from > UINT64_MAX / x->spc || (have_to && to > UINT64_MAX / x->spc))
-        return usage("the range is past the trace's end");
+        { status = usage("the range is past the trace's end"); goto done; }
     uint64_t from_s = from * x->spc, to_s = have_to ? to * x->spc : info->samples;
     if (to_s > info->samples)
-        return usage("--to %" PRIu64 " is past the trace's end (%" PRIu64 " samples, %" PRIu64 " a clock)",
-                     to, info->samples, (uint64_t)x->spc);
-    if (from_s >= to_s) return usage("the range is empty (--from %" PRIu64 ", to sample %" PRIu64 ")", from, to_s);
+        { status = usage("--to %" PRIu64 " is past the trace's end (%" PRIu64 " samples, %" PRIu64 " a clock)",
+                     to, info->samples, (uint64_t)x->spc); goto done; }
+    if (from_s >= to_s) { status = usage("the range is empty (--from %" PRIu64 ", to sample %" PRIu64 ")", from, to_s); goto done; }
 
     // Signals.
     char layout[64] = "", project[1024] = "", scope[1024];
@@ -554,7 +618,7 @@ int main(int argc, char **argv) {
     if (tt && (h->sample_bits != 43 || h->clock_bit != 42 || h->clock_first != 0 || h->samples_per_clock != 2)) {
         fprintf(stderr, PROG ": %s: header disagrees with layout tt-um-43 (bits %u, clock bit %u, clock first %u, "
                 "%u samples a clock)\n", trace, h->sample_bits, h->clock_bit, h->clock_first, h->samples_per_clock);
-        return 1;
+        goto done;
     }
     if (tt) {
         if (!no_clk) { x->clk = x->nsig; add_field(x, "clk", 1, 42); }
@@ -587,19 +651,17 @@ int main(int argc, char **argv) {
         for (int i = 0; i < 6; i++) x->sig[x->nsig - 1].bit[i] = m[VGACAP_SIG_R1 + i];
     }
     #undef MAPPED
-    vgaout_frame_runs_t fr;
-    memset(&fr, 0, sizeof fr);
     if (frames) {
         FILE *ff = fopen(frames, "r");
-        if (!ff) { fprintf(stderr, PROG ": cannot open %s: %s\n", frames, strerror(errno)); return 1; }
+        if (!ff) { fprintf(stderr, PROG ": cannot open %s: %s\n", frames, strerror(errno)); goto done; }
         int rc = vgaout_read_frame_runs(ff, &fr, err, sizeof err);
         fclose(ff);
-        if (rc) { fprintf(stderr, PROG ": %s: %s\n", frames, err); return 1; }
+        if (rc) { fprintf(stderr, PROG ": %s: %s\n", frames, err); goto done; }
         for (const char *c = fr.sampler; *c; c++)
             if (!isalnum((unsigned char)*c) && !strchr("._-", *c)) {
-                fprintf(stderr, PROG ": %s: sampler '%s' is not a plain name\n", frames, fr.sampler); return 1;
+                fprintf(stderr, PROG ": %s: sampler '%s' is not a plain name\n", frames, fr.sampler); goto done;
             }
-        if (frame_events(x, &fr, err, sizeof err)) { fprintf(stderr, PROG ": %s: %s\n", frames, err); return 1; }
+        if (frame_events(x, &fr, err, sizeof err)) { fprintf(stderr, PROG ": %s: %s\n", frames, err); goto done; }
         add_sig(x, "frame", 32, 1, K_FRAME);
     }
     x->frame_sig = -1;
@@ -611,6 +673,7 @@ int main(int argc, char **argv) {
         case K_RGB6: for (int j = 0; j < 6; j++) s->deps |= 1ull << s->bit[j]; break;
         case K_FRAME: s->deps = 0; x->frame_sig = i; break;
         }
+        x->deps_all |= s->deps;
     }
     for (int i = 0; i < x->nsig; i++) {   // VCD ids '!' onwards: one character each
         x->sig[i].id[0] = (char)('!' + i); x->sig[i].id[1] = 0;
@@ -629,10 +692,10 @@ int main(int argc, char **argv) {
     time_init(x);
     time_to(x, from_s);
     uint64_t t0 = time_now(x);
-    if (t0 != vgacap_sample_time_ps(from_s, x->spc, x->hz)) { fprintf(stderr, PROG ": time step is wrong\n"); return 1; }
+    if (t0 != vgacap_sample_time_ps(from_s, x->spc, x->hz)) { fprintf(stderr, PROG ": time step is wrong\n"); goto done; }
     if (x->fst) {
         x->ctx = fstWriterCreate(out, 1);
-        if (!x->ctx) { fprintf(stderr, PROG ": cannot create %s\n", out); return 1; }
+        if (!x->ctx) { fprintf(stderr, PROG ": cannot create %s\n", out); goto done; }
         fstWriterSetPackType(x->ctx, FST_WR_PT_LZ4);
         fstWriterSetParallelMode(x->ctx, 1);   // compression on a thread of its own
         fstWriterSetTimescale(x->ctx, -12);
@@ -653,7 +716,11 @@ int main(int argc, char **argv) {
     } else {
         x->f = fopen(out, "wb");
         x->buf = malloc(VCD_BUF);
-        if (!x->f || !x->buf) { fprintf(stderr, PROG ": cannot create %s: %s\n", out, strerror(errno)); return 1; }
+        if (!x->f || !x->buf) {
+            fprintf(stderr, PROG ": cannot create %s: %s\n", out, strerror(errno));
+            if (x->f) { fclose(x->f); unlink(out); }
+            goto done;
+        }
         FILE *f = x->f;
         fprintf(f, "$version vgacap-export $end\n$timescale 1ps $end\n");
         if (frames) fprintf(f, "$comment frame: the frame starts of %s's frames.txt $end\n", fr.sampler);
@@ -696,9 +763,9 @@ int main(int argc, char **argv) {
         if (fclose(x->f) || e) {
             if (!why) { snprintf(whybuf, sizeof whybuf, "write error on %s: %s", out, strerror(errno)); why = whybuf; }
         }
-        free(x->buf);
+        free(x->buf); x->buf = NULL;
     }
-    if (why) { fprintf(stderr, PROG ": %s\n", why); unlink(out); return 1; }
+    if (why) { fprintf(stderr, PROG ": %s\n", why); unlink(out); goto done; }
     if (x->debug)
         fprintf(stderr, "blocks_read=%" PRIu64 " times=%" PRIu64 " changes=%" PRIu64 "\n",
                 after.blocks_decoded - before.blocks_decoded, x->n_times, x->n_changes);
@@ -706,17 +773,18 @@ int main(int argc, char **argv) {
     // The viewer files.
     char abs[PATH_MAX], gtkw[PATH_MAX + 8], sucl[PATH_MAX + 8];
     if (!realpath(out, abs) || beside(gtkw, sizeof gtkw, out, ".gtkw") || beside(sucl, sizeof sucl, out, ".sucl")) {
-        fprintf(stderr, PROG ": cannot name the files beside %s\n", out); return 1;
+        fprintf(stderr, PROG ": cannot name the files beside %s\n", out); goto done;
     }
-    int has_decoded = x->nsig && x->sig[x->nsig - 1].decoded;
-    if (write_gtkw(x, gtkw, abs, scope, t0)) { fprintf(stderr, PROG ": cannot write %s\n", gtkw); return 1; }
+    if (write_gtkw(x, gtkw, abs, scope, t0, time_now(x))) { fprintf(stderr, PROG ": cannot write %s\n", gtkw); goto done; }
     int ws = 0;
     for (const char *c = abs; *c; c++) ws |= isspace((unsigned char)*c) != 0;
     if (ws) fprintf(stderr, PROG ": note: no %s: a Surfer command file cannot name a path with whitespace\n", sucl);
-    else if (write_sucl(sucl, abs, scope, has_decoded)) { fprintf(stderr, PROG ": cannot write %s\n", sucl); return 1; }
+    else if (write_sucl(x, sucl, abs, scope)) { fprintf(stderr, PROG ": cannot write %s\n", sucl); goto done; }
 
+    status = 0;
+done:
     vgaout_frame_runs_free(&fr);
-    free(x->ev_n); free(x->ev_v); free(x);
+    if (x) { free(x->ev_n); free(x->ev_v); free(x->buf); free(x); }
     vgacap_trace_close(rd);
-    return 0;
+    return status;
 }

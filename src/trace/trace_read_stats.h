@@ -17,4 +17,9 @@ typedef struct vgacap_trace_read_stats {
 
 void vgacap_trace_read_stats(const vgacap_trace_reader_t *r, vgacap_trace_read_stats_t *out);
 
+// A test hook: nonzero makes this reader decode RUNS chunks with the generic
+// (unspecialised) body, so a test can compare it with the one specialised
+// on the value width. The two must deliver the same runs and errors.
+void vgacap_trace_set_generic_runs(vgacap_trace_reader_t *r, int on);
+
 #endif

@@ -101,7 +101,7 @@ static int read_fst(const char *path, changes_t *l) {
 
 // ---- VCD ----------------------------------------------------------------------
 
-typedef struct vvar { char id[16]; char name[2900]; unsigned width; } vvar_t;
+typedef struct vvar { char id[16]; char name[4096]; unsigned width; } vvar_t;   // room for scope, name and range tokens whole
 
 // Next whitespace-separated token of *p (advanced), into tok; 0 at the end.
 static int token(const char **p, char *tok, size_t len) {

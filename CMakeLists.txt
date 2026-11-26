@@ -7,6 +7,27 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 add_compile_options(-Wall -Wextra -Werror -Wshadow -Wconversion)
 include_directories(include)
+
+# Skylake-family x86-64 CPUs with the JCC-erratum microcode keep any 32-byte
+# block of code holding a jump that crosses or ends on a 32-byte boundary out
+# of the uop cache; the hot decode and sampler loops then run up to a third
+# slower, by where the linker happens to put them. The assembler can pad such
+# jumps with NOPs. It changes no instruction and no output. It goes into
+# CMAKE_C_FLAGS, not the compile options, so that third_party (which resets
+# its directory's options) gets it too.
+option(VGACAP_JCC_PAD "Pad x86-64 jumps away from 32-byte boundaries (-Wa,-mbranches-within-32B-boundaries)" ON)
+if(VGACAP_JCC_PAD)
+  set(VGACAP_JCC_FLAG "-Wa,-mbranches-within-32B-boundaries")
+  if(CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag("${VGACAP_JCC_FLAG}" VGACAP_HAVE_JCC_FLAG)
+  endif()
+  if(VGACAP_HAVE_JCC_FLAG)
+    string(APPEND CMAKE_C_FLAGS " ${VGACAP_JCC_FLAG}")
+  else()
+    message(STATUS "vgacap: VGACAP_JCC_PAD: ${VGACAP_JCC_FLAG} is not supported here (needs GNU or Clang on x86-64 and an assembler that takes it); building without it")
+  endif()
+endif()
 enable_testing()
 
 # Libraries. Each section is owned by one component; add sources in place.
@@ -118,6 +139,14 @@ if(VGACAP_HOST_EXTRAS)
   vgacap_add_test(test_trace_write)
   target_link_libraries(test_trace_write PRIVATE vgacap_trace)
   set_tests_properties(test_trace_write PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+  # GNU ld's --wrap sends the test's calls into the slow paths through
+  # counters, so a test can check that the inline fast paths are taken
+  # (the writer's own calls, inside trace_write.c, are not wrapped).
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang)$")
+    target_link_options(test_trace_write PRIVATE
+      "LINKER:--wrap=vgacap_trace_slow,--wrap=vgacap_trace_repeat2_slow,--wrap=vgacap_trace_push2_slow")
+    target_compile_definitions(test_trace_write PRIVATE VGACAP_TEST_WRAP_SLOW=1)
+  endif()
   # The trace reader: ranges, a rebuilt seek table, plain VGCH streams.
   vgacap_add_test(test_trace_read)
   target_link_libraries(test_trace_read PRIVATE vgacap_trace vgacap_zlib)

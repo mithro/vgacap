@@ -60,15 +60,25 @@ the trace. Times are in picoseconds, the sample's exact time. `--no-clk`
 leaves out `clk`, which otherwise changes every half clock and dominates the
 file. The VCD carries no date, so the same export gives the same bytes.
 
+With `--frames`, `frame` is -1 (all ones) before frame 0 and in gaps, by the
+rule in [docs/frames-format.md](../../docs/frames-format.md#framestxt).
+
 Beside the output the tool writes `<name>.gtkw`, a GTKWave save file that
-opens the output with the signals in two groups, and `<name>.sucl`, a Surfer
-command file: `load_file` the output, then `scope_add_as_group` for each
-scope. Surfer documents command files (`.sucl`, run with `--command-file`
-or `run_command_file`) and these commands in its
+opens the output with the signals in two groups (`ports`, `decoded`), zoomed
+so the whole exported range fits a 1000-pixel wave pane, and `<name>.sucl`,
+a Surfer command file that loads the output and adds the same signals in
+the same order and groups. Both name the output by its absolute path (the
+`.gtkw`'s `[dumpfile]` and the `.sucl`'s `load_file`), so they work from any
+directory but not after the files are moved. The `.sucl` adds each variable
+with `variable_add` and builds each group with `item_focus` and
+`group_marked` (`scope_add_as_group` would sort a scope's variables by name).
+Surfer 0.7.0 shows the time from 0 to the file's end, so a range far from 0
+needs zooming in by hand there. Surfer documents command files (`.sucl`, run with
+`--command-file` or `run_command_file`) and its commands in its
 [command reference at v0.7.0](https://gitlab.com/surfer-project/surfer/-/blob/v0.7.0/docs/commands/README.md)
 (also the example
 [`examples/counter.sucl`](https://gitlab.com/surfer-project/surfer/-/blob/v0.7.0/examples/counter.sucl)).
-That is the latest release; the Surfer version inside the pinned
-oss-cad-suite could not be checked from this host. The file uses only
-whole-scope commands, so it does not depend on how Surfer spells a bus's
-name. The trace format itself is [docs/trace-format.md](../../docs/trace-format.md).
+That is the latest release, and the files were checked by opening them in
+GTKWave 3.3.121 and Surfer 0.7.0; the Surfer version inside the pinned
+oss-cad-suite could not be checked from this host. The trace format itself
+is [docs/trace-format.md](../../docs/trace-format.md).

@@ -70,6 +70,9 @@ static int compress_one(struct vgacap_trace_impl *I, const uint8_t *src, size_t 
     size_t c = ZSTD_compress2(I->cctx, I->zbuf, I->zcap, src, n);
     if (ZSTD_isError(c)) { snprintf(msg, msglen, "zstd: %s", ZSTD_getErrorName(c)); return -1; }
     if (fwrite(I->zbuf, 1, c, I->f) != c) { snprintf(msg, msglen, "write: %s", strerror(errno)); return -1; }
+    // Push the frame out of the stdio buffer now: a killed writer keeps every
+    // block it finished, and this runs on the compressor thread, off the push path.
+    if (fflush(I->f) != 0) { snprintf(msg, msglen, "write: %s", strerror(errno)); return -1; }
     // The frame's own checksum (the low 32 bits of XXH64 of the block) is
     // the value the seek table records for it.
     size_t lr = ZSTD_seekable_logFrame(I->frames, (unsigned)c, (unsigned)n, le32(I->zbuf + c - 4));
@@ -203,6 +206,24 @@ int vgacap_trace_slow(vgacap_trace_writer_t *t, uint64_t v) {
         return 0;
     }
     return slow_rare(t, v);
+}
+
+// repeat2's slow path: its two pushes, written out. The last sample is the
+// current run's value with the clock bit before clk_expect's.
+int vgacap_trace_repeat2_slow(vgacap_trace_writer_t *t) {
+    if (t->impl->failed) return -1;
+    if (t->run == 0)   // only before the first sample
+        return fail(t, "sample %llu: vgacap_trace_repeat2 before the first sample", (unsigned long long)t->n);
+    uint64_t last = t->cur | (t->clk_expect ^ t->clk_mask);
+    if (vgacap_trace_push(t, last ^ t->clk_mask)) return -1;
+    return vgacap_trace_push(t, last);
+}
+
+// push2's slow path: its two pushes. A failed push leaves the writer as it
+// was but failed, so the second, which would return -1, is skipped.
+int vgacap_trace_push2_slow(vgacap_trace_writer_t *t, uint64_t v0, uint64_t v1) {
+    if (vgacap_trace_push(t, v0)) return -1;
+    return vgacap_trace_push(t, v1);
 }
 
 // Stops the thread (after it has written every block handed to it), closes

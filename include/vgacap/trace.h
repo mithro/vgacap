@@ -13,8 +13,11 @@
 // A simulation testbench calls vgacap_trace_push() once per sample (twice a
 // clock with samples_per_clock 2). The common case -- same value, clock bit
 // as expected, not at a block end -- is inline: no call, allocation or
-// syscall. Finished blocks are compressed and written by a thread of the
-// writer's own, double-buffered.
+// syscall. vgacap_trace_push2() takes a clock's two samples at once, and
+// vgacap_trace_repeat2() records a clock that repeats the last without its
+// values; both write exactly what the pushes they stand for would.
+// Finished blocks are compressed and written by a thread of the writer's
+// own, double-buffered.
 //
 // Host only (pthreads, zstd); not part of the board builds.
 #ifndef VGACAP_TRACE_H
@@ -33,7 +36,7 @@ extern "C" {
 #define VGACAP_TRACE_BLOCK_CLOCKS  (1ull << 24)
 #define VGACAP_TRACE_RUNS_MAX      1024u           // runs a vgacap_trace_read_runs batch holds at most
 
-// Fields above `impl` are read by the inline push; do not touch them.
+// Fields above `impl` are read and written by the inline calls; do not touch them.
 typedef struct vgacap_trace_writer {
     uint64_t cur;        // the current run's value, clock bit cleared
     uint64_t run;        // samples in the current run
@@ -57,10 +60,65 @@ int vgacap_trace_slow(vgacap_trace_writer_t *t, uint64_t v);       // not for ca
 // -1 once the writer has failed (a clock bit that breaks the alternation,
 // a bit at or above sample_bits, or an I/O error); every later push then
 // returns -1 too, and vgacap_trace_finish() reports why.
+//
+// The test is v ^ cur ^ clk_expect: cur never has the clock bit and
+// clk_expect has nothing else, so its clock bit is (v ^ clk_expect) & clk_mask
+// and its other bits are (v & ~clk_mask) ^ cur. It is 0 exactly when the
+// clock bit is as expected and the value is the current run's.
 static inline int vgacap_trace_push(vgacap_trace_writer_t *t, uint64_t v) {
-    if (((v ^ t->clk_expect) & t->clk_mask) | ((v & ~t->clk_mask) ^ t->cur) | (uint64_t)(t->n == t->limit))
+    if ((v ^ t->cur ^ t->clk_expect) | (uint64_t)(t->n == t->limit))
         return vgacap_trace_slow(t, v);
     t->run++; t->n++; t->clk_expect ^= t->clk_mask; return 0;
+}
+
+int vgacap_trace_repeat2_slow(vgacap_trace_writer_t *t);          // not for callers
+
+// Record samples n and n + 1 as repeats of the last sample pushed: exactly
+// vgacap_trace_push(t, last ^ clk) then vgacap_trace_push(t, last), where
+// `last` is the last sample's value (clock bit included) and clk is
+// 1 << clock_bit, or 0 when the header has no clock bit. With a clock bit,
+// the two samples hold the current run's value, the clock bit alternating
+// on from `last`. At samples_per_clock 2 and pair-aligned pushes (sample n
+// even), that is one more clock equal to the last: clk-low and clk-high
+// samples with the same pins, so the current run grows by 2. It is also
+// defined off the pairs (n odd), as the same two pushes. Without a clock
+// bit, it is `last` twice. (No trace without a clock bit can be created
+// today: the only layout, tt-um-43, has one.)
+//
+// A caller uses it when it knows, from its own state (for example the
+// model's raw port bytes), that the next two samples are these, without
+// building their values. The writer trusts it and does not check them.
+// It is valid only after at least one sample: at sample 0 there is no
+// `last`, so it fails the writer and returns -1. Otherwise it returns what
+// the two pushes would: 0, or -1 once the writer has failed. The file is
+// byte-identical to the one the two pushes would write; a block end inside
+// or at the pair splits the run there, as push does.
+//
+// Its fast path is one test: n <= limit always, so limit - n < 2 covers a
+// block end at sample n or n + 1, sample 0 (limit 0) and a failed writer
+// (limit == n). The current run then has at least one sample (only sample
+// 0 has none), so adding 2 to it is what the two pushes would do.
+static inline int vgacap_trace_repeat2(vgacap_trace_writer_t *t) {
+    if (t->limit - t->n < 2) return vgacap_trace_repeat2_slow(t);
+    t->run += 2; t->n += 2; return 0;
+}
+
+int vgacap_trace_push2_slow(vgacap_trace_writer_t *t, uint64_t v0, uint64_t v1);   // not for callers
+
+// Record samples n and n + 1: exactly vgacap_trace_push(t, v0) then
+// vgacap_trace_push(t, v1), with the same result and the same file (if
+// the first fails, so does the second, so it is not made). For a caller
+// that has both samples of a clock but cannot tell "unchanged" itself: the
+// two compares are one test. Valid anywhere, sample 0 included.
+//
+// The fast path: w = cur ^ clk_expect is the value sample n must have to
+// extend the run, and w ^ clk_mask sample n + 1's; limit - n < 2 as in
+// repeat2.
+static inline int vgacap_trace_push2(vgacap_trace_writer_t *t, uint64_t v0, uint64_t v1) {
+    uint64_t w = t->cur ^ t->clk_expect;
+    if ((v0 ^ w) | (v1 ^ w ^ t->clk_mask) | (uint64_t)(t->limit - t->n < 2))
+        return vgacap_trace_push2_slow(t, v0, v1);
+    t->run += 2; t->n += 2; return 0;
 }
 
 // Ends the last run, writes META(close) in the last block, the seek table,

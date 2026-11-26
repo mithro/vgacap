@@ -62,6 +62,7 @@ struct vgacap_trace_reader {
     size_t buf_len;
     char *open_meta, *close_meta;
     uint64_t clk;           // the clock bit's mask, or 0
+    int generic_runs;       // vgacap_trace_set_generic_runs
     vgacap_trace_read_stats_t stats;
     vgacap_reader_t sr;
 };
@@ -407,6 +408,7 @@ struct rd {
     vgacap_trace_runs_fn fn;
     void *user;
     int done, strict;
+    int generic;       // runs_fast takes its generic body (vgacap_trace_set_generic_runs)
     const char *what;
     uint64_t skip;     // RUN events the stream reader is to pass over
     size_t nb;         // runs in the batch
@@ -485,16 +487,57 @@ static int runs_fast_ok(const vgacap_reader_t *sr, uint32_t len) {
     return 1;
 }
 
-// The RUNS chunk at p (header included, 8 + len bytes in the buffer).
-// Returns 0 when it was decoded (or the read is done), leaving the stream
-// reader as runs_byte would; -1 when it breaks a rule: d->n is back at the
-// chunk's start, d->skip is the runs delivered from it, and the caller feeds
-// the chunk to the stream reader.
-static int runs_fast(vgacap_reader_t *sr, struct rd *d, const uint8_t *p, uint32_t len) {
+// put(d, v, run) for a pair runs_decode accepted, on its locals: 0 to go on,
+// 1 when the read is done or the batch function asked to stop (d->n and
+// d->nb are then stored, and runs_decode returns 0).
+static inline __attribute__((always_inline)) int runs_put(struct rd *d, vgacap_trace_run_t *out, uint64_t *np,
+                                                          size_t *nbp, uint64_t from, uint64_t to, uint64_t dclk,
+                                                          uint64_t v, uint64_t run) {
+    const uint64_t a = *np, e = a + run;
+    size_t nb = *nbp;
+    *np = e;
+    // The usual case: inside the range, a + run < to without the sum
+    // (run is never 0).
+    if (a >= from && a < to && run < to - a) {
+        out[nb].first_sample = a; out[nb].value = v; out[nb].run = run;
+        nb++;
+    } else {
+        if (e <= from) return 0;
+        if (a >= to) { d->done = 1; d->n = e; d->nb = nb; return 1; }
+        const uint64_t s0 = a > from ? a : from, t0 = e < to ? e : to;
+        out[nb].first_sample = s0;
+        out[nb].value = v ^ (((s0 - a) & 1) ? dclk : 0);
+        out[nb].run = t0 - s0;
+        nb++;
+        if (e >= to) { d->done = 1; d->n = e; d->nb = nb; return 1; }
+    }
+    if (nb == BATCH) {
+        d->n = e; d->nb = nb;
+        flush(d);
+        nb = 0;
+        if (d->done) return 1;
+    }
+    *nbp = nb;
+    return 0;
+}
+
+// The RUNS chunk at p (header included, 8 + len bytes in the buffer), its
+// values `vb` bytes wide. Returns 0 when it was decoded (or the read is
+// done), leaving the stream reader as runs_byte would; -1 when it breaks a
+// rule: d->n is back at the chunk's start, d->skip is the runs delivered
+// from it, and the caller feeds the chunk to the stream reader.
+//
+// runs_fast calls it with vb a constant and `wide` 1: then, while a pair's
+// worst case (vb value bytes and a ten-byte LEB128 run) is in the buffer,
+// one bounds test per pair does; the chunk's tail, and every pair when
+// `wide` is 0, takes the loop that tests each byte. Both loops apply the
+// same rules in the same order, so the fault and the runs before it are the
+// same either way.
+static inline __attribute__((always_inline)) int runs_decode(vgacap_reader_t *sr, struct rd *d, const uint8_t *p,
+                                                             uint32_t len, const unsigned vb, const int wide) {
     const vgacap_header_t *h = &sr->header;
     const uint8_t *q = p + 12, *end = p + 8 + (size_t)len;
     const uint32_t count = le32(p + 8);
-    const unsigned vb = (h->sample_bits + 7u) / 8u;
     if (count == 0 || len - 4u < (uint64_t)count * (vb + 1u)) return -1;
     const uint64_t mask = h->sample_bits >= 64 ? ~(uint64_t)0 : (((uint64_t)1 << h->sample_bits) - 1u);
     const uint64_t clk = h->clock_bit == VGACAP_CLOCK_BIT_NONE ? 0 : (uint64_t)1 << h->clock_bit;
@@ -512,6 +555,34 @@ static int runs_fast(vgacap_reader_t *sr, struct rd *d, const uint8_t *p, uint32
     // The clock bit of a pair's first sample: clock_first ^ (its sample & 1).
     uint64_t pos = sr->sample_pos, prev = 0;
     uint32_t done = 0;
+    if (wide) {
+        for (; done < count && (size_t)(end - q) >= vb + 10u; done++) {
+            const uint64_t value = le64(q) & vmask;   // vb + 10 >= 8 bytes are there
+            q += vb;
+            if ((value & bad_bits) || (done && value == prev)) goto bad;
+            uint64_t run;
+            uint8_t b = *q++;
+            if (b < 0x80u) {
+                run = b;
+            } else {
+                run = b & 0x7Fu;
+                // At most ten bytes: the tenth (k 9) above 1 is a fault,
+                // and every byte with 0x80 set is above 1.
+                for (unsigned k = 1;; k++) {
+                    b = *q++;
+                    if (k == 9 && b > 1u) goto bad;
+                    run |= (uint64_t)(b & 0x7Fu) << (7u * k);
+                    if (!(b & 0x80u)) break;
+                }
+            }
+            if (b == 0) goto bad;               // a zero run, or not minimally encoded
+            if (run > UINT64_MAX - pos) goto bad;   // would take n past 2^64 - 1
+            const uint64_t v = value | (cf ^ (clk & (0 - (pos & 1u))));
+            pos += run;
+            prev = value;
+            if (runs_put(d, out, &n, &nb, from, to, dclk, v, run)) return 0;
+        }
+    }
     for (; done < count; done++) {
         if ((size_t)(end - q) < vb + 1u) goto bad;
         uint64_t value = 0;
@@ -541,30 +612,7 @@ static int runs_fast(vgacap_reader_t *sr, struct rd *d, const uint8_t *p, uint32
         const uint64_t v = value | (cf ^ (clk & (0 - (pos & 1u))));
         pos += run;
         prev = value;
-        // put(d, v, run)
-        const uint64_t a = n, e = n + run;
-        n = e;
-        // The usual case: inside the range, a + run < to without the sum
-        // (run is never 0).
-        if (a >= from && a < to && run < to - a) {
-            out[nb].first_sample = a; out[nb].value = v; out[nb].run = run;
-            nb++;
-        } else {
-            if (e <= from) continue;
-            if (a >= to) { d->done = 1; d->n = n; d->nb = nb; return 0; }
-            const uint64_t s0 = a > from ? a : from, t0 = e < to ? e : to;
-            out[nb].first_sample = s0;
-            out[nb].value = v ^ (((s0 - a) & 1) ? dclk : 0);
-            out[nb].run = t0 - s0;
-            nb++;
-            if (e >= to) { d->done = 1; d->n = n; d->nb = nb; return 0; }
-        }
-        if (nb == BATCH) {
-            d->n = n; d->nb = nb;
-            flush(d);
-            nb = 0;
-            if (d->done) return 0;
-        }
+        if (runs_put(d, out, &n, &nb, from, to, dclk, v, run)) return 0;
     }
     d->n = n; d->nb = nb;
     if (q != end) goto bad;
@@ -586,6 +634,28 @@ bad:
     d->n = n0;
     d->skip = done;
     return -1;
+}
+
+// runs_decode specialised on the value width: vb a constant (tt-um-43's 43
+// bits are 6 bytes), so its shifts and masks are constants and fewer loop
+// values compete for registers. d->generic (a test hook) takes the generic
+// body with no specialisation and no wide loop.
+static int runs_fast(vgacap_reader_t *sr, struct rd *d, const uint8_t *p, uint32_t len) {
+    const unsigned vb = (sr->header.sample_bits + 7u) / 8u;
+    if (!d->generic) {
+        switch (vb) {
+        case 1: return runs_decode(sr, d, p, len, 1, 1);
+        case 2: return runs_decode(sr, d, p, len, 2, 1);
+        case 3: return runs_decode(sr, d, p, len, 3, 1);
+        case 4: return runs_decode(sr, d, p, len, 4, 1);
+        case 5: return runs_decode(sr, d, p, len, 5, 1);
+        case 6: return runs_decode(sr, d, p, len, 6, 1);
+        case 7: return runs_decode(sr, d, p, len, 7, 1);
+        case 8: return runs_decode(sr, d, p, len, 8, 1);
+        default: break;
+        }
+    }
+    return runs_decode(sr, d, p, len, vb, 0);
 }
 
 // Feeds p[0, n) through the stream reader, its RUNS chunks by runs_fast
@@ -635,6 +705,7 @@ int vgacap_trace_read_runs(vgacap_trace_reader_t *R, uint64_t from, uint64_t to,
     if (!d) { set_err(err, errlen, "out of memory"); return -1; }
     memset(d, 0, offsetof(struct rd, runs));
     d->from = from; d->to = to; d->clk = R->clk; d->fn = fn; d->user = user;
+    d->generic = R->generic_runs;
     int rc = 0;
     if (!R->info.compressed) {
         vgacap_reader_init(&R->sr, on_read, d);
@@ -679,6 +750,8 @@ int vgacap_trace_block_data(vgacap_trace_reader_t *R, uint32_t i, const uint8_t 
 }
 
 void vgacap_trace_read_stats(const vgacap_trace_reader_t *R, vgacap_trace_read_stats_t *out) { *out = R->stats; }
+
+void vgacap_trace_set_generic_runs(vgacap_trace_reader_t *R, int on) { R->generic_runs = on ? 1 : 0; }
 
 void vgacap_trace_close(vgacap_trace_reader_t *R) {
     if (!R) return;

@@ -15,6 +15,12 @@ ctest --test-dir build --output-on-failure
 uv run pytest -q
 ```
 
+`VGACAP_JCC_PAD` (default `ON`) assembles every C file, `third_party/`
+included, with `-Wa,-mbranches-within-32B-boundaries` (GCC or Clang on x86-64,
+when the assembler takes it; CMake checks and otherwise builds without). The
+Skylake-family JCC-erratum microcode slows loops whose jumps touch a 32-byte
+boundary; the flag adds NOP padding only, so outputs are unchanged.
+
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs these jobs on
