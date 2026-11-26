@@ -919,7 +919,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="board profile; auto asks the board for its GPIOMap (default)",
     )
     capture_parser.add_argument(
-        "--project", help="tt.shuttle macro to enable, e.g. tt_um_rejunity_vga"
+        "--project", help="tt.shuttle macro to enable, such as tt_um_rejunity_vga"
     )
     capture_parser.add_argument(
         "--design", help="FPGA boards: bitstream to enable, via the same tt.shuttle"
@@ -1080,7 +1080,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reboot_parser.add_argument(
         "--to", choices=REBOOT_TARGETS, default="flash",
-        help="flash: the firmware in flash, i.e. the stock firmware (default); "
+        help="flash: the firmware in flash, which is the stock firmware (default); "
         "bootsel: the RP2350's USB bootloader, which takes a UF2",
     )
 
