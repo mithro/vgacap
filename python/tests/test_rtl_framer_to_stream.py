@@ -55,3 +55,11 @@ def test_a_chunk_cut_short_writes_nothing(tmp_path):
 def test_a_chunk_the_framer_never_sends_is_refused():
     with pytest.raises(ValueError, match="not one the raw framer sends"):
         framer_to_stream.summary(b"META" + (4).to_bytes(4, "little") + b"x=1\n")
+
+
+def test_an_input_that_cannot_be_read_is_an_error(tmp_path, capsys):
+    rc = framer_to_stream.main([str(tmp_path / "missing.bin"), str(tmp_path / "out.vgacap")])
+
+    assert rc == 1
+    assert "framer_to_stream: " in capsys.readouterr().err
+    assert not (tmp_path / "out.vgacap").exists()

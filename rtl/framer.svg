@@ -1,47 +1,48 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="700" height="556" viewBox="0 0 700 556" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif">
-<rect x="0" y="0" width="700" height="556" fill="#ffffff"/>
-<rect x="12" y="58" width="676" height="440" rx="8" fill="none" stroke="#7d8799" stroke-width="1.5"/>
-<text x="674" y="80" font-size="14" fill="#5b6577" text-anchor="end" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">vgacap_raw_framer</text>
-<text x="172" y="18" font-size="13" fill="#1c64d4" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">sample[7:0]</text>
-<text x="282" y="18" font-size="13" fill="#1c64d4" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">sample_valid</text>
-<path d="M212 26 L212 94" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
-<path d="M206 92 L212 102 L218 92 Z" fill="#1c64d4"/>
-<rect x="82.0" y="102" width="260" height="54" rx="8" fill="#eaf1fd" stroke="#1c64d4" stroke-width="1.5"/>
-<text x="212" y="125" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold">pack 4 samples</text>
-<text x="212" y="144" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal">one 32-bit word</text>
-<path d="M212 156 L212 188" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
-<path d="M206 186 L212 196 L218 186 Z" fill="#1c64d4"/>
-<rect x="82.0" y="196" width="260" height="54" rx="8" fill="#eaf1fd" stroke="#1c64d4" stroke-width="1.5"/>
-<text x="212" y="219" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold">room for the whole chunk?</text>
-<text x="212" y="238" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal">checked at its first sample</text>
-<path d="M342.0 223 L394.0 223" fill="none" stroke="#c0392b" stroke-width="2.5"/>
-<path d="M392.0 217 L402.0 223 L392.0 229 Z" fill="#c0392b"/>
-<text x="372.0" y="215" font-size="12" fill="#c0392b" text-anchor="middle" font-weight="normal">no</text>
-<rect x="402.0" y="196" width="190" height="54" rx="8" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
-<text x="497.0" y="219" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold">drop the chunk</text>
-<text x="497.0" y="238" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal">add its samples to the total</text>
-<path d="M497.0 250 L497.0 386" fill="none" stroke="#c0392b" stroke-width="2.5"/>
-<path d="M491.0 384 L497.0 394 L503.0 384 Z" fill="#c0392b"/>
-<text x="505.0" y="324" font-size="12" fill="#c0392b" text-anchor="start" font-weight="normal">TIME chunk due</text>
-<path d="M212 250 L212 282" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
-<path d="M206 280 L212 290 L218 280 Z" fill="#1c64d4"/>
-<text x="220" y="276" font-size="12" fill="#1c64d4" text-anchor="start" font-weight="normal">yes</text>
-<rect x="82.0" y="290" width="260" height="64" rx="8" fill="#eaf1fd" stroke="#1c64d4" stroke-width="1.5"/>
-<text x="212" y="315" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold">FIFO</text>
-<text x="212" y="335" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal">fifo_words × 32 bits</text>
-<path d="M212 354 L212 386" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
-<path d="M206 384 L212 394 L218 384 Z" fill="#1c64d4"/>
-<rect x="82.0" y="394" width="510.0" height="74" rx="8" fill="#e7f6ef" stroke="#14845a" stroke-width="1.5"/>
-<text x="337.0" y="420" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold">send one byte a clock</text>
-<text x="337.0" y="441" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal">RAW header, words, then any TIME chunk</text>
-<path d="M212 468 L212 514" fill="none" stroke="#14845a" stroke-width="2.5"/>
-<path d="M206 512 L212 522 L218 512 Z" fill="#14845a"/>
-<text x="200" y="542" font-size="13" fill="#14845a" text-anchor="end" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">out_data[7:0]</text>
-<text x="224" y="542" font-size="13" fill="#14845a" text-anchor="start" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">out_valid</text>
-<path d="M362 522 L362 476" fill="none" stroke="#14845a" stroke-width="2"/>
-<path d="M356 478 L362 468 L368 478 Z" fill="#14845a"/>
-<text x="374" y="542" font-size="13" fill="#14845a" text-anchor="start" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">out_ready</text>
-<path d="M592.0 223 L632.0 223 L632.0 514" fill="none" stroke="#c0392b" stroke-width="2"/>
-<path d="M626.0 512 L632.0 522 L638.0 512 Z" fill="#c0392b"/>
-<text x="632.0" y="542" font-size="13" fill="#c0392b" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">dropped[31:0]</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="494" viewBox="0 0 440 494" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="440" height="494" fill="#ffffff"/>
+<rect x="2" y="46" width="436" height="388" rx="8" fill="none" stroke="#7d8799" stroke-width="1.5"/>
+<text x="428" y="66" font-size="13" fill="#5b6577" text-anchor="end" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">vgacap_raw_framer</text>
+<text x="111.0" y="16" font-size="13" fill="#1c64d4" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">sample[7:0]</text>
+<text x="111.0" y="32" font-size="13" fill="#1c64d4" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">sample_valid</text>
+<path d="M111.0 38 L111.0 78" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
+<path d="M105.0 76 L111.0 86 L117.0 76 Z" fill="#1c64d4"/>
+<rect x="16" y="86" width="190" height="52" rx="8" fill="#eaf1fd" stroke="#1c64d4" stroke-width="1.5"/>
+<text x="111.0" y="108" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold">pack 4 samples</text>
+<text x="111.0" y="126" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal">one 32-bit word</text>
+<path d="M111.0 138 L111.0 166" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
+<path d="M105.0 164 L111.0 174 L117.0 164 Z" fill="#1c64d4"/>
+<rect x="16" y="174" width="190" height="52" rx="8" fill="#eaf1fd" stroke="#1c64d4" stroke-width="1.5"/>
+<text x="111.0" y="196" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold">room for the chunk?</text>
+<text x="111.0" y="214" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal">at its first sample</text>
+<path d="M206 200 L244 200" fill="none" stroke="#c0392b" stroke-width="2.5"/>
+<path d="M242 194 L252 200 L242 206 Z" fill="#c0392b"/>
+<text x="229.0" y="192" font-size="12" fill="#c0392b" text-anchor="middle" font-weight="normal">no</text>
+<rect x="252" y="174" width="150" height="52" rx="8" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
+<text x="327.0" y="196" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold">drop the chunk</text>
+<text x="327.0" y="214" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal">add to the total</text>
+<path d="M282 226 L282 342" fill="none" stroke="#c0392b" stroke-width="2.5"/>
+<path d="M276 340 L282 350 L288 340 Z" fill="#c0392b"/>
+<text x="276" y="284" font-size="12" fill="#c0392b" text-anchor="end" font-weight="normal">TIME</text>
+<text x="276" y="300" font-size="12" fill="#c0392b" text-anchor="end" font-weight="normal">due</text>
+<path d="M111.0 226 L111.0 254" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
+<path d="M105.0 252 L111.0 262 L117.0 252 Z" fill="#1c64d4"/>
+<text x="119.0" y="250" font-size="12" fill="#1c64d4" text-anchor="start" font-weight="normal">yes</text>
+<rect x="16" y="262" width="150" height="52" rx="8" fill="#eaf1fd" stroke="#1c64d4" stroke-width="1.5"/>
+<text x="91.0" y="284" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold">FIFO</text>
+<text x="91.0" y="302" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal" font-family="ui-monospace, Menlo, Consolas, monospace">fifo_words</text>
+<path d="M91.0 314 L91.0 342" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
+<path d="M85.0 340 L91.0 350 L97.0 340 Z" fill="#1c64d4"/>
+<rect x="16" y="350" width="341.0" height="60" rx="8" fill="#e7f6ef" stroke="#14845a" stroke-width="1.5"/>
+<text x="186.5" y="375" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold">one byte a clock</text>
+<text x="186.5" y="394" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal">RAW chunks, then TIME</text>
+<path d="M91.0 410 L91.0 448" fill="none" stroke="#14845a" stroke-width="2.5"/>
+<path d="M85.0 446 L91.0 456 L97.0 446 Z" fill="#14845a"/>
+<text x="91.0" y="472" font-size="13" fill="#14845a" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">out_data[7:0]</text>
+<text x="91.0" y="488" font-size="13" fill="#14845a" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">out_valid</text>
+<path d="M211.0 456 L211.0 418" fill="none" stroke="#14845a" stroke-width="2"/>
+<path d="M205.0 420 L211.0 410 L217.0 420 Z" fill="#14845a"/>
+<text x="211.0" y="472" font-size="13" fill="#14845a" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">out_ready</text>
+<path d="M386 226 L386 448" fill="none" stroke="#c0392b" stroke-width="2"/>
+<path d="M380 446 L386 456 L392 446 Z" fill="#c0392b"/>
+<text x="438" y="472" font-size="13" fill="#c0392b" text-anchor="end" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">dropped[31:0]</text>
 </svg>

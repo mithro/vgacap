@@ -53,10 +53,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="the rate samples went into the framer, in hertz (default 0: unknown)")
     ap.add_argument("--desc", default="vgacap_raw_framer", help="the header's description")
     a = ap.parse_args(argv)
-    data = a.input.read_bytes()
     try:
+        data = a.input.read_bytes()
         raws, samples, dropped = summary(data)
-    except ValueError as e:
+    except (OSError, ValueError) as e:
         print(f"framer_to_stream: {a.input}: {e}", file=sys.stderr)
         return 1
     a.output.write_bytes(header_bytes(a.clock_hz, a.desc) + data)

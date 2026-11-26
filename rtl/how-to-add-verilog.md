@@ -27,7 +27,7 @@ The Verilog is generated from the Migen source, so it needs no Python to build. 
 6. On the host, save every byte the link delivers, in order, as `framer.bin`.
 7. On the host, run `python3 rtl/framer_to_stream.py framer.bin out.vgacap --clock-hz HZ`, with the sample rate as `HZ`, to write the stream.
 
-The instance for step 2, with `link_ready` standing for your link's ready signal:
+The instance for step 2, with `link_ready` standing for your link's ready signal. `dropped` needs a 32-bit wire: `wire [31:0] dropped;`.
 
 ```verilog
 vgacap_raw_framer framer (

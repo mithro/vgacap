@@ -71,6 +71,7 @@ The framer sends no `VGCH` header. [`framer_to_stream.py`](framer_to_stream.py) 
 | `version` | 1 |
 | `sample_bits` | 8 |
 | `samples_per_word` | 4 |
+| `mode` | 0: extclk |
 | `flags` | `VGACAP_FLAG_FIRST_SAMPLE_MSB` |
 | `signal_map` | the Tiny VGA Pmod on `uo_out` |
 | `clock_hz` | the sample rate: only the host knows it |
