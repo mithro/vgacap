@@ -74,6 +74,12 @@ if(VGACAP_HOST_EXTRAS)
   # raw clock-resolution frames and diagnostics of a trace.
   add_executable(vgacap-centre-dump tests/centre_dump.c)
   target_link_libraries(vgacap-centre-dump PRIVATE vgacap_sample)
+  # vgacap-export: a trace, or a clock range of it, as FST or VCD (and a
+  # .gtkw and a Surfer .sucl beside it). It reads the reader's stats
+  # (src/trace) for VGACAP_EXPORT_DEBUG.
+  add_executable(vgacap-export src/tools/vgacap_export.c)
+  target_include_directories(vgacap-export PRIVATE src/trace)
+  target_link_libraries(vgacap-export PRIVATE vgacap_sample vgacap_fst)
   # Test-only helper for python/tests/test_vgacap_sample.py: rewrites a plain
   # stream as a zstd trace through the writer (its block boundaries).
   add_executable(trace-recode tests/trace_recode.c)
@@ -136,6 +142,13 @@ if(VGACAP_HOST_EXTRAS)
   # outputs of a fixed run.
   add_executable(vgacap-outputs-dump tests/outputs_dump.c)
   target_link_libraries(vgacap-outputs-dump PRIVATE vgacap_sample)
+  # vgacap-export's FST against its VCD (also run by
+  # python/tests/test_vgacap_export.py on files it exports).
+  vgacap_add_test(test_export_fst)
+  target_link_libraries(test_export_fst PRIVATE vgacap_trace vgacap_fst)
+  target_compile_definitions(test_export_fst PRIVATE VGACAP_EXPORT_PATH="$<TARGET_FILE:vgacap-export>")
+  add_dependencies(test_export_fst vgacap-export)
+  set_tests_properties(test_export_fst PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
   # The frame hash methods.
   vgacap_add_test(test_hashes)
   target_link_libraries(test_hashes PRIVATE vgacap_sample)

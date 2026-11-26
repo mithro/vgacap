@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // frames.txt and frame_hashes.<method>.txt (src/sample/outputs.c). The
 // Python reader and byte-identical rewrite are in python/tests/test_framesfile.py.
+#define _POSIX_C_SOURCE 200809L   // fmemopen: the read tests keep their files in memory
 #include "harness.h"
 #include "vgacap/outputs.h"
 #include <stdint.h>
@@ -195,7 +196,101 @@ TEST(rejects_backwards_starts) {
     ASSERT_TRUE(rejects(&o));
 }
 
+// ---- vgaout_read_frame_runs ----
+
+// `text` as a FILE, read from memory.
+static FILE *text_file(const char *text) {
+    return fmemopen((void *)text, strlen(text), "r");
+}
+// A FILE in memory for vgaout_frames_txt to write and the reader to read back.
+static char membuf[1 << 16];
+static FILE *mem_file(void) {
+    memset(membuf, 0, sizeof membuf);
+    return fmemopen(membuf, sizeof membuf, "w+");
+}
+
+TEST(read_runs_from_writer) {   // the C writer's frames.txt, gap runs included, centre-v1 keys too
+    vgaout_frame_t fr[] = {F(-1, 0, 0), F(0, 1000, 0), F(0, 1100, 0), F(0, 1200, 0), F(1, 1300, 4), F(1, 1400, 4),
+                           F(-1, 0, 0), F(-1, 0, 0), F(0, 1700, 0)};
+    vgaout_t o; base(&o, fr, 9);
+    o.sampler = "centre-v1"; o.has_centre = 1; o.colour_changes_off_grid = UINT64_MAX;
+    FILE *f = mem_file(); ASSERT_TRUE(f);
+    ASSERT_TRUE(vgaout_frames_txt(f, &o) == 0);
+    fflush(f); fseek(f, 0, SEEK_SET);
+    long n = (long)strlen(membuf);
+    fclose(f); f = fmemopen(membuf, (size_t)n, "r"); ASSERT_TRUE(f);
+    vgaout_frame_runs_t r; char err[200] = "";
+    int rc = vgaout_read_frame_runs(f, &r, err, sizeof err);
+    fclose(f);
+    if (rc) fprintf(stderr, "  err: %s\n", err);
+    ASSERT_TRUE(rc == 0);
+    ASSERT_TRUE(strcmp(r.sampler, "centre-v1") == 0);
+    ASSERT_EQ_U(r.frame_clocks, 100);
+    ASSERT_EQ_U(r.frames, 9);
+    ASSERT_EQ_U(r.n_runs, 5);
+    const vgaout_frame_run_t want[5] = {
+        {0, 1, -1, 0, 0}, {1, 3, 0, 1000, 0}, {4, 2, 1, 1300, 4}, {6, 2, -1, 0, 0}, {8, 1, 0, 1700, 0}};
+    for (size_t i = 0; i < 5; i++) {
+        ASSERT_EQ_U(r.runs[i].first, want[i].first);
+        ASSERT_EQ_U(r.runs[i].count, want[i].count);
+        ASSERT_TRUE(r.runs[i].distinct == want[i].distinct);
+        ASSERT_EQ_U(r.runs[i].start_clock, want[i].start_clock);
+        ASSERT_EQ_U(r.runs[i].missing, want[i].missing);
+    }
+    vgaout_frame_runs_free(&r);
+}
+TEST(read_runs_no_frames) {
+    vgaout_t o; base(&o, NULL, 0);
+    o.sampler_status = "no-sync"; o.n_distinct = 0;
+    FILE *f = mem_file(); ASSERT_TRUE(f);
+    ASSERT_TRUE(vgaout_frames_txt(f, &o) == 0);
+    fflush(f); fseek(f, 0, SEEK_SET);
+    long n = (long)strlen(membuf);
+    fclose(f); f = fmemopen(membuf, (size_t)n, "r"); ASSERT_TRUE(f);
+    vgaout_frame_runs_t r; char err[200] = "";
+    ASSERT_TRUE(vgaout_read_frame_runs(f, &r, err, sizeof err) == 0);
+    fclose(f);
+    ASSERT_TRUE(strcmp(r.sampler, "tb-v1") == 0);
+    ASSERT_EQ_U(r.frames, 0);
+    ASSERT_EQ_U(r.n_runs, 0);
+    vgaout_frame_runs_free(&r);
+}
+
+// 0 if `text` is refused, with a message.
+static int refused(const char *text) {
+    FILE *f = text_file(text);
+    if (!f) return 0;
+    vgaout_frame_runs_t r; char err[200] = "";
+    int rc = vgaout_read_frame_runs(f, &r, err, sizeof err);
+    fclose(f);
+    if (rc == 0) { vgaout_frame_runs_free(&r); return 0; }
+    return err[0] != 0;
+}
+#define HEAD(fc, n) "id: x\nstatus: ok\nsampler: tb-v1\nsampler_status: ok\nframe_clocks: " fc "\nframes: " n "\ndistinct:\n"
+TEST(read_runs_rejects) {
+    ASSERT_TRUE(!refused(HEAD("10", "3") "runs:\n0 2 0 5 0\n2 1 - - -\n"));             // the good one
+    ASSERT_TRUE(refused(HEAD("10", "3") "runs:\n0 2 0 5 0\n"));                           // short of frames
+    ASSERT_TRUE(refused(HEAD("10", "3") "runs:\n0 2 0 5 0\n3 1 - - -\n"));                // a hole
+    ASSERT_TRUE(refused(HEAD("10", "3") "runs:\n0 2 0 5 0\n2 1 0 3 0\n"));                // starts go backwards
+    ASSERT_TRUE(refused(HEAD("10", "3") "runs:\n0 0 0 5 0\n0 3 0 5 0\n"));                // count 0
+    ASSERT_TRUE(refused(HEAD("10", "3") "runs:\n0 3 0 5\n"));                             // too few fields
+    ASSERT_TRUE(refused(HEAD("10", "3") "runs:\n0 3 0 5 0 1\n"));                         // too many
+    ASSERT_TRUE(refused(HEAD("10", "3") "runs:\n0 3 x 5 0\n"));                           // not a number
+    ASSERT_TRUE(refused(HEAD("10", "3") "runs:\n0 3 - 5 0\n"));                           // half a gap
+    ASSERT_TRUE(refused(HEAD("10", "3") "runs:\n0 3 01 5 0\n"));                          // leading zero
+    ASSERT_TRUE(refused(HEAD("10", "3") "runs:\n0 3 -1 5 0\n"));                          // negative
+    ASSERT_TRUE(refused(HEAD("10", "3") "runs:\n0 3 0 5 0"));                             // no final newline
+    ASSERT_TRUE(refused(HEAD("10", "3")));                                                // no runs section
+    ASSERT_TRUE(refused("id: x\nframe_clocks: 10\nframes: 0\nruns:\n"));                 // no sampler
+    ASSERT_TRUE(refused("sampler: tb-v1\nframes: 0\nruns:\n"));                          // no frame_clocks
+    ASSERT_TRUE(refused("sampler: tb-v1\nframe_clocks: 1\nruns:\n"));                    // no frames
+    ASSERT_TRUE(refused("sampler: \nframe_clocks: 1\nframes: 0\nruns:\n"));              // empty sampler
+    ASSERT_TRUE(refused("sampler: tb-v1\nframe_clocks: 99999999999999999999\nframes: 0\nruns:\n"));   // overflow
+    ASSERT_TRUE(refused(""));
+}
+
 int main(void) {
+    RUN(read_runs_from_writer); RUN(read_runs_no_frames); RUN(read_runs_rejects);
     RUN(runs_grouping); RUN(runs_break_on_late_start); RUN(runs_break_on_missing);
     RUN(frame_clocks_is_median_across_gaps); RUN(header_tb); RUN(header_centre); RUN(no_frames);
     RUN(bad_distinct_rejected); RUN(hash_file_lines); RUN(hash_file_fnv_needs_list); RUN(rejects_bad_strings); RUN(rejects_backwards_starts);

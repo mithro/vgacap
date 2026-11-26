@@ -37,6 +37,7 @@ calibration designs and their reference renders live in
 |---|---|---|---|
 | stream format | [`include/vgacap/stream.h`](include/vgacap/stream.h) | [`src/stream/`](src/stream/) | [`python/vgacap/stream.py`](python/vgacap/stream.py) |
 | reconstruction (`libvgaframe`) | [`include/vgacap/frame.h`](include/vgacap/frame.h) | [`src/frame/`](src/frame/) | -- |
+| simulation trace ([format](docs/trace-format.md)) | [`include/vgacap/trace.h`](include/vgacap/trace.h) | [`src/trace/`](src/trace/) | -- |
 | synthetic VGA signals | -- | -- | [`python/vgacap/synth.py`](python/vgacap/synth.py) |
 | one-byte-per-clock simulator dump to stream (`vgacap-bin2stream`) | -- | -- | [`python/vgacap/bin2stream.py`](python/vgacap/bin2stream.py) |
 
@@ -83,7 +84,7 @@ in one-shot bursts (`--rle-oneshot`) with an FPGA breakout and
 
 **Consumers and tools:**
 
-- [`vgacap-dump` and `vgacap-frames`](src/tools/README.md), the C tools;
+- [`vgacap-dump`, `vgacap-frames`, `vgacap-sample` and `vgacap-export`](src/tools/README.md), the C tools;
 - the [`ttcap`](python/ttcap/README.md) CLI: `capture`, `png`, `demo`,
   `probe`, `throughput`, `reboot`;
 - the [GStreamer](https://gstreamer.freedesktop.org) plugin in
