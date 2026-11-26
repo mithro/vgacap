@@ -71,7 +71,7 @@ fields, or `err` followed by a message for a person.
   Why it is needed, and when `ttcap` refuses it:
   [README.md, "Hardware notes"](README.md#hardware-notes-and-assumptions).
 * `program_stream` / `program_frame` print the PIO program a capture with
-  those operands would load, in hex, with its configuration -- for
+  those operands would load, in hex, with its configuration, for
   diagnosis and for the tests that compare it with MicroPython's assembler.
   `period` is system clocks per sample, 2..32.
 * `reboot` returns the board to the firmware in its flash (the stock
@@ -167,7 +167,7 @@ as they read any other.
 ### Stopping
 
 During a capture the host may send `0x03` (or `q`). The firmware checks for
-it only between chunks -- while waiting for the next buffer or window, and
-after sending each chunk -- so a chunk is never cut short; it then writes
+it only between chunks (while waiting for the next buffer or window, and
+after sending each chunk), so a chunk is never cut short; it then writes
 the summary `TIME` chunk and `DONE`. Any other byte received during a
 capture is discarded.
