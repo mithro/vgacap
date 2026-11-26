@@ -18,7 +18,7 @@ This page builds the site from the Markdown files where they sit, checks every p
 
 ## Steps
 
-1. In the checkout, run `uv run --locked --python 3.13 --only-group docs --with pytest pytest -q docs/tests` to test the build checks themselves.
+1. In the checkout, run `uv run --locked --python 3.13 --only-group docs pytest -q docs/tests` to test the build checks themselves.
 2. In the checkout, run `uv run --locked --python 3.13 --only-group docs sphinx-build -W --keep-going -c docs . build/docs` to build the site into `build/docs`.
 3. In the checkout, run `uv run --no-project python -m http.server 8000 --bind 127.0.0.1 --directory build/docs` to serve the site.
 4. In a browser, open `http://127.0.0.1:8000/` to see the root landing page, then the page you changed.

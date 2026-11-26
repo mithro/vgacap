@@ -3,7 +3,7 @@
 from the real source file in this repository, and the rules table names
 every rule docs/_ext/vgacap_rules.py checks.
 
-    uv run --locked --python 3.13 --only-group docs --with pytest pytest -q docs/tests
+    uv run --locked --python 3.13 --only-group docs pytest -q docs/tests
 """
 
 import io
