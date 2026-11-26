@@ -53,7 +53,7 @@
 // The fastest project clock proven lossless with the stock rp1-pio driver:
 // the counter loopback stepped by exactly -1 for 4,194,304 samples at
 // 500 k samples/s, and lost ~150-320 samples at every 32 KB buffer boundary
-// from 1.25 M samples/s up (pi-sw2-p4, 2026-11-24; capture-rp1/README.md).
+// from 1.25 M samples/s up (pi-sw2-p4, 2026-11-24; capture-rp1/explanation-capture.md).
 // Nothing between the two was measured.
 #define PROVEN_MAX_HZ 500000u
 // TIME's dropped_samples when the capture cannot know it: the counter's
@@ -248,7 +248,7 @@ int main(int argc, char **argv)
         fprintf(stderr,
                 "vgacap-rp1: --clock-hz %u is above %u, the fastest rate proven lossless with the stock\n"
                 "  rp1-pio driver: above it ~150-320 samples were lost at every 32 KB buffer, uncounted\n"
-                "  (capture-rp1/README.md). --unproven-rate captures anyway, recording dropped as unknown.\n",
+                "  (capture-rp1/explanation-capture.md). --unproven-rate captures anyway, recording dropped as unknown.\n",
                 (unsigned)o.clock_hz, PROVEN_MAX_HZ);
         return 2;
     }
@@ -298,7 +298,7 @@ int main(int argc, char **argv)
     // Everything claimed from here on is released by the one teardown at the
     // end, whichever step fails: a state machine, DMA channel or program left
     // claimed by an early exit leaves the rp1-pio driver unusable until a
-    // reboot (capture-rp1/README.md). So every failure after this point sets
+    // reboot (capture-rp1/explanation-capture.md). So every failure after this point sets
     // its message and jumps to `teardown`, and teardown undoes only what was
     // done, in the order below.
     int status = 1;                  // the exit status; 0 only once the stream is written
