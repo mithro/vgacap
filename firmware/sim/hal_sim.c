@@ -57,6 +57,8 @@ static struct {
     int framing;
     unsigned hs_bit, vs_bit, hs_act, vs_act;
     double done_at;
+    int asic_ena, asic_nrst, asic_inc;
+    unsigned asic_count;
 } S;
 
 // ---- control ------------------------------------------------------------------
@@ -120,7 +122,12 @@ static uint64_t clock_at(double t) {
 
 static double time_of_clock(uint64_t c) { return S.clock_t0 + (double)c / S.clock_hz; }
 
-static uint8_t uo_at(uint64_t c) { return S.cfg.uo[c % S.cfg.uo_len]; }
+static uint8_t uo_at(uint64_t c) {
+    if (S.cfg.asic_index_plus1 &&
+        !(S.asic_ena && S.asic_nrst && S.asic_count + 1u == (unsigned)S.cfg.asic_index_plus1))
+        return 0;
+    return S.cfg.uo[c % S.cfg.uo_len];
+}
 
 // Pack `words` words of samples starting at clock `c`, as the sampler's
 // left-shifting ISR does: the first sample in the most significant byte.
@@ -276,6 +283,15 @@ int hal_clock(const fw_clock_plan_t *plan, const char **why) {
 }
 
 void hal_reset(int hold) { (void)hold; }
+
+// The mux counts rising edges of inc while out of reset; reset clears it.
+void hal_asic_ctrl(int ena, int nrst, int inc) {
+    if (!nrst) S.asic_count = 0;
+    else if (inc && !S.asic_inc && S.asic_nrst) S.asic_count++;
+    S.asic_ena = ena;
+    S.asic_nrst = nrst;
+    S.asic_inc = inc;
+}
 void hal_ui_in(int value) { (void)value; }
 
 int hal_gpio_get(unsigned gpio) {
@@ -285,6 +301,9 @@ int hal_gpio_get(unsigned gpio) {
 }
 
 void hal_delay_us(uint32_t us) { advance((double)us * 1e-6); }
+void hal_wait_us(uint32_t us) {
+    advance((double)us * 1e-6);
+}
 
 void hal_idle(void) {
     double next = INFINITY;

@@ -36,6 +36,10 @@ typedef struct sim_config {
     size_t uo_len;
     double seconds_per_byte;  // USB cost of each byte sent to the host
     size_t arena_bytes;       // the capture buffer (the firmware's is ~440 KB)
+    // An ASIC carrier: 0 for none (the design is always on the pins, as on
+    // an FPGA board), else 1 + the mux index the design sits at; uo_out is
+    // then 0 unless the mux has been reset, clocked to that index and enabled.
+    int asic_index_plus1;
     // A host that stops reading once: the first write at or after
     // `stall_at` seconds waits `stall_seconds` first (0: never).
     double stall_at, stall_seconds;

@@ -105,6 +105,13 @@ static void drive(unsigned gpio, int level) {
 
 void hal_reset(int hold) { drive(fw_board_dbv3.rst_n_gpio, !hold); }
 
+// GPIO 0/1/2: ctrl_ena, ctrl_sel_nrst, ctrl_sel_inc (GPIOMapTTDBv3).
+void hal_asic_ctrl(int ena, int nrst, int inc) {
+    drive(2, inc);
+    drive(1, nrst);
+    drive(0, ena);
+}
+
 void hal_ui_in(int value) {
     for (unsigned i = 0; i < 8; i++) {
         unsigned gpio = fw_board_dbv3.ui_in_gpio + i;
@@ -115,6 +122,10 @@ void hal_ui_in(int value) {
 
 int hal_gpio_get(unsigned gpio) { return gpio_get(gpio) ? 1 : 0; }
 void hal_delay_us(uint32_t us) { busy_wait_us_32(us); }
+void hal_wait_us(uint32_t us) {
+    absolute_time_t until = make_timeout_time_us(us);
+    while (!time_reached(until)) tud_task();
+}
 void hal_idle(void) { tud_task(); }
 
 void hal_reboot(int bootsel) {

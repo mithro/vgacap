@@ -25,7 +25,7 @@
 #include "sim.h"
 
 static void usage(void) {
-    fprintf(stderr, "usage: vgacap-fw-sim --uo FILE [--bytes-per-s N] [--arena-bytes N] [--rxstall]\n");
+    fprintf(stderr, "usage: vgacap-fw-sim --uo FILE [--bytes-per-s N] [--arena-bytes N] [--rxstall] [--asic-index N]\n");
     exit(2);
 }
 
@@ -34,11 +34,13 @@ int main(int argc, char **argv) {
     double bytes_per_s = 1e6;
     unsigned long arena = 0;
     int rxstall = 0;
+    int asic_index = -1;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--uo") && i + 1 < argc) uo_path = argv[++i];
         else if (!strcmp(argv[i], "--bytes-per-s") && i + 1 < argc) bytes_per_s = strtod(argv[++i], NULL);
         else if (!strcmp(argv[i], "--arena-bytes") && i + 1 < argc) arena = strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--rxstall")) rxstall = 1;
+        else if (!strcmp(argv[i], "--asic-index") && i + 1 < argc) asic_index = atoi(argv[++i]);
         else usage();
     }
     if (!uo_path || !(bytes_per_s > 0)) usage();
@@ -65,7 +67,7 @@ int main(int argc, char **argv) {
 
     signal(SIGPIPE, SIG_IGN);
     sim_config_t cfg = { .uo = uo, .uo_len = len, .seconds_per_byte = 1.0 / bytes_per_s,
-                         .arena_bytes = arena };
+                         .arena_bytes = arena, .asic_index_plus1 = asic_index + 1 };
     sim_init(&cfg);
     sim_force_rxstall(rxstall);
     sim_io_fds(0, 1);

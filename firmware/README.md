@@ -84,11 +84,30 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   means the board's pull-up wins there, as it did on fpga-4. **This
   firmware drives GPIO 1 high first thing at boot** (`hal_pico_init()`),
   level before direction so it never glitches low: the level the stock
-  firmware left, so nothing then depends on the pull-up. It never drives
-  it low. On an ASIC carrier that only holds the mux out of reset, the
-  stock firmware's idle level. GPIO 0 (`ctrl_ena`) and GPIO 2
-  (`ctrl_sel_inc`) are not driven at all, so whether an ASIC board's
-  selected project survives the switch is a separate question.
+  firmware left, so nothing then depends on the pull-up. Only
+  `asic_select` ever drives it low. On an ASIC carrier that only holds
+  the mux out of reset, the stock firmware's idle level. GPIO 0
+  (`ctrl_ena`) and GPIO 2 (`ctrl_sel_inc`) are not driven until an
+  `asic_select`.
+* **ASIC boards lose their project across the switch.** On tt09
+  (2026-11-24) the stock firmware's frame capture of
+  `tt_um_rejunity_vga_logo` was clean, and this firmware's, after the
+  switch, saw no sync at all: nothing drives the mux lines while the
+  RP2350 is in reset and in its bootloader (pad pull-downs), so the mux
+  comes back with nothing selected, and driving GPIO 1 high at boot does
+  not select anything. So this firmware selects the
+  project itself with `asic_select index=N`, the stock SDK's sequence
+  (PROTOCOL.md); `ttcap capture --firmware picosdk --asic-index N` sends
+  it. N is `tt.shuttle.<name>.count` under the stock firmware. The
+  firmware cannot tell an FPGA breakout from an ASIC carrier, so `ttcap`
+  refuses `--asic-index` for an FPGA bench board, named by `--board`, by
+  a `ws://` link (the bridge's address, the Pi's name or a tunnel's
+  `18000 + octet` port) or by the Pi it runs on (for a `serial:` link, or a
+  `ws://` link, not on a tunnel port, whose host resolves to this machine:
+  loopback, 0.0.0.0 or :: in any spelling, or one of its own addresses --
+  the Pi's own bridge; a host that does not resolve is refused),
+  and when those disagree. `ttcap.firmware.setup()` called directly does
+  not check: its caller must (`ttcap.demo.check_asic_index()`).
 * `ui_in` and `rst_n` are left untouched until `ui_in` / `reset` commands
   drive them; `ttcap` holds reset while it programs the clock and releases
   it last, as `select_project()` does.
