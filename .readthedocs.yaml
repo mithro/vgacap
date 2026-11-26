@@ -15,4 +15,4 @@ build:
     - asdf plugin add uv
     - asdf install uv 0.10.8
     - asdf global uv 0.10.8
-    - uv run --locked --only-group docs sphinx-build -W --keep-going -c docs . "$READTHEDOCS_OUTPUT/html"
+    - uv run --locked --python 3.13 --only-group docs sphinx-build -W --keep-going -c docs . "$READTHEDOCS_OUTPUT/html"

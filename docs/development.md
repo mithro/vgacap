@@ -29,7 +29,7 @@ Markdown files where they are, by Sphinx with
 the pages, in navigation order; a new page goes there. Warnings are errors:
 
 ```sh
-uv run --locked --only-group docs sphinx-build -W --keep-going -c docs . build/docs
+uv run --locked --python 3.13 --only-group docs sphinx-build -W --keep-going -c docs . build/docs
 ```
 
 ## Continuous integration
