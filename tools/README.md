@@ -49,12 +49,12 @@ tools/hil.sh --board fpga-1 --design tt_um_vgacal_bars --clock-hz 500000 \
 - `--no-demo` for a host without GStreamer (the pipeline checks then SKIP,
   with the reason);
 - `--ui-in` for `tt_um_vgacal_modes`;
-- `--stop-bridge` when running on the board's own Pi with
-  `serial:/dev/ttboard` (it stops the fpgas.online bridge (`fpgas-tt`),
-  which holds the device, and starts it again afterwards if it stopped it).
-  It refuses unless the bridge's `/health` says 0 clients on two reads a
-  few seconds apart; that count covers WebSocket serial sessions only, so
-  an in-flight HTTP request is not seen;
+- `--stop-bridge`: on the board's own Pi with `serial:/dev/ttboard`, stops
+  the fpgas.online bridge (`fpgas-tt`), which holds the device, and
+  restarts it afterwards if it stopped it. Needs passwordless sudo.
+  Refused unless the bridge's `/health` reports 0 clients on two reads;
+  that count is WebSocket sessions only, so an in-flight HTTP request is
+  not seen;
 - `--testpatterns DIR` if tt-vga-testpatterns is not checked out next to
   vgacap (the `reference` and `frame` checks SKIP otherwise).
 
