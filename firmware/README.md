@@ -1,6 +1,6 @@
 # The vgacap firmware
 
-The vgacap firmware is a C firmware, built with the pico-sdk, for the
+The vgacap firmware is a C firmware, built with the [pico-sdk](https://github.com/raspberrypi/pico-sdk), for the
 [Tiny Tapeout](https://tinytapeout.com) demo board v3 (RP2350B) that captures a
 design's VGA output on `uo_out` without [MicroPython](https://micropython.org) underneath. It does
 what the MicroPython capture programs ([`python/ttcap/mp/`](../python/ttcap/mp/)) do: streaming
@@ -34,7 +34,7 @@ and `tt09` is a demo board with an ASIC breakout (a TT09 chip) on the Welland be
 | [`pico/hal_pico.c`](pico/hal_pico.c) | firmware-only HAL | no | no |
 | [`pico/main.c`](pico/main.c) | `main()` | no | no |
 | [`pico/usb_descriptors.c`](pico/usb_descriptors.c) | USB descriptors | no | no |
-| [`pico/tusb_config.h`](pico/tusb_config.h) | TinyUSB configuration | no | no |
+| [`pico/tusb_config.h`](pico/tusb_config.h) | [TinyUSB](https://github.com/hathach/tinyusb) configuration | no | no |
 | [`pico/boards/tt_demoboard_v3.h`](pico/boards/tt_demoboard_v3.h) | board header | no | no |
 | [`pio/`](pio/) | PIO programs | no | no |
 | [`sim/hal_sim.c`](sim/hal_sim.c) | simulated board | no | yes |
