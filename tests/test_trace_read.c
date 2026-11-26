@@ -676,6 +676,374 @@ TEST(test_trace_v1_capture) {
     remove(path);
 }
 
+// ---- RUNS decoded straight from the pairs ------------------------------------
+//
+// The reader decodes a RUNS chunk it would accept straight from its pairs,
+// and hands any other chunk (or one breaking a rule) to the stream reader.
+// Plain streams with one RUNS chunk damaged in many ways (bits flipped in
+// its header, count, values and runs) must give the same runs, in the same
+// order, as the stream reader fed the same bytes, which is how they were
+// read before (a plain stream is read leniently: losses are skipped).
+
+struct membuf_t { uint8_t *p; size_t n, cap; };
+static int mem_put(void *user, const uint8_t *buf, size_t len) {
+    struct membuf_t *m = user;
+    if (m->n + len > m->cap) {
+        m->cap = (m->n + len) * 2;
+        m->p = realloc(m->p, m->cap);
+        if (!m->p) return -1;
+    }
+    memcpy(m->p + m->n, buf, len); m->n += len;
+    return 0;
+}
+
+struct ev_runs { struct all_runs a; uint64_t n; int done; };
+static void on_ev(void *user, const vgacap_event_t *ev) {
+    struct ev_runs *e = user;
+    if (e->done) return;
+    if (ev->type == VGACAP_EV_HEADER) e->n = 0;
+    else if (ev->type == VGACAP_EV_BLOCK) e->n = ev->u.block.first_sample;
+    else if (ev->type == VGACAP_EV_RUN) { on_all(&e->a, e->n, ev->u.run.value, ev->u.run.run); e->n += ev->u.run.run; }
+    else if (ev->type == VGACAP_EV_ERROR) e->done = 1;
+}
+
+static int stop_first_batch(void *user, const vgacap_trace_run_t *runs, size_t n) {
+    (void)runs;
+    *(size_t *)user += n;
+    return 1;
+}
+
+TEST(test_trace_runs_fast_path) {
+    char path[256]; tmp_path(path, sizeof path, "read_runs_fast.vgacap");
+    vgacap_header_t h;
+    vgacap_header_init_v2(&h, 43, 2, 42, 0);
+    h.mode = VGACAP_MODE_EVENT; h.clock_hz = 25175000;
+    // Three RUNS chunks of 3000 pairs (uo_out changes every clock), the
+    // middle one damaged.
+    enum { PAIRS = 3000 };
+    uint64_t *vals = malloc(3 * PAIRS * sizeof *vals), *runs = malloc(3 * PAIRS * sizeof *runs);
+    ASSERT_TRUE(vals && runs);
+    for (size_t i = 0; i < 3 * PAIRS; i++) {
+        vals[i] = (sample_value(2 * i + 1, 1) & ~CLK42) | ((uint64_t)(i % 3) << 8);
+        runs[i] = i % 97 == 5 ? 300 + i : 2;   // some two-byte LEB128 runs
+    }
+    struct membuf_t m = { NULL, 0, 0 };
+    vgacap_writer_t w;
+    ASSERT_EQ_U(vgacap_writer_init(&w, mem_put, &m, &h), 0);
+    ASSERT_EQ_U(vgacap_writer_meta(&w, OPEN_META, strlen(OPEN_META)), 0);
+    ASSERT_EQ_U(vgacap_writer_block(&w, 0), 0);
+    ASSERT_EQ_U(vgacap_writer_runs(&w, vals, runs, PAIRS), 0);
+    size_t mid = m.n;
+    ASSERT_EQ_U(vgacap_writer_runs(&w, vals + PAIRS, runs + PAIRS, PAIRS), 0);
+    size_t mid_end = m.n;
+    ASSERT_EQ_U(vgacap_writer_runs(&w, vals + 2 * PAIRS, runs + 2 * PAIRS, PAIRS), 0);
+    ASSERT_EQ_U(vgacap_writer_meta(&w, CLOSE_META, strlen(CLOSE_META)), 0);
+    uint8_t *damaged = malloc(m.n);
+    ASSERT_TRUE(damaged != NULL);
+    uint32_t lcg = 12345;
+    int mismatches = 0, trials = 0;
+    for (int t = 0; t < 400; t++) {
+        memcpy(damaged, m.p, m.n);
+        lcg = lcg * 1103515245u + 12345u;
+        // Mostly within the chunk's first bytes (header, count, first pairs).
+        size_t span = t % 2 ? 64 : mid_end - mid;
+        size_t at = mid + (size_t)((lcg >> 8) % span);
+        if (t == 1) at = m.n;                   // trial 1: undamaged
+        if (at < m.n) damaged[at] ^= (uint8_t)(1u << ((lcg >> 4) & 7));
+        if (t == 2) memcpy(damaged + mid + 12 + 7, damaged + mid + 12, 6);   // a pair equal to the one before
+        ASSERT_EQ_U(spit(path, damaged, m.n), 0);
+        struct ev_runs ref; memset(&ref, 0, sizeof ref);
+        vgacap_reader_t *sr = malloc(sizeof *sr);
+        ASSERT_TRUE(sr != NULL);
+        vgacap_reader_init(sr, on_ev, &ref);
+        vgacap_reader_feed(sr, damaged, m.n);
+        free(sr);
+        char err[256] = "";
+        vgacap_trace_reader_t *r = vgacap_trace_open(path, err, sizeof err);
+        if (r) {
+            struct all_runs got = { 0, 0, NULL, NULL, NULL };
+            ASSERT_EQ_U(vgacap_trace_read(r, 0, UINT64_MAX, on_all, &got, err, sizeof err), 0);
+            if (!all_same(&ref.a, &got)) { mismatches++; fprintf(stderr, "  trial %d (byte %zu)\n", t, at); }
+            if (t == 1) {
+                ASSERT_EQ_U(got.n, 3 * PAIRS);
+                // A batch function returning nonzero stops after that batch.
+                size_t seen = 0;
+                ASSERT_EQ_U(vgacap_trace_read_runs(r, 0, UINT64_MAX, stop_first_batch, &seen, err, sizeof err), 0);
+                ASSERT_EQ_U(seen, 1024);
+            }
+            all_free(&got);
+            vgacap_trace_close(r);
+            trials++;
+        }
+        all_free(&ref.a);
+    }
+    ASSERT_EQ_U(mismatches, 0);
+    ASSERT_TRUE(trials >= 390);
+    free(damaged); free(m.p); free(vals); free(runs);
+    remove(path);
+}
+
+// ---- the batched reader against 12dfaf7's run-at-a-time reader ---------------
+//
+// ref_read is vgacap_trace_read as it was at 12dfaf7 (before the batched
+// reader), on the public API: the stream reader fed each block, every RUN
+// event clipped to [from, to) as its on_read did, the same errors. Hostile
+// streams, plain (read leniently) and compressed (strict, each block a zstd
+// frame with its checksum and no seek table, so the frames are walked), must
+// read the same through vgacap_trace_read: the same runs, return and error.
+
+struct ref_rd {
+    uint64_t n, from, to, clk;
+    int done, strict;
+    const char *what;
+    struct all_runs a;
+};
+
+static void ref_on_read(void *user, const vgacap_event_t *ev) {   // 12dfaf7's on_read
+    struct ref_rd *d = user;
+    if (d->done) return;
+    switch (ev->type) {
+    case VGACAP_EV_HEADER: d->n = 0; break;
+    case VGACAP_EV_BLOCK: d->n = ev->u.block.first_sample; break;
+    case VGACAP_EV_RUN: {
+        uint64_t a = d->n, e = d->n + ev->u.run.run;
+        d->n = e;
+        if (e <= d->from) break;
+        if (a >= d->to) { d->done = 1; break; }
+        uint64_t s = a > d->from ? a : d->from, t = e < d->to ? e : d->to;
+        uint64_t v = ev->u.run.value ^ (((s - a) & 1) ? d->clk : 0);
+        on_all(&d->a, s, v, t - s);
+        if (e >= d->to) d->done = 1;
+        break;
+    }
+    case VGACAP_EV_RESYNC:
+        if (d->strict) { d->what = ev->u.resync.what; d->done = 1; }
+        break;
+    case VGACAP_EV_ERROR: d->what = ev->u.error.what; d->done = 1; break;
+    default: break;
+    }
+}
+
+static int ref_mid_chunk(const vgacap_reader_t *sr) { return sr->scanning || sr->in_payload || sr->hdrfill; }
+
+static void ref_first_block(void *user, const vgacap_event_t *ev) {
+    uint64_t *f = user;
+    if (ev->type == VGACAP_EV_BLOCK && f[1] == 0) { f[0] = ev->u.block.first_sample; f[1] = 1; }
+}
+
+// 12dfaf7's vgacap_trace_read, collecting the runs into d->a.
+static int ref_read(vgacap_trace_reader_t *r, uint64_t from, uint64_t to, struct ref_rd *d,
+                    const uint8_t *plain, size_t plain_len, char *err, size_t errlen) {
+    const vgacap_trace_info_t *in = vgacap_trace_info(r);
+    if (from >= to || from >= in->samples) return 0;
+    d->from = from; d->to = to;
+    d->clk = in->header.clock_bit == VGACAP_CLOCK_BIT_NONE ? 0 : (uint64_t)1 << in->header.clock_bit;
+    vgacap_reader_t *sr = malloc(sizeof *sr);
+    if (!sr) return -1;
+    int rc = 0;
+    if (!in->compressed) {
+        vgacap_reader_init(sr, ref_on_read, d);
+        vgacap_reader_feed(sr, plain, plain_len);
+        if (d->what) { snprintf(err, errlen, "%s", d->what); rc = -1; }
+        free(sr);
+        return rc;
+    }
+    d->strict = 1;
+    uint64_t *first = calloc(in->blocks, sizeof *first);
+    for (uint32_t i = 0; i < in->blocks; i++) {   // each block's BLKH (checked at open)
+        const uint8_t *p; size_t n;
+        if (vgacap_trace_block_data(r, i, &p, &n, err, errlen)) { free(first); free(sr); return -1; }
+        uint64_t f[2] = { 0, 0 };
+        if (i == 0) vgacap_reader_init(sr, ref_first_block, f);
+        else vgacap_reader_init_header(sr, ref_first_block, f, &in->header);
+        vgacap_reader_feed(sr, p, n);
+        first[i] = f[0];
+    }
+    uint32_t lo = 0, hi = in->blocks;
+    while (hi - lo > 1) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (first[mid] <= from) lo = mid; else hi = mid;
+    }
+    for (uint32_t i = lo; i < in->blocks && first[i] < to && !d->done; i++) {
+        const uint8_t *p; size_t n;
+        if (vgacap_trace_block_data(r, i, &p, &n, err, errlen)) { rc = -1; break; }
+        if (i == 0) vgacap_reader_init(sr, ref_on_read, d);
+        else vgacap_reader_init_header(sr, ref_on_read, d, &in->header);
+        vgacap_reader_feed(sr, p, n);
+        if (d->what) { snprintf(err, errlen, "block %u: %s", i, d->what); rc = -1; break; }
+        if (!d->done && ref_mid_chunk(sr)) { snprintf(err, errlen, "block %u: ends inside a chunk", i); rc = -1; break; }
+        if (!d->done && i + 1 < in->blocks && d->n != first[i + 1]) {
+            snprintf(err, errlen, "block %u ends at sample %llu but block %u starts at %llu", i,
+                     (unsigned long long)d->n, i + 1, (unsigned long long)first[i + 1]);
+            rc = -1; break;
+        }
+    }
+    free(first); free(sr);
+    return rc;
+}
+
+// Stream building, chunk by chunk (no writer checks: hostile on purpose).
+static void put_chunk(struct membuf_t *m, const char *tag, const uint8_t *p, uint32_t len) {
+    uint8_t h[8];
+    memcpy(h, tag, 4);
+    for (int i = 0; i < 4; i++) h[4 + i] = (uint8_t)(len >> (8 * i));
+    mem_put(m, h, 8);
+    mem_put(m, p, len);
+}
+
+static void put_blkh(struct membuf_t *m, uint64_t first) {
+    uint8_t b[8];
+    for (int i = 0; i < 8; i++) b[i] = (uint8_t)(first >> (8 * i));
+    put_chunk(m, VGACAP_TAG_BLOCK, b, 8);
+}
+
+// A RUNS chunk of `pairs` pairs (43-bit values, adjacent ones different),
+// runs from rnd: mostly 1 to 4, some multi-byte, some of `huge`.
+static uint32_t fz;
+static uint32_t rnd(void) { fz = fz * 1103515245u + 12345u; return fz >> 8; }
+static void put_runs(struct membuf_t *m, unsigned pairs, uint64_t huge) {
+    uint8_t *p = malloc(4 + (size_t)pairs * 16);
+    size_t n = 4;
+    for (int i = 0; i < 4; i++) p[i] = (uint8_t)(pairs >> (8 * i));
+    for (unsigned k = 0; k < pairs; k++) {
+        uint64_t v = (BASE43 | (k & 0xFF) | ((uint64_t)(rnd() & 7) << 8)) & ~CLK42;
+        for (int i = 0; i < 6; i++) p[n++] = (uint8_t)(v >> (8 * i));
+        uint32_t c = rnd() % 64;
+        uint64_t run = c < 50 ? 1 + c % 4 : c < 60 ? 100 + rnd() % 100000 : huge ? huge : 1;
+        do { uint8_t b = run & 0x7F; run >>= 7; p[n++] = (uint8_t)(b | (run ? 0x80 : 0)); } while (run);
+    }
+    put_chunk(m, VGACAP_TAG_RUNS, p, (uint32_t)n);
+    free(p);
+}
+
+// One hostile change to bytes [lo, hi) of m: the format note's faults (bits
+// flipped, bytes lost or added, a chunk cut short, a length or count off, a
+// BLKH moved far or near 2^64).
+static void damage(struct membuf_t *m, size_t lo, size_t hi) {
+    if (hi <= lo + 16) return;
+    size_t at = lo + rnd() % (hi - lo);
+    switch (rnd() % 7) {
+    case 0: m->p[at] ^= (uint8_t)(1u << (rnd() % 8)); break;
+    case 1: memmove(m->p + at, m->p + at + 1, m->n - at - 1); m->n--; break;          // a byte lost
+    case 2: mem_put(m, (const uint8_t *)"", 1); memmove(m->p + at + 1, m->p + at, m->n - at - 1);
+            m->p[at] = (uint8_t)rnd(); break;                                           // a byte added
+    case 3: m->n = at; break;                                                           // cut short
+    case 4: m->p[at] = 0; break;
+    case 5: m->p[at] = 0xFF; break;
+    default: break;                                                                     // none
+    }
+}
+
+struct fuzz_stats { int plain, zstd, unopened, mismatches; };
+
+static void compare(const char *path, const uint8_t *plain, size_t plain_len, struct fuzz_stats *st, int zstd,
+                    const char *what) {
+    char err[256] = "";
+    vgacap_trace_reader_t *r = vgacap_trace_open(path, err, sizeof err);
+    if (!r) { st->unopened++; return; }
+    const uint64_t s = vgacap_trace_info(r)->samples;
+    const uint64_t ranges[][2] = { { 0, UINT64_MAX }, { 1, s / 2 + 1 }, { s / 3, UINT64_MAX },
+                                   { UINT64_MAX - 100, UINT64_MAX }, { rnd() % (s + 1), rnd() % (s + 2) + s / 2 } };
+    for (unsigned i = 0; i < sizeof ranges / sizeof ranges[0]; i++) {
+        struct ref_rd d; memset(&d, 0, sizeof d);
+        char e1[256] = "", e2[256] = "";
+        int r1 = ref_read(r, ranges[i][0], ranges[i][1], &d, plain, plain_len, e1, sizeof e1);
+        struct all_runs got = { 0, 0, NULL, NULL, NULL };
+        int r2 = vgacap_trace_read(r, ranges[i][0], ranges[i][1], on_all, &got, e2, sizeof e2);
+        if (r1 != r2 || strcmp(e1, e2) || !all_same(&d.a, &got)) {
+            st->mismatches++;
+            fprintf(stderr, "  %s, range %u: rc %d/%d, '%s' / '%s'\n", what, i, r1, r2, e1, e2);
+        }
+        all_free(&d.a); all_free(&got);
+    }
+    if (zstd) st->zstd++; else st->plain++;
+    vgacap_trace_close(r);
+}
+
+// A stream: VGCH, META(open), BLKH(b0), RUNS..., blocks of RUNS behind
+// BLKHs, META(close). Plain: one file; zstd: each block a frame.
+static void fuzz_one(const char *path, int zstd, uint64_t b0, uint64_t huge, int hostile, struct fuzz_stats *st,
+                     const char *what) {
+    vgacap_header_t h;
+    vgacap_header_init_v2(&h, 43, 2, 42, 0);
+    h.mode = VGACAP_MODE_EVENT; h.clock_hz = 25175000;
+    enum { NB = 3 };
+    struct membuf_t blk[NB];
+    memset(blk, 0, sizeof blk);
+    vgacap_writer_t w;
+    vgacap_writer_init(&w, mem_put, &blk[0], &h);
+    vgacap_writer_meta(&w, OPEN_META, strlen(OPEN_META));
+    uint64_t at = b0;
+    for (int b = 0; b < NB; b++) {
+        size_t start = blk[b].n;
+        put_blkh(&blk[b], b == 0 ? (zstd ? 0 : b0) : b == 1 && zstd && b0 ? b0 : at);
+        size_t runs_from = blk[b].n;
+        unsigned chunks = 1 + rnd() % 3;
+        for (unsigned c = 0; c < chunks; c++) put_runs(&blk[b], 20 + rnd() % 300, huge);
+        // where the next block starts, from what was written (an undamaged reading)
+        struct ev_runs e; memset(&e, 0, sizeof e);
+        vgacap_reader_t *sr = malloc(sizeof *sr);
+        vgacap_reader_init_header(sr, on_ev, &e, &h);
+        vgacap_reader_feed(sr, blk[b].p + start, blk[b].n - start);
+        free(sr);
+        at = e.n;
+        all_free(&e.a);
+        if (b == NB - 1) put_chunk(&blk[b], VGACAP_TAG_META, (const uint8_t *)CLOSE_META, (uint32_t)strlen(CLOSE_META));
+        if (hostile && (rnd() % NB) == (unsigned)b) damage(&blk[b], b == 0 && zstd ? runs_from : start, blk[b].n);
+    }
+    if (!zstd) {
+        struct membuf_t all = { NULL, 0, 0 };
+        for (int b = 0; b < NB; b++) mem_put(&all, blk[b].p, blk[b].n);
+        spit(path, all.p, all.n);
+        compare(path, all.p, all.n, st, 0, what);
+        free(all.p);
+    } else {
+        struct membuf_t all = { NULL, 0, 0 };
+        ZSTD_CCtx *c = ZSTD_createCCtx();
+        ZSTD_CCtx_setParameter(c, ZSTD_c_checksumFlag, 1);
+        for (int b = 0; b < NB; b++) {
+            size_t cap = ZSTD_compressBound(blk[b].n);
+            uint8_t *z = malloc(cap);
+            size_t zn = ZSTD_compress2(c, z, cap, blk[b].p, blk[b].n);
+            if (!ZSTD_isError(zn)) mem_put(&all, z, zn);
+            free(z);
+        }
+        ZSTD_freeCCtx(c);
+        spit(path, all.p, all.n);
+        compare(path, NULL, 0, st, 1, what);
+        free(all.p);
+    }
+    for (int b = 0; b < NB; b++) free(blk[b].p);
+}
+
+TEST(test_trace_runs_against_12dfaf7) {
+    char path[256]; tmp_path(path, sizeof path, "read_runs_fuzz.bin");
+    struct fuzz_stats st = { 0, 0, 0, 0 };
+    fz = 2026;
+    // A BLKH near 2^64: the runs after it wrap (plain; a trace's block 0
+    // must start at BLKH(0), so its later blocks carry it).
+    for (int zstd = 0; zstd < 2; zstd++) {
+        char what[64];
+        snprintf(what, sizeof what, "%s BLKH near 2^64", zstd ? "zstd" : "plain");
+        fuzz_one(path, zstd, UINT64_MAX - 1000, 0, 0, &st, what);
+        // Huge (ten-byte LEB128) runs, read from past 0.
+        snprintf(what, sizeof what, "%s huge runs", zstd ? "zstd" : "plain");
+        fuzz_one(path, zstd, 0, UINT64_MAX / 2 + 12345, 0, &st, what);
+    }
+    // Hostile streams of both kinds.
+    for (int t = 0; t < 400; t++) {
+        char what[64];
+        snprintf(what, sizeof what, "trial %d", t);
+        uint64_t b0 = t % 5 == 0 ? UINT64_MAX - rnd() % 100000 : t % 5 == 1 ? rnd() : 0;
+        uint64_t huge = t % 3 == 0 ? UINT64_MAX - rnd() : t % 3 == 1 ? (uint64_t)rnd() << 32 : 0;
+        fuzz_one(path, t & 1, b0, huge, 1, &st, what);
+    }
+    fprintf(stderr, "  %d plain and %d zstd streams compared, %d that do not open\n", st.plain, st.zstd, st.unopened);
+    ASSERT_EQ_U(st.mismatches, 0);
+    ASSERT_TRUE(st.plain >= 150 && st.zstd >= 100);
+    remove(path);
+}
+
 // n is a u64. In a plain v2 stream (no clock bit) a RUNS chunk whose run
 // would take n past 2^64 - 1 is skipped by the stream reader ("RUNS run takes
 // n past 64 bits"), so neither the sample total nor a read wraps: the chunk
@@ -733,6 +1101,8 @@ int main(void) {
     RUN(test_trace_open_touches_little);
     RUN(test_trace_block_mid_chunk);
     RUN(test_trace_v1_capture);
+    RUN(test_trace_runs_fast_path);
+    RUN(test_trace_runs_against_12dfaf7);
     RUN(test_trace_run_past_64_bits);
     RUN(test_trace_not_a_trace);
     if (five_ready) remove(five_path());

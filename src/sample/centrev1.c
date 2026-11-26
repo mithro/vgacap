@@ -40,6 +40,9 @@ struct centrev1 {
     double cpp, hsync;              // hsync: the pulse in pixels, hs.pulse / cpp
     int hb0, vb0;                   // hback', vback' without the override
     int64_t *xs;                    // xs[p]: pixel p's clock, -1 when outside the line
+    int64_t xs0;                    // xs[0] when xs[p] = xs[0] + p for every p (cpp 1), else -1
+    int64_t cc0, cc1;               // the colour-change clocks [cc0, cc1): the window's, from 1, inside the line
+    uint8_t *off;                   // off[x - cc0]: clock x is off the pixel grid (whole cpp only)
     uint8_t *frame;                 // rgb6, width * height
     uint8_t *map;                   // L * lines: 1 where a clock was ever lit
     uint64_t colour_changes, off_grid;
@@ -225,9 +228,21 @@ void centrev1_calibrated(centrev1_t *s, const vgacal_t *cal, const vgafc_t *fc) 
         double x = floor((s->hsync + (double)g->hback + (double)p + 0.5) * s->cpp);
         s->xs[p] = x >= 0.0 && x < (double)s->L ? (int64_t)x : -1;
     }
+    s->xs0 = s->xs[0];
+    for (uint32_t p = 0; p < g->width && s->xs0 >= 0; p++)
+        if (s->xs[p] != s->xs0 + (int64_t)p) s->xs0 = -1;
+    const span_t sp = window_span(s->hsync, s->cpp, g->hback, g->width);
+    s->cc0 = sp.lo > 1 ? sp.lo : 1;
+    s->cc1 = sp.hi < (int64_t)s->L ? sp.hi : (int64_t)s->L;
+    if (s->cc1 < s->cc0) s->cc1 = s->cc0;
+    s->off = xcalloc((size_t)(s->cc1 - s->cc0), 1);
+    if (s->cpp == floor(s->cpp)) {
+        const int64_t icpp = (int64_t)s->cpp;
+        for (int64_t x = s->cc0; x < s->cc1; x++) s->off[x - s->cc0] = (x - sp.lo) % icpp != 0;
+    }
 }
 
-void centrev1_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks) {
+static inline void cv_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks) {
     if (!clocks) return;
     if (first != s->next) {
         fprintf(stderr, "centrev1_push: clock %llu, expected %llu\n",
@@ -236,7 +251,9 @@ void centrev1_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64_t clock
     }
     s->next = first + clocks;
     const int was_in_frame = s->vf.in_frame;
-    vgaframe_push64(&s->vf, uo_out, clocks);
+    // vgaframe_push64 is this one push for a run that fits in 32 bits.
+    if (clocks <= UINT32_MAX) vgaframe_push(&s->vf, uo_out, (uint32_t)clocks);
+    else vgaframe_push64(&s->vf, uo_out, clocks);
     const int r = s->vf.last_report;
     if (!r) return;
     const vgaframe_timing_learner_t *l = &s->vf.learner;
@@ -252,6 +269,14 @@ void centrev1_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64_t clock
     } else if (s->vf.in_frame && !s->v_found && l->prev_v != l->t.vsync_positive) {
         s->v_found = 1; s->v_clock = first;         // the first row out of the vsync pulse
     }
+}
+
+void centrev1_push(centrev1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks) {
+    cv_push(s, uo_out, first, clocks);
+}
+
+void centrev1_push_runs(centrev1_t *s, const vgasample_run_t *runs, size_t n) {
+    for (size_t i = 0; i < n; i++) cv_push(s, runs[i].uo_out, runs[i].first, runs[i].clocks);
 }
 
 // The latest frame-clock end in [lo, hi], as its index; -1 if none.
@@ -274,7 +299,10 @@ static void on_raw(void *user, const vgaframe_raw_t *r) {
     const uint64_t rows = r->lines < s->lines ? r->lines : s->lines;
     const size_t stride = r->stride;
 
-    // The pick.
+    // The pick. A clock is written when its bit 7 is set (then its colour
+    // is the low six bits), else missing (stored as 0). The loops are
+    // branch-free so that they vectorise; at cpp 1 the window's clocks are
+    // consecutive (xs0).
     uint32_t missing = 0;
     for (uint32_t y = 0; y < g->height; y++) {
         const int64_t row = (int64_t)s->vpl + g->vback + (int64_t)y;
@@ -285,38 +313,53 @@ static void on_raw(void *user, const vgaframe_raw_t *r) {
             continue;
         }
         const uint8_t *src = r->raw + (size_t)row * stride;
-        for (uint32_t p = 0; p < g->width; p++) {
-            const int64_t x = s->xs[p];
-            const uint8_t b = x >= 0 ? src[x] : 0;
-            if (b & 0x80) out[p] = (uint8_t)(b & 0x3F);
-            else { out[p] = 0; missing++; }
+        uint32_t written = 0;
+        if (s->xs0 >= 0) {
+            const uint8_t *q = src + s->xs0;
+            for (uint32_t p = 0; p < g->width; p++) {
+                const uint8_t b = q[p];
+                out[p] = (uint8_t)(b & 0x3F & -(b >> 7));
+                written += (uint32_t)(b >> 7);
+            }
+        } else {
+            for (uint32_t p = 0; p < g->width; p++) {
+                const int64_t x = s->xs[p];
+                const uint8_t b = x >= 0 ? src[x] : 0;
+                out[p] = (uint8_t)(b & 0x3F & -(b >> 7));
+                written += (uint32_t)(b >> 7);
+            }
         }
+        missing += g->width - written;
     }
 
-    // The activity map: every lit clock of the line and frame.
+    // The activity map: every lit clock (written, colour not 0) of the line
+    // and frame.
     for (uint64_t row = 0; row < rows; row++) {
         const uint8_t *src = r->raw + (size_t)row * stride;
         uint8_t *m = s->map + (size_t)(row * s->L);
-        for (uint64_t x = 0; x < s->L; x++)
-            if ((src[x] & 0x80) && (src[x] & 0x3F)) m[x] = 1;
+        for (uint64_t x = 0; x < s->L; x++) {
+            const uint8_t b = src[x];
+            m[x] |= (uint8_t)((b >> 7) & ((b & 0x3F) != 0));
+        }
     }
 
-    // Colour changes inside the window, and those off the pixel grid.
-    const int whole = s->cpp == floor(s->cpp);
-    const int64_t icpp = (int64_t)s->cpp;
-    const span_t sp = window_span(s->hsync, s->cpp, g->hback, g->width);
-    const int64_t xlo = sp.lo, xhi = sp.hi;
-    const int64_t c0 = xlo > 1 ? xlo : 1, c1 = xhi < (int64_t)s->L ? xhi : (int64_t)s->L;
+    // Colour changes inside the window: clocks x of [cc0, cc1) written, as
+    // is clock x - 1, with a different colour; and those off the pixel grid
+    // (s->off, all 0 unless cpp is whole).
+    const uint8_t *off = s->off;
     for (uint32_t y = 0; y < g->height; y++) {
         const int64_t row = (int64_t)s->vpl + g->vback + (int64_t)y;
         if (row < 0 || (uint64_t)row >= rows) continue;
         const uint8_t *src = r->raw + (size_t)row * stride;
-        for (int64_t x = c0; x < c1; x++) {
+        uint32_t changes = 0, offg = 0;
+        for (int64_t x = s->cc0; x < s->cc1; x++) {
             const uint8_t a = src[x - 1], b = src[x];
-            if (!(a & 0x80) || !(b & 0x80) || ((a ^ b) & 0x3F) == 0) continue;
-            s->colour_changes++;
-            if (whole && (x - xlo) % icpp != 0) s->off_grid++;
+            const uint8_t ch = (uint8_t)(((a & b) >> 7) & (((a ^ b) & 0x3F) != 0));
+            changes += ch;
+            offg += (uint32_t)(ch & off[x - s->cc0]);
         }
+        s->colour_changes += changes;
+        s->off_grid += offg;
     }
 
     if (s->raw_fn) s->raw_fn(s->raw_user, r);
@@ -392,6 +435,6 @@ void centrev1_finish(centrev1_t *s, centrev1_diag_t *d) {
 void centrev1_free(centrev1_t *s) {
     if (!s) return;
     free(s->raw); free(s->rgb); free(s->cover);
-    free(s->frame); free(s->map); free(s->xs);
+    free(s->frame); free(s->map); free(s->xs); free(s->off);
     free(s);
 }

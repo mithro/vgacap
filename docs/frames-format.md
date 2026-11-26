@@ -54,8 +54,8 @@ when the trace has no closing record, because the run was cut off.
 | value | meaning |
 |---|---|
 | `ok` | the simulation finished normally |
-| `sim-timeout` | the simulation hit its wall-clock limit before it produced a usable clip |
-| `unstable-sync` | the line or frame period varied by more than 1%, so there is no stable raster |
+| `sim-timeout` | the run was stopped by the wall-clock limit (SIGTERM), or produced fewer than half its target frames |
+| `unstable-sync` | frame length varied by more than 1%, or more than 1% of lines were short or long |
 | `no-sync` | no periodic hsync/vsync was seen during calibration |
 | `bad-timing` | sync was seen but is not a plausible raster |
 | `truncated` | the trace ended without a closing record |
@@ -90,7 +90,7 @@ distinct_frames, store, store_length, store_sha256
   0 to `frames` - 1 with no holes; the number comes from counting the end of
   each vsync pulse from `capture_after_clock`.
 - `distinct_frames` is the number of distinct frames in the store: frames
-  with identical pixels (and the same `missing`) share one.
+  with identical pixels share one; `missing` is kept per frame, in the runs.
 - `store` is a file in the same directory as `frames.txt` (a bare file name,
   no whitespace, `/` or `\`). It holds the distinct frames' rgb6 bytes
   concatenated, distinct frame n at byte offset n * width * height, and the

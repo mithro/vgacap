@@ -47,12 +47,21 @@ if(VGACAP_HOST_EXTRAS)
   # file with a message saying so.
   target_link_libraries(vgacap-dump PRIVATE vgacap_trace)
   target_compile_definitions(vgacap-dump PRIVATE VGACAP_DUMP_TRACES)
+  # bench-runs --write-trace: the benchmark's stream as a simulation trace.
+  target_link_libraries(bench-runs PRIVATE vgacap_trace)
+  target_compile_definitions(bench-runs PRIVATE BENCH_WRITE_TRACE)
   # Test-only helper for python/tests/test_roundtrip_c.py: writes a trace.
   add_executable(trace-make tests/trace_make.c)
   target_link_libraries(trace-make PRIVATE vgacap_trace)
   # --- sample: the shared calibration and frame clock (src/sample), host only ---
   add_library(vgacap_sample STATIC src/sample/calib.c src/sample/frameclock.c src/sample/tbv1.c src/sample/centrev1.c src/sample/hashes.c src/sample/outputs.c)
   target_link_libraries(vgacap_sample PUBLIC vgacap_frame vgacap_trace vgacap_stream vgacap_sha256 vgacap_zstd m)
+  # vgacap-sample: a simulation trace to its samplers' stores (centre-v1 by default,
+  # tb-v1 on request), frames.txt and hash files, in one pass. It reads the reader's stats (src/trace) for
+  # VGACAP_SAMPLE_DEBUG.
+  add_executable(vgacap-sample src/tools/vgacap_sample.c)
+  target_include_directories(vgacap-sample PRIVATE src/trace)
+  target_link_libraries(vgacap-sample PRIVATE vgacap_sample)
   # Test-only helper for python/tests/test_calib.py: calibration and frame
   # clock of a trace.
   add_executable(vgacap-calib-dump tests/calib_dump.c)
@@ -65,6 +74,10 @@ if(VGACAP_HOST_EXTRAS)
   # raw clock-resolution frames and diagnostics of a trace.
   add_executable(vgacap-centre-dump tests/centre_dump.c)
   target_link_libraries(vgacap-centre-dump PRIVATE vgacap_sample)
+  # Test-only helper for python/tests/test_vgacap_sample.py: rewrites a plain
+  # stream as a zstd trace through the writer (its block boundaries).
+  add_executable(trace-recode tests/trace_recode.c)
+  target_link_libraries(trace-recode PRIVATE vgacap_trace)
 endif()
 
 function(vgacap_add_test name)
