@@ -51,7 +51,8 @@ BANNED_RE = re.compile(
 # 6.3: labels, so matched as written at the start of a paragraph or line.
 BANNED_LABELS = re.compile(r"(?:^|\n)\s*(Future|Sources):", re.MULTILINE)
 
-#: Every check this module makes: its rule number, the start of the message
+#: Every check this module makes: its rule number (None for a check of the
+#: pending list, which no page rule covers), the start of the message
 #: it prints (… for a part that varies), what it catches, and whether the
 #: build fails or only logs it. docs/developing/site/reference-page-rules.md
 #: is made from this table, and docs/tests/test_vgacap_developing.py holds
@@ -65,7 +66,7 @@ CHECKS = (
     ("10.1", "banned word or phrase … (6.1)", "a banned word or phrase in prose", "fails"),
     ("10.1", "forbidden label … (6.3)", "a paragraph or line that starts with Future: or Sources:", "fails"),
     ("10.2", "title is … characters, over …: …", "a title over the title limit", "fails"),
-    ("10.3", "rule 10.3: title … is also the title of …", "a title that another page has, on every page with it", "fails"),
+    ("10.3", "title … is also the title of …", "a title that another page has, on every page with it", "fails"),
     ("3.2", "how-to headings are out of order: …", "how-to headings out of order", "fails"),
     ("10.4", "step sentence of … words, over …: …", "a how-to step sentence over the sentence limit", "fails"),
     ("10.5", "how-to is missing …", "a how-to with a fixed heading missing", "fails"),
@@ -83,8 +84,8 @@ CHECKS = (
     ("1.6", "the page holds … sentences or facts; more than two are needed", "a page other than a landing with two sentences or facts or fewer", "fails"),
     ("10.19", "… links, over …", "more links than the link limit", "logged"),
     ("10.20", "… callouts, over …", "more callouts than the callout limit", "logged"),
-    ("pending", "vgacap_rules_pending names …, which is not a page", "a pending list entry that is not a page", "fails"),
-    ("pending", "… passes every rule: take it out of vgacap_rules_pending (…)", "a page on the pending list that passes every rule", "fails"),
+    (None, "vgacap_rules_pending names …, which is not a page", "a pending list entry that is not a page", "fails"),
+    (None, "… passes every rule: take it out of vgacap_rules_pending (…)", "a page on the pending list that passes every rule", "fails"),
 )
 
 TITLE_MAX = 65          # 5.1

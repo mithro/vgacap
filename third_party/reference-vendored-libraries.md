@@ -77,7 +77,7 @@ Library is as above, and Upstream path each path copied, from the upstream root.
 
 ## Files left out
 
-Library is as above, and Path the upstream path. Copied and Built say whether the file is in `third_party/` and whether the build compiles it. `ZSTD_DISABLE_ASM=1` stands in for the assembly file, and the macros below for libfst's `config.h`.
+Library is as above, and Path the upstream path. Copied and Built say whether the file is in `third_party/` and whether the build compiles it. `ZSTD_DISABLE_ASM=1` stands in for the assembly file, and the macros below for the `config.h` that libfst's own build generates and `fstapi.c` includes.
 
 | Library | Path | Copied | Built |
 |---|---|---|---|
@@ -85,7 +85,7 @@ Library is as above, and Path the upstream path. Copied and Built say whether th
 | `zstd/` | `lib/common/pool.c` | yes | no |
 | `zstd/` | `lib/common/threading.c` | yes | no |
 | `zstd/` | `lib/compress/zstdmt_compress.c` | yes | no |
-| `libfst/` | `config.h` | no | no |
+| `libfst/` | generated `config.h` | no | no |
 
 ## Macros defined
 

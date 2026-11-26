@@ -13,7 +13,7 @@ The tables are made from [`docs/_ext/vgacap_rules.py`](../../_ext/vgacap_rules.p
 
 ## Checks
 
-Rule is the rule's number, or `pending` for a check of the pending list. What the build catches is the case that sets it off, and Message the start of the warning, with … for a part that varies.
+Checks says whether the check is of a page or of the pending list, and Rule is the page rule's number. What the build catches is the case that sets it off, and Message the start of the warning, with … for a part that varies.
 
 ```{vgacap-page-rules}
 ```
@@ -41,4 +41,4 @@ Each of these fails the build in prose, in any case. Code, links and markup are 
 
 ## Pages on the pending list
 
-A page listed in `vgacap_rules_pending` in [`docs/conf.py`](../../conf.py) has its rule failures logged, not failed. A listed page that passes every rule fails the build, so the list only shrinks, and so does an entry that is not a page.
+A page listed in `vgacap_rules_pending` in [`docs/conf.py`](../../conf.py) has its rule failures logged, not failed. A listed page that passes every rule fails the build, so the list only shrinks. An entry that names something that is not a page also fails the build.

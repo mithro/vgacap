@@ -29,7 +29,7 @@ This page runs [`tools/hil.sh`](hil.sh) against fpga-1, a demo board with an FPG
 
 ## Check
 
-Step 4 prints one `PASS` line for each of the ten checks, then these lines, and exits with status 0. These are the lines of [the 2026-11-24 run on fpga-4](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-frame-capture-fpga4), with `fpga-1` in the report's name; fpga-1's own result is left to its bench run.
+Step 4 prints one `PASS` line for each of the ten checks, then these lines, and exits with status 0. These are the lines of [the 2026-11-24 run on fpga-4](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-frame-capture-fpga4), with `fpga-1` in the report's name.
 
 ```text
 10 check(s): 10 passed, 0 failed, 0 skipped

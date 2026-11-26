@@ -352,9 +352,10 @@ class PageRules(SourceDirective):
     source = RULES
 
     def make(self):
-        rows = [[code(rule), what, code(message), result]
+        rows = [["a page" if rule else "the pending list", code(rule) if rule else "none",
+                 what, code(message), result]
                 for rule, message, what, result in vgacap_rules.CHECKS]
-        return [table(["Rule", "What the build catches", "Message", "Result"], rows)]
+        return [table(["Checks", "Rule", "What the build catches", "Message", "Result"], rows)]
 
 
 class SidebarChecks(SourceDirective):

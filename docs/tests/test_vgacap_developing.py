@@ -107,7 +107,9 @@ def messages(module):
             if name in ("fail", "note"):
                 out.append((name, node.args[0].value, template(node.args[1])))
             elif name == "report":
-                out.append(("report", None, template(node.args[2])))
+                # report() prints "rule <number>: <message>"; the rule is the row's.
+                rule, _, message = template(node.args[2]).partition(": ")
+                out.append(("report", rule.removeprefix("rule "), message))
             elif name == "warning":
                 out.append(("warning", None, template(node.args[0])))
         elif (isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple)
@@ -123,8 +125,8 @@ def matches(row, message):
 
 def test_rules_table_has_one_row_for_each_check():
     found = messages(vgacap_rules)
-    # report() and the two generic warnings only pass a message through.
-    code = [(kind, rule, m) for kind, rule, m in found if m not in ("rule …: …", "…")]
+    # Page.fail's report() call and report's own warning only pass a message through.
+    code = [(kind, rule, m) for kind, rule, m in found if m != "…"]
     rows = list(vgacap_rules.CHECKS)
     for kind, rule, message in code:
         hits = [r for r in rows if matches(r[1], message)
