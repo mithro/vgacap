@@ -3,16 +3,21 @@
 
 A landing page (front matter `type: landing`) is one line for each
 destination: a list item that starts with a link. The site's sidebar is the
-tree those lines make, walked breadth-first from the root landing page: a
-page's parent is the first landing page that reaches it, in line order.
-Every page therefore has one place in the sidebar. A later line to the same
-page, or a line back up to a landing page above, is a cross-link and adds
-no entry, so lines may link in any direction without making a cycle.
+tree those lines make, walked breadth-first from the root landing page.
+
+A page is the destination of one line only: that line's landing page is
+its parent, its one place in the sidebar. Every other mention of the page
+is a cross-link, written as a list item that does not start with the link
+("- The protocol is also under [Reference](...)"); a second line to the
+same page fails the build, naming both, so a page's place is always the one
+its writer chose. A line back up, to the root or to a landing page above,
+is a cross-link by its nature and is allowed.
 
 Before MyST parses a landing page, this appends a hidden toctree of its
 children in the tree. A page writes no toctree directive of its own; one
-that does fails the build. The lines are read with markdown-it, as MyST
-reads them, so a link in a code block is not a line. A line's link resolves
+that does fails the build. The lines and toctrees are found with
+markdown-it, as MyST reads them, so one shown in a code block does not
+count. A link is percent-decoded, as MyST decodes it. A line's link resolves
 as the build resolves links elsewhere: relative to the page, `/` for the
 repository root, a directory to its README. A line to a Markdown file or a
 directory that is not a page fails the build, naming the line.
@@ -23,6 +28,7 @@ every landing page be read again.
 
 import posixpath
 import re
+import urllib.parse
 
 from markdown_it import MarkdownIt
 from sphinx.util import logging
@@ -31,7 +37,6 @@ logger = logging.getLogger(__name__)
 
 FRONT_MATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.S)
 LANDING = re.compile(r"^type:\s*landing\s*$", re.M)
-TOCTREE = re.compile(r"^\s*(```+|~~~+|:::+)\s*\{toctree\}", re.M)
 SCHEME = re.compile(r"[a-z][a-z0-9+.-]*:", re.I)
 WRAPPERS = ("strong_open", "em_open")
 PARSER = MarkdownIt("commonmark")
@@ -46,7 +51,7 @@ def resolve(docname, href, found_docs, srcdir):
     """(docname or None, problem or None) for a line's link."""
     if not href or href.startswith("#") or SCHEME.match(href) or href.startswith("//"):
         return None, None                      # an anchor here, or another site
-    path = href.split("#", 1)[0].split("?", 1)[0]
+    path = urllib.parse.unquote(href.split("#", 1)[0].split("?", 1)[0])
     if path.startswith("/"):
         rel = posixpath.normpath(path.lstrip("/"))
     else:
@@ -93,7 +98,8 @@ def lines(docname, text, found_docs, srcdir, warn=True):
 
 
 def tree(app):
-    """{landing docname: [child docnames]}, cached for the build."""
+    """{landing docname: [child docnames]}, cached for the build. A page that
+    is the destination of lines on two landing pages is reported."""
     if getattr(app, "vgacap_tree", None) is not None:
         return app.vgacap_tree
     env = app.env
@@ -104,19 +110,39 @@ def tree(app):
             texts[docname] = text
     root = app.config.root_doc
     children = {docname: [] for docname in texts}
-    placed, queue = {root}, [root]
+    targets = {}
+    parent_of = {root: None}
+    queue = [root]
     while queue:
-        parent = queue.pop(0)
-        if parent not in texts:
+        landing = queue.pop(0)
+        if landing not in texts:
             continue
-        for target in lines(parent, texts[parent], env.found_docs, env.srcdir):
-            if target not in placed:
-                placed.add(target)
-                children[parent].append(target)
+        targets[landing] = lines(landing, texts[landing], env.found_docs, env.srcdir)
+        for target in targets[landing]:
+            if target not in parent_of:
+                parent_of[target] = landing
+                children[landing].append(target)
                 queue.append(target)
+    for landing, found in targets.items():
+        above, node = set(), landing
+        while node is not None:
+            above.add(node)
+            node = parent_of.get(node)
+        for target in found:
+            if target in above or parent_of.get(target) == landing:
+                continue
+            logger.warning(
+                f"{target} is a line on {parent_of[target]} and on {landing}: a page has "
+                "one line; write the other mention as a cross-link, a list item that does "
+                "not start with the link", location=landing, type="vgacap", subtype="landing")
     app.vgacap_tree = children
-    app.vgacap_landings = set(texts)
     return children
+
+
+def writes_toctree(text):
+    """Whether the page writes a toctree directive outside a code example."""
+    return any(token.type == "fence" and token.info.strip().startswith("{toctree}")
+               for token in PARSER.parse(text))
 
 
 def on_env_get_outdated(app, env, added, changed, removed):
@@ -130,7 +156,7 @@ def on_env_get_outdated(app, env, added, changed, removed):
 
 
 def on_source_read(app, docname, source):
-    if TOCTREE.search(source[0]):
+    if writes_toctree(source[0]):
         logger.warning("a page writes no toctree: the sidebar comes from the landing "
                        "pages' lines (docs/_ext/vgacap_landing.py)", location=docname,
                        type="vgacap", subtype="landing")
