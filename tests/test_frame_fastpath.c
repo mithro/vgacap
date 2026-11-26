@@ -428,6 +428,104 @@ TEST(fastpath_equivalent_no_table_mode_forced_800x600_56) {
     ASSERT_TRUE(both_maps(70, &odd_timing, BUF_W, BUF_H, svga56, 0));
 }
 
+// ---- vgaframe_reset, as vgacap-frames and vgadecode call it at an overrun --
+
+// Both sides reset. The fast path's own state has to come out of it as a
+// fresh vgaframe_init leaves it: raw all zero with an empty dirty box,
+// last_report 0, and have_prev 0 so the next push takes the slow path. The
+// pixel table depends on the config alone and stays.
+static int reset_both(void) {
+    uint8_t table[256], table_ok = lib.f.pixel_table_ok;
+    memcpy(table, lib.f.pixel_table, sizeof table);
+    vgaframe_reset(&lib.f);
+    ref_vgaframe_reset(&ref.f);
+    if (lib.f.dirty_x_end || lib.f.dirty_y_end) return mismatch("dirty box not empty after reset");
+    if (lib.f.learner.have_prev) return mismatch("have_prev after reset");
+    if (lib.f.pixel_table_ok != table_ok || memcmp(table, lib.f.pixel_table, sizeof table))
+        return mismatch("pixel table changed by reset");
+    for (size_t i = 0; i < sizeof lib.raw; i++)
+        if (lib.raw[i]) return mismatch("raw not zero after reset");
+    return same_state() && same_buffers();
+}
+
+// The random stream with a reset mid-line inside a frame, at a line's first
+// clock, at a frame's first clock, part way into a run (the run's tail then
+// reaches a fresh learner), straight after a frame was emitted, after a run
+// that saturated x, and inside an open FRAM window. After each one the
+// stream goes on, and the two sides have to keep agreeing.
+static int reset_case(uint64_t seed, const uint8_t map[VGACAP_SIG_COUNT], int is_tiny) {
+    rng_state = seed;
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    make_stream(m);
+    size_t n = (size_t)NFRAMES * cpl * lpf, f1 = (size_t)cpl * lpf;
+    uint32_t a0 = (uint32_t)m->v_sync + m->v_back;
+    pair_init(map, BUF_W, BUF_H, NULL);
+    unsigned long frames_before = 0;
+    // Two clean frames, so the learner knows the mode and frames are being
+    // built, then a reset mid-line and mid-frame.
+    size_t at = f1 + (size_t)(a0 + 200) * cpl + 333;
+    if (!push_stream(0, at, map, is_tiny) || !reset_both()) return 0;
+    // On from there: the fresh learner starts mid-line.
+    size_t to = 3 * f1 + (size_t)(a0 + 100) * cpl;   // a line's first clock
+    if (!push_stream(at, to, map, is_tiny) || !reset_both()) return 0;
+    if (!push_stream(to, n, map, is_tiny) || !push_stream(0, f1, map, is_tiny)) return 0;
+    if (!reset_both()) return 0;                       // a frame's first clock
+    // Part way into a run: the run's head before the reset, its tail after.
+    if (!push_stream(f1, 2 * f1 + (size_t)(a0 + 50) * cpl + 100, map, is_tiny)) return 0;
+    uint32_t s = stream[2 * f1 + (size_t)(a0 + 50) * cpl + 100];
+    if (!is_tiny) s = remap(s, map);
+    if (!push_both(s, 1) || !reset_both() || !push_both(s, 1)) return 0;
+    // Straight after an emit: the learner has just been reset, so it needs
+    // the rest of this pass and a frame of the next to measure the mode
+    // again; then push clock by clock until a frame comes out.
+    if (!push_stream(2 * f1 + (size_t)(a0 + 50) * cpl + 102, n, map, is_tiny)) return 0;
+    if (!push_stream(0, f1, map, is_tiny)) return 0;
+    size_t k = f1;
+    frames_before = frames_compared;
+    while (k < n && frames_compared == frames_before) {
+        uint32_t v = is_tiny ? stream[k] : remap(stream[k], map);
+        if (!push_both(v, 1)) return 0;
+        k++;
+    }
+    if (frames_compared == frames_before) return mismatch("no frame emitted to reset after");
+    if (!reset_both() || !push_stream(k, n, map, is_tiny)) return 0;
+    // After a run that saturated x.
+    uint32_t idle = is_tiny ? stream[n - 1] : remap(stream[n - 1], map);
+    if (!push64_both(idle, 5000000000ull) || !reset_both()) return 0;
+    if (!push_stream(0, n, map, is_tiny)) return 0;
+    // Inside an open FRAM window, and with a FRAM picture pending.
+    uint16_t first = (uint16_t)(a0 + 100);
+    size_t w0 = f1 + (size_t)first * cpl;
+    if (!frame_begin_both(3, first, 25, cpl, 25u * cpl)) return 0;
+    if (!push_stream(w0, w0 + 10u * cpl + 57, map, is_tiny) || !reset_both()) return 0;
+    if (!frame_begin_both(4, first, 25, cpl, 25u * cpl)) return 0;
+    if (!push_stream(w0, w0 + 25u * cpl, map, is_tiny)) return 0;
+    if (!lib.f.fram_pending) return mismatch("no pending FRAM picture to reset");
+    if (!reset_both()) return 0;
+    // And back to a continuous stream that emits frames.
+    frames_before = frames_compared;
+    for (int pass = 0; pass < 2; pass++)
+        if (!push_stream(0, n, map, is_tiny)) return 0;
+    if (frames_compared == frames_before) return mismatch("no frames after the last reset");
+    if (!flush_both()) return 0;
+    fprintf(stderr, "  reset seed %llu: %lu pushes, %lu frames compared\n",
+            (unsigned long long)seed, pushes, frames_compared);
+    return 1;
+}
+
+TEST(fastpath_equivalent_across_reset_tiny) {
+    glitch_frames = 0x1;   // frames 1 to 3 clean, so frames come out between the resets
+    ASSERT_TRUE(reset_case(80, tiny_map, 1));
+    ASSERT_TRUE(reset_case(81, tiny_map, 1));
+    glitch_frames = 0x5;
+}
+
+TEST(fastpath_equivalent_across_reset_wide) {
+    glitch_frames = 0x1;
+    ASSERT_TRUE(reset_case(82, wide_map, 0));
+    glitch_frames = 0x5;
+}
+
 int main(void) {
     RUN(fastpath_equivalent_busy);
     RUN(fastpath_equivalent_bars);
@@ -444,5 +542,7 @@ int main(void) {
     RUN(fastpath_equivalent_no_table_mode_auto_crop);
     RUN(fastpath_equivalent_no_table_mode_auto_crop_small_buffer);
     RUN(fastpath_equivalent_no_table_mode_forced_800x600_56);
+    RUN(fastpath_equivalent_across_reset_tiny);
+    RUN(fastpath_equivalent_across_reset_wide);
     RUN_TESTS_END();
 }
