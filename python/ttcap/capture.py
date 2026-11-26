@@ -271,7 +271,8 @@ _CLEANUP = (
 
 #: Per-read timeout while a capture is streaming. Generous, because the gap
 #: between chunks is a whole DMA buffer of project clocks: at 100 kHz with
-#: buf_words=4096 that is ~82 ms, but a slower clock stretches it linearly.
+#: buf_words=4096 that is ~82 ms on an RP2040 (8,192 samples) and ~164 ms
+#: on an RP2350 (16,384 samples), and a slower clock stretches it linearly.
 DEFAULT_CHUNK_TIMEOUT = 30.0
 
 _TIME_HEAD = struct.Struct("<QIIH")
@@ -426,8 +427,9 @@ class CaptureRequest:
     #:
     #: Called from the thread driving the iterator, never from another, and
     #: never while a chunk is half read. Stop latency is therefore one DMA
-    #: buffer: ~82 ms at 750 kHz with `buf_words=4096`, but 2.2 s at the
-    #: RP2040's 60 kHz ceiling. A consumer that cannot wait that long wants
+    #: buffer: with `buf_words=4096`, ~22 ms on an RP2350 at 750 kHz (16,384
+    #: samples) but ~137 ms on an RP2040 at its 60 kHz ceiling (8,192
+    #: samples). A consumer that cannot wait that long wants
     #: `CaptureSession.request_stop()` instead, which is thread-safe.
     stop: Callable[[], bool] | None = None
     #: The board-side program body `ttcap.mp.build()` puts after the shared
@@ -876,8 +878,9 @@ def _keyed_int(msg: str, key: str) -> int | None:
 
 #: How long an abandoned capture waits for the board's own trailer after a
 #: cooperative stop before falling back to a real Ctrl-C. One DMA buffer at
-#: the RP2040's 60 kHz ceiling is 2.2 s, so this is a little over the
-#: slowest legitimate gap and far below `DEFAULT_CHUNK_TIMEOUT`: this is the
+#: the RP2040's 60 kHz ceiling is ~137 ms at the default `buf_words`, so
+#: this is well over the slowest legitimate gap at the default and far
+#: below `DEFAULT_CHUNK_TIMEOUT`: this is the
 #: unhappy path, and waiting out a 30 s read for a board that is not coming
 #: back helps nobody.
 STOP_DRAIN_TIMEOUT = 5.0
@@ -1059,8 +1062,9 @@ class CaptureSession:
         capture too early loses the board's only overrun and RXSTALL
         report.** The byte goes out at once, but the board picks it up
         between chunk writes, so the trailer is up to one DMA buffer away:
-        ~82 ms at 750 kHz with `buf_words=4096`, but **2.2 s** at the
-        RP2040's 60 kHz ceiling. An element's `stop()` should keep pulling
+        with `buf_words=4096`, ~22 ms on an RP2350 at 750 kHz but **~137 ms**
+        on an RP2040 at its 60 kHz ceiling. An element's `stop()` should
+        keep pulling
         until the iterator ends -- or wait at least that long -- before it
         escalates to `close()`, and a subprocess driver should allow the
         same before it sends a second signal.
