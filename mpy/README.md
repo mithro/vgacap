@@ -6,7 +6,7 @@ RP2350 on the Tiny Tapeout demo board, and writes it as vgacap chunks.
 
 It is the third way to capture on the RP2350 demo board, next to the
 MicroPython scripts ([`python/ttcap/mp/`](../python/ttcap/mp/)) and the vgacap firmware
-([`firmware/`](../firmware/README.md)). It shares the firmware's capture
+([`firmware/`](../firmware/README.md)). It shares the vgacap firmware's capture
 engines: the module is a thin binding over [`firmware/core/fw_capture.c`](../firmware/core/fw_capture.c)
 and [`firmware/pico/hal_rp2.c`](../firmware/pico/hal_rp2.c), not a reimplementation.
 
@@ -35,19 +35,19 @@ Both return `None` once the capture has ended; everything they report is in
 the stream.
 
 **Capture arguments** are keyword-only, all required, and are the
-`stream`/`frame` arguments of the firmware protocol
+`stream`/`frame` arguments of the vgacap firmware protocol
 ([firmware/PROTOCOL.md](../firmware/PROTOCOL.md)), with the same meanings
 and ranges: the module turns them back into the protocol's `key=value` text
-and parses it with the firmware's own tables. Integers are ints, `edge` is
+and parses it with the vgacap firmware's own tables. Integers are ints, `edge` is
 `"falling"` or `"rising"`. A bad argument raises `ValueError` with exactly
-the text of the firmware's `err` reply (`unknown key 'bogus'`, `pio must be
+the text of the vgacap firmware's `err` reply (`unknown key 'bogus'`, `pio must be
 an integer 0..2, got '3'`, `sysclk 133000000 is not 2..32 whole project
 clocks of 100000`, ...), before anything is written.
 
-`frame()` also takes **`clock_hz`**, the project clock: on this firmware the
+`frame()` also takes **`clock_hz`**, the project clock: on the module's MicroPython firmware the
 ttboard SDK runs the clock (`tt.clock_project_PWM(hz)`), so the module is
 told it, and refuses a capture whose system clock is not a whole 2..32
-multiple of it, as the firmware does.
+multiple of it, as the vgacap firmware does.
 
 **Environment arguments:**
 
@@ -78,11 +78,11 @@ lines of 640x480 fitted in 46 blocks. Only a heap with less free memory in total
 than the region sweeps a picture in several windows.
 
 The opening `frame window=W buffers=N` TIME message says how many lines a
-window takes and in how many blocks. The FRAM chunks are the firmware's
-(one chunk per window, whatever N is); the firmware's own `buffers` is
+window takes and in how many blocks. The FRAM chunks are the vgacap firmware's
+(one chunk per window, whatever N is); the vgacap firmware's own `buffers` is
 always 1 (its 440 KB static arena).
 
-**Output:** vgacap chunks only, `RAW`/`FRAM`/`TIME`, exactly as the firmware
+**Output:** vgacap chunks only, `RAW`/`FRAM`/`TIME`, exactly as the vgacap firmware
 writes them after its `ok` ([PROTOCOL.md, "Capture output"](../firmware/PROTOCOL.md#capture-output)), and no `DONE`
 marker: the raw REPL's own end of output ends a capture. The host writes
 the `VGCH` header, as on the other two paths.
@@ -111,8 +111,8 @@ time (`RuntimeError` otherwise).
 Not in the module: the project clock, reset, `ui_in` and selecting a
 design. Those are the SDK's (`tt.clock_project_PWM`, `tt.reset_project`,
 `tt.shuttle[...].enable()`), and ttcap drives them as on the script path.
-The firmware's `asic_select` command and the `hal_asic_ctrl()` HAL hook
-behind it are firmware-only: the module does not link the firmware's
+The vgacap firmware's `asic_select` command and the `hal_asic_ctrl()` HAL hook
+behind it are firmware-only: the module does not link the vgacap firmware's
 command layer, so it neither offers nor needs them.
 
 ## Building
