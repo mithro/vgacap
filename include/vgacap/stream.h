@@ -3,7 +3,9 @@
 //
 // Chunk = tag[4] ASCII, u32 little-endian payload length, payload.
 // The first chunk is always the VGCH header. See docs in mithro/tt-vga-capture
-// (docs/superpowers/plans/2026-09-15-m2-stream-and-frame.md, "Stream format").
+// (docs/superpowers/plans/2026-09-15-m2-stream-and-frame.md, "Stream format";
+// version 2 -- wide samples, RUNS, BLKH and META -- is
+// docs/design/2026-11-25-format-v2-runs.md).
 #ifndef VGACAP_STREAM_H
 #define VGACAP_STREAM_H
 
@@ -20,6 +22,16 @@ extern "C" {
 #define VGACAP_TAG_FRAME  "FRAM"
 #define VGACAP_TAG_EVENT  "EVNT"
 #define VGACAP_TAG_TIME   "TIME"
+// Version 2 only (a version 1 stream never carries them).
+#define VGACAP_TAG_RUNS   "RUNS"   // u32 pair_count, then (vbytes value, LEB128 run) pairs
+#define VGACAP_TAG_BLOCK  "BLKH"   // u64 first_sample: sets the sample index n
+#define VGACAP_TAG_META   "META"   // 1..VGACAP_META_MAX bytes of key=value lines
+
+#define VGACAP_META_MAX 4096
+#define VGACAP_CLOCK_BIT_NONE 0xFF
+// Version 2 keeps the whole VGCH chunk within version 1's 20 + 255 bytes,
+// so a version 1 reader always reaches its "unsupported version" error.
+#define VGACAP_DESC_MAX_V2 251
 
 #define VGACAP_DESC_MAX 255
 #define VGACAP_FLAG_FIRST_SAMPLE_MSB 0x01
@@ -54,21 +66,37 @@ enum vgacap_signal {
 #define VGACAP_SIG_ABSENT 0xFF
 
 typedef struct vgacap_header {
-    uint16_t version;                       // 1
-    uint8_t  sample_bits;                   // 8, 12, 16 or 32
+    uint16_t version;                       // 1 or 2
+    uint8_t  sample_bits;                   // v1: 8, 12, 16 or 32; v2: 1..64
     uint8_t  mode;                          // enum vgacap_mode
     uint32_t clock_hz;                      // nominal project clock, 0 = unknown
     uint8_t  signal_map[VGACAP_SIG_COUNT];  // sample bit index per signal, or VGACAP_SIG_ABSENT
-    uint8_t  samples_per_word;              // 1, 2, 4 or 8 samples per 32-bit word in RAW/FRAM
+    uint8_t  samples_per_word;              // 1, 2, 4 or 8 samples per 32-bit word in RAW/FRAM;
+                                            // v2: 0 when sample_bits > 32
     uint8_t  flags;                         // VGACAP_FLAG_*
-    uint8_t  desc_len;
+    uint8_t  desc_len;                      // v2: at most VGACAP_DESC_MAX_V2
     char     desc[VGACAP_DESC_MAX + 1];     // NUL-terminated free text
+    // Version 2 fields; a version 1 header reads as 1, NONE, 0.
+    uint8_t  samples_per_clock;             // 1, or 2 exactly when there is a clock bit
+    uint8_t  clock_bit;                     // 0..sample_bits-1, or VGACAP_CLOCK_BIT_NONE
+    uint8_t  clock_first;                   // the clock bit's value in sample 0 (0 with no clock bit)
 } vgacap_header_t;
 
 // Fill a header for the Tiny VGA Pmod: signal_map = {7,3,0,4,1,5,2,6},
-// version 1, mode UNKNOWN, clock 0, empty desc.
+// version 1, mode UNKNOWN, clock 0, empty desc, one sample a clock, no
+// clock bit.
 void vgacap_header_init_tinyvga(vgacap_header_t *h, uint8_t sample_bits,
                                 uint8_t samples_per_word, uint8_t flags);
+// A version 2 header: the Tiny VGA map on bits 0-7, mode UNKNOWN, clock 0,
+// empty desc, samples_per_word 0 when sample_bits > 32 and 1 otherwise.
+void vgacap_header_init_v2(vgacap_header_t *h, uint8_t sample_bits, uint8_t samples_per_clock,
+                           uint8_t clock_bit, uint8_t clock_first);
+
+// LEB128 of v into p (at most 10 bytes); returns the bytes written, 1..10.
+size_t vgacap_leb128_put(uint8_t *p, uint64_t v);
+// One RUNS pair: `vbytes` = (sample_bits + 7) / 8 little-endian value bytes,
+// then the LEB128 run. Returns the bytes written (vbytes + 1..10).
+size_t vgacap_run_pair_put(uint8_t *p, uint64_t value, unsigned vbytes, uint64_t run);
 
 // Pack n samples into 32-bit words per the header's packing; words must hold
 // ceil(n / samples_per_word) entries. Returns the number of words written.
@@ -117,23 +145,39 @@ int vgacap_writer_events(vgacap_writer_t *w, const uint64_t *clocks, const uint3
                          uint32_t count);
 int vgacap_writer_time(vgacap_writer_t *w, uint64_t host_time_ns, uint32_t clock_hz,
                        uint32_t dropped, const char *msg);
+// Version 2 chunks; each returns -1, writing nothing, under a version 1
+// header. RUNS: values with the clock bit stored as 0 and no bits at or
+// above sample_bits, runs >= 1, adjacent values different, 1 <= pair_count
+// and the chunk within VGACAP_MAX_CHUNK_LEN; anything else is -1, writing
+// nothing.
+int vgacap_writer_runs(vgacap_writer_t *w, const uint64_t *values, const uint64_t *runs,
+                       uint32_t pair_count);
+int vgacap_writer_block(vgacap_writer_t *w, uint64_t first_sample);
+// META: 1..VGACAP_META_MAX bytes, written as given (the reader checks the text).
+int vgacap_writer_meta(vgacap_writer_t *w, const char *text, size_t len);
 
 // ---- reader -------------------------------------------------------------
 
 typedef enum vgacap_event_type {
     VGACAP_EV_HEADER,       // u.header
-    VGACAP_EV_RUN,          // u.run: `run` consecutive clocks of `value`
+    // u.run: `run` consecutive samples (not clocks: with samples_per_clock
+    // 2 a clock is two samples). `value` is the run's first sample, its
+    // clock bit (if any) regenerated as clock_first ^ (n & 1); the clock
+    // bit of each later sample in the run toggles.
+    VGACAP_EV_RUN,
     VGACAP_EV_FRAME_BEGIN,  // u.frame: a FRAM chunk starts; its samples follow as RUNs
     VGACAP_EV_TIME,         // u.time
     VGACAP_EV_RESYNC,       // u.resync; non-fatal, see below
-    VGACAP_EV_ERROR         // u.error; the reader stops accepting input
+    VGACAP_EV_ERROR,        // u.error; the reader stops accepting input
+    VGACAP_EV_BLOCK,        // u.block: a BLKH chunk
+    VGACAP_EV_META          // u.meta: a META chunk whose text is well formed
 } vgacap_event_type_t;
 
 typedef struct vgacap_event {
     vgacap_event_type_t type;
     union {
         const vgacap_header_t *header;
-        struct { uint32_t value; uint32_t run; } run;
+        struct { uint64_t value; uint64_t run; } run;
         struct {
             uint32_t frame_counter; uint16_t first_line; uint16_t line_count;
             uint32_t clocks_per_line; uint32_t sample_count;
@@ -142,11 +186,20 @@ typedef struct vgacap_event {
             uint64_t host_time_ns; uint32_t clock_hz; uint32_t dropped_samples;
             const char *msg; uint16_t msg_len;   // msg valid only during the callback
         } time;
-        // Chunk framing was lost and has now been regained: `skipped` bytes
-        // of input were discarded, `what` says what first looked wrong.
-        // Delivered once per episode, at the moment the next plausible chunk
-        // header is found; parsing continues normally from there.
+        // Data was lost. Either chunk framing was lost and has now been
+        // regained: `skipped` bytes of input were discarded, `what` says what
+        // first looked wrong, delivered once per episode at the moment the
+        // next plausible chunk header is found. Or ("data lost, framing
+        // kept") a well-framed chunk was skipped by its length, a v2 rule:
+        // a RUNS/BLKH/META content error, a chunk the header forbids, or a
+        // RUNS chunk discarded while the sample index is unknown; then
+        // `skipped` is the whole chunk (8 + length), reported at its end.
+        // A BLKH whose first_sample is not the running n is reported with
+        // skipped = 0 just before its BLOCK event.
         struct { uint32_t skipped; const char *what; } resync;
+        // `expected` is the reader's running sample index before the chunk.
+        struct { uint64_t first_sample; uint64_t expected; } block;
+        struct { const char *text; uint16_t len; } meta;   // text valid only during the callback
         struct { const char *what; } error;
     } u;
 } vgacap_event_t;
@@ -184,9 +237,31 @@ typedef struct vgacap_reader {
     const char *resync_what;   // what first looked wrong
     uint8_t     scanbuf[8];    // rolling tag+length candidate window
     uint8_t     scanfill;
+    // Version 2. n, the index of the next sample to deliver: 0 after a VGCH,
+    // advanced by every delivered sample, set by each BLKH.
+    uint64_t    sample_pos;
+    // 0 while n is unknown: after a loss that could have carried samples, in
+    // a stream with a clock bit, or before the first BLKH of a reader made by
+    // vgacap_reader_init_header. RUNS chunks are then discarded (and
+    // reported) until a BLKH. Losses of META or TIME alone leave n known.
+    int         pos_known;
+    // A byte-wise resync that began on a TIME chunk: 8 + its length. If the
+    // scan regains framing after exactly that many bytes, only the TIME was
+    // lost and n stays known. 0 otherwise.
+    uint32_t    resync_time_len;
+    const char *skip_what;     // non-NULL: skipping this chunk by its length, report at its end
+    // RUNS pair assembly
+    uint8_t     vbytes, vfill, lebcount, have_prev;
+    uint64_t    pair_value, pair_run, prev_value;
+    char        metabuf[VGACAP_META_MAX + 1];
 } vgacap_reader_t;
 
 void vgacap_reader_init(vgacap_reader_t *r, vgacap_event_fn cb, void *user);
+// A reader that already knows the header, for decoding a block other than
+// block 0 of a trace: no VGCH is expected and no HEADER event is emitted.
+// n is unknown until the block's BLKH, which is adopted without a report.
+void vgacap_reader_init_header(vgacap_reader_t *r, vgacap_event_fn cb, void *user,
+                               const vgacap_header_t *h);
 // Feed any number of bytes; events are delivered from inside this call.
 // Returns 0, or -1 after an ERROR event (further input is ignored). A
 // framing error is not an ERROR: it produces a VGACAP_EV_RESYNC (once sync

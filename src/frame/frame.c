@@ -3,6 +3,7 @@
 // and from FRAM partial-frame windows (see vgaframe_frame_begin).
 #include "vgacap/frame.h"
 #include <string.h>
+#include "internal.h"
 
 size_t vgaframe_raw_size(const vgaframe_config_t *c) { return (size_t)c->max_clocks_per_line * c->max_lines; }
 size_t vgaframe_rgb_size(const vgaframe_config_t *c) { return vgaframe_raw_size(c) * 3; }
@@ -23,18 +24,32 @@ void vgaframe_reset(vgaframe_t *f) {
     vgaframe_timing_init(&f->learner);
     memset(&f->out_timing, 0, sizeof f->out_timing);
     f->x = 0; f->y = 0; f->in_frame = 0; f->frames_seen = 0;
+    f->last_report = 0;
     f->fram_active = 0; f->fram_pending = 0; f->fram_counter = 0;
     f->fram_first_line = 0; f->fram_line_count = 0; f->fram_cpl = 0;
     f->fram_remaining = 0; f->fram_max_line = 0; f->fram_anchor = 0;
     f->fram_h_high = f->fram_v_high = f->fram_clocks = 0;
     memset(f->raw, 0, vgaframe_raw_size(&f->cfg));
+    f->dirty_x_end = f->dirty_y_end = 0;
     memset(f->cover, 0, f->cfg.max_lines);
+}
+
+// See vgaframe_t.pixel_table: a lookup by the sample's low 8 bits, valid
+// when no colour signal sits at bit 8 or above.
+static void build_pixel_table(vgaframe_t *f) {
+    const uint8_t *m = f->cfg.signal_map;
+    f->pixel_table_ok = 0;
+    for (int sig = VGACAP_SIG_R1; sig <= VGACAP_SIG_B0; sig++)
+        if (m[sig] != VGACAP_SIG_ABSENT && m[sig] >= 8) return;
+    for (uint32_t s = 0; s < 256; s++) f->pixel_table[s] = (uint8_t)(vgaframe_colour(m, s) | 0x80);
+    f->pixel_table_ok = 1;
 }
 
 int vgaframe_init(vgaframe_t *f, const vgaframe_config_t *cfg, uint8_t *raw, uint8_t *rgb, uint8_t *cover) {
     if (!cfg->max_clocks_per_line || !cfg->max_lines || !raw || !rgb || !cover) return -1;
     memset(f, 0, sizeof *f);
     f->cfg = *cfg; f->raw = raw; f->rgb = rgb; f->cover = cover;
+    build_pixel_table(f);
     vgaframe_reset(f);
     return 0;
 }
@@ -91,6 +106,27 @@ static int covered(const vgaframe_t *f) {
     return 1;
 }
 
+// Zeroes raw's lines [0, lines), as a memset of them would leave it, but
+// only inside the dirty box: everything outside it is zero already.
+static void clear_raw(vgaframe_t *f, uint32_t lines) {
+    uint32_t W = f->cfg.max_clocks_per_line;
+    uint32_t ny = lines < f->dirty_y_end ? lines : f->dirty_y_end, nx = f->dirty_x_end;
+    if (nx == W) memset(f->raw, 0, (size_t)W * ny);
+    else for (uint32_t y = 0; y < ny; y++) memset(f->raw + (size_t)y * W, 0, nx);
+    if (lines >= f->dirty_y_end) f->dirty_x_end = f->dirty_y_end = 0;   // raw is all zero now
+}
+
+// rgb24 for each raw byte: a written pixel's colour, two bits a channel
+// scaled by 85, or magenta for a pixel never written. Four bytes an entry,
+// the fourth spare, so that emit can store a pixel with one 4-byte copy.
+#define RGB_OF(p) { ((p) & 0x80) ? (((p) >> 4) & 3) * 85 : 255, \
+                    ((p) & 0x80) ? (((p) >> 2) & 3) * 85 : 0,   \
+                    ((p) & 0x80) ? ((p) & 3) * 85 : 255, 0 }
+#define RGB_OF4(p) RGB_OF(p), RGB_OF((p) + 1), RGB_OF((p) + 2), RGB_OF((p) + 3)
+#define RGB_OF16(p) RGB_OF4(p), RGB_OF4((p) + 4), RGB_OF4((p) + 8), RGB_OF4((p) + 12)
+#define RGB_OF64(p) RGB_OF16(p), RGB_OF16((p) + 16), RGB_OF16((p) + 32), RGB_OF16((p) + 48)
+static const uint8_t rgb_of[256][4] = { RGB_OF64(0), RGB_OF64(64), RGB_OF64(128), RGB_OF64(192) };
+
 // Emits the accumulated picture. `lines_known` bounds how much of `raw` to
 // scan for the auto-crop bounding box and to clear afterwards. `is_fram`
 // says whether this is the FRAM accumulation being published (which names
@@ -124,15 +160,22 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
     if (x0 + w > W) w = W - x0;
     if (y0 + h > f->cfg.max_lines) h = f->cfg.max_lines - y0;
     uint8_t partial = partial_hint;
-    for (uint32_t y = 0; y < h; y++)
-        for (uint32_t x = 0; x < w; x++) {
-            uint8_t p = f->raw[(y0 + y) * W + x0 + x];
-            uint8_t *o = f->rgb + (y * w + x) * 3;
-            if (!(p & 0x80)) { o[0] = 255; o[1] = 0; o[2] = 255; partial = 1; continue; }
-            o[0] = (uint8_t)(((p >> 4) & 3) * 85);
-            o[1] = (uint8_t)(((p >> 2) & 3) * 85);
-            o[2] = (uint8_t)((p & 3) * 85);
+    if (w && h) {
+        // Each pixel is one 4-byte copy from rgb_of, whose spare fourth byte
+        // the next pixel overwrites; the very last pixel is copied as 3
+        // bytes so nothing past the picture is touched. `written` keeps
+        // 0x80 only while every pixel had it.
+        uint8_t *o = f->rgb, written = 0x80;
+        for (uint32_t y = 0; y < h; y++) {
+            const uint8_t *r = f->raw + (y0 + y) * W + x0;
+            uint32_t n = y + 1 < h ? w : w - 1;
+            for (uint32_t x = 0; x < n; x++, o += 3) { written &= r[x]; memcpy(o, rgb_of[r[x]], 4); }
         }
+        uint8_t p = f->raw[(y0 + h - 1) * W + x0 + w - 1];
+        written &= p;
+        memcpy(o, rgb_of[p], 3);
+        if (!(written & 0x80)) partial = 1;
+    }
     // Report the timing actually used for this crop: the learner's own
     // measurement, unless resolved_mode() picked a different mode (a
     // force_mode, or - in FRAM mode - a clocks-per-line table match the
@@ -172,7 +215,7 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
     // "written" pixels from a differently-shaped frame for the next one.
     uint32_t clear_lines = is_fram ? f->cfg.max_lines :
                            (lines_known < f->cfg.max_lines ? lines_known + 1 : f->cfg.max_lines);
-    memset(f->raw, 0, (size_t)W * clear_lines);
+    clear_raw(f, clear_lines);
     memset(f->cover, 0, f->cfg.max_lines);
 }
 
@@ -184,10 +227,33 @@ static void flush_pending_fram(vgaframe_t *f) {
     f->fram_pending = 0;
 }
 
-void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
-    uint8_t h = bit(f->cfg.signal_map, sample, VGACAP_SIG_HSYNC);
+// Stores `run` clocks of `sample` at (x, y), clipped to the buffer, and
+// moves x on past them.
+static inline void store_run(vgaframe_t *f, uint32_t sample, uint32_t run) {
+    uint32_t W = f->cfg.max_clocks_per_line;
+    if (f->y < f->cfg.max_lines && f->x < W) {
+        // f->x < W is guaranteed above, so W - f->x cannot underflow; compare
+        // against it directly instead of f->x + run, which can itself wrap
+        // for a large run and defeat the clip entirely.
+        uint32_t n = run > (W - f->x) ? (W - f->x) : run;
+        uint8_t px = f->pixel_table_ok ? f->pixel_table[sample & 0xFF]
+                                       : (uint8_t)(vgaframe_colour(f->cfg.signal_map, sample) | 0x80);
+        uint8_t *d = f->raw + f->y * W + f->x;
+        if (n == 1) *d = px;   // the commonest run on a busy picture: no call
+        else memset(d, px, n);
+        f->cover[f->y] = 1;
+        if (f->x + n > f->dirty_x_end) f->dirty_x_end = f->x + n;
+        if (f->y >= f->dirty_y_end) f->dirty_y_end = f->y + 1;
+    }
+    f->x = vgaframe_sat_add32(f->x, run);
+}
+
+// The rest of a push, after the learner has seen it and reported r: kept
+// out of vgaframe_push so that the common case there stays small.
+static void push_rest(vgaframe_t *f, uint32_t sample, uint32_t run, uint8_t h, int r) {
+    // vgaframe_push's fast path handles a no-edge push (r == 0) outside FRAM
+    // mode without coming here, so r == 0 logic added here would be bypassed.
     uint8_t v = bit(f->cfg.signal_map, sample, VGACAP_SIG_VSYNC);
-    int r = vgaframe_timing_push(&f->learner, h, v, run);
     // x is the clock offset within the line, which the learner tracks as
     // clk_in_line: a line start is reported at the *trailing* edge of its
     // hsync pulse (that is when the glitch filter can judge the pulse), so
@@ -251,16 +317,7 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
         }
     }
     if (!f->in_frame && !f->fram_active) return;
-    uint32_t W = f->cfg.max_clocks_per_line;
-    if (f->y < f->cfg.max_lines && f->x < W) {
-        // f->x < W is guaranteed above, so W - f->x cannot underflow; compare
-        // against it directly instead of f->x + run, which can itself wrap
-        // for a large run and defeat the clip entirely.
-        uint32_t n = run > (W - f->x) ? (W - f->x) : run;
-        memset(f->raw + f->y * W + f->x, vgaframe_colour(f->cfg.signal_map, sample) | 0x80, n);
-        f->cover[f->y] = 1;
-    }
-    f->x += run;
+    store_run(f, sample, run);
     if (f->fram_active) {
         f->fram_clocks += run;
         if (h) f->fram_h_high += run;
@@ -276,6 +333,24 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
             if (covered(f)) emit(f, expected_lines(f), 0, 1);
         }
     }
+}
+
+void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
+    uint8_t h = bit(f->cfg.signal_map, sample, VGACAP_SIG_HSYNC);
+    if (vgaframe_timing_push_no_edge(&f->learner, h, run)) {
+        // No hsync edge, so no report: x and y stay where they are, and in
+        // continuous mode all that is left is to store the run.
+        f->last_report = 0;
+        if (!f->fram_active) {
+            if (f->in_frame) store_run(f, sample, run);
+            return;
+        }
+        push_rest(f, sample, run, h, 0);
+        return;
+    }
+    int r = vgaframe_timing_push(&f->learner, h, bit(f->cfg.signal_map, sample, VGACAP_SIG_VSYNC), run);
+    f->last_report = r;
+    push_rest(f, sample, run, h, r);
 }
 
 void vgaframe_flush(vgaframe_t *f) {
@@ -322,4 +397,15 @@ void vgaframe_frame_begin(vgaframe_t *f, uint32_t frame_counter, uint16_t first_
     f->learner.h_low = 0;
     f->learner.v_high_lines = 0;
     f->learner.v_low_lines = 0;
+}
+
+void vgaframe_push64(vgaframe_t *f, uint32_t sample, uint64_t run) {
+    uint32_t first = run > UINT32_MAX ? UINT32_MAX : (uint32_t)run;
+    vgaframe_push(f, sample, first);
+    int report = f->last_report;
+    for (run -= first; run; run -= first) {
+        first = run > UINT32_MAX ? UINT32_MAX : (uint32_t)run;
+        vgaframe_push(f, sample, first);
+    }
+    f->last_report = report;
 }

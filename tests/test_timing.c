@@ -171,6 +171,52 @@ TEST(recovers_from_a_mislearned_pulse_shape) {
     ASSERT_TRUE(l.t.mode != NULL);
 }
 
+#define SAT UINT32_MAX
+static void feed_frames(vgaframe_timing_learner_t *l, size_t n, int frames) {
+    for (int f = 0; f < frames; f++)
+        for (size_t i = 0; i < n; i++) vgaframe_timing_push(l, (uint8_t)((buf[i] >> 7) & 1), (uint8_t)((buf[i] >> 3) & 1), 1);
+}
+
+TEST(split_run_equals_unsplit) {
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, black, NULL, buf, sizeof buf / sizeof buf[0]);
+    uint8_t h = (uint8_t)((buf[n - 1] >> 7) & 1), v = (uint8_t)((buf[n - 1] >> 3) & 1);
+    vgaframe_timing_learner_t a, b;
+    vgaframe_timing_init(&a); vgaframe_timing_init(&b);
+    feed_frames(&a, n, 3); feed_frames(&b, n, 3);
+    vgaframe_timing_push64(&a, h, v, (1ull << 32) + 1000u);
+    vgaframe_timing_push(&b, h, v, UINT32_MAX);
+    vgaframe_timing_push(&b, h, v, 1001u);
+    ASSERT_EQ_MEM(&a, &b, sizeof a);
+    ASSERT_EQ_U(h ? a.h_high : a.h_low, SAT);
+    ASSERT_EQ_U(a.clk_in_line, SAT);
+}
+
+TEST(learner_recovers_after_long_run) {
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, black, NULL, buf, sizeof buf / sizeof buf[0]);
+    uint8_t h = (uint8_t)((buf[n - 1] >> 7) & 1), v = (uint8_t)((buf[n - 1] >> 3) & 1);
+    vgaframe_timing_learner_t a; vgaframe_timing_init(&a);
+    feed_frames(&a, n, 3);
+    vgaframe_timing_push64(&a, h, v, (1ull << 32) + 1000u);
+    feed_frames(&a, n, 3);
+    ASSERT_EQ_U(a.t.clocks_per_line, 800); ASSERT_EQ_U(a.t.lines_per_frame, 525); ASSERT_EQ_U(a.t.locked, 1);
+}
+
+TEST(push64_returns_the_first_pieces_report) {
+    // A line is reported at the trailing edge of its hsync pulse, which is a
+    // run's first clock: the split run reports it, and its later pieces
+    // (which hold no edge) must not turn it into 0.
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, black, NULL, buf, sizeof buf / sizeof buf[0]);
+    vgaframe_timing_learner_t a; vgaframe_timing_init(&a);
+    feed_frames(&a, n, 3);
+    size_t i = 10u * 800u;   // past the vsync lines: a plain line start follows
+    while (!(((buf[i] >> 7) & 1) == 0 && ((buf[i + 1] >> 7) & 1) == 1)) i++;
+    for (size_t k = 0; k <= i; k++) vgaframe_timing_push(&a, (uint8_t)((buf[k] >> 7) & 1), (uint8_t)((buf[k] >> 3) & 1), 1);
+    ASSERT_EQ_U(vgaframe_timing_push64(&a, 1, (uint8_t)((buf[i + 1] >> 3) & 1), 3ull * UINT32_MAX), 1);
+}
+
 int main(void) {
     RUN(learns_640x480_negative_syncs);
     RUN(learns_800x600_positive_syncs);
@@ -181,5 +227,8 @@ int main(void) {
     RUN(ignores_hsync_glitches_800x600);
     RUN(a_pulse_of_the_right_shape_is_never_filtered);
     RUN(recovers_from_a_mislearned_pulse_shape);
+    RUN(split_run_equals_unsplit);
+    RUN(learner_recovers_after_long_run);
+    RUN(push64_returns_the_first_pieces_report);
     RUN_TESTS_END();
 }

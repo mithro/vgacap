@@ -442,6 +442,14 @@ static void on_event(void *user, const vgacap_event_t *ev)
     switch (ev->type) {
     case VGACAP_EV_HEADER: {
         vgaframe_config_t cfg;
+        /* The frame layer counts every sample as a pixel clock: a stream
+         * with two samples a clock, or samples wider than 32 bits, is a
+         * simulation trace, not a capture. */
+        if (ev->u.header->samples_per_clock != 1 || ev->u.header->sample_bits > 32) {
+            GST_ELEMENT_ERROR(self, STREAM, WRONG_TYPE, ("%s", "a simulation trace (samples_per_clock 2) is read with vgacap-sample, not vgacap-frames"), (NULL));
+            self->flow = GST_FLOW_ERROR;
+            return;
+        }
         memset(&cfg, 0, sizeof cfg);
         cfg.max_clocks_per_line = (guint16)self->alloc_width;
         cfg.max_lines = (guint16)self->alloc_height;
@@ -469,7 +477,7 @@ static void on_event(void *user, const vgacap_event_t *ev)
             break;
         self->frame_clk = self->clock_pos;
         self->clock_pos += ev->u.run.run;
-        vgaframe_push(&self->frame, ev->u.run.value, ev->u.run.run);
+        vgaframe_push64(&self->frame, (uint32_t)ev->u.run.value, ev->u.run.run);
         break;
     case VGACAP_EV_FRAME_BEGIN:
         if (!self->frame_ready)
@@ -494,6 +502,9 @@ static void on_event(void *user, const vgacap_event_t *ev)
         }
         if (ev->u.time.dropped_samples > self->dropped)
             self->dropped = ev->u.time.dropped_samples;
+        break;
+    case VGACAP_EV_BLOCK:
+    case VGACAP_EV_META:
         break;
     case VGACAP_EV_RESYNC:
         /* Not fatal: the frame layer re-derives timing from the sync bits, so

@@ -110,6 +110,13 @@ void vgaframe_timing_init(vgaframe_timing_learner_t *l);
 // stream that starts inside a pulse and meets a glitch before its first
 // clean line can learn a 2-clock pulse as the sync width) cannot wedge it.
 int  vgaframe_timing_push(vgaframe_timing_learner_t *l, uint8_t hsync, uint8_t vsync, uint32_t run);
+// As vgaframe_timing_push for a run of up to 2^64-1 clocks. The run is cut
+// into pieces of at most UINT32_MAX clocks; a report only ever happens at a
+// run's first clock, so the first piece's report is returned and the others,
+// which hold no edge, add clocks only. h_high, h_low and clk_in_line saturate
+// at UINT32_MAX rather than wrap: a phase or line that long is no sync at all,
+// and the learner re-learns from the next real edges.
+int  vgaframe_timing_push64(vgaframe_timing_learner_t *l, uint8_t hsync, uint8_t vsync, uint64_t run);
 
 // ---- frame reconstruction ------------------------------------------------
 
@@ -144,6 +151,11 @@ typedef struct vgaframe {
     vgaframe_config_t cfg; vgaframe_timing_learner_t learner;
     uint8_t *raw, *rgb, *cover;
     uint32_t x, y; int in_frame; uint32_t frames_seen;
+    // The learner's return for the first piece of the most recent
+    // vgaframe_push / vgaframe_push64: 1 line start, 2 frame start, 3 line
+    // start with a retroactive frame, else 0. Samplers read it to date line
+    // and frame starts.
+    int last_report;
     // FRAM mode state. FRAM mode is per *chunk*, not for the lifetime of the
     // object: fram_active is set only while a FRAM chunk still has samples
     // outstanding, and gates the window-driven line layout. fram_pending is
@@ -166,6 +178,18 @@ typedef struct vgaframe {
     // (force_mode, or a FRAM clocks-per-line table match) - see emit() in
     // frame.c. vgaframe_output_t.timing always points here.
     vgaframe_timing_t out_timing;
+    // The raw byte (colour | 0x80 "written") for each value of a sample's
+    // low 8 bits, built by vgaframe_init from cfg.signal_map when every
+    // colour signal is at a bit below 8 or absent (Tiny VGA's are), which
+    // is what pixel_table_ok says. The colour then depends on those 8 bits
+    // alone, so one lookup replaces vgaframe_colour per push. A wider map
+    // leaves pixel_table_ok at 0 and keeps vgaframe_colour.
+    uint8_t pixel_table_ok;
+    uint8_t pixel_table[256];
+    // Every non-zero byte of raw lies in lines [0, dirty_y_end) and columns
+    // [0, dirty_x_end), so clearing raw after a frame need only zero that
+    // box: the rest is zero already. Both are 0 when raw is all zero.
+    uint32_t dirty_x_end, dirty_y_end;
 } vgaframe_t;
 
 // Binds the caller's buffers and puts the object in its starting state; see
@@ -178,6 +202,10 @@ int  vgaframe_init(vgaframe_t *f, const vgaframe_config_t *cfg, uint8_t *raw, ui
 // discontinuity, a flush/seek, or a reconnect.
 void vgaframe_reset(vgaframe_t *f);
 void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run);
+// As vgaframe_push for a run of up to 2^64-1 clocks; x saturates at
+// UINT32_MAX instead of wrapping. last_report is the first piece's: a later
+// piece of the same run does not overwrite it.
+void vgaframe_push64(vgaframe_t *f, uint32_t sample, uint64_t run);
 void vgaframe_flush(vgaframe_t *f);   // emit whatever is buffered as partial (end of stream)
 // helper: 6-bit colour (rr gg bb) from a sample via the signal map
 uint8_t vgaframe_colour(const uint8_t *signal_map, uint32_t sample);

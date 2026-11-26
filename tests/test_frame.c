@@ -302,6 +302,75 @@ TEST(reset_restores_the_post_init_state) {
     ASSERT_EQ_MEM(last_rgb, ref_rgb, (size_t)ref_w * ref_h * 3);
 }
 
+TEST(frame_x_saturates) {
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+    vgaframe_t f; setup(&f, m);
+    for (int fr = 0; fr < 2; fr++) for (size_t k = 0; k < n; k++) vgaframe_push(&f, buf[k], 1);
+    ASSERT_TRUE(f.in_frame);
+    size_t i = 0;
+    for (; i < 100; i++) vgaframe_push(&f, buf[i], 1);
+    ASSERT_EQ_U(f.x, 100);
+    uint32_t y = f.y;
+    vgaframe_push64(&f, buf[i], 1ull << 33);
+    ASSERT_EQ_U(f.x, UINT32_MAX);
+    ASSERT_EQ_U(f.y, y);
+    ASSERT_TRUE((f.raw[y * 1400u + 1399u] & 0x80) != 0);   // the row's tail was filled
+    ASSERT_EQ_U(f.raw[(y + 1) * 1400u], 0);                 // and nothing spilled onto the next row
+}
+
+TEST(frames_are_exact_after_a_long_run) {
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+    vgaframe_t f; setup(&f, NULL);
+    for (int fr = 0; fr < 3; fr++) for (size_t i = 0; i < n; i++) vgaframe_push(&f, buf[i], 1);
+    ASSERT_TRUE(nframes >= 1);
+    vgaframe_push64(&f, buf[n - 1], (1ull << 32) + 1000u);
+    nframes = 0;
+    for (int fr = 0; fr < 4; fr++) for (size_t i = 0; i < n; i++) vgaframe_push(&f, buf[i], 1);
+    ASSERT_TRUE(nframes >= 1);
+    ASSERT_EQ_U(last.width, 640); ASSERT_EQ_U(last.height, 480);
+    for (uint16_t y = 0; y < 480; y++) for (uint16_t x = 0; x < 640; x++) {
+        uint8_t c = bars(NULL, x, y); const uint8_t *q = last_rgb + (y * 640 + x) * 3;
+        ASSERT_EQ_U(q[0], ((c >> 4) & 3) * 85); ASSERT_EQ_U(q[1], ((c >> 2) & 3) * 85); ASSERT_EQ_U(q[2], (c & 3) * 85);
+    }
+}
+
+TEST(last_report_values) {
+    const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
+    size_t n = synth_frame(m, bars, NULL, buf, sizeof buf / sizeof buf[0]);
+    vgaframe_t f; setup(&f, NULL);
+    vgaframe_timing_learner_t ref; vgaframe_timing_init(&ref);
+    int lines = 0, frames = 0, retro = 0, first2_seen = 0;
+    for (int fr = 0; fr < 3; fr++) for (size_t i = 0; i < n; i++) {
+        vgaframe_push(&f, buf[i], 1);
+        int want = vgaframe_timing_push(&ref, (uint8_t)((buf[i] >> 7) & 1), (uint8_t)((buf[i] >> 3) & 1), 1);
+        ASSERT_EQ_U(f.last_report, want);   // pins 0 on every non-edge push
+        int r = f.last_report;
+        if (r == 1) lines++;
+        else if (r == 2) { frames++; first2_seen = 1; }
+        else if (r == 3) { retro++; ASSERT_TRUE(!first2_seen); }
+    }
+    // Exact totals for 3 frames of 525 lines (1575 hsync pulses). The stream
+    // begins at the first pulse's leading edge, with no earlier phase to
+    // measure it against, so that pulse is never reported as a line start,
+    // and frame 0's start (the same pulse) is lost with it. Frames 1 and 2
+    // start with a reported 2 each (frames fed - 1 == 2), and every other
+    // pulse reports 1: 1575 - 1 - 2 == 1572. The retroactive 3 may appear
+    // at most once, before the first 2; this stream does not need it.
+    ASSERT_EQ_U(frames, 2);
+    ASSERT_EQ_U(lines, 3 * 525 - 1 - 2);
+    ASSERT_TRUE(retro <= 1);
+    // A split run keeps its first piece's report: the run that starts at a
+    // line's hsync trailing edge reports 1, and its later pieces do not
+    // overwrite it with 0.
+    size_t i = 10u * 800u;
+    while (!(((buf[i] >> 7) & 1) == 0 && ((buf[i + 1] >> 7) & 1) == 1)) i++;
+    for (size_t k = 0; k <= i; k++) vgaframe_push(&f, buf[k], 1);
+    vgaframe_push64(&f, buf[i + 1], 3ull * UINT32_MAX);
+    ASSERT_EQ_U(f.last_report, 1);
+}
+
 int main(void) {
     RUN(colour_helper);
     RUN(reconstructs_640x480_bars);
@@ -316,5 +385,8 @@ int main(void) {
     RUN(glitchy_hsync_still_reconstructs_800x600);
     RUN(flush_emits_partial);
     RUN(reset_restores_the_post_init_state);
+    RUN(frame_x_saturates);
+    RUN(frames_are_exact_after_a_long_run);
+    RUN(last_report_values);
     RUN_TESTS_END();
 }

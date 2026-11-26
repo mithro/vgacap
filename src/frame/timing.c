@@ -7,12 +7,14 @@
 // period), and the transition into the pulse level is the line/frame start.
 #include "vgacap/frame.h"
 #include <string.h>
+#include "internal.h"
 
 void vgaframe_timing_init(vgaframe_timing_learner_t *l) { memset(l, 0, sizeof *l); }
 
-// Called once per line, right after a new line has been detected (h entering
-// its pulse). Samples vsync at this instant; may additionally report a frame
-// boundary (upgrading *ret from 1 to 2) when vsync enters its pulse.
+// Called once per line, at the hsync pulse's *trailing* edge, when the pulse
+// has been accepted as a line start. Samples vsync at this instant; may
+// additionally report a frame boundary (upgrading *ret from 1 to 2) when
+// vsync enters its pulse.
 static void vsync_sample(vgaframe_timing_learner_t *l, uint8_t v, int *ret) {
     if (v != l->prev_v) {
         uint32_t completed = l->prev_v ? l->v_high_lines : l->v_low_lines;
@@ -90,6 +92,7 @@ static int pulse_is_a_line_start(const vgaframe_timing_learner_t *l, uint32_t wi
 }
 
 int vgaframe_timing_push(vgaframe_timing_learner_t *l, uint8_t h, uint8_t v, uint32_t run) {
+    if (vgaframe_timing_push_no_edge(l, h, run)) return 0;
     int ret = 0;
     if (!l->have_prev) {
         l->have_prev = 1;
@@ -146,7 +149,12 @@ int vgaframe_timing_push(vgaframe_timing_learner_t *l, uint8_t h, uint8_t v, uin
             } else if (!filter_armed(l) || pulse_is_a_line_start(l, completed)) {
                 l->t.hsync_positive = pulse_level;
                 l->t.hsync_width = completed;
-                if (l->pulse_start_clk) l->t.clocks_per_line = l->pulse_start_clk;
+                // A saturated start is a count that stopped meaning anything
+                // (no sync for 2^32 clocks or more), not a line length:
+                // keep the measurement already held. The line itself is
+                // still a line, so the frame count carries on and the next
+                // frame boundary measures a whole frame.
+                if (l->pulse_start_clk && l->pulse_start_clk != UINT32_MAX) l->t.clocks_per_line = l->pulse_start_clk;
                 l->clk_in_line = completed;
                 l->report_x = completed;
                 l->ignored_run = 0;
@@ -165,13 +173,22 @@ int vgaframe_timing_push(vgaframe_timing_learner_t *l, uint8_t h, uint8_t v, uin
             // real pulse still measures a whole line's worth of blanking.
             // clk_in_line is untouched throughout, so the pixels around the
             // glitch keep their true positions in the line.
-            if (h) l->h_high += completed; else l->h_low += completed;
+            if (h) l->h_high = vgaframe_sat_add32(l->h_high, completed);
+            else   l->h_low  = vgaframe_sat_add32(l->h_low, completed);
         } else {
             if (h) l->h_high = 0; else l->h_low = 0;
         }
         l->prev_h = h;
     }
-    if (h) l->h_high += run; else l->h_low += run;
-    l->clk_in_line += run;
+    vgaframe_timing_add_run(l, h, run);
+    return ret;
+}
+
+int vgaframe_timing_push64(vgaframe_timing_learner_t *l, uint8_t h, uint8_t v, uint64_t run) {
+    uint32_t first = run > UINT32_MAX ? UINT32_MAX : (uint32_t)run;
+    int ret = vgaframe_timing_push(l, h, v, first);
+    // Every piece after the first lies at the same levels, so it holds no
+    // edge and cannot report anything: it only adds clocks.
+    if (run > first) vgaframe_timing_add_run(l, h, run - first);
     return ret;
 }

@@ -13,6 +13,26 @@ void vgacap_header_init_tinyvga(vgacap_header_t *h, uint8_t sample_bits, uint8_t
     h->version = 1; h->sample_bits = sample_bits; h->mode = VGACAP_MODE_UNKNOWN;
     memcpy(h->signal_map, tinyvga, sizeof tinyvga);
     h->samples_per_word = samples_per_word; h->flags = flags;
+    h->samples_per_clock = 1; h->clock_bit = VGACAP_CLOCK_BIT_NONE; h->clock_first = 0;
+}
+
+void vgacap_header_init_v2(vgacap_header_t *h, uint8_t sample_bits, uint8_t samples_per_clock,
+                           uint8_t clock_bit, uint8_t clock_first) {
+    vgacap_header_init_tinyvga(h, sample_bits, sample_bits > 32 ? 0 : 1, 0);
+    h->version = 2;
+    h->samples_per_clock = samples_per_clock; h->clock_bit = clock_bit; h->clock_first = clock_first;
+}
+
+size_t vgacap_leb128_put(uint8_t *p, uint64_t v) {
+    size_t n = 0;
+    while (v >= 0x80u) { p[n++] = (uint8_t)(v | 0x80u); v >>= 7; }
+    p[n++] = (uint8_t)v;
+    return n;
+}
+
+size_t vgacap_run_pair_put(uint8_t *p, uint64_t value, unsigned vbytes, uint64_t run) {
+    for (unsigned i = 0; i < vbytes; i++) p[i] = (uint8_t)(value >> (8u * i));
+    return vbytes + vgacap_leb128_put(p + vbytes, run);
 }
 
 static int write_chunk_head(vgacap_writer_t *w, const char tag[4], uint32_t length) {
@@ -24,14 +44,19 @@ void vgacap_writer_attach(vgacap_writer_t *w, vgacap_write_fn write, void *user,
     memset(w, 0, sizeof *w); w->write = write; w->user = user; w->header = *h;
 }
 
+// Version 2's fixed part is 24 bytes: version 1's 20, then
+// samples_per_clock, clock_bit, clock_first and a reserved 0.
 int vgacap_writer_init(vgacap_writer_t *w, vgacap_write_fn write, void *user, const vgacap_header_t *h) {
     vgacap_writer_attach(w, write, user, h);
     uint8_t *p = w->scratch;
+    uint32_t fixed = h->version == 2 ? 24u : 20u;
+    if (h->version == 2 && h->desc_len > VGACAP_DESC_MAX_V2) return -1;
     put_u16(p + 0, h->version); p[2] = h->sample_bits; p[3] = h->mode; put_u32(p + 4, h->clock_hz);
     memcpy(p + 8, h->signal_map, VGACAP_SIG_COUNT); p[16] = h->samples_per_word; p[17] = h->flags;
     put_u16(p + 18, h->desc_len);
-    if (write_chunk_head(w, VGACAP_TAG_HEADER, 20u + h->desc_len)) return -1;
-    if (w->write(w->user, p, 20)) return -1;
+    p[20] = h->samples_per_clock; p[21] = h->clock_bit; p[22] = h->clock_first; p[23] = 0;
+    if (write_chunk_head(w, VGACAP_TAG_HEADER, fixed + h->desc_len)) return -1;
+    if (w->write(w->user, p, fixed)) return -1;
     if (h->desc_len && w->write(w->user, (const uint8_t *)h->desc, h->desc_len)) return -1;
     return 0;
 }
@@ -127,4 +152,50 @@ int vgacap_writer_time(vgacap_writer_t *w, uint64_t host_time_ns, uint32_t clock
     if (w->write(w->user, c, 18)) return -1;
     if (ml && w->write(w->user, (const uint8_t *)msg, ml)) return -1;
     return 0;
+}
+
+// ---- version 2 ------------------------------------------------------------
+
+static uint64_t sample_mask64(uint8_t bits) { return bits >= 64 ? ~(uint64_t)0 : (((uint64_t)1 << bits) - 1u); }
+
+static size_t leb128_len(uint64_t v) { size_t n = 1; while (v >= 0x80u) { v >>= 7; n++; } return n; }
+
+int vgacap_writer_runs(vgacap_writer_t *w, const uint64_t *values, const uint64_t *runs, uint32_t pair_count) {
+    const vgacap_header_t *h = &w->header;
+    if (h->version != 2 || pair_count == 0 || h->sample_bits == 0 || h->sample_bits > 64) return -1;
+    unsigned vbytes = (h->sample_bits + 7u) / 8u;
+    uint64_t bad = ~sample_mask64(h->sample_bits);
+    if (h->clock_bit != VGACAP_CLOCK_BIT_NONE) {
+        if (h->clock_bit >= h->sample_bits || h->clock_bit >= 64) return -1;
+        bad |= (uint64_t)1 << h->clock_bit;
+    }
+    // Check every pair and size the chunk before writing anything.
+    uint64_t len = 4;
+    for (uint32_t i = 0; i < pair_count; i++) {
+        if (runs[i] == 0 || (values[i] & bad) || (i && values[i] == values[i - 1])) return -1;
+        len += vbytes + leb128_len(runs[i]);
+        if (len > VGACAP_MAX_CHUNK_LEN) return -1;
+    }
+    if (write_chunk_head(w, VGACAP_TAG_RUNS, (uint32_t)len)) return -1;
+    uint8_t *buf = w->scratch; size_t fill = 0;
+    put_u32(buf, pair_count); fill = 4;
+    // Batch pairs (at most 18 bytes each) through the scratch buffer.
+    for (uint32_t i = 0; i < pair_count; i++) {
+        if (fill + 18u > sizeof w->scratch) { if (w->write(w->user, buf, fill)) return -1; fill = 0; }
+        fill += vgacap_run_pair_put(buf + fill, values[i], vbytes, runs[i]);
+    }
+    return w->write(w->user, buf, fill);
+}
+
+int vgacap_writer_block(vgacap_writer_t *w, uint64_t first_sample) {
+    if (w->header.version != 2) return -1;
+    uint8_t c[8]; put_u64(c, first_sample);
+    if (write_chunk_head(w, VGACAP_TAG_BLOCK, 8)) return -1;
+    return w->write(w->user, c, 8);
+}
+
+int vgacap_writer_meta(vgacap_writer_t *w, const char *text, size_t len) {
+    if (w->header.version != 2 || len == 0 || len > VGACAP_META_MAX) return -1;
+    if (write_chunk_head(w, VGACAP_TAG_META, (uint32_t)len)) return -1;
+    return w->write(w->user, (const uint8_t *)text, len);
 }

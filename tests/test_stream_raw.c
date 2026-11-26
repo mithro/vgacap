@@ -4,9 +4,9 @@
 
 static uint8_t outbuf[65536]; static size_t outlen;
 static int capture_write(void *u, const uint8_t *b, size_t n) { (void)u; memcpy(outbuf + outlen, b, n); outlen += n; return 0; }
-static uint32_t got[4096]; static size_t ngot;
+static uint64_t got[4096]; static size_t ngot;
 static void on_event(void *u, const vgacap_event_t *ev) { (void)u;
-    if (ev->type == VGACAP_EV_RUN) { for (uint32_t i = 0; i < ev->u.run.run; i++) got[ngot++] = ev->u.run.value; } }
+    if (ev->type == VGACAP_EV_RUN) { for (uint64_t i = 0; i < ev->u.run.run; i++) got[ngot++] = ev->u.run.value; } }
 
 static void roundtrip(uint8_t bits, uint8_t spw, uint8_t flags, uint32_t n) {
     vgacap_header_t h; vgacap_header_init_tinyvga(&h, bits, spw, flags);
