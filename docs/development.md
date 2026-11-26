@@ -21,21 +21,33 @@ when the assembler takes it; CMake checks and otherwise builds without). The
 Skylake-family JCC-erratum microcode slows loops whose jumps touch a 32-byte
 boundary; the flag adds NOP padding only, so outputs are unchanged.
 
+## Documentation site
+
+The [Read the Docs](https://about.readthedocs.com) site is built from the
+Markdown files where they are, by Sphinx with
+[MyST](https://myst-parser.readthedocs.io). [`docs/conf.py`](conf.py) lists
+the pages, in navigation order; a new page goes there. Warnings are errors:
+
+```sh
+uv run --locked --python 3.13 --only-group docs sphinx-build -W --keep-going -c docs . build/docs
+```
+
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs these jobs on
 every push and pull request, on a pinned `ubuntu-24.04` image:
 
-| step | `c` | `firmware` | `mpy-module` | `python` | `gstreamer` |
-|---|---|---|---|---|---|
-| host CMake build | yes | no | yes | yes | yes |
-| [`vgacap-rp1`](../capture-rp1/README.md) against [piolib](https://github.com/raspberrypi/utils/tree/master/piolib) | yes | no | no | no | no |
-| piolib for the RP1 sampler test | no | no | no | yes | yes |
-| [`vgacap_fw.uf2`](../firmware/README.md) for the RP2350 | no | yes | no | no | no |
-| MicroPython unix port with the module | no | no | yes | no | no |
-| MicroPython rp2 port with the module | no | no | yes | no | no |
-| GStreamer installed | no | no | no | no | yes |
-| plugin built | no | no | no | no | yes |
-| Icarus (`iverilog`) for the RTL test | no | no | no | no | yes |
-| `ctest` | yes | no | no | no | yes |
-| `pytest` | no | no | [`test_mpy_module.py`](../python/tests/test_mpy_module.py) | all | all |
+| step | `c` | `firmware` | `mpy-module` | `docs` | `python` | `gstreamer` |
+|---|---|---|---|---|---|---|
+| host CMake build | yes | no | yes | no | yes | yes |
+| [`vgacap-rp1`](../capture-rp1/README.md) against [piolib](https://github.com/raspberrypi/utils/tree/master/piolib) | yes | no | no | no | no | no |
+| piolib for the RP1 sampler test | no | no | no | no | yes | yes |
+| [`vgacap_fw.uf2`](../firmware/README.md) for the RP2350 | no | yes | no | no | no | no |
+| MicroPython unix port with the module | no | no | yes | no | no | no |
+| MicroPython rp2 port with the module | no | no | yes | no | no | no |
+| [documentation site](#documentation-site) | no | no | no | yes | no | no |
+| GStreamer installed | no | no | no | no | no | yes |
+| plugin built | no | no | no | no | no | yes |
+| Icarus (`iverilog`) for the RTL test | no | no | no | no | no | yes |
+| `ctest` | yes | no | no | no | no | yes |
+| `pytest` | no | no | [`test_mpy_module.py`](../python/tests/test_mpy_module.py) | no | all | all |

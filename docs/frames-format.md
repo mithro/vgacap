@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# frames.txt and frame_hashes.<method>.txt
+# `frames.txt` and `frame_hashes.<method>.txt`
 
 The text outputs of a sampler run over a simulation trace: which pictures a
 design drew, when each frame started, and a hash of every frame. The C writer
@@ -185,7 +185,7 @@ except that when frame k is followed by gaps, "no frame" starts at frame k's
 start + `frame_clocks` and lasts until the next frame with a picture starts.
 The last frame holds to the end of the trace.
 
-## frame_hashes.<method>.txt
+## `frame_hashes.<method>.txt`
 
 One file per hash method, `<method>` being `sha256-rgb6` or
 `fnv1a64-tb2026-rgb888`. The first line is always `hash_method: <method>`.
