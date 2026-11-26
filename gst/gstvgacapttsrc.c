@@ -114,6 +114,7 @@ enum {
     PROP_TTCAP_COMMAND,
     PROP_STOP_TIMEOUT,
     PROP_CAPTURE_MODE,
+    PROP_FIRMWARE,
     PROP_VGA_MODE,
     PROP_WINDOW_LINES
 };
@@ -126,6 +127,7 @@ enum {
  * carry; "frame"/"window" capture whole frames at the design's real clock
  * and send them between frames (ttcap/mp/frame_rp2.py). */
 #define DEFAULT_CAPTURE_MODE "stream"
+#define DEFAULT_FIRMWARE "micropython"
 /* -1 on the two board-tuning integers means "say nothing and let ttcap pick",
  * so its defaults are not copied into C where they would quietly drift. */
 #define DEFAULT_PIO (-1)
@@ -167,6 +169,7 @@ struct _GstVgaCapTtSrc {
     gchar *profile;
     gchar *ttcap_command;
     gchar *capture_mode;
+    gchar *firmware;
     gchar *vga_mode;
     gint window_lines;
     guint clock_hz;
@@ -523,6 +526,9 @@ static gchar **build_argv(GstVgaCapTtSrc *self, GError **error)
     if (self->capture_mode && *self->capture_mode &&
         g_strcmp0(self->capture_mode, DEFAULT_CAPTURE_MODE) != 0)
         argv_add(argv, "--mode", self->capture_mode);
+    if (self->firmware && *self->firmware &&
+        g_strcmp0(self->firmware, DEFAULT_FIRMWARE) != 0)
+        argv_add(argv, "--firmware", self->firmware);
     if (self->vga_mode && *self->vga_mode)
         argv_add(argv, "--vga-mode", self->vga_mode);
     if (self->window_lines > 0)
@@ -1154,6 +1160,10 @@ static void gst_vgacapttsrc_set_property(GObject *object, guint prop_id,
         g_free(self->capture_mode);
         self->capture_mode = g_value_dup_string(value);
         break;
+    case PROP_FIRMWARE:
+        g_free(self->firmware);
+        self->firmware = g_value_dup_string(value);
+        break;
     case PROP_VGA_MODE:
         g_free(self->vga_mode);
         self->vga_mode = g_value_dup_string(value);
@@ -1208,6 +1218,9 @@ static void gst_vgacapttsrc_get_property(GObject *object, guint prop_id, GValue 
     case PROP_CAPTURE_MODE:
         g_value_set_string(value, self->capture_mode);
         break;
+    case PROP_FIRMWARE:
+        g_value_set_string(value, self->firmware);
+        break;
     case PROP_VGA_MODE:
         g_value_set_string(value, self->vga_mode);
         break;
@@ -1231,6 +1244,7 @@ static void gst_vgacapttsrc_finalize(GObject *object)
     g_clear_pointer(&self->profile, g_free);
     g_clear_pointer(&self->ttcap_command, g_free);
     g_clear_pointer(&self->capture_mode, g_free);
+    g_clear_pointer(&self->firmware, g_free);
     g_clear_pointer(&self->vga_mode, g_free);
     g_clear_pointer(&self->cmdline, g_free);
     if (self->err_reader) {
@@ -1304,6 +1318,13 @@ static void gst_vgacapttsrc_class_init(GstVgaCapTtSrcClass *klass)
                             "link carries), frame (whole frames at the design's real "
                             "clock) or window (frames swept in window-lines windows)",
                             DEFAULT_CAPTURE_MODE, rw));
+    g_object_class_install_property(gobject_class, PROP_FIRMWARE,
+        g_param_spec_string("firmware", "Board firmware",
+                            "ttcap capture --firmware: micropython (the stock firmware, "
+                            "through its raw REPL) or picosdk (vgacap's capture "
+                            "firmware, firmware/PROTOCOL.md, which cannot select a "
+                            "design itself)",
+                            DEFAULT_FIRMWARE, rw));
     g_object_class_install_property(gobject_class, PROP_VGA_MODE,
         g_param_spec_string("vga-mode", "VGA mode",
                             "frame/window modes: the VGA timing to expect, e.g. "
@@ -1338,6 +1359,7 @@ static void gst_vgacapttsrc_init(GstVgaCapTtSrc *self)
     self->profile = g_strdup(DEFAULT_PROFILE);
     self->ttcap_command = g_strdup(DEFAULT_TTCAP_COMMAND);
     self->capture_mode = g_strdup(DEFAULT_CAPTURE_MODE);
+    self->firmware = g_strdup(DEFAULT_FIRMWARE);
     self->vga_mode = g_strdup("");
     self->window_lines = 0;
     self->clock_hz = 0;
