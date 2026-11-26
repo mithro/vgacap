@@ -13,6 +13,7 @@
 #define vgaframe_push64        ref_vgaframe_push64
 #define vgaframe_flush         ref_vgaframe_flush
 #define vgaframe_frame_begin   ref_vgaframe_frame_begin
+#define vgaframe_set_rgb6_buffer ref_vgaframe_set_rgb6_buffer
 #define vgaframe_timing_init   ref_vgaframe_timing_init
 #define vgaframe_timing_push   ref_vgaframe_timing_push
 #define vgaframe_timing_push64 ref_vgaframe_timing_push64

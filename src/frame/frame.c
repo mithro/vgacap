@@ -23,7 +23,7 @@ uint8_t vgaframe_colour(const uint8_t *m, uint32_t s) {
 void vgaframe_reset(vgaframe_t *f) {
     vgaframe_timing_init(&f->learner);
     memset(&f->out_timing, 0, sizeof f->out_timing);
-    f->x = 0; f->y = 0; f->in_frame = 0; f->frames_seen = 0;
+    f->x = 0; f->y = 0; f->in_frame = 0; f->frames_seen = 0; f->retro_frame = 0;
     f->last_report = 0;
     f->fram_active = 0; f->fram_pending = 0; f->fram_counter = 0;
     f->fram_first_line = 0; f->fram_line_count = 0; f->fram_cpl = 0;
@@ -116,6 +116,22 @@ static void clear_raw(vgaframe_t *f, uint32_t lines) {
     if (lines >= f->dirty_y_end) f->dirty_x_end = f->dirty_y_end = 0;   // raw is all zero now
 }
 
+// Clears what a frame left behind: raw's lines [0, lines) and all of cover.
+static void clear_frame(vgaframe_t *f, uint32_t lines) {
+    clear_raw(f, lines);
+    memset(f->cover, 0, f->cfg.max_lines);
+}
+
+// Lines of raw to clear after a frame: every line, for a FRAM picture, whose
+// windows can land anywhere in [0, max_lines), not just below lines_known
+// (which is only this emit's notion of the frame height), so no stale
+// "written" pixels from a differently-shaped frame are left for the next
+// one; else lines_known and one more, capped at max_lines.
+static uint32_t lines_to_clear(const vgaframe_t *f, uint32_t lines_known, int is_fram) {
+    if (is_fram) return f->cfg.max_lines;
+    return lines_known < f->cfg.max_lines ? lines_known + 1 : f->cfg.max_lines;
+}
+
 // rgb24 for each raw byte: a written pixel's colour, two bits a channel
 // scaled by 85, or magenta for a pixel never written. Four bytes an entry,
 // the fourth spare, so that emit can store a pixel with one 4-byte copy.
@@ -131,8 +147,20 @@ static const uint8_t rgb_of[256][4] = { RGB_OF64(0), RGB_OF64(64), RGB_OF64(128)
 // scan for the auto-crop bounding box and to clear afterwards. `is_fram`
 // says whether this is the FRAM accumulation being published (which names
 // the frame by its FRAM counter and may have written anywhere in the
-// buffer) or a continuous-mode frame.
-static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int is_fram) {
+// buffer) or a continuous-mode frame. Returns 1 if it cleared raw and cover
+// (lines_to_clear), 0 if it returned early with nothing to crop, leaving
+// them as they were.
+//
+// With no on_frame callback there is nobody to show a picture to, so emit
+// does only its bookkeeping - frames_seen, the FRAM pending state and the
+// clearing - and skips the crop scan and the rgb24 / rgb6 conversion.
+static int emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int is_fram) {
+    if (!f->cfg.on_frame) {
+        f->frames_seen++;
+        if (is_fram) { f->fram_pending = 0; f->fram_h_high = f->fram_v_high = f->fram_clocks = 0; }
+        clear_frame(f, lines_to_clear(f, lines_known, is_fram));
+        return 1;
+    }
     const vgaframe_mode_t *m = resolved_mode(f);
     uint32_t W = f->cfg.max_clocks_per_line, x0, y0, w, h;
     if (m) {
@@ -150,13 +178,13 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
                     if (y > maxy) maxy = y;
                 }
             }
-        if (minx > maxx) return; // nothing to show
+        if (minx > maxx) return 0; // nothing to show
         x0 = minx; y0 = miny; w = maxx - minx + 1; h = maxy - miny + 1;
     }
     // A force_mode (or a table/fram_cpl match) whose active area starts at or
     // past the buffer edge has nothing to crop: bail rather than let the
     // W - x0 / max_lines - y0 clamps below underflow.
-    if (x0 >= W || y0 >= f->cfg.max_lines) return;
+    if (x0 >= W || y0 >= f->cfg.max_lines) return 0;
     if (x0 + w > W) w = W - x0;
     if (y0 + h > f->cfg.max_lines) h = f->cfg.max_lines - y0;
     uint8_t partial = partial_hint;
@@ -175,6 +203,14 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
         written &= p;
         memcpy(o, rgb_of[p], 3);
         if (!(written & 0x80)) partial = 1;
+        if (f->rgb6) {
+            // The 6-bit colour of a written pixel, 0 for one never written.
+            uint8_t *o6 = f->rgb6;
+            for (uint32_t y = 0; y < h; y++, o6 += w) {
+                const uint8_t *r = f->raw + (y0 + y) * W + x0;
+                for (uint32_t x = 0; x < w; x++) o6[x] = (r[x] & 0x80) ? (uint8_t)(r[x] & 0x3F) : 0;
+            }
+        }
     }
     // Report the timing actually used for this crop: the learner's own
     // measurement, unless resolved_mode() picked a different mode (a
@@ -202,28 +238,52 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
         f->out_timing.vsync_positive = (uint8_t)(2 * f->fram_v_high < f->fram_clocks);
     }
     vgaframe_output_t out;
-    out.rgb24 = f->rgb; out.width = (uint16_t)w; out.height = (uint16_t)h; out.timing = &f->out_timing;
+    out.rgb24 = f->rgb; out.rgb6 = f->rgb6; out.width = (uint16_t)w; out.height = (uint16_t)h; out.timing = &f->out_timing;
     out.stride = w * 3;   // rows are packed; emit() writes them that way above
     out.active_x0 = (uint16_t)x0; out.active_y0 = (uint16_t)y0; out.partial = partial;
     out.frame_counter = is_fram ? f->fram_counter : f->frames_seen;
     f->frames_seen++;
     if (is_fram) { f->fram_pending = 0; f->fram_h_high = f->fram_v_high = f->fram_clocks = 0; }
-    if (f->cfg.on_frame) f->cfg.on_frame(f->cfg.user, &out);
-    // In FRAM mode a frame's windows can land anywhere in [0, max_lines), not
-    // just below lines_known (which is only this emit's notion of the frame
-    // height), so clear the whole buffer rather than risk leaving stale
-    // "written" pixels from a differently-shaped frame for the next one.
-    uint32_t clear_lines = is_fram ? f->cfg.max_lines :
-                           (lines_known < f->cfg.max_lines ? lines_known + 1 : f->cfg.max_lines);
-    clear_raw(f, clear_lines);
-    memset(f->cover, 0, f->cfg.max_lines);
+    f->cfg.on_frame(f->cfg.user, &out);
+    clear_frame(f, lines_to_clear(f, lines_known, is_fram));
+    return 1;
+}
+
+// A continuous-mode frame boundary (report 2) ends the frame in progress:
+// hand it to on_raw as received, emit it if the timing is trusted, and clear
+// raw and cover whether or not emit ran or returned early, so the next
+// frame starts from an empty buffer. (That holds for every frame started at
+// a boundary, and for one started after a pending FRAM picture - see
+// flush_pending_fram - but not after a vgaframe_flush whose emit returned
+// early: see vgaframe_flush in frame.h.)
+static void end_frame(vgaframe_t *f) {
+    if (f->cfg.on_raw) {
+        vgaframe_raw_t r;
+        r.raw = f->raw; r.stride = f->cfg.max_clocks_per_line;
+        r.lines = f->y < f->cfg.max_lines ? f->y + 1 : f->cfg.max_lines;
+        r.timing = &f->learner.t; r.retroactive = f->retro_frame;
+        f->cfg.on_raw(f->cfg.raw_user, &r);
+    }
+    // Trust an exact (clocks_per_line, lines_per_frame) match against the
+    // built-in table on the very first fully measured frame, not only a
+    // `locked` (two independently agreeing measurements) one: a random
+    // signal matching both dimensions of a real VESA mode is strong enough
+    // evidence on its own. `locked` remains the stronger signal and is
+    // unaffected by this - see vgaframe_timing_t.
+    int cleared = 0;
+    if (f->learner.t.locked || f->learner.t.mode || f->cfg.force_mode) cleared = emit(f, f->y + 1, 0, 0);
+    if (!cleared) clear_frame(f, lines_to_clear(f, f->y + 1, 0));
 }
 
 // A continuous-mode frame has started, so any FRAM accumulation still
 // waiting for the window that would complete it is never going to get it:
-// publish what was covered and free the buffer for the new frame.
+// publish what was covered and free the buffer for the new frame. Freed
+// even when emit declines the picture (an early return: nothing lit with no
+// mode, or a crop past the buffer), which clears nothing: the new frame must
+// not be built on top of the FRAM windows' pixels.
 static void flush_pending_fram(vgaframe_t *f) {
-    if (f->fram_pending && covered_any(f)) emit(f, expected_lines(f), 1, 1);
+    if (f->fram_pending && covered_any(f) && !emit(f, expected_lines(f), 1, 1))
+        clear_frame(f, f->cfg.max_lines);
     f->fram_pending = 0;
 }
 
@@ -274,17 +334,11 @@ static void push_rest(vgaframe_t *f, uint32_t sample, uint32_t run, uint8_t h, i
         // no real mode puts active pixels inside its own vsync.
         f->x = f->learner.report_x;
         if (f->in_frame) f->y++;
-        else { flush_pending_fram(f); f->in_frame = 1; f->y = f->learner.t.vsync_lines; }
+        else { flush_pending_fram(f); f->in_frame = 1; f->y = f->learner.t.vsync_lines; f->retro_frame = 1; }
     } else if (r == 2) {
         flush_pending_fram(f);
-        // Trust an exact (clocks_per_line, lines_per_frame) match against
-        // the built-in table on the very first fully measured frame, not
-        // only a `locked` (two independently agreeing measurements) one:
-        // a random signal matching both dimensions of a real VESA mode is
-        // strong enough evidence on its own. `locked` remains the stronger
-        // signal and is unaffected by this - see vgaframe_timing_t.
-        if (f->in_frame && (f->learner.t.locked || f->learner.t.mode || f->cfg.force_mode)) emit(f, f->y + 1, 0, 0);
-        f->y = 0; f->x = f->learner.report_x; f->in_frame = 1;
+        if (f->in_frame) end_frame(f);
+        f->y = 0; f->x = f->learner.report_x; f->in_frame = 1; f->retro_frame = 0;
     } else if (r == 1) {
         f->x = f->learner.report_x;
         if (f->in_frame) f->y++;
@@ -335,6 +389,14 @@ static void push_rest(vgaframe_t *f, uint32_t sample, uint32_t run, uint8_t h, i
     }
 }
 
+// vgaframe_push holds the fast path every sample takes, and its speed moved
+// by some 15% with nothing but where the linker happened to place it (the
+// M10 Task 10 changes left it byte for byte the same but off a 64-byte
+// boundary). Pin it to one so that unrelated changes elsewhere in this file
+// cannot move it.
+#if defined(__GNUC__)
+__attribute__((aligned(64)))
+#endif
 void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
     uint8_t h = bit(f->cfg.signal_map, sample, VGACAP_SIG_HSYNC);
     if (vgaframe_timing_push_no_edge(&f->learner, h, run)) {
@@ -409,3 +471,5 @@ void vgaframe_push64(vgaframe_t *f, uint32_t sample, uint64_t run) {
     }
     f->last_report = report;
 }
+
+void vgaframe_set_rgb6_buffer(vgaframe_t *f, uint8_t *rgb6) { f->rgb6 = rgb6; }

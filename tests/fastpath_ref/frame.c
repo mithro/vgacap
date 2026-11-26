@@ -1,6 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 // Reconstructs RGB24 frames from a continuous stream of (sample, run) pairs,
 // and from FRAM partial-frame windows (see vgaframe_frame_begin).
+//
+// DELIBERATE CHANGES, M10 Task 10 (controller's Ruling O): the a26c942 push
+// path below has been given, in its own plain style and without the fast
+// path, the same intended behaviour changes the library made in Task 10, so
+// test_frame_fastpath keeps comparing the fast path against a reference with
+// the same semantics. Each is marked "Task 10" below:
+//   - the raw-frame callback (on_raw) at every report 2 while in_frame, and
+//     retro_frame, set where report 3 claims a frame and cleared where
+//     report 2 starts one;
+//   - raw (lines [0, y + 2) capped at max_lines, by memset) and cover
+//     cleared at every report 2 while in_frame, including after emit's early
+//     returns;
+//   - emit doing only its bookkeeping (frames_seen, FRAM pending state,
+//     clearing) when on_frame is NULL;
+//   - the rgb6 output beside rgb24 (vgaframe_set_rgb6_buffer);
+//   - and (Task 10 fix round 1) flush_pending_fram clearing all of raw and
+//     cover when emit declines the pending FRAM picture.
+// Nothing else differs from a26c942.
 #include "vgacap/frame.h"
 #include <string.h>
 #include "internal.h"
@@ -24,6 +42,7 @@ void vgaframe_reset(vgaframe_t *f) {
     vgaframe_timing_init(&f->learner);
     memset(&f->out_timing, 0, sizeof f->out_timing);
     f->x = 0; f->y = 0; f->in_frame = 0; f->frames_seen = 0;
+    f->retro_frame = 0;   // Task 10
     f->last_report = 0;
     f->fram_active = 0; f->fram_pending = 0; f->fram_counter = 0;
     f->fram_first_line = 0; f->fram_line_count = 0; f->fram_cpl = 0;
@@ -98,9 +117,23 @@ static int covered(const vgaframe_t *f) {
 // says whether this is the FRAM accumulation being published (which names
 // the frame by its FRAM counter and may have written anywhere in the
 // buffer) or a continuous-mode frame.
-static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int is_fram) {
-    const vgaframe_mode_t *m = resolved_mode(f);
+// Task 10: returns 1 if it cleared raw and cover, 0 on an early return.
+static int emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int is_fram) {
     uint32_t W = f->cfg.max_clocks_per_line, x0, y0, w, h;
+    // In FRAM mode a frame's windows can land anywhere in [0, max_lines), not
+    // just below lines_known (which is only this emit's notion of the frame
+    // height), so clear the whole buffer rather than risk leaving stale
+    // "written" pixels from a differently-shaped frame for the next one.
+    uint32_t clear_lines = is_fram ? f->cfg.max_lines :
+                           (lines_known < f->cfg.max_lines ? lines_known + 1 : f->cfg.max_lines);
+    if (!f->cfg.on_frame) {   // Task 10: bookkeeping only
+        f->frames_seen++;
+        if (is_fram) { f->fram_pending = 0; f->fram_h_high = f->fram_v_high = f->fram_clocks = 0; }
+        memset(f->raw, 0, (size_t)W * clear_lines);
+        memset(f->cover, 0, f->cfg.max_lines);
+        return 1;
+    }
+    const vgaframe_mode_t *m = resolved_mode(f);
     if (m) {
         x0 = (uint32_t)m->h_sync + m->h_back; y0 = (uint32_t)m->v_sync + m->v_back;
         w = m->h_active; h = m->v_active;
@@ -116,13 +149,13 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
                     if (y > maxy) maxy = y;
                 }
             }
-        if (minx > maxx) return; // nothing to show
+        if (minx > maxx) return 0; // nothing to show
         x0 = minx; y0 = miny; w = maxx - minx + 1; h = maxy - miny + 1;
     }
     // A force_mode (or a table/fram_cpl match) whose active area starts at or
     // past the buffer edge has nothing to crop: bail rather than let the
     // W - x0 / max_lines - y0 clamps below underflow.
-    if (x0 >= W || y0 >= f->cfg.max_lines) return;
+    if (x0 >= W || y0 >= f->cfg.max_lines) return 0;
     if (x0 + w > W) w = W - x0;
     if (y0 + h > f->cfg.max_lines) h = f->cfg.max_lines - y0;
     uint8_t partial = partial_hint;
@@ -130,6 +163,7 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
         for (uint32_t x = 0; x < w; x++) {
             uint8_t p = f->raw[(y0 + y) * W + x0 + x];
             uint8_t *o = f->rgb + (y * w + x) * 3;
+            if (f->rgb6) f->rgb6[y * w + x] = (p & 0x80) ? (uint8_t)(p & 0x3F) : 0;   // Task 10
             if (!(p & 0x80)) { o[0] = 255; o[1] = 0; o[2] = 255; partial = 1; continue; }
             o[0] = (uint8_t)(((p >> 4) & 3) * 85);
             o[1] = (uint8_t)(((p >> 2) & 3) * 85);
@@ -161,28 +195,28 @@ static void emit(vgaframe_t *f, uint32_t lines_known, uint8_t partial_hint, int 
         f->out_timing.vsync_positive = (uint8_t)(2 * f->fram_v_high < f->fram_clocks);
     }
     vgaframe_output_t out;
-    out.rgb24 = f->rgb; out.width = (uint16_t)w; out.height = (uint16_t)h; out.timing = &f->out_timing;
+    out.rgb24 = f->rgb; out.rgb6 = f->rgb6; out.width = (uint16_t)w; out.height = (uint16_t)h; out.timing = &f->out_timing;
     out.stride = w * 3;   // rows are packed; emit() writes them that way above
     out.active_x0 = (uint16_t)x0; out.active_y0 = (uint16_t)y0; out.partial = partial;
     out.frame_counter = is_fram ? f->fram_counter : f->frames_seen;
     f->frames_seen++;
     if (is_fram) { f->fram_pending = 0; f->fram_h_high = f->fram_v_high = f->fram_clocks = 0; }
-    if (f->cfg.on_frame) f->cfg.on_frame(f->cfg.user, &out);
-    // In FRAM mode a frame's windows can land anywhere in [0, max_lines), not
-    // just below lines_known (which is only this emit's notion of the frame
-    // height), so clear the whole buffer rather than risk leaving stale
-    // "written" pixels from a differently-shaped frame for the next one.
-    uint32_t clear_lines = is_fram ? f->cfg.max_lines :
-                           (lines_known < f->cfg.max_lines ? lines_known + 1 : f->cfg.max_lines);
+    f->cfg.on_frame(f->cfg.user, &out);
     memset(f->raw, 0, (size_t)W * clear_lines);
     memset(f->cover, 0, f->cfg.max_lines);
+    return 1;
 }
 
 // A continuous-mode frame has started, so any FRAM accumulation still
 // waiting for the window that would complete it is never going to get it:
 // publish what was covered and free the buffer for the new frame.
+// Task 10 (fix round 1): a picture emit declines is cleared here too, so
+// the continuous frame that follows does not start on its pixels.
 static void flush_pending_fram(vgaframe_t *f) {
-    if (f->fram_pending && covered_any(f)) emit(f, expected_lines(f), 1, 1);
+    if (f->fram_pending && covered_any(f) && !emit(f, expected_lines(f), 1, 1)) {
+        memset(f->raw, 0, (size_t)f->cfg.max_clocks_per_line * f->cfg.max_lines);
+        memset(f->cover, 0, f->cfg.max_lines);
+    }
     f->fram_pending = 0;
 }
 
@@ -211,7 +245,7 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
         // no real mode puts active pixels inside its own vsync.
         f->x = f->learner.report_x;
         if (f->in_frame) f->y++;
-        else { flush_pending_fram(f); f->in_frame = 1; f->y = f->learner.t.vsync_lines; }
+        else { flush_pending_fram(f); f->in_frame = 1; f->y = f->learner.t.vsync_lines; f->retro_frame = 1; }
     } else if (r == 2) {
         flush_pending_fram(f);
         // Trust an exact (clocks_per_line, lines_per_frame) match against
@@ -220,8 +254,22 @@ void vgaframe_push(vgaframe_t *f, uint32_t sample, uint32_t run) {
         // a random signal matching both dimensions of a real VESA mode is
         // strong enough evidence on its own. `locked` remains the stronger
         // signal and is unaffected by this - see vgaframe_timing_t.
-        if (f->in_frame && (f->learner.t.locked || f->learner.t.mode || f->cfg.force_mode)) emit(f, f->y + 1, 0, 0);
-        f->y = 0; f->x = f->learner.report_x; f->in_frame = 1;
+        if (f->in_frame) {
+            // Task 10: the raw callback, then emit as before, then the
+            // clearing whether or not emit ran or returned early.
+            uint32_t H = f->cfg.max_lines;
+            if (f->cfg.on_raw) {
+                vgaframe_raw_t rf;
+                rf.raw = f->raw; rf.stride = f->cfg.max_clocks_per_line;
+                rf.lines = f->y < H ? f->y + 1 : H;
+                rf.timing = &f->learner.t; rf.retroactive = f->retro_frame;
+                f->cfg.on_raw(f->cfg.raw_user, &rf);
+            }
+            if (f->learner.t.locked || f->learner.t.mode || f->cfg.force_mode) emit(f, f->y + 1, 0, 0);
+            memset(f->raw, 0, (size_t)f->cfg.max_clocks_per_line * (f->y + 1 < H ? f->y + 2 : H));
+            memset(f->cover, 0, H);
+        }
+        f->y = 0; f->x = f->learner.report_x; f->in_frame = 1; f->retro_frame = 0;
     } else if (r == 1) {
         f->x = f->learner.report_x;
         if (f->in_frame) f->y++;
@@ -337,3 +385,6 @@ void vgaframe_push64(vgaframe_t *f, uint32_t sample, uint64_t run) {
     }
     f->last_report = report;
 }
+
+// Task 10.
+void vgaframe_set_rgb6_buffer(vgaframe_t *f, uint8_t *rgb6) { f->rgb6 = rgb6; }
