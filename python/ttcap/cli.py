@@ -984,8 +984,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=sorted(CAPTURE_MODES),
         default="stream",
-        help="stream: every sample, at a clock the USB link can carry "
-        "(~750 kHz RP2350, ~60 kHz RP2040); frame: whole frames at the "
+        help="stream: every sample, at a clock the USB link can carry; "
+        "frame: whole frames at the "
         "project's real clock, sent between frames; window: the same, "
         "--window-lines lines per frame; rle: every sample, run-length "
         "encoded by the PIO, as fast as the picture's runs let the link "

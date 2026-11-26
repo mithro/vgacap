@@ -27,7 +27,7 @@ review: 2027-05-27
 
 2. In the terminal, read the first board line, which names the counting style the board chose and its period in system clocks.
 3. In the terminal, read the stats line, which shows `rxstall=0` when every pair arrived.
-4. In the checkout, run `uv run ttcap png clock-rle.vgacap out/clock`, which expands the runs and writes the frames as PNGs.
+4. In the checkout, run `mkdir -p out && uv run ttcap png clock-rle.vgacap out/clock`, which expands the runs and writes the frames as PNGs.
 
 For one burst at the design's real clock, add `--rle-oneshot` and a large `--buf-words`. The board then fills its two buffers once at full speed and sends them, so the burst holds `--buf-words` pairs whatever the link carries. On an FPGA breakout, a burst at 25 MHz with `--buf-words 20000` matched the design exactly ([research note](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-11-24-pio-run-counting.md)).
 
