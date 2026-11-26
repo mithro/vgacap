@@ -70,6 +70,9 @@ static int compress_one(struct vgacap_trace_impl *I, const uint8_t *src, size_t 
     size_t c = ZSTD_compress2(I->cctx, I->zbuf, I->zcap, src, n);
     if (ZSTD_isError(c)) { snprintf(msg, msglen, "zstd: %s", ZSTD_getErrorName(c)); return -1; }
     if (fwrite(I->zbuf, 1, c, I->f) != c) { snprintf(msg, msglen, "write: %s", strerror(errno)); return -1; }
+    // Push the frame out of the stdio buffer now: a killed writer keeps every
+    // block it finished, and this runs on the compressor thread, off the push path.
+    if (fflush(I->f) != 0) { snprintf(msg, msglen, "write: %s", strerror(errno)); return -1; }
     // The frame's own checksum (the low 32 bits of XXH64 of the block) is
     // the value the seek table records for it.
     size_t lr = ZSTD_seekable_logFrame(I->frames, (unsigned)c, (unsigned)n, le32(I->zbuf + c - 4));
