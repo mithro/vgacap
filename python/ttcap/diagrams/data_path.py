@@ -37,17 +37,18 @@ def draw(theme):
     # uo_out down into the PIO; the project clock up to the design.
     s.arrow([(CX, 64), (CX, 172)], c["sig"], 3)
     s.label(CX + 10, 92, "uo_out[7:0]", 13, c["sig"], "start")
-    s.rect(403, 184, 44, 26, c["part"], c["part_edge"], rx=4, sw=1.2)
-    s.label(425, 202, "PWM", 12)
-    s.arrow([(425, 184), (425, 104), (360, 104), (360, 68)], c["sig"], 2)
+    s.rect(414, 184, 44, 26, c["part"], c["part_edge"], rx=4, sw=1.2)
+    s.label(436, 202, "PWM", 12)
+    s.arrow([(414, 202), (357, 202)], c["sig"], 2)
+    s.arrow([(436, 184), (436, 104), (360, 104), (360, 68)], c["sig"], 2)
     s.label(370, 96, "project clock", 13, c["sig"], "start")
 
-    def part(y, h, name, sub):
-        s.rect(110, y, 280, h, c["part"], c["part_edge"], rx=5, sw=1.2)
+    def part(y, h, name, sub, w=280):
+        s.rect(CX - w / 2, y, w, h, c["part"], c["part_edge"], rx=5, sw=1.2)
         s.label(CX, y + 22, name, 15, weight="bold")
         s.label(CX, y + 41, sub, 13, c["muted"])
 
-    part(176, 52, "PIO sampler", "one sample a clock edge")
+    part(176, 52, "PIO sampler", "one sample a clock edge", 210)
     s.arrow([(CX, 228), (CX, 262)], c["str"], 3)
     s.label(CX + 10, 250, "RX FIFO", 13, c["chip_text"], "start")
 
