@@ -20,8 +20,7 @@ A frame is emitted at the frame boundary that closes it, once the timing is
 known. A capture starts mid-frame: the tail of that frame is unusable, the
 next boundary only tells the reconstruction where frames begin, and the
 whole frame after it is the first that can be rendered. So capture at
-least three frame periods for one picture; [`ttcap capture --frames N`](../../python/ttcap/README.md#capturing-with-the-stock-firmware)
-captures N + 2.
+least three frame periods for one picture.
 
 ## Glitches
 
