@@ -70,7 +70,7 @@ design must run.
 | vgacap firmware | RP2350 | ASIC | [clean](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-picosdk-firmware-fpga4/README.md#asic-board-tt09-silicon-with-asic_select) | [clean](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-picosdk-firmware-fpga4/README.md#asic-board-tt09-silicon-with-asic_select) | [clean](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-picosdk-firmware-fpga4/README.md#asic-board-tt09-silicon-with-asic_select) |
 | MicroPython C module | RP2350 | FPGA | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-mpy-module-fpga1) | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-mpy-module-fpga1) | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-mpy-module-fpga1) |
 | FPGA | iCE40UP5K | FPGA | [pixel-exact](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-rtl-framer-fpga4) | -- | -- |
-| Raspberry Pi 5 | RP1 | -- | [loopback only](capture-rp1/README.md#proven-on-hardware-the-loopback-fixture) | -- | -- |
+| Raspberry Pi 5 | RP1 | -- | [loopback only](capture-rp1/how-to-capture-loopback.md) | -- | -- |
 | simulator | -- | -- | [clean](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-sim-tt_um_vga_pattern) | -- | -- |
 
 Run-length capture on the stock firmware
