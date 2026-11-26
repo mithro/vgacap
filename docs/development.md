@@ -1,7 +1,6 @@
 # Developing vgacap
 
-How to build and test vgacap, and what CI checks. The
-[top-level README](../README.md) has the overview.
+How to build and test vgacap, and what CI checks.
 
 ## Building and testing
 
