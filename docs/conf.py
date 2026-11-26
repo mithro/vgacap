@@ -86,10 +86,10 @@ include_patterns = [
 vgacap_rules_pending = {
     page: "split into typed pages (docs/superpowers/specs/2026-11-27-docs-site-design.md)"
     for page in (
-        "README", "python/ttcap/README", "firmware/README", "firmware/PROTOCOL",
-        "mpy/README", "capture-rp1/README", "rtl/README", "gst/README",
-        "src/tools/README", "tools/README", "docs/development", "docs/frames-format",
-        "docs/trace-format", "third_party/README", "docs/diagrams/NOTICE",
+        "python/ttcap/README", "firmware/README", "firmware/PROTOCOL",
+        "mpy/README", "capture-rp1/README", "rtl/README",
+        "tools/README", "docs/development",
+        "docs/trace-format", "third_party/README",
     )
 }
 

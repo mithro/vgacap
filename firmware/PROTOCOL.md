@@ -104,8 +104,8 @@ is torn, and its `RAW ` chunk (sent before, during or after the rewrite)
 mixes two fills. A `TIME` chunk with the message `overrun` follows that
 very `RAW ` chunk, before any other, its `dropped_samples` the cumulative
 total so far (an upper bound: a rewrite that started during the send but
-never overtook it counts too). [vgacap-frames](../src/tools/README.md#overruns)
-and [vgadecode](../gst/README.md#vgadecode-a-stream-in-video-out) drop the
+never overtook it counts too). [vgacap-frames](../src/frame/explanation-rebuilding-frames.md#resetting-on-an-overrun)
+and [vgadecode](../gst/reference-elements.md#vgadecode-output-buffers) drop the
 picture in progress there. `max_bytes` stops the capture once the chunks sent (RAW and
 overrun TIME, headers included) reach it; 0 means only a stop byte ends it.
 The project clock must be running.

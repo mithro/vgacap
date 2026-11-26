@@ -12,5 +12,4 @@ review: 2027-05-27
 - [The vgacap MicroPython module](../../mpy/README.md): the same capture built into MicroPython.
 - [vgacap-rp1](../../capture-rp1/README.md): capturing with a Raspberry Pi 5.
 - [vgacap/rtl](../../rtl/README.md): capture logic built into an FPGA design.
-- [The C tools](../../src/tools/README.md): turning a capture into frames, checks and waveforms.
-- [The GStreamer plugin](../../gst/README.md): turning a capture into video.
+- [From a capture to pictures](../../src/README.md): the stream, how frames are rebuilt, the tools and the GStreamer plugin.
