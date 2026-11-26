@@ -23,6 +23,14 @@ target_link_libraries(vgacap-frames PRIVATE vgacap_stream vgacap_frame)
 # --- gst: GStreamer plugin (gst/), built only when GStreamer is installed ---
 add_subdirectory(gst)
 
+# --- third_party: vendored zstd, zlib, libfst and SHA-256 for the host-only
+# tools (simulation traces). Not used by the board builds. OFF skips them
+# and test_third_party.
+option(VGACAP_HOST_EXTRAS "Build the vendored host-only libraries" ON)
+if(VGACAP_HOST_EXTRAS)
+  add_subdirectory(third_party)
+endif()
+
 function(vgacap_add_test name)
   add_executable(${name} tests/${name}.c ${ARGN})
   target_include_directories(${name} PRIVATE tests)
@@ -43,6 +51,10 @@ vgacap_add_test(test_frame_partial tests/synth.c)
 vgacap_add_test(test_stream_header)
 vgacap_add_test(test_stream_raw)
 vgacap_add_test(test_stream_chunks)
+if(VGACAP_HOST_EXTRAS)
+  vgacap_add_test(test_third_party)
+  target_link_libraries(test_third_party PRIVATE vgacap_zstd vgacap_zlib vgacap_fst vgacap_sha256)
+endif()
 
 # --- firmware: the pico-sdk capture firmware's portable core (firmware/core),
 # built here for its host simulator and its tests. The firmware itself is

@@ -10,4 +10,5 @@ __pycache__/
 .claude/worktrees/
 .worktrees/
 capture-rp1/vgacap-rp1
+build-off/
 capture-rp1/vgacap-rp1-programs
