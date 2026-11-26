@@ -57,7 +57,7 @@ Step 3 ends with `24 passed`. Test checks names a group of the tests, and Holds 
 |---|---|---|
 | `1 skipped` when step 3 is run without the variable | no `build/mpy-unix/micropython` | Run step 2 |
 | `RuntimeError: .../build/mpy-unix/micropython is missing: run mpy/build-unix.sh` | step 2 has not run | Run step 2 |
-| `test_stream_stops_between_chunks_on_request` fails with `assert 3 >= 4` | the test's timing on a busy machine ([issue #31](https://github.com/mithro/vgacap/issues/31)) | Run step 3 again on a quieter machine |
+| `test_stream_stops_between_chunks_on_request` fails with `assert 3 >= 4` | a timing bug in that test ([issue #31](https://github.com/mithro/vgacap/issues/31)) | Nothing in your change: the other 23 tests must pass |
 | A compiler error in `modvgacap.c` or `hal_mpy.c` at step 2 | the change does not build against MicroPython | Fix the source; the unix port builds it with its own warnings |
 | `git clone` fails at step 2 | no network | Clone `https://github.com/micropython/micropython.git` elsewhere and pass its path: `mpy/build-unix.sh <dir>` |
 

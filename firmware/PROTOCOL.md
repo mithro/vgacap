@@ -17,7 +17,7 @@ Figure 1 is the exchange of one frame capture as `ttcap capture --firmware picos
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../docs/diagrams/firmware-protocol-dark.svg">
-  <img src="../docs/diagrams/firmware-protocol.svg" alt="ttcap and the vgacap firmware exchange lines for sync and setup, then the frame command, its ok, TIME and FRAM chunks, the DONE end marker, then a clock stop." width="100%">
+  <img src="../docs/diagrams/firmware-protocol.svg" alt="ttcap and the vgacap firmware exchange sync and setup lines, the frame command and its ok, TIME and FRAM chunks, the DONE marker, then a clock stop." width="100%">
 </picture>
 
 *Figure 1: a frame capture of two pictures

@@ -42,7 +42,8 @@ Item names a fact about GPIO 1, and Value gives it.
 | Item | Value |
 |---|---|
 | Level the stock firmware leaves | high |
-| Level the firmware drives at boot | high, set before the pin becomes an output |
+| Level the firmware drives at boot | high |
+| Order at boot | the level first, then the direction |
 | The only command that drives it low | `asic_select` |
 
 ## PIO and DMA

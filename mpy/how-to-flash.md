@@ -90,7 +90,7 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
 
    A release UF2 carries a filesystem image, and its list must include `0x100c8008`, the superblock of a
    filesystem at `0x100C8000`. A `firmware.uf2` you built carries none, so the list cannot show it. That build
-   mounts at `0x100C8000` because the board definition at `596f456`,
+   mounts at `0x100C8000` all the same. Its board definition at `596f456`,
    [`mpconfigboard.h`](https://github.com/psychogenic/tinytapeout_rp2350b/blob/596f456/mpconfigboard.h), gives
    4 MB of flash and leaves the first 800 KB to MicroPython. Stop here if neither holds.
 
