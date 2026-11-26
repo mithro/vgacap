@@ -2,8 +2,9 @@
 
 Host-only libraries for the simulation-trace tools, built when
 `VGACAP_HOST_EXTRAS` is ON (the default). Nothing here is used by the board
-builds (`firmware/`, `capture-rp1/`, `mpy/`). The code is unmodified upstream
-source; `CMakeLists.txt` builds it with `-O2 -w` and without vgacap's
+builds (`firmware/`, `capture-rp1/`, `mpy/`). The code is upstream source,
+unmodified except for the one local patch listed under SHA-256;
+`CMakeLists.txt` builds it with `-O2 -w` and without vgacap's
 `-Werror` flags.
 
 ## zstd 1.5.7 (`zstd/`)
@@ -47,3 +48,7 @@ source; `CMakeLists.txt` builds it with `-O2 -w` and without vgacap's
 - Licence: public domain (statement in `sha256/LICENSE`, quoted from the
   upstream README).
 - Files: `sha256.c sha256.h`.
+- Local patch: `sha256_transform` casts `data[j]` to `uint32_t` before
+  `<< 24`, and `sha256.c` includes `<stdint.h>` for it. Upstream shifts the
+  promoted `int`, which is undefined behaviour for bytes of 0x80 and above
+  (found by UBSan in `test_hashes`).

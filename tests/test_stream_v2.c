@@ -269,7 +269,8 @@ TEST(runs_other_widths) {
         uint8_t bits = widths[k];
         start_v2(bits, 1, VGACAP_CLOCK_BIT_NONE, 0);
         uint64_t mask = bits == 64 ? ~0ull : ((1ull << bits) - 1);
-        uint64_t v[3] = { mask, 0, mask >> 1 }, r[3] = { 1, 300, ~0ull };
+        // The last run is the largest that keeps n within 64 bits.
+        uint64_t v[3] = { mask, 0, mask >> 1 }, r[3] = { 1, 300, ~0ull - 301u };
         ASSERT_EQ_U(vgacap_writer_runs(&W, v, r, 3), 0);
         ASSERT_EQ_U(outbuf[outlen - 3 * ((bits + 7u) / 8u) - 1 - 2 - 10 - 4 - 8], 'R');
         ASSERT_EQ_U(feed_all(), 0);
@@ -347,6 +348,45 @@ TEST(runs_reject_zero_run) {
     const uint8_t zero = 0;
     put_runs1(1, 6, &zero, 1);
     expect_runs_skip("RUNS run is zero", 8 + 4 + 6 + 1, 0);
+}
+
+// n is a u64: a run whose end would take it past 2^64 - 1 is a RUNS content
+// error, skipped by length, never a wrap. A run ending exactly at 2^64 - 1
+// is delivered.
+TEST(runs_reject_n_past_64_bits) {
+    // BLKH puts n at 2^64 - 3: a run of 2 ends at 2^64 - 1, a run of 3 would wrap.
+    start_v2(43, 1, VGACAP_CLOCK_BIT_NONE, 0);
+    ASSERT_EQ_U(vgacap_writer_block(&W, UINT64_MAX - 2u), 0);
+    const uint8_t three = 3;
+    put_runs1(1, 6, &three, 1);
+    ASSERT_EQ_U(feed_all(), 0);
+    // Resync 0 is the BLKH gap report (n was 0), then the RUNS skip.
+    ASSERT_EQ_U(count(VGACAP_EV_RUN), 0);
+    ASSERT_EQ_U(count(VGACAP_EV_RESYNC), 2);
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 0), "BLKH first_sample does not follow"));
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 1), "RUNS run takes n past 64 bits"));
+    ASSERT_EQ_U(nth(VGACAP_EV_RESYNC, 1)->u.resync.skipped, 8 + 4 + 6 + 1);
+    ASSERT_EQ_U(rd.sample_pos, UINT64_MAX - 2u);
+    start_v2(43, 1, VGACAP_CLOCK_BIT_NONE, 0);
+    ASSERT_EQ_U(vgacap_writer_block(&W, UINT64_MAX - 2u), 0);
+    writer_runs1(1, 2);
+    ASSERT_EQ_U(feed_all(), 0);
+    ASSERT_EQ_U(count(VGACAP_EV_RESYNC), 1);   // the BLKH gap report only
+    ASSERT_EQ_U(count(VGACAP_EV_RUN), 1);
+    ASSERT_EQ_U(rd.sample_pos, UINT64_MAX);
+    // Mid-chunk, from n = 0: pair 1 (2^64 - 1 samples) is delivered, pair 2
+    // would wrap. The whole chunk is reported; in a clock stream n is then
+    // unknown and the next RUNS is discarded until a BLKH.
+    start_trace();
+    uint64_t values[2] = { 1, 2 }, runs[2] = { UINT64_MAX, 1 };
+    ASSERT_EQ_U(vgacap_writer_runs(&W, values, runs, 2), 0);
+    writer_runs1(5, 1);
+    ASSERT_EQ_U(feed_all(), 0);
+    ASSERT_EQ_U(count(VGACAP_EV_RUN), 1);
+    ASSERT_EQ_U(nth(VGACAP_EV_RUN, 0)->u.run.run, UINT64_MAX);
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 0), "RUNS run takes n past 64 bits"));
+    ASSERT_EQ_U(nth(VGACAP_EV_RESYNC, 0)->u.resync.skipped, 8 + 4 + (6 + 10) + (6 + 1));
+    ASSERT_TRUE(what_is(nth(VGACAP_EV_RESYNC, 1), "RUNS discarded: sample position unknown until BLKH"));
 }
 
 TEST(runs_length_mismatch) {
@@ -828,7 +868,7 @@ int main(void) {
     RUN(leb128_vectors); RUN(header_v2_round_trip); RUN(worked_example_bytes); RUN(header_v2_rules);
     RUN(header_v1_defaults); RUN(runs_round_trip_43bit); RUN(runs_clock_first_one); RUN(runs_other_widths);
     RUN(runs_reject_clock_bit_set); RUN(runs_reject_overlong_leb); RUN(runs_reject_padding_bits);
-    RUN(runs_reject_zero_run); RUN(runs_length_mismatch); RUN(runs_two_faults_early_bound_first); RUN(runs_reject_no_pairs); RUN(runs_adjacent_pairs);
+    RUN(runs_reject_zero_run); RUN(runs_reject_n_past_64_bits); RUN(runs_length_mismatch); RUN(runs_two_faults_early_bound_first); RUN(runs_reject_no_pairs); RUN(runs_adjacent_pairs);
     RUN(runs_writer_refuses_bad_pairs); RUN(runs_need_v2_header); RUN(rle_rejected_in_v2);
     RUN(clock_stream_rejects_raw); RUN(wide_stream_rejects_raw); RUN(v2_narrow_stream_allows_raw);
     RUN(block_sets_position); RUN(bad_blkh_length); RUN(clock_loss_discards_until_blkh);
