@@ -1,18 +1,18 @@
-# Images and logos used in the overview figure
+---
+type: reference
+owner: vgacap maintainers
+reader: someone reusing the overview figure who needs each picture's source and license
+review: 2027-05-27
+---
 
-- [`images/tt-etr-dbv3p2.jpg`](images/tt-etr-dbv3p2.jpg): [Tiny Tapeout](https://tinytapeout.com)'s KiCad render of the ETR demo
-  board v3.2 without a breakout fitted, from
-  [TinyTapeout/tt-demo-pcb](https://github.com/TinyTapeout/tt-demo-pcb)
-  `doc/img/tt-etr-dbv3p2-render.png` at commit
-  [3b125fe](https://github.com/TinyTapeout/tt-demo-pcb/blob/3b125feeac2bc38a9818803b32c25ffa5058b97b/doc/img/tt-etr-dbv3p2-render.png)
-  (Apache-2.0). [`prep_board.py`](prep_board.py) flattens it onto white and scales it down.
-- [`logos/tinytapeout.svg`](logos/tinytapeout.svg): the Tiny Tapeout logo, from
-  [TinyTapeout/tt-support-tools](https://github.com/TinyTapeout/tt-support-tools)
-  [`logo/tt_logo.svg`](https://github.com/TinyTapeout/tt-support-tools/blob/main/logo/tt_logo.svg) (Apache-2.0).
-- [`logos/raspberry-pi.svg`](logos/raspberry-pi.svg): the Raspberry Pi logo, from
-  [Wikipedia](https://en.wikipedia.org/wiki/File:Raspberry_Pi_Logo.svg).
-  Raspberry Pi is a trademark of Raspberry Pi Ltd; the logo is used here
-  only to identify the Raspberry Pi 5 capture source.
+# Images and logos in the overview figure
 
-The logos are trademarks of their owners and are not covered by this
-repository's license.
+**You want to know where each picture inside the overview figure comes from, and under what terms it is used.**
+
+The figure is drawn by [`overview.py`](overview.py), which embeds these files. The logos are trademarks of their owners and are not covered by this repository's license. File is the file in this directory, Shows what it is, From where it was taken, and Terms its license.
+
+| File | Shows | From | Terms |
+|---|---|---|---|
+| [`images/tt-etr-dbv3p2.jpg`](images/tt-etr-dbv3p2.jpg) | the ETR demo board v3.2 without a breakout, flattened onto white by [`prep_board.py`](prep_board.py) | [TinyTapeout/tt-demo-pcb at 3b125fe](https://github.com/TinyTapeout/tt-demo-pcb/blob/3b125feeac2bc38a9818803b32c25ffa5058b97b/doc/img/tt-etr-dbv3p2-render.png) | Apache-2.0 |
+| [`logos/tinytapeout.svg`](logos/tinytapeout.svg) | the Tiny Tapeout logo | [TinyTapeout/tt-support-tools `logo/tt_logo.svg`](https://github.com/TinyTapeout/tt-support-tools/blob/main/logo/tt_logo.svg) | Apache-2.0 |
+| [`logos/raspberry-pi.svg`](logos/raspberry-pi.svg) | the Raspberry Pi logo | [Wikipedia](https://en.wikipedia.org/wiki/File:Raspberry_Pi_Logo.svg) | a trademark of Raspberry Pi Ltd, used only to name the Raspberry Pi 5 capture source |

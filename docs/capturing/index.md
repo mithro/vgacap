@@ -11,5 +11,4 @@ review: 2027-05-27
 - [The vgacap firmware](../../firmware/README.md): a capture firmware for the RP2350 demo board.
 - [The vgacap MicroPython module](../../mpy/README.md): the same capture built into MicroPython.
 - [Other capture sources](other-sources.md): a Raspberry Pi 5, an FPGA design, or a simulation.
-- [The C tools](../../src/tools/README.md): turning a capture into frames, checks and waveforms.
-- [The GStreamer plugin](../../gst/README.md): turning a capture into video.
+- [From a capture to pictures](../../src/README.md): the stream, how frames are rebuilt, the tools and the GStreamer plugin.

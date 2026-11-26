@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="646" height="537" viewBox="0 0 646 537" role="img" aria-labelledby="t">
+<title id="t">One 640x480@60 VGA frame: sync, porches and the active area</title>
+<rect x="0" y="0" width="646" height="537" fill="#ffffff"/>
+<rect x="76.0" y="76.0" width="59.5" height="46.0" fill="#dbe7fb" stroke="#c9ced8" stroke-width="1"/>
+<rect x="76.0" y="122.0" width="59.5" height="46.0" fill="#dbe7fb" stroke="#c9ced8" stroke-width="1"/>
+<rect x="76.0" y="168.0" width="59.5" height="297.6" fill="#dbe7fb" stroke="#c9ced8" stroke-width="1"/>
+<rect x="76.0" y="465.6" width="59.5" height="46.0" fill="#dbe7fb" stroke="#c9ced8" stroke-width="1"/>
+<rect x="135.5" y="76.0" width="46.0" height="46.0" fill="#dbe7fb" stroke="#c9ced8" stroke-width="1"/>
+<rect x="135.5" y="122.0" width="46.0" height="46.0" fill="#eef0f4" stroke="#c9ced8" stroke-width="1"/>
+<rect x="135.5" y="168.0" width="46.0" height="297.6" fill="#eef0f4" stroke="#c9ced8" stroke-width="1"/>
+<rect x="135.5" y="465.6" width="46.0" height="46.0" fill="#eef0f4" stroke="#c9ced8" stroke-width="1"/>
+<rect x="181.5" y="76.0" width="396.8" height="46.0" fill="#dbe7fb" stroke="#c9ced8" stroke-width="1"/>
+<rect x="181.5" y="122.0" width="396.8" height="46.0" fill="#eef0f4" stroke="#c9ced8" stroke-width="1"/>
+<rect x="181.5" y="168.0" width="396.8" height="297.6" fill="#e7f6ef" stroke="#c9ced8" stroke-width="1"/>
+<rect x="181.5" y="465.6" width="396.8" height="46.0" fill="#eef0f4" stroke="#c9ced8" stroke-width="1"/>
+<rect x="578.3" y="76.0" width="46.0" height="46.0" fill="#dbe7fb" stroke="#c9ced8" stroke-width="1"/>
+<rect x="578.3" y="122.0" width="46.0" height="46.0" fill="#eef0f4" stroke="#c9ced8" stroke-width="1"/>
+<rect x="578.3" y="168.0" width="46.0" height="297.6" fill="#eef0f4" stroke="#c9ced8" stroke-width="1"/>
+<rect x="578.3" y="465.6" width="46.0" height="46.0" fill="#eef0f4" stroke="#c9ced8" stroke-width="1"/>
+<rect x="181.5" y="168.0" width="396.8" height="297.6" fill="#e7f6ef" stroke="#14845a" stroke-width="2"/>
+<text x="379.9" y="310.8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#14845a" text-anchor="middle">active area</text>
+<text x="379.9" y="334.8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#14845a" text-anchor="middle">640 x 480: the picture</text>
+<text x="105.8" y="55.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1d2433" text-anchor="middle">sync</text>
+<text x="105.8" y="70.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5b6577" text-anchor="middle">96</text>
+<text x="158.5" y="55.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1d2433" text-anchor="middle">back</text>
+<text x="158.5" y="70.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5b6577" text-anchor="middle">48</text>
+<text x="379.9" y="55.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1d2433" text-anchor="middle">active</text>
+<text x="379.9" y="70.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5b6577" text-anchor="middle">640 clocks</text>
+<text x="601.3" y="55.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1d2433" text-anchor="middle">front</text>
+<text x="601.3" y="70.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5b6577" text-anchor="middle">16</text>
+<text x="55.0" y="99.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1d2433" text-anchor="middle" transform="rotate(-90 55 99.0)">sync</text>
+<text x="68.0" y="99.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5b6577" text-anchor="middle" transform="rotate(-90 68 99.0)">2</text>
+<text x="55.0" y="145.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1d2433" text-anchor="middle" transform="rotate(-90 55 145.0)">back</text>
+<text x="68.0" y="145.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5b6577" text-anchor="middle" transform="rotate(-90 68 145.0)">33</text>
+<text x="55.0" y="316.8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1d2433" text-anchor="middle" transform="rotate(-90 55 316.8)">active</text>
+<text x="68.0" y="316.8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5b6577" text-anchor="middle" transform="rotate(-90 68 316.8)">480 lines</text>
+<text x="55.0" y="488.6" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1d2433" text-anchor="middle" transform="rotate(-90 55 488.6)">front</text>
+<text x="68.0" y="488.6" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5b6577" text-anchor="middle" transform="rotate(-90 68 488.6)">10</text>
+<path d="M64.0 10 L76.0 10 L76.0 34 L135.5 34 L135.5 10 L624.3 10" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
+<text x="58.0" y="26.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#1c64d4" text-anchor="end">hsync</text>
+<path d="M10 64.0 L10 76.0 L34 76.0 L34 122.0 L10 122.0 L10 511.6" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
+<text x="22.0" y="54.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#1c64d4" text-anchor="middle">vsync</text>
+<text x="350.2" y="531.6" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1d2433" text-anchor="middle">one line: 800 clocks</text>
+<text x="640.3" y="293.8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1d2433" text-anchor="middle" transform="rotate(-90 640.3199999999999 293.8)">one frame: 525 lines</text>
+</svg>

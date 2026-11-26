@@ -19,8 +19,8 @@ REPL. The other capture sources have their own READMEs:
 [`capture-rp1/`](../../capture-rp1/README.md) (Raspberry Pi 5) and
 [`rtl/`](../../rtl/README.md) (FPGA).
 
-These commands assume the board and clock described in
-[A first capture](../../README.md#a-first-capture):
+These commands assume a demo board on `/dev/ttyACM0` running a 640x480 VGA
+design, at 500 kHz on an RP2350 board (an RP2040 board keeps up with 60 kHz):
 
 ```sh
 uv run ttcap probe serial:/dev/ttyACM0          # sys.version and the GPIO map
@@ -35,7 +35,7 @@ the RP2040 or RP2350 layout from it.
 The capture stops at the first of `--seconds` (default 5; 0 for no limit),
 `--max-bytes N` or `--frames N`. In stream mode, `--frames N` captures N + 2
 frame periods at 640x480@60 timing
-([When frames appear](../../src/tools/README.md#when-frames-appear)); in
+([When frames appear](../../src/frame/explanation-rebuilding-frames.md#when-the-first-frame-appears)); in
 frame and window modes it stops after N complete pictures.
 
 `ttcap capture` refuses to start without enough free heap:
@@ -111,7 +111,7 @@ frames rather than slowing the capture down.
 
 At a 60 kHz project clock a 640x480 frame is 800x525 clocks, so each frame
 is **seven seconds long**: honest timing, but a slideshow rather than a
-video. `--fps 30` (or `30/1`, or `29.97`) sets [`vgadecode`](../../gst/README.md#vgadecode-a-stream-in-video-out)'s
+video. `--fps 30` (or `30/1`, or `29.97`) sets [`vgadecode`](../../gst/reference-elements.md#vgadecode-properties)'s
 `repeat-last-frame` and `output-fps`, which re-push the last frame to fill
 the gaps so the video plays at wall-clock speed. The setting is on the
 decoder, so every output shares the one cadence.
@@ -123,7 +123,7 @@ the board, the outdir or the port. It is the same command a real run
 prints before it starts, so you can copy, edit and run it by hand.
 
 The pipeline builds `vgacapttsrc` by name, never as a `vgacapbin` URI
-([why](../../gst/README.md#vgacapbin-a-uri-in-video-out)).
+([why](../../gst/reference-elements.md#vgacapbin-uris)).
 
 ### Checked arguments
 
@@ -151,7 +151,7 @@ error (a board error exits 1).
 
 Ctrl-C ends the run cleanly. The demo forwards the signal once to
 `gst-launch-1.0 -e`, which turns it into an end-of-stream, so the board winds
-down through [`vgacapttsrc`'s cooperative stop](../../gst/README.md#stopping-matters) and the Matroska file is
+down through [`vgacapttsrc`'s cooperative stop](../../gst/explanation-live-source.md#why-stopping-is-a-sequence) and the Matroska file is
 finalized rather than truncated. Allow one DMA buffer for that: with the
 default `--buf-words`, about 22 ms on an RP2350 at 750 kHz and about
 137 ms on an RP2040 at 60 kHz. `SIGTERM`, `SIGHUP` and `SIGQUIT` do the
