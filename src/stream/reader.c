@@ -517,6 +517,8 @@ static int runs_byte(vgacap_reader_t *r, uint8_t b) {
     r->lebcount++;
     if (b & 0x80u) return 0;
     if (b == 0) return skip_rest(r, r->lebcount == 1 ? "RUNS run is zero" : "RUNS run not minimally encoded");
+    // n is a u64: a run whose end would pass it is a content error, not a wrap.
+    if (r->pair_run > UINT64_MAX - r->sample_pos) return skip_rest(r, "RUNS run takes n past 64 bits");
     emit_run(r, r->pair_value, r->pair_run);
     r->prev_value = r->pair_value; r->have_prev = 1;
     r->pair_value = 0; r->pair_run = 0; r->vfill = 0; r->lebcount = 0;

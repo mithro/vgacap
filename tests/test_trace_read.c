@@ -1044,6 +1044,36 @@ TEST(test_trace_runs_against_12dfaf7) {
     remove(path);
 }
 
+// n is a u64. In a plain v2 stream (no clock bit) a RUNS chunk whose run
+// would take n past 2^64 - 1 is skipped by the stream reader ("RUNS run takes
+// n past 64 bits"), so neither the sample total nor a read wraps: the chunk
+// after it carries on from 2^64 - 2. Before the fix the skipped run was
+// delivered, n wrapped to 3 and the total was 4.
+static int file_write(void *u, const uint8_t *b, size_t n) { return fwrite(b, 1, n, u) == n ? 0 : -1; }
+
+TEST(test_trace_run_past_64_bits) {
+    char path[256]; tmp_path(path, sizeof path, "read_wrap.vgacap");
+    FILE *f = fopen(path, "wb");
+    ASSERT_TRUE(f != NULL);
+    vgacap_header_t h; vgacap_header_init_v2(&h, 8, 1, VGACAP_CLOCK_BIT_NONE, 0);
+    vgacap_writer_t w; ASSERT_EQ_U(vgacap_writer_init(&w, file_write, f, &h), 0);
+    const uint64_t v[3] = { 1, 2, 3 }, r[3] = { UINT64_MAX - 1u, 5, 1 };
+    for (int i = 0; i < 3; i++) ASSERT_EQ_U(vgacap_writer_runs(&w, &v[i], &r[i], 1), 0);
+    ASSERT_EQ_U(fclose(f), 0);
+    vgacap_trace_reader_t *t = open_or_say(path);
+    ASSERT_TRUE(t != NULL);
+    ASSERT_EQ_U(vgacap_trace_info(t)->samples, UINT64_MAX);
+    struct all_runs a = { 0, 0, NULL, NULL, NULL };
+    char err[256] = "";
+    ASSERT_EQ_U(vgacap_trace_read(t, UINT64_MAX - 4u, UINT64_MAX, on_all, &a, err, sizeof err), 0);
+    ASSERT_EQ_U(a.n, 2);
+    ASSERT_EQ_U(a.first[0], UINT64_MAX - 4u); ASSERT_EQ_U(a.value[0], 1); ASSERT_EQ_U(a.len[0], 3);
+    ASSERT_EQ_U(a.first[1], UINT64_MAX - 1u); ASSERT_EQ_U(a.value[1], 3); ASSERT_EQ_U(a.len[1], 1);
+    all_free(&a);
+    vgacap_trace_close(t);
+    remove(path);
+}
+
 TEST(test_trace_not_a_trace) {
     char path[256]; tmp_path(path, sizeof path, "read_junk.bin");
     char err[256] = "";
@@ -1073,6 +1103,7 @@ int main(void) {
     RUN(test_trace_v1_capture);
     RUN(test_trace_runs_fast_path);
     RUN(test_trace_runs_against_12dfaf7);
+    RUN(test_trace_run_past_64_bits);
     RUN(test_trace_not_a_trace);
     if (five_ready) remove(five_path());
     RUN_TESTS_END();

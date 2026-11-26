@@ -386,8 +386,24 @@ def test_simulation_trace_is_refused(tmp_path):
                           samples_per_clock=2, clock_bit=42))
     w.block(0); w.runs([(1, 10), (2, 5)])
     stream = tmp_path / "trace.vgacap"; stream.write_bytes(fp.getvalue())
-    proc, pngs = decode_with_gst(stream, tmp_path / "png", timeout=60)
-    assert proc.returncode != 0
+    outdir = tmp_path / "png"; outdir.mkdir()
+    proc = subprocess.Popen(["gst-launch-1.0", "-m", "filesrc", f"location={stream}", "!",
+                             "vgadecode", "!", "pngenc", "!", "multifilesink",
+                             f"location={outdir}/frame-%04d.png"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=gst_env())
+    # gst-launch 1.26.2 sometimes keeps running after two ERRORs during
+    # preroll (the element's, then basesrc's "Internal data stream error");
+    # stock matroskademux does the same. The refusal has been posted by then,
+    # so a hang is killed and judged by what it printed.
+    try:
+        out, err = proc.communicate(timeout=15)
+        hung = False
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, err = proc.communicate()
+        hung = True
     assert ("a simulation trace (samples_per_clock 2) is read with vgacap-sample, "
-            "not vgacap-frames") in proc.stdout + proc.stderr
-    assert not pngs
+            "not vgacap-frames") in out + err, f"hung={hung}\n{out}\n{err}"
+    assert not sorted(outdir.glob("frame-*.png"))
+    if not hung:
+        assert proc.returncode != 0
