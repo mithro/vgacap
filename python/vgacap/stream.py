@@ -361,6 +361,8 @@ def read_stream(data: bytes) -> tuple[Header, list]:
     def runs_out(new):
         nonlocal n
         for v, r in new:
+            if n + r >= 1 << 64:  # as C: n is a u64 and must not wrap
+                raise ValueError("RUNS run takes n past 64 bits")
             if header.has_clock:
                 v |= (header.clock_first ^ (n & 1)) << header.clock_bit
             items.append(("run", v, r))

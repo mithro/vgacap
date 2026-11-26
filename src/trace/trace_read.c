@@ -394,7 +394,8 @@ const vgacap_trace_info_t *vgacap_trace_info(const vgacap_trace_reader_t *r) { r
 // (src/stream/reader.c): a pair count that is not zero and the length can
 // hold, values without the clock bit, bits above sample_bits or the previous
 // pair's value, runs in LEB128 of at most ten bytes, the tenth at most 1,
-// minimally encoded and not zero, and pairs that fill the chunk exactly. A
+// minimally encoded and not zero, no run that takes n past 2^64 - 1, and
+// pairs that fill the chunk exactly. A
 // chunk that breaks any of them goes to the stream reader after all, from
 // its start, the runs already delivered from it being passed over (struct
 // rd's `skip`): the reader then delivers the same runs and reports the
@@ -607,6 +608,7 @@ static inline __attribute__((always_inline)) int runs_decode(vgacap_reader_t *sr
             }
         }
         if (b == 0) goto bad;               // a zero run, or not minimally encoded
+        if (run > UINT64_MAX - pos) goto bad;   // would take n past 2^64 - 1
         const uint64_t v = value | (cf ^ (clk & (0 - (pos & 1u))));
         pos += run;
         prev = value;
