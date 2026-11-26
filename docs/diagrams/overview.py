@@ -341,6 +341,13 @@ def draw():
     line([(usb_x, HOST_Y + 40), (usb_x, STREAM_Y - 2)], "str")
     for cx in (PI_C, SIM_C):
         line([(cx, SRC_Y + SRC_H - 16), (cx, STREAM_Y - 2)], "str")
+    # The three sources are alternatives: an "or" between each pair of the
+    # arrows into the stream, as between the two breakouts above.
+    OR_Y = STREAM_Y - 26
+    for ox in ((PI_C + usb_x) / 2, (usb_x + SIM_C) / 2):
+        add(f'<circle cx="{ox:.1f}" cy="{OR_Y}" r="14" fill="{PAPER}" stroke="{STR_EDGE}" '
+            f'stroke-width="1.25"/>')
+        text(ox, OR_Y + 4.5, "or", "part", "middle")
 
     # ---- the stream: one format for every source --------------------------------------------------------
     rect(LEFT, STREAM_Y, RIGHT - LEFT, STREAM_H, STREAM_BG, STREAM_EDGE, rx=6, sw=2.5)
@@ -382,7 +389,7 @@ def draw():
 
     # ---- legend --------------------------------------------------------------------------------------
     LY = OUT_Y + 90 + 46
-    items = (("sig", "signals"), ("str", "captured data"), ("pic", "pictures"))
+    items = (("sig", "from the design"), ("str", "captured data"), ("pic", "pictures"))
     total = sum(40 + 7.4 * len(label) + 26 for _, label in items) - 26
     x = MID - total / 2
     for kind, label in items:

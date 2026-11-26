@@ -198,6 +198,10 @@
 <path d="M424.0 538 L424.0 580" fill="none" stroke="#ff8f45" stroke-width="4.5" marker-end="url(#a-str)"/>
 <path d="M121.0 460 L121.0 580" fill="none" stroke="#ff8f45" stroke-width="4.5" marker-end="url(#a-str)"/>
 <path d="M935.0 460 L935.0 580" fill="none" stroke="#ff8f45" stroke-width="4.5" marker-end="url(#a-str)"/>
+<circle cx="272.5" cy="556" r="14" fill="#232834" stroke="#8a4e24" stroke-width="1.25"/>
+<text x="272.5" y="560.5" class="part" text-anchor="middle">or</text>
+<circle cx="679.5" cy="556" r="14" fill="#232834" stroke="#8a4e24" stroke-width="1.25"/>
+<text x="679.5" y="560.5" class="part" text-anchor="middle">or</text>
 <rect x="16" y="582" width="1024" height="96" rx="6" fill="#1d2129" stroke="#8a93a6" stroke-width="2.5"/>
 <text x="36" y="612" class="title" text-anchor="start">vgacap stream</text>
 <rect x="36.0" y="626" width="32.4" height="22" rx="2" fill="#ffffff" stroke="#454c5c" stroke-width="0.75"/>
@@ -258,10 +262,10 @@
 <text x="676.0" y="890" class="title" text-anchor="start">Pixel-exact</text>
 <text x="676.0" y="910" class="title" text-anchor="start">checks</text>
 <text x="676.0" y="930" class="detail" text-anchor="start">against references</text>
-<path d="M338.4 992 L370.4 992" fill="none" stroke="#6aa5ff" stroke-width="3" marker-end="url(#a-sig)"/>
-<text x="378.4" y="996.5" class="legend" text-anchor="start">signals</text>
-<path d="M456.2 992 L488.2 992" fill="none" stroke="#ff8f45" stroke-width="4.5" marker-end="url(#a-str)"/>
-<text x="496.2" y="996.5" class="legend" text-anchor="start">captured data</text>
-<path d="M618.4 992 L650.4 992" fill="none" stroke="#3fcf91" stroke-width="3" marker-end="url(#a-pic)"/>
-<text x="658.4" y="996.5" class="legend" text-anchor="start">pictures</text>
+<path d="M308.8 992 L340.8 992" fill="none" stroke="#6aa5ff" stroke-width="3" marker-end="url(#a-sig)"/>
+<text x="348.8" y="996.5" class="legend" text-anchor="start">from the design</text>
+<path d="M485.8 992 L517.8 992" fill="none" stroke="#ff8f45" stroke-width="4.5" marker-end="url(#a-str)"/>
+<text x="525.8" y="996.5" class="legend" text-anchor="start">captured data</text>
+<path d="M648.0 992 L680.0 992" fill="none" stroke="#3fcf91" stroke-width="3" marker-end="url(#a-pic)"/>
+<text x="688.0" y="996.5" class="legend" text-anchor="start">pictures</text>
 </svg>

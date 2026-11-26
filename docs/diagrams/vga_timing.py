@@ -96,13 +96,18 @@ def draw(p):
 
     # hsync along the top: high, low for the pulse (negative in this mode), high.
     hi, lo = 2 + 8, 2 + WAVE - 8
-    path = (f"M{xs[0]:.1f} {lo} L{xs[1]:.1f} {lo} L{xs[1]:.1f} {hi} L{xs[4]:.1f} {hi}")
+    # Each waveform starts a little before the grid, at the idle level, so
+    # the falling edge that starts the line or the frame is drawn too.
+    LEAD = 12
+    path = (f"M{xs[0] - LEAD:.1f} {hi} L{xs[0]:.1f} {hi} L{xs[0]:.1f} {lo} "
+            f"L{xs[1]:.1f} {lo} L{xs[1]:.1f} {hi} L{xs[4]:.1f} {hi}")
     add(f'<path d="{path}" fill="none" stroke="{p["SIG"]}" stroke-width="2.5"/>')
-    text(gx - 6, (hi + lo) / 2 + 4, "hsync", 12.5, 700, p["SIG"], "end")
+    text(gx - LEAD - 6, (hi + lo) / 2 + 4, "hsync", 12.5, 700, p["SIG"], "end")
     vl, vh = 2 + 8, 2 + WAVE - 8
-    path = (f"M{vh} {ys[0]:.1f} L{vh} {ys[1]:.1f} L{vl} {ys[1]:.1f} L{vl} {ys[4]:.1f}")
+    path = (f"M{vl} {ys[0] - LEAD:.1f} L{vl} {ys[0]:.1f} L{vh} {ys[0]:.1f} "
+            f"L{vh} {ys[1]:.1f} L{vl} {ys[1]:.1f} L{vl} {ys[4]:.1f}")
     add(f'<path d="{path}" fill="none" stroke="{p["SIG"]}" stroke-width="2.5"/>')
-    text((vl + vh) / 2, gy - 22, "vsync", 12.5, 700, p["SIG"], "middle")
+    text((vl + vh) / 2, gy - LEAD - 10, "vsync", 12.5, 700, p["SIG"], "middle")
 
     # Totals, under the grid and to its right.
     text((xs[0] + xs[4]) / 2, ys[4] + 20, "one line: 800 clocks", 13, 600)

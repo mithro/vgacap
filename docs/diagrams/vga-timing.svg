@@ -36,9 +36,9 @@
 <text x="68.0" y="316.8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5b6577" text-anchor="middle" transform="rotate(-90 68 316.8)">480 lines</text>
 <text x="55.0" y="488.6" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1d2433" text-anchor="middle" transform="rotate(-90 55 488.6)">front</text>
 <text x="68.0" y="488.6" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#5b6577" text-anchor="middle" transform="rotate(-90 68 488.6)">10</text>
-<path d="M76.0 34 L135.5 34 L135.5 10 L624.3 10" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
-<text x="70.0" y="26.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#1c64d4" text-anchor="end">hsync</text>
-<path d="M34 76.0 L34 122.0 L10 122.0 L10 511.6" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
+<path d="M64.0 10 L76.0 10 L76.0 34 L135.5 34 L135.5 10 L624.3 10" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
+<text x="58.0" y="26.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#1c64d4" text-anchor="end">hsync</text>
+<path d="M10 64.0 L10 76.0 L34 76.0 L34 122.0 L10 122.0 L10 511.6" fill="none" stroke="#1c64d4" stroke-width="2.5"/>
 <text x="22.0" y="54.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700" fill="#1c64d4" text-anchor="middle">vsync</text>
 <text x="350.2" y="531.6" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1d2433" text-anchor="middle">one line: 800 clocks</text>
 <text x="640.3" y="293.8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1d2433" text-anchor="middle" transform="rotate(-90 640.3199999999999 293.8)">one frame: 525 lines</text>
