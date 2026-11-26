@@ -38,15 +38,10 @@ frame periods at 640x480@60 timing
 ([When frames appear](../../src/tools/README.md#when-frames-appear)); in
 frame and window modes it stops after N complete pictures.
 
-The board has very little heap (about 80 KB on the RP2040 demo board), so
-`ttcap capture` clears the previous run's names and collects garbage before
-it sends anything. A script that fails to compile on the board does not
-always say so, and can halt the firmware outright, so `ttcap capture`
-refuses to start without enough free heap. In stream mode that is the two
-DMA buffers plus room to compile the script, `8 * --buf-words + 24000`
-bytes: ~56 KB at the default and ~90 KB at `--buf-words 8192`, which an
-RP2040 demo board does not have. In frame and window modes it is 24000
-bytes plus one line. If it refuses, reset the board to free its heap.
+`ttcap capture` refuses to start without enough free heap:
+`8 * --buf-words + 24000` bytes in stream mode (~56 KB at the default; an
+RP2040 demo board has about 80 KB), or 24000 bytes plus one line in frame
+and window modes. If it refuses, reset the board.
 
 `ttcap png` needs [Pillow](https://github.com/python-pillow/Pillow) and
 [a built `build/vgacap-frames`](../../docs/development.md).
@@ -173,8 +168,13 @@ never left holding a shared bench board.
 
 ## Reaching a Welland board (bench access needed)
 
+Before running against a bench board, check its page on
+[tinytapeout.fpgas.online](https://tinytapeout.fpgas.online)
+(`/board/<slug>/status.json`) for other clients, and confirm the board's
+USB serial: boards move between ports.
+
 The Welland bench is a shared set of Tiny Tapeout demo boards,
-listed on [tinytapeout.fpgas.online](https://tinytapeout.fpgas.online). Each board is attached to its own
+listed on tinytapeout.fpgas.online. Each board is attached to its own
 Raspberry Pi, which runs the fpgas.online bridge (`fpgas-tt`).
 
 `ttcap demo --board` takes a slug from the `WELLAND` table in
