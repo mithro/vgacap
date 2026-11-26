@@ -1,4 +1,4 @@
-# Developing vgacap
+# Building, testing and continuous integration
 
 How to build and test vgacap, and what CI checks.
 
