@@ -40,7 +40,7 @@ tt-vga-testpatterns'
 ```sh
 ssh -f -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com
 tools/hil.sh --board fpga-1 --design tt_um_vgacal_bars --clock-hz 500000 \
-    --link ws://127.0.0.1:18034/serial docs/results/
+    --link ws://127.0.0.1:18034/serial tmp/hil/
 ```
 
 [`tools/hil.sh`](hil.sh) only runs `hil.py` in this checkout's uv environment;
@@ -64,8 +64,7 @@ the run could not start (lock held, missing tool, bad arguments).
 
 ## Running on shared boards
 
-The Welland boards are shared, so `hil.py` is careful with
-them:
+The Welland bench is shared, so `hil.py` is careful with its boards:
 
 - one run per board at a time is enforced with a lock file (per user per
   machine; `--lock-dir` makes it shared);
