@@ -1073,8 +1073,14 @@ static int on_batch(void *user, const vgacap_trace_run_t *runs, size_t n) {
 static void batches_free(struct batches *b) { all_free(&b->a); free(b->size); memset(b, 0, sizeof *b); }
 
 // A RUNS chunk of `pairs` pairs for header h, with fault `fault` (F_NONE:
-// none) planted at pair `at`.
-enum { F_NONE, F_CLK, F_HIGH, F_EQUAL, F_ZERO, F_NOTMIN, F_TENTH, F_COUNT_UP, F_COUNT_DOWN, F_EXTRA, F_KINDS };
+// none) planted at pair `at`. The runs of a stream must keep n within 64
+// bits: at most one run is above 2^63 (huge_left, set per stream), the rest
+// are at most about 2^48, so a stream's total stays below 2^64 unless
+// F_PAST plants a run of 2^64 - 1, which takes n past it unless it is the
+// stream's first.
+enum { F_NONE, F_CLK, F_HIGH, F_EQUAL, F_ZERO, F_NOTMIN, F_TENTH, F_COUNT_UP, F_COUNT_DOWN, F_EXTRA, F_PAST,
+       F_KINDS };
+static int huge_left;
 static void put_runs_vb(struct membuf_t *m, const vgacap_header_t *h, unsigned pairs, int fault, unsigned at) {
     const unsigned bits = h->sample_bits, vb = (bits + 7u) / 8u;
     const uint64_t mask = bits >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << bits) - 1u;
@@ -1096,8 +1102,10 @@ static void put_runs_vb(struct membuf_t *m, const vgacap_header_t *h, unsigned p
         for (unsigned i = 0; i < vb; i++) p[n++] = (uint8_t)(v >> (8 * i));
         uint32_t c = rnd() % 64;
         uint64_t run = c < 40 ? 1 + c % 4 : c < 52 ? 100 + rnd() % 100000
-                     : c < 58 ? ((uint64_t)rnd() << 24 | rnd()) + 1 : UINT64_MAX - rnd();
+                     : c < 58 || !huge_left ? ((uint64_t)rnd() << 16 | rnd()) + 1 : ((uint64_t)1 << 63) + rnd();
+        if (run >> 63) huge_left = 0;
         if (k == at && fault == F_ZERO) run = 0;
+        if (k == at && fault == F_PAST) run = UINT64_MAX;
         if (k == at && fault == F_NOTMIN) {
             p[n++] = (uint8_t)(0x80 | (run & 0x7F)); p[n++] = 0;   // a needless zero byte
         } else if (k == at && fault == F_TENTH) {
@@ -1164,6 +1172,7 @@ static void diff_one(const char *path, unsigned bits, int zstd, int fault, struc
     vgacap_writer_init(&w, mem_put, &blk[0], &h);
     vgacap_writer_meta(&w, OPEN_META, strlen(OPEN_META));
     uint64_t at = 0;
+    huge_left = 1;
     const int faulty_block = (int)(rnd() % 2);
     for (int b = 0; b < 2; b++) {
         size_t start = blk[b].n;

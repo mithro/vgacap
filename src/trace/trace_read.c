@@ -497,8 +497,7 @@ static inline __attribute__((always_inline)) int runs_put(struct rd *d, vgacap_t
     size_t nb = *nbp;
     *np = e;
     // The usual case: inside the range, a + run < to without the sum
-    // (a run that wraps past 2^64 takes put()'s tests below, as in the
-    // stream reader's path; run is never 0).
+    // (run is never 0).
     if (a >= from && a < to && run < to - a) {
         out[nb].first_sample = a; out[nb].value = v; out[nb].run = run;
         nb++;
@@ -577,6 +576,7 @@ static inline __attribute__((always_inline)) int runs_decode(vgacap_reader_t *sr
                 }
             }
             if (b == 0) goto bad;               // a zero run, or not minimally encoded
+            if (run > UINT64_MAX - pos) goto bad;   // would take n past 2^64 - 1
             const uint64_t v = value | (cf ^ (clk & (0 - (pos & 1u))));
             pos += run;
             prev = value;
