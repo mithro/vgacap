@@ -13,8 +13,11 @@
 // A simulation testbench calls vgacap_trace_push() once per sample (twice a
 // clock with samples_per_clock 2). The common case -- same value, clock bit
 // as expected, not at a block end -- is inline: no call, allocation or
-// syscall. Finished blocks are compressed and written by a thread of the
-// writer's own, double-buffered.
+// syscall. vgacap_trace_push2() takes a clock's two samples at once, and
+// vgacap_trace_repeat2() records a clock that repeats the last without its
+// values; both write exactly what the pushes they stand for would.
+// Finished blocks are compressed and written by a thread of the writer's
+// own, double-buffered.
 //
 // Host only (pthreads, zstd); not part of the board builds.
 #ifndef VGACAP_TRACE_H
