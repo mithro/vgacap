@@ -55,6 +55,7 @@ extensions = [
     "myst_parser",
     "vgacap_picture",   # <picture> light/dark twins -> the theme-switched pair
     "vgacap_rules",     # the docs.fpgas.online rules a machine can decide
+    "vgacap_generated", # reference tables built from their source (modes.c, argparse)
 ]
 source_suffix = {".md": "markdown"}
 root_doc = "docs/index"
