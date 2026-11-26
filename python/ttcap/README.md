@@ -82,13 +82,15 @@ With `UV_NO_DEV=1`, `ttcap png` needs `uv sync --extra synth`.
 ## `ttcap demo`: a board in, video out
 
 ```sh
+export GST_PLUGIN_PATH=$PWD/build
 uv run ttcap demo --link serial:/dev/ttyACM0 \
     --clock-hz 60000 --seconds 60 --outdir video          # PNGs + video/capture.mkv
 uv run ttcap demo --link serial:/dev/ttyACM0 --clock-hz 500000 --outdir live --window --serve 8080
 uv run ttcap demo --link serial:/dev/ttyACM0 --clock-hz 500000 --outdir dry --dry-run   # just the pipeline
 ```
 
-On the Welland bench, `--board SLUG` replaces `--link`; see
+The demo needs the [GStreamer plugin built](../../docs/development.md). On
+the Welland bench, `--board SLUG` replaces `--link`; see
 [Reaching a Welland board](#reaching-a-welland-board-bench-access-needed).
 
 One capture feeds every output, through a `tee`:
@@ -167,23 +169,22 @@ never left holding a shared bench board.
 
 ## Reaching a Welland board (bench access needed)
 
-Before running against a bench board, check its page on
-[tinytapeout.fpgas.online](https://tinytapeout.fpgas.online)
-(`/board/<slug>/status.json`) for other clients, and confirm
-[the board's USB serial](boards.py) (`status.json` shows the live value):
-boards move between ports.
+The Welland bench is a shared set of Tiny Tapeout demo boards, listed on
+[tinytapeout.fpgas.online](https://tinytapeout.fpgas.online). Each board
+is attached to its own Raspberry Pi, which runs the fpgas.online bridge
+(`fpgas-tt`).
 
-The Welland bench is a shared set of Tiny Tapeout demo boards,
-listed on tinytapeout.fpgas.online. Each board is attached to its own
-Raspberry Pi, which runs the fpgas.online bridge (`fpgas-tt`).
+Before running against a bench board, check `/board/<slug>/status.json`
+on tinytapeout.fpgas.online for other clients, and that its USB serial
+matches the one in [`boards.py`](boards.py): boards move between ports.
 
 `ttcap demo --board` takes a slug from the `WELLAND` table in
-[`boards.py`](boards.py), such as `fpga-1`, `fpga-3` or `fpga-4`, and
+`boards.py`, such as `fpga-1`, `fpga-3` or `fpga-4`, and
 resolves it to a link:
 
 * **on the board's own Pi**, `serial:/dev/ttboard`. Stop the bridge first
   (`sudo systemctl stop fpgas-tt`), since it holds the device open, after
-  [checking it has no clients](#reaching-a-welland-board-bench-access-needed);
+  checking it has no clients;
 * **anywhere else**, the bridge at `ws://10.21.2.<octet>:8765/serial`, which
   is on the bench network. The octet is the board's bench port number
   (7 for tt07, 34 for fpga-1). From a workstation that means an SSH
@@ -197,5 +198,5 @@ uv run ttcap demo --link ws://127.0.0.1:18034/serial --design tt_um_vga_pattern 
 Any free local port works, and one per board keeps two tunnels from
 colliding.
 
-`--link` overrides the board entirely. A run over the bridge that fails to
-connect prints that tunnel command before it exits.
+`--link` overrides the board entirely. With `--board` from a workstation, a
+failed run prints the `ssh -L` command for that board.
