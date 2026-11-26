@@ -104,7 +104,17 @@ class ModuleSession(CaptureSession):
                 "capture's buffers; reset the board%s, and try again"
                 % (self._mem_free, needed, "" if req.is_frame else ", or ask for fewer buffer words")
             )
-        refused = repl.begin_chunks(code, timeout=self._chunk_timeout)
+        try:
+            refused = repl.begin_chunks(code, timeout=self._chunk_timeout)
+        except BaseException as exc:
+            # The call may be running with Ctrl-C disabled -- a stream whose
+            # first buffer never fills (no clock) writes nothing -- and
+            # `_iter` has no teardown for `_prepare()`: stop it here, or
+            # every later command reads its output.
+            self._abandon_prepared()
+            if isinstance(exc, TimeoutError):
+                raise CaptureError("board went quiet before the first chunk: %s" % exc) from exc
+            raise
         if refused is not None:
             raise CaptureError("the vgacap module refused the capture: %s" % refusal(refused))
         # The first byte is the proof the capture is running, so a stop byte

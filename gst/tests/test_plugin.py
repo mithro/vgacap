@@ -275,6 +275,24 @@ def test_pts_is_monotonic_across_a_clock_rate_change(tmp_path):
     assert 84_000_000 in durations and 16_683_217 in durations, durations
 
 
+def test_an_overrun_resets_the_picture_and_marks_the_next_buffer_discont(tmp_path):
+    import sys
+    sys.path.insert(0, str(ROOT / "python" / "tests"))
+    from test_frames_e2e import write_overrun_stream
+
+    GST_BUFFER_FLAG_DISCONT = 0x40  # GST_MINI_OBJECT_FLAG_LAST << 2
+    stream = tmp_path / "overrun.vgacap"
+    wanted, _ = write_overrun_stream(stream)
+
+    buffers = identity_buffers(stream)
+    _, pngs = decode_with_gst(stream, tmp_path / "png")
+
+    assert [bool(b["flags"] & GST_BUFFER_FLAG_DISCONT) for b in buffers][1:].count(True) == 1
+    for png in pngs:
+        got = np.asarray(Image.open(png).convert("RGB"))
+        assert any(np.array_equal(got, w) for w in wanted), f"{png} is a torn picture"
+
+
 def test_mid_stream_caps_renegotiation(tmp_path):
     mode_a, mode_b = MODES["640x480@60"], MODES["800x600@60"]
     specs = [(mode_a, grid(mode_a.h_active, mode_a.v_active)),
