@@ -544,6 +544,18 @@ static int d_repeat2(struct diff *d) {
     return ra;
 }
 
+// push2 against its definition, push(v0) then push(v1).
+static int d_push2(struct diff *d, uint64_t v0, uint64_t v1) {
+    int ra = vgacap_trace_push2(d->a, v0, v1);
+    int r0 = vgacap_trace_push(d->b, v0);
+    int r1 = vgacap_trace_push(d->b, v1);
+    int rb = (r0 || r1) ? -1 : 0;
+    if (ra != rb && !d->bad) fprintf(stderr, "  sample %llu: push2 %d vs push %d\n", (unsigned long long)d->n, ra, rb);
+    d->bad |= ra != rb;
+    d->n += 2; d->last = v1;
+    return ra;
+}
+
 static int files_equal(const char *pa, const char *pb) {
     size_t la, lb;
     uint8_t *a = slurp(pa, &la), *b = slurp(pb, &lb);
@@ -620,11 +632,11 @@ TEST(test_repeat2_random_mix) {
     diff_rm(&d);
 }
 
-// A block end by clock count (2^25 samples) inside a stretch of repeat2s:
-// `odd` starts with one sample alone, so the block end falls inside a
-// repeat2's pair; `push_at` pushes the two samples at the block end, so the
-// next repeat2 is the first call after it.
-static int clock_end_case(const char *name, int odd, int push_at) {
+// A block end by clock count (2^25 samples) inside a stretch of repeat2s
+// (or, with `push2`, of push2s of the same value): `odd` starts with one
+// sample alone, so the block end falls inside a pair; `push_at` pushes the
+// two samples at the block end, so the next call is the first after it.
+static int clock_end_case(const char *name, int odd, int push_at, int push2) {
     struct diff d;
     if (diff_open(&d, name, 3)) return -1;
     const uint64_t v = BASE43 | 0x55, end = 2 * VGACAP_TRACE_BLOCK_CLOCKS;
@@ -632,6 +644,7 @@ static int clock_end_case(const char *name, int odd, int push_at) {
     if (!odd) d_push(&d, at_n(&d, v));
     while (d.n < end + 1000) {
         if (push_at && d.n == end) { d_push(&d, at_n(&d, v)); d_push(&d, at_n(&d, v)); }
+        else if (push2) d_push2(&d, at_n(&d, v), at_n(&d, v) ^ CLK42);
         else d_repeat2(&d);
     }
     int rc = diff_finish(&d, 0);
@@ -648,9 +661,9 @@ static int clock_end_case(const char *name, int odd, int push_at) {
 }
 
 TEST(test_repeat2_block_end_by_clock) {
-    ASSERT_TRUE(clock_end_case("repeat2_clock_even", 0, 0) == 0);
-    ASSERT_TRUE(clock_end_case("repeat2_clock_odd", 1, 0) == 0);
-    ASSERT_TRUE(clock_end_case("repeat2_clock_pushed", 0, 1) == 0);
+    ASSERT_TRUE(clock_end_case("repeat2_clock_even", 0, 0, 0) == 0);
+    ASSERT_TRUE(clock_end_case("repeat2_clock_odd", 1, 0, 0) == 0);
+    ASSERT_TRUE(clock_end_case("repeat2_clock_pushed", 0, 1, 0) == 0);
 }
 
 // Every change is a single push followed at once by a repeat2 (three
@@ -741,6 +754,72 @@ TEST(test_repeat2_long_run) {
     diff_rm(&d);
 }
 
+// ---- vgacap_trace_push2: differential against two pushes --------------------
+
+// Random pairs through push2, most of them unchanged (its fast path) in the
+// quiet phase, with single pushes that put it off the pairs and some
+// repeat2s; blocks end by size in the busy phase and by clock count later.
+TEST(test_push2_random_mix) {
+    struct diff d;
+    ASSERT_TRUE(diff_open(&d, "push2_mix", 1) == 0);
+    rng_state = 0x51afd6c0e4a3b2f1ull;
+    const uint64_t busy = 4000000, quiet = VGACAP_TRACE_BLOCK_CLOCKS + 3000000;
+    uint64_t v = BASE43;
+    for (uint64_t c = 0; c < busy + quiet; c++) {
+        uint64_t r = rnd64();
+        unsigned p = (unsigned)(r % 1000), how = (unsigned)((r >> 10) % 16);
+        if (p < (c < busy ? 700u : 1u)) v = BASE43 | ((r >> 16) & 0x3FF);
+        uint64_t v0 = at_n(&d, v), v1 = v0 ^ CLK42;
+        if (how == 0 && c) d_push(&d, v0);                   // one alone: off the pairs
+        else if (how == 1 && c) d_repeat2(&d);
+        else if (how == 2 && c < busy) d_push2(&d, v0, v1 ^ 1);   // a change at the second sample
+        else d_push2(&d, v0, v1);
+    }
+    ASSERT_EQ_U(d.bad, 0);
+    ASSERT_TRUE(diff_finish(&d, 0) == 0);
+    struct readback *rb = calloc(1, sizeof *rb);
+    ASSERT_TRUE(read_back(d.pa, rb) == 0);
+    ASSERT_EQ_U(rb->resyncs + rb->errors, 0);
+    ASSERT_EQ_U(rb->samples, d.n);
+    int by_size = 0, by_clock = 0;
+    for (unsigned b = 0; b + 1 < rb->nblocks; b++) {
+        if (rb->block_bytes[b] > VGACAP_TRACE_BLOCK_BYTES - VGACAP_TRACE_BLOCK_RESERVE - 64) by_size = 1;
+        if (rb->block_samples[b] == 2 * VGACAP_TRACE_BLOCK_CLOCKS) by_clock = 1;
+    }
+    fprintf(stderr, "  %llu samples, %u blocks, %u runs\n", (unsigned long long)d.n, rb->nblocks, rb->nruns);
+    ASSERT_TRUE(by_size);
+    ASSERT_TRUE(by_clock);
+    free(rb);
+    diff_rm(&d);
+}
+
+TEST(test_push2_block_end_by_clock) {
+    ASSERT_TRUE(clock_end_case("push2_clock_even", 0, 0, 1) == 0);
+    ASSERT_TRUE(clock_end_case("push2_clock_odd", 1, 0, 1) == 0);
+    ASSERT_TRUE(clock_end_case("push2_clock_pushed", 0, 1, 1) == 0);
+}
+
+// push2 at sample 0 is two pushes; a bad second sample fails the writer
+// after the first is recorded, and later push2s return -1.
+TEST(test_push2_first_and_failure) {
+    struct diff d;
+    ASSERT_TRUE(diff_open(&d, "push2_first", 3) == 0);
+    ASSERT_EQ_U(d_push2(&d, BASE43, BASE43 | CLK42), 0);
+    ASSERT_EQ_U(d_push2(&d, BASE43, BASE43 | CLK42), 0);
+    ASSERT_EQ_U((unsigned)(d_push2(&d, BASE43, BASE43) + 1), 0);              // second clock bit wrong
+    ASSERT_EQ_U((unsigned)(d_push2(&d, BASE43, BASE43 | CLK42) + 1), 0);
+    ASSERT_EQ_U((unsigned)(d_repeat2(&d) + 1), 0);
+    ASSERT_TRUE(diff_finish(&d, -1) == 0);
+    diff_rm(&d);
+
+    ASSERT_TRUE(diff_open(&d, "push2_bits", 3) == 0);
+    ASSERT_EQ_U(d_push2(&d, BASE43, BASE43 | CLK42), 0);
+    ASSERT_EQ_U((unsigned)(d_push2(&d, (uint64_t)1 << 50, BASE43 | CLK42) + 1), 0);   // bit 50
+    ASSERT_EQ_U((unsigned)(d_push2(&d, BASE43, BASE43 | CLK42) + 1), 0);
+    ASSERT_TRUE(diff_finish(&d, -1) == 0);
+    diff_rm(&d);
+}
+
 // ---- speed (perf label; run by hand, not in CI) -----------------------------
 
 static double clock_s(clockid_t id) {
@@ -808,5 +887,8 @@ int main(int argc, char **argv) {
     RUN(test_repeat2_at_sample_0);
     RUN(test_repeat2_after_failure);
     RUN(test_repeat2_long_run);
+    RUN(test_push2_random_mix);
+    RUN(test_push2_block_end_by_clock);
+    RUN(test_push2_first_and_failure);
     RUN_TESTS_END();
 }
