@@ -14,7 +14,7 @@ A trace is a version 2 vgacap stream. Its chunk bytes, header fields, chunk enco
 
 ## The header
 
-Field is a field of the [`VGCH` header](../src/stream/reference-stream-format.md#vgch-the-header), and Trace value what the trace writer puts in it.
+Field is a field of the [`VGCH` header](../src/stream/reference-stream-format.md#vgch-the-header) or of a `RUNS` pair, and Trace value what the trace writer puts in it.
 
 | Field | Trace value |
 |---|---|
@@ -29,6 +29,7 @@ Field is a field of the [`VGCH` header](../src/stream/reference-stream-format.md
 | `samples_per_clock` | 2 |
 | `clock_bit` | 42 |
 | `clock_first` | 0 |
+| RUNS `value` | 6 bytes (ceil(43 / 8)) |
 
 ## META
 
