@@ -274,9 +274,10 @@ The C reader reports a loss as a resync event, with the bytes lost and a reason,
 | a `BLKH` that does not follow | `BLKH first_sample does not follow` | adopt its `first_sample` and go on | the C text, then detail, and stop |
 | a `META` length of 0 or over 4096 | `bad META length` | skip | the same text |
 | `META` text that breaks its rules | `bad META text` | skip | the same text |
-| a chunk cut off by the end of the input | none | wait for more input | `truncated chunk 'TAG'` |
+| input that ends inside a chunk's 8-byte head | none | wait for more input | none: the bytes are ignored |
+| input that ends inside a chunk's payload | none | wait for more input | `truncated chunk 'TAG'` |
 | input that ends while scanning | none: the caller reports it | stop | none |
-| a stream with no `VGCH` | none | none | `no header` |
+| input with no complete chunk | none | none | `no header` |
 
 Under a header with a clock bit, n becomes unknown after any loss that could have carried samples. Until the next `BLKH`, every `RUNS` chunk is skipped. A lost `META`, or a scan that lost exactly one `TIME` chunk, leaves n known.
 
