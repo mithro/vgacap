@@ -37,15 +37,21 @@ from vgacap.modes import MODES
 from vgacap.stream import Header, Writer
 
 from . import mp
-from .boards import BoardProfile
+from .boards import BoardProfile, pwm_slice_addr
 from .repl import CHUNK_HEADER_LEN, RawRepl, ReplFramingError
 
 EDGES = ("falling", "rising")
 #: Board-side program bodies a `CaptureRequest` may name (`ttcap/mp/`).
-CAPTURE_SCRIPTS = ("capture_rp2.py", "frame_rp2.py")
+CAPTURE_SCRIPTS = ("capture_rp2.py", "frame_rp2.py", "rle_rp2.py")
 #: `ttcap capture --mode` names: continuous streaming at a reduced clock,
-#: or whole frames / windows of frames at the project's real clock.
-CAPTURE_MODES = {"stream": "capture_rp2.py", "frame": "frame_rp2.py", "window": "frame_rp2.py"}
+#: or whole frames / windows of frames at the project's real clock, or a
+#: stream run-length encoded by the PIO (`RLE ` chunks).
+CAPTURE_MODES = {
+    "stream": "capture_rp2.py",
+    "frame": "frame_rp2.py",
+    "window": "frame_rp2.py",
+    "rle": "rle_rp2.py",
+}
 #: The timing `frame_rp2.py` is told to expect unless asked otherwise.
 DEFAULT_VGA_MODE = "640x480@60"
 #: The sample point frame capture uses unless told otherwise: the rising
@@ -153,7 +159,50 @@ def frame_cfg(
         max_frames=max_frames,
         sample_delay=sample_delay,
         clock_hz=clock_hz,
+        clk_pwm=pwm_slice_addr(profile, profile.clk_gpio),
     )
+    return cfg
+
+
+#: `rle_rp2.py` styles: phase-locked to a whole sysclk/clock ratio, waiting
+#: for every clock edge, or whichever is exact for the clock (see the body).
+RLE_STYLES = ("auto", "locked", "edge")
+
+
+def rle_cfg(
+    profile: BoardProfile,
+    clock_hz: int,
+    buf_words: int = DEFAULT_BUF_WORDS,
+    max_bytes: int = 0,
+    edge: str = "rising",
+    sample_delay: int = 0,
+    style: str = "auto",
+    mask: int = -1,
+    oneshot: bool = False,
+    pio: int = DEFAULT_PIO,
+    sm: int = 0,
+) -> dict:
+    """Build the `CFG` dict for `rle_rp2.py` (PIO run-length streaming).
+
+    `edge` and `sample_delay` place the sample point as in frame capture
+    (the default is frame capture's measured one). `style` and `mask` are
+    the body's STYLE and MASK; `mask` -1 lets the board pick (1 on RP2350).
+    `buf_words` must be even: a DMA buffer is whole (value, run) pairs.
+    `oneshot` fills the two buffers once at full speed and sends them.
+    """
+    if not 0 <= sample_delay <= 31:
+        raise ValueError(f"sample_delay must be 0..31 system clocks, got {sample_delay}")
+    if style not in RLE_STYLES:
+        raise ValueError(f"style must be one of {RLE_STYLES}, got {style!r}")
+    if mask not in (-1, 0, 1):
+        raise ValueError(f"mask must be -1 (board decides), 0 or 1, got {mask}")
+    if buf_words % 2:
+        raise ValueError(f"buf_words must be even (whole pairs), got {buf_words}")
+    if clock_hz <= 0:
+        raise ValueError(f"clock_hz must be positive, got {clock_hz}")
+    cfg = capture_cfg(profile, buf_words=buf_words, max_bytes=max_bytes, edge=edge, pio=pio, sm=sm)
+    cfg.update(clock_hz=clock_hz, sample_delay=sample_delay, style=style, mask=mask,
+               oneshot=1 if oneshot else 0)
     return cfg
 
 
@@ -402,11 +451,21 @@ class CaptureRequest:
     #: capture firmware itself (its `asic_select` command). None leaves the
     #: mux alone, which is right on an FPGA board.
     asic_index: int | None = None
+    #: `rle_rp2.py` only: its STYLE and MASK (see `rle_cfg`).
+    rle_style: str = "auto"
+    rle_mask: int = -1
+    #: `rle_rp2.py` only: fill both buffers once and send them (see rle_cfg).
+    rle_oneshot: bool = False
 
     @property
     def is_frame(self) -> bool:
         """Whole-frame/windowed capture rather than streaming."""
         return self.script == "frame_rp2.py"
+
+    @property
+    def is_rle(self) -> bool:
+        """Streaming, run-length encoded by the PIO."""
+        return self.script == "rle_rp2.py"
 
     def __post_init__(self) -> None:
         if self.project and self.design:
@@ -428,12 +487,15 @@ class CaptureRequest:
         if self.seconds < 0:
             raise ValueError(f"seconds must not be negative, got {self.seconds}")
         if self.seconds == 0 and self.max_bytes == 0 and self.stop is None and not (
-            self.is_frame and self.max_frames
+            (self.is_frame and self.max_frames) or (self.is_rle and self.rle_oneshot)
         ):
             raise ValueError(
                 "seconds and max_bytes are both 0 and no stop callable was "
                 "given: the capture would never stop"
             )
+        # Every check the CFG makes (e.g. sample_delay's range) fails here,
+        # before `select_project()` has sent the board a single command.
+        self.cfg()
 
     @property
     def selection(self) -> str | None:
@@ -454,6 +516,20 @@ class CaptureRequest:
                 edge=self.edge,
                 sample_delay=self.sample_delay,
                 clock_hz=self.clock_hz,
+            )
+        if self.is_rle:
+            return rle_cfg(
+                self.profile,
+                clock_hz=self.clock_hz,
+                buf_words=self.buf_words,
+                max_bytes=self.max_bytes,
+                edge=self.edge,
+                sample_delay=self.sample_delay,
+                style=self.rle_style,
+                mask=self.rle_mask,
+                oneshot=self.rle_oneshot,
+                pio=self.pio,
+                sm=self.sm,
             )
         return capture_cfg(
             self.profile,
@@ -515,6 +591,20 @@ class CaptureStats:
     #: watching: below `min_free_bytes(buf_words)` the script may not
     #: compile at all, or its DMA buffers may not fit.
     mem_free_before: int = 0
+
+    @property
+    def board_error(self) -> str:
+        """What the board said went wrong, or "" if it said nothing.
+
+        The last line of its traceback (e.g. a `MemoryError` allocating the
+        DMA buffers) if it raised, else its first `error=` TIME message (a
+        setup the script refused) -- either way the reason a run with no
+        samples has none, which is not that the sampler saw no clock.
+        """
+        lines = [line.strip() for line in self.stderr.splitlines() if line.strip()]
+        if lines:
+            return lines[-1]
+        return next((m for m in self.messages if m.startswith("error=")), "")
 
     @property
     def clean(self) -> bool:
@@ -617,29 +707,72 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
         # was in is returned so the caller can put it back (`restore_mode`).
         out = _exec_checked(repl, "print(int(tt.mode))")
         did["mode_before"] = int(out.strip().splitlines()[-1])
-        _exec_checked(
-            repl,
-            "from ttboard.mode import RPMode\n"
-            "tt.mode = RPMode.ASIC_RP_CONTROL\n"
-            "tt.ui_in.value = %d" % req.ui_in,
-        )
-        did["ui_in"] = req.ui_in
-    # `clock_project_PWM(freqHz, duty_u16=0xffff/2, quiet=False,
-    # max_rp2040_freq=...)` in both SDK 2.x and 3.x; only the
-    # `max_rp2040_freq` default differs between them, and this passes
-    # neither it nor any other optional argument.
-    _exec_checked(repl, f"tt.clock_project_PWM({int(req.clock_hz)})")
-    _exec_checked(repl, "tt.reset_project(False)")
+    try:
+        if req.ui_in is not None:
+            _exec_checked(
+                repl,
+                "from ttboard.mode import RPMode\n"
+                "tt.mode = RPMode.ASIC_RP_CONTROL\n"
+                "tt.ui_in.value = %d" % req.ui_in,
+            )
+            did["ui_in"] = req.ui_in
+        # `clock_project_PWM(freqHz, duty_u16=0xffff/2, quiet=False,
+        # max_rp2040_freq=...)` in both SDK 2.x and 3.x; only the
+        # `max_rp2040_freq` default differs between them, and this passes
+        # neither it nor any other optional argument.
+        _exec_checked(repl, clock_command(req))
+        _exec_checked(repl, "tt.reset_project(False)")
+    except BaseException as exc:
+        # The caller never sees `did`, so it cannot put the mode back: a
+        # shared board must not be left in ASIC_RP_CONTROL by a failed setup.
+        if "mode_before" in did:
+            undo_selection(repl, did, stop=True, error=exc)
+        raise
     return did
+
+
+def cleanup_names(cfg: dict) -> list[str]:
+    """What `prepare_board` deletes: the module-level names of EVERY capture
+    program, not just the next one, so switching between stream and frame
+    mode does not leave the other program's globals holding the heap."""
+    names: set[str] = set()
+    for script in CAPTURE_SCRIPTS:
+        names.update(mp.module_level_names(mp.build(cfg, script)))
+    return sorted(names)
+
+
+#: The RP2350's rated system clock. The SDK's `clock_project_PWM` scans down
+#: from `max_rp2040_freq` (133 MHz unless told otherwise) for the first
+#: system clock that is an even multiple of the project clock, so 25 MHz
+#: gets 100 MHz: 4 system clocks a project clock.
+RP2350_SYSCLK_HZ = 150_000_000
+
+
+def clock_command(req: CaptureRequest) -> str:
+    """The `tt.clock_project_PWM` call for this capture.
+
+    PIO run counting in its locked style needs at least 6 system clocks a
+    project clock (`rle_rp2.py`), which the SDK's default choice cannot give
+    at 25 MHz. On an RP2350 an `rle_rp2.py` capture therefore lets the SDK
+    go up to the chip's rated 150 MHz: 25 MHz then gets 150 MHz, 6 to 1.
+    Measured on fpga-4, 2026-11-24: prbs exact at 25 MHz with sample points
+    rising+0/+1/+4/+5 (offsets 2-3 after the edge are where uo_out changes).
+    Every other capture keeps the SDK's default choice, under which its
+    sample points were measured.
+    """
+    hz = int(req.clock_hz)
+    if req.is_rle and req.profile.pio_gpio_base == 16:  # the RP2350 profile
+        return f"tt.clock_project_PWM({hz}, max_rp2040_freq={RP2350_SYSCLK_HZ})"
+    return f"tt.clock_project_PWM({hz})"
 
 
 def prepare_board(repl: RawRepl, names: list[str], timeout: float = 10.0) -> int:
     """Clear a previous run's leftovers and return the free heap in bytes.
 
-    Deletes every module-level name the script is about to define, collects,
-    and reads `gc.mem_free()`. On tt07 that recovered about 5 KB (79,296 ->
-    84,208 free), which was the difference between a capture script that
-    compiled and one that did not.
+    Deletes `names` (every capture program's module-level names, from
+    `cleanup_names`), collects, and reads `gc.mem_free()`. On tt07 that
+    recovered about 5 KB (79,296 -> 84,208 free), which was the difference
+    between a capture script that compiled and one that did not.
     """
     stdout, stderr = repl.exec(_CLEANUP % (names,), timeout=timeout)
     if stderr.strip():
@@ -660,6 +793,34 @@ def stop_clock(repl: RawRepl) -> None:
 def restore_mode(repl: RawRepl, mode: int) -> None:
     """Put the SDK's RPMode back to what `select_project` found (`--ui-in`)."""
     _exec_checked(repl, "tt.mode = %d" % int(mode))
+
+
+def undo_selection(
+    repl: RawRepl, did: dict, stop: bool, error: BaseException | None = None
+) -> None:
+    """Undo what `select_project` returned in `did`: stop the clock when
+    `stop`, and put back the RPMode it changed.
+
+    Both steps are tried even if one fails. With `error` -- the exception
+    a failed capture is already raising -- a failure here becomes a note on
+    it rather than replacing it; without one, the first failure is raised.
+    """
+    steps = []
+    if stop:
+        steps.append(lambda: stop_clock(repl))
+    if "mode_before" in did:
+        steps.append(lambda: restore_mode(repl, did["mode_before"]))
+    first = None
+    for step in steps:
+        try:
+            step()
+        except Exception as exc:  # noqa: BLE001 - reported below
+            if error is not None:
+                error.add_note(f"putting the board back failed too: {exc}")
+            elif first is None:
+                first = exc
+    if first is not None:
+        raise first
 
 
 def _describe(req: CaptureRequest) -> str:
@@ -687,6 +848,8 @@ def _describe(req: CaptureRequest) -> str:
             "capture=%s vga_mode=%s sample_delay=%d"
             % ("window" if req.window_lines else "frame", req.vga_mode, req.sample_delay)
         )
+    if req.is_rle:
+        parts.append("capture=rle sample_delay=%d" % req.sample_delay)
     return " ".join(parts)
 
 
@@ -985,6 +1148,10 @@ class CaptureSession:
             # that reported samples=0 would make the CLI exit 3 ("the
             # sampler never saw a clock edge") on a perfectly good stream.
             self._samples += struct.unpack_from("<I", payload, offset)[0]
+        elif tag == b"RLE ":
+            # Samples are the runs' sum: u32 pair_count, then (value, run).
+            pairs = struct.unpack_from("<I", payload, 0)[0]
+            self._samples += sum(struct.unpack_from("<%dI" % (2 * pairs), payload, 4)[1::2])
         elif tag == b"TIME":
             # `dropped_samples` is a running total, so the newest chunk
             # simply replaces the old value -- never `+=`.
@@ -1058,7 +1225,7 @@ class CaptureSession:
         req, repl = self._req, self._repl
         self._script = mp.build(req.cfg(), req.script)
         needed = req.min_free()
-        self._mem_free = prepare_board(repl, mp.module_level_names(self._script))
+        self._mem_free = prepare_board(repl, cleanup_names(req.cfg()))
         if self._mem_free < needed:
             if req.is_frame:
                 why = "one line of frame buffer plus %d to compile the script" % (

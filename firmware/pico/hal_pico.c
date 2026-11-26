@@ -110,6 +110,12 @@ void hal_ui_in(int value) {
 
 void hal_idle(void) { tud_task(); }
 
+// hal_delay_us is hal_rp2.c's busy wait; this one services USB meanwhile.
+void hal_wait_us(uint32_t us) {
+    absolute_time_t until = make_timeout_time_us(us);
+    while (!time_reached(until)) tud_task();
+}
+
 void hal_reboot(int bootsel) {
     // Let the `ok` reach the host before the USB device disappears.
     absolute_time_t until = make_timeout_time_ms(100);

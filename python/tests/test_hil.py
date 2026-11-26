@@ -62,12 +62,24 @@ def run_hil(*args: str, stub: str = "ok", timeout: int = 60,
         capture_output=True, text=True, env=env, timeout=timeout)
 
 
+def free_port() -> int:
+    """A TCP port nothing is listening on now. hil.py's default (8099) is
+    shared by every run on the host, and a run that finds it taken fails
+    its demo checks for a reason that has nothing to do with the code."""
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
 @pytest.fixture
 def workspace(tmp_path: pathlib.Path) -> dict:
-    """The arguments every run shares: its own workdir, lock and report."""
+    """The arguments every run shares: its own workdir, lock, report and
+    MJPEG port."""
     return {
         "common": ["--link", "stub://board", "--clock-hz", "500000",
-                   "--seconds", "4",
+                   "--seconds", "4", "--serve-port", str(free_port()),
                    "--workdir", str(tmp_path / "work"),
                    "--lock-dir", str(tmp_path / "lock")],
         "report": tmp_path / "report.md",
@@ -350,6 +362,7 @@ def _processes_marked(mark: str) -> list[int]:
     return found
 
 
+@needs_frames_tool
 @pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGHUP])
 def test_a_stop_signal_cleans_up_and_still_reports(workspace, sig):
     """A dropped ssh or a `kill` used to end hil.py with no cleanup at all,
@@ -394,3 +407,918 @@ def test_frames_left_by_an_earlier_run_do_not_count(workspace):
     result = statuses(second.stdout)
     assert result["demo-frames"] == "FAIL", second.stdout
     assert result["video"] == "FAIL", second.stdout
+
+
+# ------------------------------------------------------- the MJPEG reader
+
+
+def _mjpeg_server(first_delay: float, later_delay: float, parts: int = 4):
+    """A multipart server: headers at once, the first part after
+    `first_delay`, each later one after `later_delay`, then it closes."""
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - the http.server spelling
+            self.send_response(200)
+            self.send_header("Content-Type",
+                             "multipart/x-mixed-replace; boundary=vgacapframe")
+            self.end_headers()
+            self.wfile.flush()
+            try:
+                for n in range(parts):
+                    time.sleep(first_delay if n == 0 else later_delay)
+                    self.wfile.write(b"--vgacapframe\r\nContent-Type: image/jpeg"
+                                     b"\r\n\r\nJPEG\r\n")
+                    self.wfile.flush()
+            except OSError:
+                pass
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_the_mjpeg_reader_waits_for_a_slow_first_part(monkeypatch):
+    """fpga-1: the first frame waits for the design enable (~4-5 s), longer
+    than the per-part timeout. Scaled down: first 1.0 s, per part 0.5 s."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    monkeypatch.setattr(hil.MjpegReader, "FIRST_PART_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(hil.MjpegReader, "PART_TIMEOUT_S", 0.5)
+    server = _mjpeg_server(first_delay=1.0, later_delay=0.05)
+    try:
+        reader = hil.MjpegReader(server.server_port, budget=4.0)
+        reader.start()
+        reader.join(timeout=15)
+    finally:
+        server.shutdown()
+    assert "timed out" not in reader.note, reader.note
+    assert reader.parts == 4, (reader.parts, reader.note)
+
+
+def test_the_mjpeg_reader_still_bounds_later_parts(monkeypatch):
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    monkeypatch.setattr(hil.MjpegReader, "FIRST_PART_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(hil.MjpegReader, "PART_TIMEOUT_S", 0.5)
+    server = _mjpeg_server(first_delay=0.05, later_delay=1.5)
+    try:
+        reader = hil.MjpegReader(server.server_port, budget=10.0)
+        started = time.monotonic()
+        reader.start()
+        reader.join(timeout=15)
+        took = time.monotonic() - started
+    finally:
+        server.shutdown()
+    assert "read failed: timed out" in reader.note, reader.note
+    assert reader.parts == 1 and took < 5, (reader.parts, took)
+
+
+def test_the_mjpeg_reader_timeouts_fit_a_design_enable():
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    assert hil.MjpegReader.FIRST_PART_TIMEOUT_S >= 20
+    assert hil.MjpegReader.PART_TIMEOUT_S <= 10
+
+
+# ------------------------------------------------- --stop-bridge etiquette
+
+
+def _health_server(*bodies: bytes):
+    """A one-thread HTTP server answering GETs with `bodies` in turn, the
+    last one for ever after."""
+    import http.server
+    import threading
+
+    answers = list(bodies)
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - the http.server spelling
+            body = answers.pop(0) if len(answers) > 1 else answers[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, "http://127.0.0.1:%d/health" % server.server_port
+
+
+def test_bridge_clients_reads_the_daemons_count():
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    server, url = _health_server(b'{"clients": 2, "kind": "fpga"}')
+    try:
+        assert hil.bridge_clients(url) == 2
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize("body", [b"not json", b'{"kind": "fpga"}', b'{"clients": "1"}',
+                                  b'{"clients": false}', b'{"clients": -1}',
+                                  b'{"clients": 0.0}', b'[0]'])
+def test_bridge_clients_that_cannot_be_read_are_not_zero(body):
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    server, url = _health_server(body)
+    try:
+        got = hil.bridge_clients(url)
+    finally:
+        server.shutdown()
+    assert got != 0 and isinstance(got, str), got
+
+
+def test_an_unreachable_bridge_is_not_idle():
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    got = hil.bridge_clients("http://127.0.0.1:9/health", timeout=2)
+    assert isinstance(got, str) and got.startswith("unknown"), got
+
+
+def test_stop_bridge_refuses_while_a_visitor_is_connected(tmp_path, monkeypatch):
+    """The bridge also serves the public site, whose visitors cannot see a
+    claims file: with a client connected, nothing may be stopped."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    server, url = _health_server(b'{"clients": 1}')
+    calls = []
+
+    def fake_run(argv, **_kw):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0)  # "fpgas-tt is active"
+
+    monkeypatch.setattr(hil.shutil, "which", lambda _name: "/bin/systemctl")
+    monkeypatch.setattr(hil.subprocess, "run", fake_run)
+    args = hil.build_parser().parse_args(
+        [str(tmp_path / "report.md"), "--clock-hz", "500000",
+         "--link", "serial:/dev/null", "--stop-bridge", "--bridge-health", url,
+         "--workdir", str(tmp_path)])
+    run = hil.Hil(args)
+    try:
+        with pytest.raises(hil.Fatal, match="1 client"):
+            run.stop_bridge()
+    finally:
+        server.shutdown()
+    assert not run.bridge_stopped
+    assert not any("stop" in argv for argv in calls), calls
+
+
+class FakeSystemd:
+    """`subprocess.run` for systemctl: one `fpgas-tt` unit, every call
+    recorded in `events` (shared with the fake board link)."""
+
+    def __init__(self, events, *, state="active", stop="ok"):
+        self.events = events
+        self.state = state
+        #: "ok", "fails" (exit 1, still running), "times-out-stopped"
+        #: (TimeoutExpired, but it did stop) or "interrupted".
+        self.stop = stop
+        #: Raised, once each, by the next is-active / start / ps.
+        self.raise_from = {}
+        #: The keyword arguments each systemctl verb was run with.
+        self.kwargs = {}
+
+    real_run = staticmethod(subprocess.run)
+
+    def __call__(self, argv, check=False, **kw):
+        argv = list(argv)
+        if argv[0] == "ps":
+            assert kw.get("timeout"), "ps must be bounded"
+            self.ps_calls = getattr(self, "ps_calls", 0) + 1
+            if "ps" in self.raise_from:
+                raise self.raise_from.pop("ps")
+        if "systemctl" not in argv:
+            return self.real_run(argv, check=check, **kw)  # git describe, say
+        verb = argv[argv.index("systemctl") + 1]
+        self.kwargs[verb] = dict(kw, sigint=signal.getsignal(signal.SIGINT))
+        if verb in self.raise_from:
+            raise self.raise_from.pop(verb)
+        if argv[:2] == ["systemctl", "is-active"]:
+            code = 0 if self.state == "active" else 3
+            return subprocess.CompletedProcess(argv, code, stdout=self.state + "\n")
+        self.events.append(("systemctl", argv[-2]))
+        if argv[-2] == "stop":
+            if self.stop == "fails":
+                code = 1
+            elif self.stop == "times-out-stopped":
+                self.state = "inactive"
+                raise subprocess.TimeoutExpired(argv, 120)
+            elif self.stop == "interrupted":
+                self.state = "inactive"
+                raise KeyboardInterrupt
+            else:
+                self.state, code = "inactive", 0
+        elif argv[-2] == "start":
+            self.state, code = "active", 0
+        else:
+            raise AssertionError(argv)
+        if check and code:
+            raise subprocess.CalledProcessError(code, argv)
+        return subprocess.CompletedProcess(argv, code)
+
+
+class FakeBoard:
+    """A board link that soft-reboots on Ctrl-D, recording into `events`."""
+
+    def __init__(self, events):
+        self.events = events
+        self.replies = []
+
+    def write(self, data):
+        self.events.append(("board", data))
+        if data == b"\x04":
+            self.replies = [b"MPY: soft reboot\r\n", b">>> "]
+
+    def read(self, timeout):
+        return self.replies.pop(0) if self.replies else b""
+
+    def close(self):
+        self.events.append(("board", "closed"))
+
+
+@pytest.fixture
+def bridge_run(tmp_path, monkeypatch):
+    """A `Hil` with --stop-bridge on a serial link, systemd and the board
+    faked, and a /health that says 0 clients."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+    import ttcap.cli
+
+    events = []
+    systemd = FakeSystemd(events)
+    board = FakeBoard(events)
+    server, url = _health_server(b'{"clients": 0}')
+    monkeypatch.setattr(hil.shutil, "which", lambda _name: "/bin/systemctl")
+    monkeypatch.setattr(hil.subprocess, "run", systemd)
+    monkeypatch.setattr(hil, "BRIDGE_SETTLE_S", 0.0)
+    monkeypatch.setattr(ttcap.cli, "link_from_url", lambda _url, **_kw: board)
+    args = hil.build_parser().parse_args(
+        [str(tmp_path / "report.md"), "--clock-hz", "500000",
+         "--link", "serial:/dev/null", "--stop-bridge", "--bridge-health", url,
+         "--workdir", str(tmp_path)])
+    yield hil, hil.Hil(args), systemd, events
+    server.shutdown()
+
+
+def test_stop_bridge_reads_the_count_twice(tmp_path, monkeypatch, bridge_run):
+    """A visitor arriving between the two reads stops the stop."""
+    hil, run, _systemd, events = bridge_run
+    server, url = _health_server(b'{"clients": 0}', b'{"clients": 1}')
+    run.args.bridge_health = url
+    try:
+        with pytest.raises(hil.Fatal, match="1 client"):
+            run.stop_bridge()
+    finally:
+        server.shutdown()
+    assert not run.bridge_stopped and events == []
+
+
+def test_a_failed_stop_is_a_clean_error_and_no_board_restart(bridge_run):
+    hil, run, systemd, events = bridge_run
+    systemd.stop = "fails"
+    with pytest.raises(hil.Fatal, match="systemctl stop fpgas-tt. failed.*now active"):
+        run.stop_bridge()
+    run.cleanup()
+    # The daemon never stopped: the board must not be reset under it. The
+    # start is a no-op on an active unit, and harmless.
+    assert events == [("systemctl", "stop"), ("systemctl", "start")]
+    assert systemd.state == "active" and not run.bridge_stopped
+
+
+def test_the_stop_cannot_be_interrupted_from_the_terminal(bridge_run):
+    """Ctrl-C reaches the whole foreground process group: sudo and systemctl
+    run in a session of their own, with this process deaf to SIGINT."""
+    _hil, run, systemd, _events = bridge_run
+    run.stop_bridge()
+    assert systemd.kwargs["stop"]["start_new_session"] is True
+    assert systemd.kwargs["stop"]["sigint"] is signal.SIG_IGN
+    assert signal.getsignal(signal.SIGINT) is not signal.SIG_IGN  # put back
+    run.cleanup()
+    assert systemd.kwargs["start"]["start_new_session"] is True
+
+
+def test_ctrl_c_while_checking_a_failed_stop_still_undoes_it(bridge_run, monkeypatch):
+    """The stop took effect and then timed out; a second Ctrl-C lands in
+    the is-active that follows. The bridge must still be started."""
+    _hil, _run, systemd, _events = bridge_run
+    systemd.stop = "times-out-stopped"
+    real_call = systemd.__call__
+    is_active_calls = []
+
+    def run_(argv, **kw):
+        if list(argv)[:2] == ["systemctl", "is-active"]:
+            is_active_calls.append(1)
+            if len(is_active_calls) == 2:  # the one after the stop
+                raise KeyboardInterrupt
+        return real_call(argv, **kw)
+
+    hil, run, systemd, events = bridge_run
+    monkeypatch.setattr(hil.subprocess, "run", run_)
+    with pytest.raises(KeyboardInterrupt):
+        run.stop_bridge()
+    assert run.bridge_stopped
+    monkeypatch.setattr(hil.subprocess, "run", systemd)
+    run.cleanup()
+    assert ("board", b"\x04") in events
+    assert systemd.state == "active" and events[-1] == ("systemctl", "start")
+
+
+@pytest.mark.parametrize("error", [subprocess.TimeoutExpired(["ps"], 30),
+                                   OSError("no ps")])
+def test_a_stuck_or_missing_ps_cannot_keep_the_bridge_down(bridge_run, error):
+    _hil, run, systemd, events = _stopped(bridge_run)
+    run.sessions = [999999]
+    systemd.raise_from["ps"] = error
+    run.cleanup()
+    assert systemd.state == "active" and events[-1] == ("systemctl", "start")
+    assert any("could not check session(s) 999999" in n for n in run.notes), run.notes
+
+
+def test_cleanup_takes_one_ps_for_every_session(bridge_run):
+    """A stuck `ps` costs PS_TIMEOUT_S once, not once a session, while
+    cleanup is deaf to signals (logind SIGKILLs a dropped ssh ~90 s on)."""
+    _hil, run, systemd, events = _stopped(bridge_run)
+    run.sessions = [999997, 999998, 999999]
+    systemd.raise_from["ps"] = subprocess.TimeoutExpired(["ps"], 30)
+    run.cleanup()
+    assert systemd.ps_calls == 1
+    assert events[-1] == ("systemctl", "start")
+    assert any("999997, 999998, 999999" in n for n in run.notes), run.notes
+
+
+def test_reap_kills_every_session_from_one_snapshot(tmp_path, bridge_run):
+    hil, run, systemd, _events = bridge_run
+    procs = [run.spawn(["sleep", "60"]) for _ in range(3)]
+    try:
+        before = getattr(systemd, "ps_calls", 0)
+        hil._reap(*run.sessions)
+        assert systemd.ps_calls - before == 1
+        for proc in procs:
+            assert proc.wait(timeout=10) == -signal.SIGKILL
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+
+@pytest.mark.parametrize("error", [subprocess.TimeoutExpired(["ps"], 30),
+                                   OSError("no ps")])
+def test_a_ps_failure_outside_cleanup_is_fatal(bridge_run, error):
+    """Raised from a check, a TimeoutExpired escaped main's handlers and
+    no report was written; a Fatal is reported."""
+    hil, _run, systemd, _events = bridge_run
+    systemd.raise_from["ps"] = error
+    with pytest.raises(hil.Fatal, match="`ps` could not list"):
+        hil._survivors(12345)
+
+
+def test_a_signal_right_after_popen_still_registers_the_session(bridge_run, monkeypatch):
+    """The signal is held until the session is on the list, then delivered;
+    the board command does not inherit an ignored SIGINT."""
+    hil, run, _systemd, _events = bridge_run
+    real_popen = subprocess.Popen
+
+    def popen(argv, **kw):
+        proc = real_popen(argv, **kw)
+        os.kill(os.getpid(), signal.SIGINT)  # lands before the append
+        return proc
+
+    monkeypatch.setattr(hil.subprocess, "Popen", popen)
+    with pytest.raises(KeyboardInterrupt):
+        run.spawn(["sleep", "30"])
+    assert len(run.sessions) == 1
+    pid = run.sessions[0]
+    try:
+        status = pathlib.Path("/proc/%d/status" % pid).read_text()
+        ignored = int(next(line.split()[1] for line in status.splitlines()
+                           if line.startswith("SigIgn:")), 16)
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            assert not ignored & (1 << (sig - 1)), (sig, hex(ignored))
+    finally:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+
+
+def test_a_second_ctrl_c_while_deferred_signals_are_put_back(monkeypatch):
+    """Reproduces the re-review: SIGINT arriving as SIGINT's own handler is
+    restored used to raise there, leaving SIGTERM/SIGHUP/SIGQUIT as the
+    deferring handler for good and the pending SIGTERM never delivered."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    got = []
+
+    def record(signum, _frame):
+        got.append(signum)
+
+    saved = {s: signal.getsignal(s) for s in (signal.SIGINT, *hil.STOP_SIGNALS)}
+    real_signal = signal.signal
+    fired = []
+
+    def signal_then_ctrl_c(sig, handler):
+        old = real_signal(sig, handler)
+        if sig == signal.SIGINT and handler is signal.default_int_handler and not fired:
+            fired.append(1)
+            os.kill(os.getpid(), signal.SIGINT)  # the second Ctrl-C
+        return old
+
+    try:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        for s in hil.STOP_SIGNALS:
+            signal.signal(s, record)
+        monkeypatch.setattr(hil.signal, "signal", signal_then_ctrl_c)
+        with pytest.raises(KeyboardInterrupt):
+            with hil.signals_deferred():
+                os.kill(os.getpid(), signal.SIGTERM)  # held, delivered after
+            time.sleep(0.05)
+        monkeypatch.undo()
+        time.sleep(0.05)
+        assert fired, "the restore never put SIGINT's handler back"
+        for s in hil.STOP_SIGNALS:
+            assert signal.getsignal(s) is record, s
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        assert got == [signal.SIGTERM]
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == set()
+    finally:
+        monkeypatch.undo()
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+
+
+@pytest.mark.parametrize("mode", ["restore", "pending"])
+def test_deferred_signals_survive_a_live_second_thread(monkeypatch, mode):
+    """Modelled on the re-review's repro: the mask in signals_deferred is
+    this thread's only, so a process-directed SIGINT can go to another
+    live thread (MjpegReader during check_demo) and its Python handler
+    then runs here, inside the restore. Every handler must still come
+    back, and every held signal still be delivered."""
+    import threading
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    stop = threading.Event()
+    other = threading.Thread(target=lambda: stop.wait(30), daemon=True)
+    other.start()
+    got = []
+
+    def record(signum, _frame):
+        got.append(signum)
+
+    saved = {s: signal.getsignal(s) for s in (signal.SIGINT, *hil.STOP_SIGNALS)}
+    real_signal = signal.signal
+    fired = []
+
+    def hook(sig, handler):
+        old = real_signal(sig, handler)
+        if (mode == "restore" and sig == signal.SIGINT
+                and handler is signal.default_int_handler and not fired):
+            fired.append(1)
+            os.kill(os.getpid(), signal.SIGINT)  # process-directed, like Ctrl-C
+            time.sleep(0.05)  # let the other thread take it
+        return old
+
+    raised = []
+    try:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        for s in hil.STOP_SIGNALS:
+            signal.signal(s, record)
+        monkeypatch.setattr(hil.signal, "signal", hook)
+        try:
+            try:
+                with hil.signals_deferred():
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    if mode == "pending":
+                        os.kill(os.getpid(), signal.SIGINT)
+                    time.sleep(0.05)
+                time.sleep(0.1)
+            except KeyboardInterrupt as exc:
+                raised.append(exc)
+            time.sleep(0.1)
+        except KeyboardInterrupt as exc:
+            raised.append(exc)
+        monkeypatch.undo()
+        for s in hil.STOP_SIGNALS:
+            assert signal.getsignal(s) is record, signal.Signals(s).name
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        assert got == [signal.SIGTERM]
+        assert raised, "the Ctrl-C was lost"
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == set()
+    finally:
+        stop.set()
+        monkeypatch.undo()
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+
+
+@pytest.mark.parametrize("mode", ["midrestore", "swallow"])
+def test_a_stop_signal_during_the_restore_keeps_its_own_word(monkeypatch, mode):
+    """Modelled on the review's probe_stop.py, with hil's real handlers.
+
+    midrestore: a SIGTERM taken by another thread runs _on_stop_signal
+    inside the restore; it sets every stop signal to SIG_IGN, and the
+    restore must not re-arm them. swallow: a SIGINT was deferred as well;
+    its KeyboardInterrupt, delivered when the mask lifts, must not replace
+    the Interrupted that names the real cause."""
+    import threading
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    stop = threading.Event()
+    other = threading.Thread(target=lambda: stop.wait(30), daemon=True)  # unmasked
+    other.start()
+    saved = {s: signal.getsignal(s) for s in (signal.SIGINT, *hil.STOP_SIGNALS)}
+    real_signal = signal.signal
+    fired = []
+
+    def hook(sig, handler):
+        old = real_signal(sig, handler)
+        if sig == signal.SIGTERM and handler is hil._on_stop_signal and not fired:
+            fired.append(1)
+            os.kill(os.getpid(), signal.SIGTERM)  # process-directed
+            time.sleep(0.05)  # main has it blocked: the other thread takes it
+        return old
+
+    raised = []
+    try:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        for s in hil.STOP_SIGNALS:
+            signal.signal(s, hil._on_stop_signal)
+        monkeypatch.setattr(hil.signal, "signal", hook)
+        try:
+            try:
+                with hil.signals_deferred():
+                    if mode == "swallow":
+                        os.kill(os.getpid(), signal.SIGINT)
+                        time.sleep(0.05)
+                time.sleep(0.1)
+            except BaseException as exc:  # noqa: BLE001
+                raised.append(exc)
+            time.sleep(0.1)
+        except BaseException as exc:  # noqa: BLE001
+            raised.append(exc)
+        monkeypatch.undo()
+        assert fired
+        assert len(raised) == 1 and isinstance(raised[0], hil.Interrupted), raised
+        assert str(raised[0]) == "SIGTERM"
+        if mode == "swallow":
+            assert isinstance(raised[0].__context__, KeyboardInterrupt), raised[0].__context__
+        for s in hil.STOP_SIGNALS:
+            assert signal.getsignal(s) == signal.SIG_IGN, signal.Signals(s).name
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == set()
+    finally:
+        stop.set()
+        monkeypatch.undo()
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+
+
+def test_the_mjpeg_reader_is_born_with_signals_blocked():
+    """No window between start() returning and run() blocking them."""
+    import socket
+    import threading
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    real_run = hil.MjpegReader.run
+    gate = threading.Event()
+
+    class Late(hil.MjpegReader):
+        def run(self):
+            gate.wait(10)  # run() has not blocked anything yet
+            real_run(self)
+
+    reader = Late(port, budget=1.0)
+    reader.start()
+    try:
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == set()  # main's
+        status = pathlib.Path("/proc/self/task/%d/status" % reader.native_id).read_text()
+        blocked = int(next(line.split()[1] for line in status.splitlines()
+                           if line.startswith("SigBlk:")), 16)
+        for sig in (signal.SIGINT, *hil.STOP_SIGNALS):
+            assert blocked & (1 << (sig - 1)), (signal.Signals(sig).name, hex(blocked))
+    finally:
+        gate.set()
+        reader.stop()
+
+
+def test_the_mjpeg_reader_thread_leaves_signals_to_main():
+    sys.path.insert(0, str(ROOT / "tools"))
+    import hil
+
+    import socket
+    with socket.socket() as sock:  # a port nothing listens on
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    reader = hil.MjpegReader(port, budget=2.0)
+    reader.start()
+    try:
+        time.sleep(0.3)
+        status = pathlib.Path("/proc/self/task/%d/status" % reader.native_id).read_text()
+        blocked = int(next(line.split()[1] for line in status.splitlines()
+                           if line.startswith("SigBlk:")), 16)
+        for sig in (signal.SIGINT, *hil.STOP_SIGNALS):
+            assert blocked & (1 << (sig - 1)), (signal.Signals(sig).name, hex(blocked))
+    finally:
+        reader.stop()
+    # and the main thread's own mask is untouched
+    assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == set()
+
+
+def test_a_restart_that_times_out_discards_unsent_output(bridge_run, monkeypatch):
+    """So close() does not wait out the tty's closing_wait before the
+    bridge starts."""
+    import ttcap.cli
+    import ttcap.repl
+
+    _hil, run, systemd, events = _stopped(bridge_run)
+
+    class StuckLink(FakeBoard):
+        def discard_output(self):
+            self.events.append(("board", "discarded"))
+
+    monkeypatch.setattr(ttcap.cli, "link_from_url", lambda _url, **_kw: StuckLink(events))
+
+    def stuck(_link):
+        raise OSError("Write timeout")
+
+    monkeypatch.setattr(ttcap.repl, "restart_sdk", stuck)
+    run.cleanup()
+    assert events.index(("board", "discarded")) < events.index(("board", "closed"))
+    assert events[-1] == ("systemctl", "start")
+
+
+def test_restart_board_bounds_its_writes(bridge_run, monkeypatch):
+    """A USB CDC port that stops draining must not block cleanup."""
+    hil, run, _systemd, events = _stopped(bridge_run)
+    import ttcap.cli
+    seen = {}
+
+    def link(_url, **kw):
+        seen.update(kw)
+        return FakeBoard(events)
+
+    monkeypatch.setattr(ttcap.cli, "link_from_url", link)
+    run.cleanup()
+    assert seen == {"write_timeout": hil.RESTART_WRITE_TIMEOUT_S}
+    assert 0 < hil.RESTART_WRITE_TIMEOUT_S <= 5
+
+
+def test_a_failed_start_on_an_active_bridge_does_not_say_it_is_down(bridge_run):
+    _hil, run, systemd, _events = bridge_run
+    systemd.stop = "fails"
+    with pytest.raises(_hil.Fatal):
+        run.stop_bridge()
+    systemd.raise_from["start"] = subprocess.TimeoutExpired(["systemctl"], 120)
+    run.cleanup()
+    assert not any("still down" in n for n in run.notes), run.notes
+    assert any("but fpgas-tt is active" in n for n in run.notes), run.notes
+
+
+def test_a_failed_start_on_a_stopped_bridge_says_so(bridge_run):
+    _hil, run, systemd, _events = _stopped(bridge_run)
+    systemd.raise_from["start"] = subprocess.TimeoutExpired(["systemctl"], 120)
+    run.cleanup()
+    assert any("WARNING" in n and "still down" in n for n in run.notes), run.notes
+
+
+def test_a_cleanup_cut_short_before_the_start_is_retried_in_full(bridge_run):
+    """The gate is cleared only once the start has been attempted."""
+    _hil, run, systemd, events = _stopped(bridge_run)
+    systemd.raise_from["start"] = KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt):
+        run.cleanup()
+    assert run.bridge_stopped and systemd.state == "inactive"
+    run.cleanup()
+    assert systemd.state == "active" and not run.bridge_stopped
+    run.cleanup()  # and once it is done, again is nothing
+    # The interrupted start never reached systemctl; the retry's did, once.
+    assert events.count(("systemctl", "start")) == 1
+    assert events[-1] == ("systemctl", "start")
+
+
+def test_main_runs_cleanup_again_when_interrupted(tmp_path, bridge_run, monkeypatch):
+    """A second signal before cleanup()'s guard is up must not skip it."""
+    hil, run, systemd, events = bridge_run
+    systemd.stop = "fails"
+    real_cleanup = hil.Hil.cleanup
+    tries = []
+
+    def cleanup(self):
+        tries.append(1)
+        if len(tries) == 1:
+            raise hil.Interrupted("SIGHUP")
+        real_cleanup(self)
+
+    monkeypatch.setattr(hil.Hil, "cleanup", cleanup)
+    frames = tmp_path / "vgacap-frames"
+    frames.write_text("")
+    saved = {sig: signal.getsignal(sig) for sig in hil.STOP_SIGNALS}
+    try:
+        code = hil.main([str(tmp_path / "r.md"), "--clock-hz", "500000",
+                         "--seconds", "4", "--link", "serial:/dev/null",
+                         "--stop-bridge", "--bridge-health", run.args.bridge_health,
+                         "--vgacap-frames", str(frames),
+                         "--workdir", str(tmp_path / "work"),
+                         "--lock-dir", str(tmp_path / "lock")])
+    finally:
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
+    assert code == 1 and len(tries) == 2
+    assert events[-1] == ("systemctl", "start")
+    assert (tmp_path / "r.md").exists()
+
+
+def test_failed_stop_through_main_writes_a_report(tmp_path, monkeypatch, bridge_run):
+    """Not a traceback: the run is reported as cut short, with a report."""
+    hil, run, systemd, _events = bridge_run
+    systemd.stop = "fails"
+    frames = tmp_path / "vgacap-frames"
+    frames.write_text("")
+    report = tmp_path / "report.md"
+    saved = {sig: signal.getsignal(sig) for sig in hil.STOP_SIGNALS}
+    try:
+        code = hil.main([str(report), "--clock-hz", "500000", "--seconds", "4",
+                         "--link", "serial:/dev/null", "--stop-bridge",
+                         "--bridge-health", run.args.bridge_health,
+                         "--vgacap-frames", str(frames),
+                         "--workdir", str(tmp_path / "work"),
+                         "--lock-dir", str(tmp_path / "lock")])
+    finally:
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
+    assert code == 1
+    text = report.read_text()
+    assert "systemctl stop fpgas-tt` failed" in text
+
+
+def _stopped(bridge_run):
+    """The bridge_run fixture with fpgas-tt stopped by stop_bridge()."""
+    hil, run, systemd, events = bridge_run
+    run.stop_bridge()
+    assert run.bridge_stopped and systemd.state == "inactive"
+    return hil, run, systemd, events
+
+
+def test_the_board_is_restarted_before_the_bridge_starts(bridge_run):
+    _hil, run, systemd, events = _stopped(bridge_run)
+    run.cleanup()
+    assert systemd.state == "active" and not run.bridge_stopped
+    reset = events.index(("board", b"\x04"))
+    start = events.index(("systemctl", "start"))
+    assert events.index(("systemctl", "stop")) < reset < start, events
+    assert events.index(("board", "closed")) < start
+    assert any("Board restarted" in note for note in run.notes), run.notes
+
+
+def test_the_bridge_starts_when_the_restart_raises(bridge_run, monkeypatch):
+    import ttcap.cli
+
+    _hil, run, systemd, events = _stopped(bridge_run)
+
+    def no_link(_url, **_kw):
+        raise OSError("could not open port /dev/null")
+
+    monkeypatch.setattr(ttcap.cli, "link_from_url", no_link)
+    run.cleanup()
+    assert systemd.state == "active" and events[-1] == ("systemctl", "start")
+    assert any("WARNING: restarting the board" in n and "OSError" in n
+               for n in run.notes), run.notes
+
+
+def test_the_bridge_starts_when_the_restart_sees_no_reboot(bridge_run, monkeypatch):
+    import ttcap.repl
+
+    _hil, run, systemd, events = _stopped(bridge_run)
+    monkeypatch.setattr(ttcap.repl, "restart_sdk", lambda _link: (False, ""))
+    run.cleanup()
+    assert systemd.state == "active" and events[-1] == ("systemctl", "start")
+    assert any("no soft reboot seen" in n for n in run.notes), run.notes
+
+
+@pytest.mark.parametrize("exc", ["KeyboardInterrupt", "Interrupted"])
+def test_the_bridge_starts_when_the_restart_is_interrupted(bridge_run, monkeypatch, exc):
+    """BaseExceptions get past restart_board's `except Exception`; the
+    start is in a `finally`, so they cannot get past it."""
+    import ttcap.repl
+
+    hil, run, systemd, events = _stopped(bridge_run)
+    error = KeyboardInterrupt if exc == "KeyboardInterrupt" else hil.Interrupted
+
+    def interrupted(_link):
+        raise error("SIGHUP")
+
+    monkeypatch.setattr(ttcap.repl, "restart_sdk", interrupted)
+    with pytest.raises(error):
+        run.cleanup()
+    assert systemd.state == "active" and events[-1] == ("systemctl", "start")
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP])
+def test_a_signal_during_cleanup_does_not_stop_it(bridge_run, monkeypatch, sig):
+    """Ctrl-C or a stop signal while the board restarts is ignored: the
+    restart finishes and the bridge is started."""
+    hil, run, systemd, events = _stopped(bridge_run)
+    board = FakeBoard(events)
+    real_write = board.write
+
+    def write(data):
+        if data == b"\x04":
+            os.kill(os.getpid(), sig)
+        real_write(data)
+
+    board.write = write
+    import ttcap.cli
+    monkeypatch.setattr(ttcap.cli, "link_from_url", lambda _url, **_kw: board)
+    # As main() has it: the stop signals raise Interrupted.
+    saved = {s: signal.getsignal(s) for s in hil.STOP_SIGNALS}
+    for s in hil.STOP_SIGNALS:
+        signal.signal(s, hil._on_stop_signal)
+    try:
+        run.cleanup()
+        # The handlers are back afterwards.
+        assert signal.getsignal(signal.SIGTERM) is hil._on_stop_signal
+    finally:
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+    assert ("board", b"\x04") in events
+    assert systemd.state == "active" and events[-1] == ("systemctl", "start")
+
+
+def test_a_bridge_already_running_again_is_not_reset_under(bridge_run):
+    """Someone started fpgas-tt during the run: the board is its users' now."""
+    _hil, run, systemd, events = _stopped(bridge_run)
+    systemd.state = "active"
+    run.cleanup()
+    assert not any(kind == "board" for kind, _ in events), events
+    assert events[-1] == ("systemctl", "start")
+    assert any("not restarted" in n for n in run.notes), run.notes
+
+
+def test_restart_sdk_leaves_raw_repl_then_soft_resets():
+    from ttcap.repl import restart_sdk
+
+    class FakeLink:
+        def __init__(self):
+            self.written = []
+            self.replies = [b"MPY: soft reboot\r\n", b"tt.sdk_version=3.1.0\r\n>>> "]
+
+        def write(self, data):
+            self.written.append(data)
+
+        def read(self, timeout):
+            return self.replies.pop(0) if self.replies else b""
+
+        def close(self):
+            raise AssertionError("restart_sdk must leave the link to its caller")
+
+    link = FakeLink()
+    started = time.monotonic()
+    ok, text = restart_sdk(link, wait=30.0)
+    assert ok and "sdk_version" in text
+    # Ctrl-C twice first, so code still running on the board cannot hold
+    # the restart up.
+    assert link.written == [b"\r\x03\x03", b"\x02", b"\r\n", b"\x04"]
+    # Done as soon as the board is back at a prompt, not after all of `wait`.
+    assert time.monotonic() - started < 10.0
+
+
+def test_restart_sdk_without_a_reboot_says_so():
+    from ttcap.repl import restart_sdk
+
+    class SilentLink:
+        written: list = []
+
+        def write(self, data):
+            self.written.append(data)
+
+        def read(self, timeout):
+            return b">>> "  # a prompt, but no reboot ever
+
+        def close(self):
+            pass
+
+    ok, _text = restart_sdk(SilentLink(), wait=0.5)
+    assert not ok

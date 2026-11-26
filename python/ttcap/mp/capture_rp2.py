@@ -3,10 +3,11 @@
 
 A program body: `ttcap.mp.build(cfg, "capture_rp2.py")` puts
 `prelude.py` in front of it, which supplies the imports, the shared CFG
-keys, the register arithmetic, the chunk writers, `make_sampler()`,
-`set_gpio_base()`, `init_input_pins()` and the cooperative stop -- read that
+keys, the register arithmetic, `write_time_chunk()`, `set_gpio_base()`,
+`init_input_pins()`, `stop_dma()` and the cooperative stop -- read that
 file's docstring first. This body adds the DMA register map it re-arms
-channels through and `make_sampler()`, the plain sampler program. Keys this body reads on top of the prelude's:
+channels through, `write_raw_chunk()` and `make_sampler()`, the plain
+sampler program. Keys this body reads on top of the prelude's:
 
     buf_words    32-bit words per DMA buffer (two are allocated), e.g. 4096
     max_bytes    stop after this many emitted bytes; 0 = run until Ctrl-C
@@ -26,15 +27,27 @@ and every address they touch are module-level, because a hard IRQ runs with
 the heap locked and a nested closure over main()'s locals raises
 MemoryError at its first statement -- see the "hard IRQ state" block below.
 
-There is therefore at most one buffer of latency. If a handler
-finds its buffer still marked full, the main loop did not consume it in
-time: the DMA is now overwriting data the host never saw. That is counted
-as an overrun and reported in a `TIME` chunk whose `dropped_samples` is the
-CUMULATIVE total so far, `overruns * buf_words * samples_per_word` -- every
-`TIME` chunk here carries a running total, never an increment, so a reader
-takes the last value instead of summing. `FDEBUG`'s
-RXSTALL bit is cleared at the start and read back at the end -- if it is
-set, the RX FIFO overflowed and samples were lost regardless.
+OVERRUNS. The partner chain starts rewriting a buffer the moment the
+other one completes, so the main loop has one buffer's fill time to send
+a buffer, and the send reads the live buffer. So the overrun is counted
+when the DMA *starts* on a buffer still marked full (in the completion
+handler of the buffer before it): from then on that buffer's chunk mixes
+old and new samples, whether or not it is still being sent. The handler
+marks the buffer `TORN`, and the main loop, after sending a buffer, emits
+an `overrun` TIME chunk straight after it if it was torn -- so a torn
+chunk is never followed by another chunk without its report. The chunk is
+already on the wire by then; the report says it is not contiguous. Its
+`dropped_samples` is the CUMULATIVE total so far, `overruns * buf_words *
+samples_per_word` -- every `TIME` chunk here carries a running total, never
+an increment, so a reader takes the last value instead of summing.
+Every overwrite of an unsent buffer is counted, however far behind the
+main loop is, and one that started mid-send but never overtook it is
+counted too, so the total is an upper bound on what was lost.
+vgacap-frames and vgadecode drop the picture in progress at the marker;
+since it follows the damaged chunk, a picture completed inside that chunk
+is already out.
+`FDEBUG`'s RXSTALL bit is cleared at the start and read back at the end --
+if it is set, the RX FIFO overflowed and samples were lost regardless.
 
 MEMORY: this script's `finally` drops the two DMA buffers (32 KB at the
 default `buf_words`) and collects before the host's next command.
@@ -56,6 +69,12 @@ DMA_CH_TRANS_COUNT = 0x08
 def dma_reg(channel, offset):
     """Absolute address of one register of DMA channel `channel`."""
     return DMA_BASE + DMA_CH_STRIDE * channel + offset
+
+
+def write_raw_chunk(out, buf, sample_count):
+    """Emit one `RAW ` chunk and return the number of bytes written."""
+    written = _write_all(out, b"RAW " + _le32(4 + len(buf)) + _le32(sample_count))
+    return written + _write_all(out, buf)
 
 
 def make_sampler(clk_gpio, in_count, push, rising):
@@ -132,7 +151,9 @@ ADDR_A = 0
 ADDR_B = 0
 #: Whether each buffer holds samples the main loop has not written out yet.
 FULL = [False, False]
-#: Buffers the main loop failed to drain before the DMA came round again.
+#: Whether the DMA started rewriting each buffer while it was still FULL.
+TORN = [False, False]
+#: Times the DMA started on a buffer the main loop had not finished sending.
 OVERRUNS = [0]
 
 
@@ -143,16 +164,19 @@ def on_a(_channel):
     # starting it.
     MEM[WR_A] = ADDR_A
     MEM[TC_A] = BUF_WORDS
-    if FULL[0]:
+    # A's chain has just started B on buffer 1 (see OVERRUNS above).
+    if FULL[1]:
         OVERRUNS[0] += 1
+        TORN[1] = True
     FULL[0] = True
 
 
 def on_b(_channel):
     MEM[WR_B] = ADDR_B
     MEM[TC_B] = BUF_WORDS
-    if FULL[1]:
+    if FULL[0]:
         OVERRUNS[0] += 1
+        TORN[0] = True
     FULL[1] = True
 
 
@@ -167,8 +191,7 @@ def main(out):
     global WR_A, WR_B, TC_A, TC_B, ADDR_A, ADDR_B
 
     bufs = [bytearray(BUF_BYTES), bytearray(BUF_BYTES)]
-    FULL[0] = False
-    FULL[1] = False
+    FULL[0] = FULL[1] = TORN[0] = TORN[1] = False
     OVERRUNS[0] = 0
     dma_a = None
     dma_b = None
@@ -233,7 +256,6 @@ def main(out):
         sm.active(1)
 
         sent = 0
-        reported = 0
         index = 0
         stopping = False
         while True:
@@ -245,13 +267,20 @@ def main(out):
             if stopping:
                 break
             sent += write_raw_chunk(out, bufs[index], SAMPLES_PER_CHUNK)
+            # FULL and TORN together, with the IRQs off: a handler sets
+            # TORN[index] only while FULL[index], so a tear during the send
+            # above cannot be missed, and a mark for the next contents (a
+            # main loop held up for over a fill) is not wiped.
+            irq = machine.disable_irq()
             FULL[index] = False
-            if OVERRUNS[0] > reported:
+            torn = TORN[index]
+            TORN[index] = False
+            machine.enable_irq(irq)
+            if torn:
                 # Cumulative, not an increment: see write_time_chunk().
                 sent += write_time_chunk(
                     out, OVERRUNS[0] * SAMPLES_PER_CHUNK, b"overrun"
                 )
-                reported = OVERRUNS[0]
             index = 1 - index
             # Both stop checks are here, between whole chunks: MAX_BYTES so
             # the board can finish on its own if the host never asks, and
@@ -295,12 +324,7 @@ def main(out):
             rp2.PIO(PIO_NUM).remove_program(sampler)
         except Exception:
             pass
-        for dma in (dma_a, dma_b):
-            if dma is not None:
-                dma.active(0)
-        for dma in (dma_a, dma_b):
-            if dma is not None:
-                dma.close()
+        stop_dma((dma_a, dma_b))  # see the prelude: EN off, then abort
         # Unconditional: with a cooperative stop there is no such thing as a
         # half-written chunk to desync the stream, so the host always gets
         # its overruns/rxstall summary -- which is the only place those
