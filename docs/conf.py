@@ -72,8 +72,9 @@ include_patterns = [page + ".md" for page in PAGES]
 # GitHub-style ids for headings, so `file.md#some-heading` links resolve.
 myst_heading_anchors = 6
 # As on GitHub: a standalone <img> tag is an image (copied into the site),
-# and a bare http(s):// or www. URL is a link. Not fuzzy: boards.py and
-# README.md are not web sites (.py and .md are country domains).
+# and a bare http(s):// URL is a link. Not fuzzy: boards.py and README.md
+# are not web sites (.py and .md are country domains). Unlike GitHub, a
+# bare www. address is not linked either; write the https:// form.
 myst_enable_extensions = ["html_image", "linkify"]
 myst_linkify_fuzzy_links = False
 
