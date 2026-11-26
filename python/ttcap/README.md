@@ -72,7 +72,7 @@ sample.
 ## Running on a Raspberry Pi
 
 The board tools (`ttcap`) need only [pyserial](https://github.com/pyserial/pyserial) and [websockets](https://github.com/python-websockets/websockets). On a Pi, keep
-the dev group (pytest, numpy, Pillow) out of the environment; otherwise
+the [dev group](../../pyproject.toml) out of the environment; otherwise
 [`uv`](https://docs.astral.sh/uv/) will try to build numpy and Pillow from source, which can hang a Pi 3:
 
 ```sh
@@ -101,8 +101,8 @@ One capture feeds every output, through a `tee`:
 
 | output | default | flag | encoder | fallback encoder | muxer | sink |
 |---|---|---|---|---|---|---|
-| `out/frame-%04d.png` | on | `--no-png` | `pngenc` | -- | -- | `multifilesink` |
-| `out/capture.mkv` | on | `--no-video` | `x264enc` | `vp8enc` | `matroskamux` | `filesink` |
+| `OUTDIR/frame-%04d.png` | on | `--no-png` | `pngenc` | -- | -- | `multifilesink` |
+| `OUTDIR/capture.mkv` | on | `--no-video` | `x264enc` | `vp8enc` | `matroskamux` | `filesink` |
 | window | off | `--window` | -- | -- | -- | `autovideosink` |
 | `http://localhost:PORT/` | off | `--serve PORT` | `jpegenc` | -- | `multipartmux` | `fdsink` |
 
@@ -173,7 +173,7 @@ never left holding a shared bench board.
 
 ## Reaching a Welland board (bench access needed)
 
-The Welland boards are a shared bench of Tiny Tapeout demo boards,
+The Welland bench is a shared set of Tiny Tapeout demo boards,
 listed on [tinytapeout.fpgas.online](https://tinytapeout.fpgas.online). Each board is attached to its own
 Raspberry Pi, which runs the fpgas.online bridge (`fpgas-tt`).
 
