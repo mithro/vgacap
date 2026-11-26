@@ -206,10 +206,12 @@ fpgas.online bridge (`fpgas-tt`) can also enable a design
 (`/designs/<name>/enable`), and holds the port until stopped
 (`sudo systemctl stop fpgas-tt`, after checking it has no clients).
 
-1. With the stock firmware, enable the design to capture with
-   `ttcap capture`'s `--design`, and take a reference capture the usual
-   way if wanted.
-2. Stop anything else that owns the port.
+1. With the stock firmware, enable the design to capture: with
+   `ttcap capture`'s `--design` on a board of your own, or on the bench
+   through the bridge's `/designs/<name>/enable`.
+2. Stop anything else that owns the port (on the bench, the bridge, once
+   it shows no clients). Then take a reference capture on `serial:<dev>`
+   the usual way if wanted.
 3. Into the bootloader:
    `uv run --no-sync ttcap reboot serial:<dev> --to bootsel`. The board
    reappears as a USB drive labeled `RP2350`.
