@@ -51,6 +51,11 @@ class BoardProfile:
         """
         return self.sample_bits * self.samples_per_word
 
+    @property
+    def chip(self) -> str:
+        """"rp2040" or "rp2350": the first part of `name`."""
+        return self.name.split("-")[0]
+
 
 RP2040_TT06 = BoardProfile(
     "rp2040-tt06map",
@@ -124,6 +129,26 @@ def rx_dreq(pio: int, sm: int) -> int:
 def fdebug_addr(pio: int) -> int:
     """Address of PIO `pio`'s FDEBUG register (RXSTALL in bits 0..3)."""
     return pio_base(pio) + PIO_FDEBUG_OFFSET
+
+
+#: PWM block base (pico-sdk `addressmap.h` PWM_BASE). Each slice's
+#: registers are 0x14 apart: CSR +0x00, DIV +0x04, CTR +0x08, CC +0x0c,
+#: TOP +0x10 -- the same on both chips (`hardware/regs/pwm.h`).
+PWM_BASE = {"rp2040": 0x40050000, "rp2350": 0x400A8000}
+PWM_SLICE_STRIDE = 0x14
+
+
+def pwm_slice_addr(profile: BoardProfile, gpio: int) -> int:
+    """Address of the CSR of the PWM slice that drives `gpio`.
+
+    pico-sdk `PWM_GPIO_SLICE_NUM`: GPIO 0..31 use slice (gpio >> 1) & 7;
+    the RP2350's GPIO 32..47 use slices 8..11, (gpio >> 1) & 3 + 8.
+    """
+    if gpio < 32:
+        slice_num = (gpio >> 1) & 7
+    else:
+        slice_num = 8 + ((gpio >> 1) & 3)
+    return PWM_BASE[profile.chip] + PWM_SLICE_STRIDE * slice_num
 
 
 def profile_from_gpio_map(m: dict[str, int]) -> BoardProfile:

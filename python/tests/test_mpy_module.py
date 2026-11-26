@@ -279,6 +279,31 @@ def test_request_stop_from_another_thread(board):
     assert session.stats().clean
 
 
+def test_a_stream_whose_first_buffer_never_fills_leaves_the_board_at_a_prompt(board):
+    req = request(clock_hz=100_000, buf_words=512, stop=lambda: False)
+    select_project(board, req)
+    board.exec("import vgacap\nvgacap.sim_clock(0)")  # the design never clocks
+    session = ModuleSession(board, req, chunk_timeout=1.0)
+    with pytest.raises(CaptureError, match="board went quiet before the first chunk"):
+        next(session.chunks())
+    assert board.exec("print(1 + 1)")[0].strip() == "2"
+
+
+def test_an_interrupt_waiting_for_the_first_chunk_leaves_the_board_at_a_prompt(board, monkeypatch):
+    req = request(clock_hz=100_000, buf_words=512, stop=lambda: False)
+    select_project(board, req)
+    board.exec("import vgacap\nvgacap.sim_clock(0)")
+
+    def interrupted(n, timeout):  # the operator's Ctrl-C, once the call is running
+        monkeypatch.undo()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(board, "read_exact", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        next(ModuleSession(board, req).chunks())
+    assert board.exec("print(1 + 1)")[0].strip() == "2"
+
+
 def test_consumer_closing_early_leaves_the_board_at_a_prompt(board):
     req = request(clock_hz=100_000, buf_words=512, stop=lambda: False)
     select_project(board, req)
@@ -448,3 +473,11 @@ def test_keys_cannot_carry_protocol_text(board):
         "import vgacap\nvgacap.stream(**{'buf_words': 64, 'max_bytes': 0, 'edge': 'falling', "
         "'pio=1 sm': 0})")
     assert stderr.strip().splitlines()[-1] == "ValueError: 'pio=1 sm' is not a key"
+
+
+def test_the_module_refuses_rle_rather_than_streaming():
+    # capture_args() is shared with the firmware, so an rle request is
+    # refused here too instead of quietly becoming a plain stream.
+    req = request(clock_hz=25_000_000, max_bytes=4096, script="rle_rp2.py")
+    with pytest.raises(CaptureError, match="no rle mode"):
+        capture_code(req)
