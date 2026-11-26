@@ -32,7 +32,7 @@ board can settle and writes a dated Markdown report. The checks are:
 
 The example runs against `fpga-1`, a demo board with an FPGA breakout on
 the shared Welland bench, and needs bench access (see
-[python/ttcap/README.md](../python/ttcap/how-to-capture-welland-bridge.md)).
+[How to capture from a Welland board through the bridge](../python/ttcap/how-to-capture-welland-bridge.md)).
 It needs the calibration bitstream uploaded first, with
 tt-vga-testpatterns'
 [`tools/upload.py`](https://github.com/mithro/tt-vga-testpatterns/blob/main/tools/upload.py):

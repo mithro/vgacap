@@ -19,38 +19,48 @@ The fpgas.online bridge (`fpgas-tt`) holds the board's serial port, `/dev/ttboar
 
 ## Steps
 
-1. In a browser, open `https://tinytapeout.fpgas.online/board/fpga-4/status.json`, and go on only if it shows `"clients": 0` and the `usb_serial` you expect.
-2. On the Pi, run `sudo systemctl stop fpgas-tt`, which stops the bridge and frees `/dev/ttboard`.
-3. In the checkout on the Pi, capture from the serial port, which runs with no bridge in between:
+1. In a browser, open `https://tinytapeout.fpgas.online/board/fpga-4/status.json`, and go on only if it shows `"clients": 0` and `"reachable": true`.
+2. In the same `status.json`, check that `usb_serial` is the board you expect, since boards move between Pis.
+3. In a terminal, log in to the board's Pi through the bench gateway, which gives you a shell on `pi-sw2-p35`:
+
+   ```sh
+   ssh -J tweed.welland.mithis.com pi@10.21.2.35
+   ```
+
+4. On the Pi, run `sudo systemctl stop fpgas-tt`, which stops the bridge and frees `/dev/ttboard`.
+5. In the checkout on the Pi, capture from the serial port, which runs with no bridge in between:
 
    ```sh
    uv run --no-sync ttcap capture serial:/dev/ttboard --clock-hz 750000 --seconds 4 --out bench.vgacap
    ```
 
-4. In the checkout on the Pi, restart the stock firmware's SDK, whether or not step 3 succeeded, which leaves no design of yours enabled:
+6. In the checkout on the Pi, restart the stock firmware's SDK, whether or not step 5 succeeded, which leaves no design of yours enabled:
 
    ```sh
    uv run --no-sync python tools/board_restart.py serial:/dev/ttboard
    ```
 
-5. On the Pi, run `sudo systemctl start fpgas-tt`, whether or not steps 3 and 4 succeeded, which starts the bridge again.
-6. In the browser, reload `status.json` until it shows `"reachable": true` and `idle_display` shows `"state": "loaded"`.
+7. On the Pi, run `sudo systemctl start fpgas-tt`, whether or not steps 5 and 6 succeeded, which starts the bridge again.
+8. In the browser, reload `status.json` until it shows `"reachable": true` and `idle_display` shows `"state": "loaded"`.
 
-Step 4 comes before step 5 because the bridge checks the board's state when it starts. On an ASIC board, starting the bridge with the capture's project still enabled left it reporting `left:` and that project ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). `ttcap demo --board fpga-4` run on this Pi picks `serial:/dev/ttboard` itself, and says to stop the bridge first.
+Step 6 comes before step 7 because the bridge checks the board's state when it starts. On an ASIC board, starting the bridge with the capture's project still enabled left its safe-start check reporting `left:` and that project ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). `ttcap demo --board fpga-4` run on this Pi picks `serial:/dev/ttboard` itself, and says to stop the bridge first.
 
 ## Check
 
-Step 3 ends with `wrote bench.vgacap` and a stats line. On fpga-4 at 750 kHz it was `samples=2834432 ... overruns=0 dropped=0 rxstall=0` ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). After step 5, `systemctl is-active fpgas-tt` prints `active`, and `sudo fuser /dev/ttboard` shows the bridge's process again.
+Step 5 ends with `wrote bench.vgacap` and a stats line. On fpga-4 at 750 kHz it was `samples=2834432 ... overruns=0 dropped=0 rxstall=0` ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). After step 7, `systemctl is-active fpgas-tt` prints `active`, and `sudo fuser /dev/ttboard` shows the bridge's process again.
 
 ## If it fails
 
 | Step | What you see | Likely cause | Fix |
 |---|---|---|---|
 | 1 | `"clients"` above 0 | someone else is using the board | stop here: do not stop the bridge |
-| 3 | `capture failed: TimeoutError:` | the bridge still holds the port | check step 2, then run step 3 again |
-| 3 | any other failure | see [ttcap exit codes and messages](reference-exit-codes.md) | do steps 4 and 5 before anything else |
-| 5 | `systemctl is-active fpgas-tt` prints `failed` | the bridge did not start | run step 5 again and read `journalctl -u fpgas-tt` |
-| 6 | `idle_display` stays `left:` and a design name | the SDK restart came after the bridge started | stop the bridge and repeat steps 4 and 5 |
+| 1 | `"reachable": false` | the board's Pi is down or the board is not connected | use another board |
+| 2 | a different `usb_serial` | the board has moved to another Pi | find the board by its serial on the site |
+| 3 | `Permission denied (publickey)` | your key is not on the gateway or the Pi | ask for bench access |
+| 5 | `capture failed: TimeoutError:` | the bridge still holds the port | check step 4, then run step 5 again |
+| 5 | any other failure | see [ttcap exit codes and messages](reference-exit-codes.md) | do steps 6 and 7 before anything else |
+| 7 | `systemctl is-active fpgas-tt` prints `failed` | the bridge did not start | run step 7 again and read `journalctl -u fpgas-tt` |
+| 8 | `idle_display` `state` stays other than `loaded` | the SDK restart came after the bridge started | stop the bridge and repeat steps 6 and 7 |
 
 ## Next
 

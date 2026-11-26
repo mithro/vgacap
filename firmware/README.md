@@ -16,7 +16,7 @@ or `ttcap reboot` brings the board's stock firmware back.
 The [hardware notes](#hardware-notes-and-assumptions) name the boards they
 were measured on: `fpga-4` is a demo board with an FPGA breakout on the
 Welland bench (see
-[python/ttcap/README.md](../python/ttcap/how-to-capture-welland-bridge.md)),
+[How to capture from a Welland board through the bridge](../python/ttcap/how-to-capture-welland-bridge.md)),
 and `tt09` is a demo board with an ASIC breakout (a TT09 chip) on the Welland bench.
 
 ## Layout
