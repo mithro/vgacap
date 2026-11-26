@@ -479,10 +479,38 @@ TEST(fastpath_equivalent_no_table_mode_forced_800x600_56) {
 
 // ---- vgaframe_reset, as vgacap-frames and vgadecode call it at an overrun --
 
-// Both sides reset. The fast path's own state has to come out of it as a
-// fresh vgaframe_init leaves it: raw all zero with an empty dirty box,
+// Both sides reset. The library side must then equal a freshly
+// vgaframe_init'd object (same_as_fresh). The fast path's own state has to
+// come out of it as a fresh vgaframe_init leaves it: raw all zero with an empty dirty box,
 // last_report 0, and have_prev 0 so the next push takes the slow path. The
 // pixel table depends on the config alone and stays.
+// The library side after vgaframe_reset against a vgaframe_init'd object with
+// the same config: every field but the buffer pointers. The learner and
+// out_timing are compared byte for byte, since both are memset by reset and
+// by init. fram_anchor_level is the one field reset leaves alone: it is
+// written before it is read (at a window's first sample), so it is excluded.
+static uint8_t fresh_raw[BUF_W * BUF_H], fresh_rgb[BUF_W * BUF_H * 3], fresh_cover[BUF_H];
+static int same_as_fresh(void) {
+    static vgaframe_t fresh;
+    if (vgaframe_init(&fresh, &lib.f.cfg, fresh_raw, fresh_rgb, fresh_cover)) return mismatch("fresh init failed");
+    const vgaframe_t *a = &lib.f, *b = &fresh;
+    SAME(cfg.max_clocks_per_line); SAME(cfg.max_lines); SAME(cfg.force_mode); SAME(cfg.on_frame); SAME(cfg.user);
+    if (memcmp(a->cfg.signal_map, b->cfg.signal_map, sizeof a->cfg.signal_map)) return mismatch("cfg.signal_map vs fresh");
+    if (memcmp(&a->learner, &b->learner, sizeof a->learner)) return mismatch("learner vs fresh");
+    if (memcmp(&a->out_timing, &b->out_timing, sizeof a->out_timing)) return mismatch("out_timing vs fresh");
+    SAME(x); SAME(y); SAME(in_frame); SAME(frames_seen); SAME(last_report);
+    SAME(fram_active); SAME(fram_pending); SAME(fram_counter); SAME(fram_first_line);
+    SAME(fram_line_count); SAME(fram_cpl); SAME(fram_remaining); SAME(fram_max_line);
+    SAME(fram_anchor); SAME(fram_h_high); SAME(fram_v_high); SAME(fram_clocks);
+    SAME(pixel_table_ok);
+    if (memcmp(a->pixel_table, b->pixel_table, sizeof a->pixel_table)) return mismatch("pixel_table vs fresh");
+    SAME(dirty_x_end); SAME(dirty_y_end);
+    size_t raw_n = vgaframe_raw_size(&a->cfg);
+    if (memcmp(a->raw, b->raw, raw_n)) return mismatch("raw vs fresh");
+    if (memcmp(a->cover, b->cover, a->cfg.max_lines)) return mismatch("cover vs fresh");
+    return 1;
+}
+
 static int reset_both(void) {
     uint8_t table[256], table_ok = lib.f.pixel_table_ok;
     memcpy(table, lib.f.pixel_table, sizeof table);
@@ -494,7 +522,7 @@ static int reset_both(void) {
         return mismatch("pixel table changed by reset");
     for (size_t i = 0; i < sizeof lib.raw; i++)
         if (lib.raw[i]) return mismatch("raw not zero after reset");
-    return same_state() && same_buffers();
+    return same_as_fresh() && same_state() && same_buffers();
 }
 
 // The random stream with a reset mid-line inside a frame, at a line's first
