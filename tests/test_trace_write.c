@@ -498,6 +498,7 @@ struct diff {
     uint64_t n;      // samples pushed (the next sample's number)
     uint64_t last;   // the last sample's value, clock bit included
     int bad;         // a call's results differed
+    char err[256];   // a's finish error, after diff_finish
 };
 
 static uint64_t rng_state = 0x9e3779b97f4a7c15ull;
@@ -582,6 +583,7 @@ static int diff_finish(struct diff *d, int want_rc) {
     }
     if (ra != want_rc) { fprintf(stderr, "  finish returned %d (%s), want %d\n", ra, ea, want_rc); ok = 0; }
     if (!files_equal(d->pa, d->pb)) ok = 0;
+    snprintf(d->err, sizeof d->err, "%s", ea);
     return ok ? 0 : -1;
 }
 
@@ -731,6 +733,21 @@ TEST(test_repeat2_after_failure) {
     diff_rm(&d);
 }
 
+// A push that fails at sample 0, then repeat2: repeat2 returns -1 and
+// finish reports the push's error, not repeat2's sample-0 refusal.
+TEST(test_repeat2_after_failure_at_sample_0) {
+    struct diff d;
+    ASSERT_TRUE(diff_open(&d, "repeat2_failed_0", 3) == 0);
+    ASSERT_EQ_U((unsigned)(d_push(&d, BASE43 | CLK42) + 1), 0);   // clock bit 1 at sample 0
+    ASSERT_EQ_U((unsigned)(d_repeat2(&d) + 1), 0);
+    ASSERT_EQ_U((unsigned)(d_repeat2(&d) + 1), 0);
+    ASSERT_TRUE(diff_finish(&d, -1) == 0);
+    const char *want = "sample 0: clock bit is 1, expected 0";
+    if (strcmp(d.err, want) != 0) fprintf(stderr, "  err: %s\n", d.err);
+    ASSERT_TRUE(strcmp(d.err, want) == 0);
+    diff_rm(&d);
+}
+
 // More than 2^32 samples of one value, all but the first pair by repeat2:
 // 129 blocks, one pair each.
 TEST(test_repeat2_long_run) {
@@ -820,6 +837,38 @@ TEST(test_push2_first_and_failure) {
     diff_rm(&d);
 }
 
+// push2's first sample checked on its own: a wrong clock bit at v0 fails
+// the writer (v1 is the right sample for n + 1 given v0's value), and a
+// v0 that changes the value, in low or high bits, with v1 back at the old
+// run's value, is two runs.
+TEST(test_push2_first_sample) {
+    struct diff d;
+    ASSERT_TRUE(diff_open(&d, "push2_v0_clock", 3) == 0);
+    ASSERT_EQ_U(d_push2(&d, BASE43, BASE43 | CLK42), 0);
+    ASSERT_EQ_U((unsigned)(d_push2(&d, BASE43 | CLK42, BASE43 | CLK42) + 1), 0);   // v0's clock bit is 1
+    ASSERT_EQ_U((unsigned)(d_push2(&d, BASE43, BASE43 | CLK42) + 1), 0);
+    ASSERT_TRUE(diff_finish(&d, -1) == 0);
+    const char *want = "sample 2: clock bit is 1, expected 0";
+    if (strcmp(d.err, want) != 0) fprintf(stderr, "  err: %s\n", d.err);
+    ASSERT_TRUE(strcmp(d.err, want) == 0);
+    diff_rm(&d);
+
+    ASSERT_TRUE(diff_open(&d, "push2_v0_change", 3) == 0);
+    ASSERT_EQ_U(d_push2(&d, BASE43, BASE43 | CLK42), 0);
+    ASSERT_EQ_U(d_push2(&d, BASE43 | 5, BASE43 | CLK42), 0);                  // low bits
+    ASSERT_EQ_U(d_push2(&d, BASE43, BASE43 | CLK42), 0);
+    ASSERT_EQ_U(d_push2(&d, BASE43 ^ ((uint64_t)1 << 40), BASE43 | CLK42), 0);   // a bit above 31
+    ASSERT_EQ_U(d_push2(&d, BASE43, BASE43 | CLK42), 0);
+    ASSERT_TRUE(diff_finish(&d, 0) == 0);
+    struct readback *rb = calloc(1, sizeof *rb);
+    ASSERT_TRUE(read_back(d.pa, rb) == 0);
+    ASSERT_EQ_U(rb->resyncs + rb->errors, 0);
+    ASSERT_EQ_U(rb->samples, 10);
+    ASSERT_EQ_U(rb->nruns, 5);   // BASE 2, x 1, BASE 3, y 1, BASE 3
+    free(rb);
+    diff_rm(&d);
+}
+
 // ---- speed (perf label; run by hand, not in CI) -----------------------------
 
 static double clock_s(clockid_t id) {
@@ -886,9 +935,11 @@ int main(int argc, char **argv) {
     RUN(test_repeat2_block_end_by_size);
     RUN(test_repeat2_at_sample_0);
     RUN(test_repeat2_after_failure);
+    RUN(test_repeat2_after_failure_at_sample_0);
     RUN(test_repeat2_long_run);
     RUN(test_push2_random_mix);
     RUN(test_push2_block_end_by_clock);
     RUN(test_push2_first_and_failure);
+    RUN(test_push2_first_sample);
     RUN_TESTS_END();
 }
