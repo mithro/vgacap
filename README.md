@@ -89,7 +89,7 @@ in one-shot bursts (`--rle-oneshot`) with an FPGA breakout and
   [`gst/`](gst/README.md): `vgadecode`, `vgacapttsrc`, `vgacapbin`;
 - [`ttcap.emu`](python/ttcap/emu/), a cycle-level RP2040/RP2350 emulator
   that runs the exact board programs for the tests;
-- [`tools/hil.py`](tools/README.md#hardware-in-the-loop-check), the
+- [`tools/hil.py`](tools/reference-hil-checks.md), the
   hardware-in-the-loop check.
 
 ## Building and testing
