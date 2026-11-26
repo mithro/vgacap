@@ -135,13 +135,34 @@ def test_a_tuple_metavar_names_each_value():
 def test_each_choice_is_a_row():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=("a", "b"), default="a", help="mode")
-    assert text_rows(ap) == [["--mode", "MODE", "'a'", "a", "mode"], ["", "", "", "b", ""]]
+    assert text_rows(ap) == [["--mode", "MODE", "'a'", "", "mode"], ["", "", "", "a", ""], ["", "", "", "b", ""]]
 
 
 def test_subcommands_follow_with_their_names():
     ap = argparse.ArgumentParser()
     ap.add_argument("--v", action="store_true", help="v")
     sub = ap.add_subparsers(dest="cmd")
-    go = sub.add_parser("go")
+    go = sub.add_parser("go", help="go somewhere")
     go.add_argument("--fast", action="store_true", help="fast")
-    assert [r[0] for r in text_rows(ap)] == ["--v", "go --fast"]
+    rows = text_rows(ap)
+    assert [r[0] for r in rows] == ["--v", "go", "go --fast"]
+    assert rows[1][4] == "go somewhere"
+
+
+def test_a_suppress_equal_to_but_not_the_constant_is_left_out():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--hidden", help="".join(["==", "SUPPRESS=="]))
+    assert text_rows(ap) == []
+
+
+def test_a_long_range_of_choices_is_one_row():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--level", type=int, choices=range(1, 23), help="level")
+    assert text_rows(ap)[1][3] == "1 to 22"
+    assert len(text_rows(ap)) == 2
+
+
+def test_a_stray_percent_in_help_is_shown_as_written():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--duty", help="duty cycle in % of a line")
+    assert text_rows(ap)[0][4] == "duty cycle in % of a line"
