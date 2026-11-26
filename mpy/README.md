@@ -13,7 +13,7 @@ and [`firmware/pico/hal_rp2.c`](../firmware/pico/hal_rp2.c), not a reimplementat
 The module is built into the demo board's MicroPython firmware (the
 [`vgacap-module` branch of mithro/tt-micropython-firmware](https://github.com/mithro/tt-micropython-firmware/tree/vgacap-module), which pins this
 repository as a submodule). The board otherwise stays exactly as it was
-(the [ttboard SDK](https://github.com/TinyTapeout/tt-micropython-firmware), `tt.shuttle`, the FPGA loader, the REPL), and a capture
+(the [stock firmware](https://github.com/TinyTapeout/tt-micropython-firmware)'s `tt.shuttle`, FPGA loader and REPL), and a capture
 becomes one call instead of a script shipped over the REPL. The host side
 is `ttcap capture --firmware mpy-module`.
 
@@ -44,10 +44,11 @@ the text of the vgacap firmware's `err` reply (`unknown key 'bogus'`, `pio must 
 an integer 0..2, got '3'`, `sysclk 133000000 is not 2..32 whole project
 clocks of 100000`, ...), before anything is written.
 
-`frame()` also takes **`clock_hz`**, the project clock: on the module's MicroPython firmware the
-ttboard SDK runs the clock (`tt.clock_project_PWM(hz)`), so the module is
-told it, and refuses a capture whose system clock is not a whole 2..32
-multiple of it, as the vgacap firmware does.
+`frame()` also takes **`clock_hz`**, the project clock: on the module's
+MicroPython firmware, as on the stock firmware, `tt.clock_project_PWM(hz)`
+runs the clock, so the module is told it, and refuses a capture whose
+system clock is not a whole 2..32 multiple of it, as the vgacap firmware
+does.
 
 **Environment arguments:**
 
@@ -105,11 +106,11 @@ outside MicroPython); two DMA channels (`dma_claim_unused_channel`, shared
 with `rp2.DMA`); and a shared handler on `DMA_IRQ_1` (`rp2.DMA` owns
 `DMA_IRQ_0`) that acknowledges only those two channels. Block 0 holds the
 stock firmware's FPGA loader: its window cannot move to GPIO 16 while that
-is loaded, so `pio=0` is refused, as on the other paths. One capture at a
+is loaded, so `pio=0` is refused. One capture at a
 time (`RuntimeError` otherwise).
 
 Not in the module: the project clock, reset, `ui_in` and selecting a
-design. Those are the SDK's (`tt.clock_project_PWM`, `tt.reset_project`,
+design. Those are the stock firmware's (`tt.clock_project_PWM`, `tt.reset_project`,
 `tt.shuttle[...].enable()`), and ttcap drives them as on the script path.
 The vgacap firmware's `asic_select` command and the `hal_asic_ctrl()` HAL hook
 behind it are firmware-only: the module does not link the vgacap firmware's
