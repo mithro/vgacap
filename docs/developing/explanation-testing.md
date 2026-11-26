@@ -7,16 +7,16 @@ review: 2027-05-27
 
 # The test layers of vgacap
 
-This page explains how vgacap is tested: which part of the capture path each kind of test runs as shipped code, and which part it replaces. It is for someone about to change vgacap who wants to know where a change is checked. The commands are on [How to build vgacap and run its tests](../development.md).
+This page explains how vgacap is tested. For each kind of test, it says which parts of the capture path run as shipped and which are stand-ins. It is for someone about to change vgacap who wants to know where a change is checked. The commands are on [How to build vgacap and run its tests](../development.md).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="test-layers-dark.svg">
-  <img src="test-layers.svg" alt="The capture path from design uo_out down to frames, against four kinds of test: C tests, emulated RP2, simulated board and the HIL check." width="100%">
+  <img src="test-layers.svg" alt="For C tests, the emulated RP2, the simulated board and the HIL check: what each puts at the design, PIO and DMA, board code and link." width="100%">
 </picture>
 
 ## The capture path
 
-A capture moves through six parts, in the order of the figure's rows. A design drives `uo_out`, the RP2's PIO and DMA sample it, and code on the board frames the samples into a stream. The stream crosses a link to the host, where `ttcap` writes it, and `vgacap-frames` rebuilds pictures from it. A test is worth what it runs as shipped code, so each kind of test below is described by the parts it runs and the parts it stands in for.
+A capture moves through six parts. A design drives `uo_out`, the RP2's PIO and DMA sample it, and code on the board frames the samples into a stream. The stream crosses a link to the host, where `ttcap` writes it, and `vgacap-frames` rebuilds pictures from it. The figure shows the four board-side parts, as its rows. On the host side, `vgacap-frames` runs as shipped in every kind of test, and `ttcap` in every kind but the C tests.
 
 ## C tests
 
@@ -36,4 +36,6 @@ CI runs the three layers above on every push and pull request, in a configuratio
 
 ## The hardware-in-the-loop check
 
-Some questions only a board can settle: whether the profile detection reads a real `GPIOMap`, whether a real sampler overruns, and whether the picture is the one the design draws. [`tools/hil.py`](../../tools/hil.py) runs the whole path on a demo board, compares the pictures with a calibration design's reference render, and writes a dated report. It runs by hand on a bench board, never in CI. The first full pass is [the 2026-11-23 run on fpga-4](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-23-hil-fpga4), and the checks are listed on [Hardware-in-the-loop checks](../../tools/reference-hil-checks.md).
+Some questions only a board can settle. Does the profile detection read a real `GPIOMap`? Does a real sampler overrun, and is the picture the one the design draws?
+
+[`tools/hil.py`](../../tools/hil.py) runs the whole path on a demo board, compares the pictures with a calibration design's reference render, and writes a dated report. It runs by hand on a bench board, never in CI. The first full pass is [the 2026-11-23 run on fpga-4](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-23-hil-fpga4), and the checks are listed on [Hardware-in-the-loop checks](../../tools/reference-hil-checks.md).
