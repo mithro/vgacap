@@ -60,7 +60,7 @@ COL_W, COL_GAP = 148, 10
 CELL_H, ROW_GAP = 34, 8
 GROUP_H = 26
 HEAD_H = 46
-LEGEND_H = 40
+LEGEND_H = 32
 FONT = "font-family=\"Inter, 'Segoe UI', Helvetica, Arial, sans-serif\""
 
 

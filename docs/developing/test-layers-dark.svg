@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="758" height="374" viewBox="0 0 758 374" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif">
-<rect x="0" y="0" width="758" height="374" fill="#131416"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="758" height="366" viewBox="0 0 758 366" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="758" height="366" fill="#131416"/>
 <path d="M138 27 V22 H594 V27" fill="none" stroke="#a0a8b8" stroke-width="1.5"/>
 <text x="366.0" y="16" font-size="12.5" fill="#a0a8b8" text-anchor="middle" font-weight="normal">CI, every push</text>
 <path d="M612 27 V22 H752 V27" fill="none" stroke="#a0a8b8" stroke-width="1.5"/>
