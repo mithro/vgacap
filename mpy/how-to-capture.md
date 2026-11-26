@@ -10,14 +10,14 @@ review: 2027-05-27
 **You want a `.vgacap` capture of a design's VGA output, taken through the vgacap module with
 `ttcap capture --firmware mpy-module`.**
 
-The board keeps the stock firmware's SDK, so ttcap enables the design and runs its clock as it does with the
-stock firmware, and only the capture itself is the module's. Putting the module on a board is on
+The module firmware keeps the stock firmware's SDK. So ttcap enables the design and runs its clock as it does
+with the stock firmware, and only the capture itself is the module's. Putting the module on a board is on
 [How to flash the module firmware and restore the board's own](how-to-flash.md). Every other `ttcap capture`
 option is on [ttcap](../python/ttcap/README.md).
 
 ## What you need
 
-- A demo board running a firmware with the module and the SDK, flashed as on
+- A demo board running the module firmware, flashed as on
   [How to flash the module firmware and restore the board's own](how-to-flash.md).
 - `DEV`, its serial port, or the board's bridge address on the Welland bench, and a vgacap checkout set up to run
   `ttcap`, with `build/vgacap-frames` built for step 4.
@@ -72,7 +72,7 @@ A good capture reports `overruns=0` and `rxstall=0`, and its PNG shows the desig
 | What you see | Likely cause | Fix |
 |---|---|---|
 | `this board's firmware has no vgacap module` | the board runs the stock firmware | Flash the module firmware, or capture with `--firmware micropython` |
-| `the board's vgacap module speaks API ...` | the module and ttcap are from different versions | Flash a module firmware built from your checkout |
+| `the board's vgacap module speaks API ...` | the module and ttcap are from different versions | Flash the module firmware built from your checkout |
 | `the capture firmware has no rle mode; use --firmware micropython` | `--mode rle` was given | Use `stream`, `frame` or `window` |
 | `pio 0 would have to move its pin window to GPIO 16 ...` | `--pio 0` was given | Use `--pio 1` or `--pio 2` |
 | `board has only N bytes of free heap ...` | the heap is too full for the buffers | Reset the board and try again, or lower `--buf-words` for a stream |

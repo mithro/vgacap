@@ -12,7 +12,7 @@ review: 2027-05-27
 [`mpy/build-unix.sh`](build-unix.sh) builds MicroPython's unix port with the module on the simulated board, at the
 MicroPython commit the demo boards run. [`python/tests/test_mpy_module.py`](../python/tests/test_mpy_module.py)
 then drives it through ttcap, behind a raw REPL. The board build is on
-[How to build a demo-board firmware with the module and the SDK](how-to-build-release.md).
+[How to build the module firmware](how-to-build-release.md).
 
 ## What you need
 

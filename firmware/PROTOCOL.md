@@ -208,7 +208,7 @@ Command names the command, and Effect what it changes on the board.
 
 GPIO 14 is left alone until the first `reset`, and GPIO 17 to 24 until the first `ui_in`. Step is a step of
 `asic_select`, and Pins what it does. The reply comes after the last step, about 20 ms plus 2 ms for each index.
-GPIO 1 erases an FPGA breakout's configuration when low, as [the GPIO table](reference-board.md#gpios) says, so
+GPIO 1 erases an FPGA breakout's configuration when low, as [the GPIO table](reference-board.md#gpios) says.
 [How to select an ASIC project with the vgacap firmware](how-to-select-asic-project.md) says when to send it.
 
 | Step | Pins |

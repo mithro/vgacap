@@ -13,7 +13,7 @@ checks.**
 This is the `mpy-module` job's rp2 step in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml): MicroPython's
 rp2 port with the module, for the board definition the demo boards use. The result has no Tiny Tapeout SDK in it,
 so it is a compile check, not a firmware for a board. That one is on
-[How to build a demo-board firmware with the module and the SDK](how-to-build-release.md).
+[How to build the module firmware](how-to-build-release.md).
 
 ## What you need
 
@@ -59,5 +59,5 @@ Step 3 ends without an error, and `build/micropython/ports/rp2/build-tt_rp2350_b
 
 ## Next
 
-- [How to build a demo-board firmware with the module and the SDK](how-to-build-release.md)
+- [How to build the module firmware](how-to-build-release.md)
 - [The vgacap module's source files](reference-files.md)

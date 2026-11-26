@@ -10,8 +10,8 @@ review: 2027-05-27
 **You want a demo board running the module firmware for a while, and afterwards its own firmware back, byte for
 byte.**
 
-The module firmware is a demo-board MicroPython firmware with the vgacap module and the Tiny Tapeout SDK built in.
-It lives in the board's flash, so this page backs up the board's firmware region and every file first. It writes
+[The module firmware](explanation-borrowing.md#the-module-firmware) lives in the board's
+flash, so this page backs up the board's firmware region and every file first. It writes
 only the firmware region, then restores the backup. It follows the
 [fpga-1 run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-mpy-module-fpga1), which
 needed no power cycle.
@@ -26,7 +26,7 @@ needed no power cycle.
 - `DEV`, the stock firmware's serial port, set in the shell. On the Welland bench it is `/dev/ttboard` on the board's own Pi.
 - `IMAGE`, the module firmware's UF2, set in the shell. It is the `tt-demo-rp2350-vgacap-module-*.uf2` asset of the
   [`dev-vgacap-module` pre-release](https://github.com/mithro/tt-micropython-firmware/releases/tag/dev-vgacap-module),
-  or the `firmware.uf2` from [How to build a demo-board firmware with the module and the SDK](how-to-build-release.md).
+  or the `firmware.uf2` from [How to build the module firmware](how-to-build-release.md).
 - An empty working directory with about 10 MB free, and `/mnt/rp2350`, made with `sudo mkdir -p /mnt/rp2350`.
 
 The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then the littlefs filesystem from
@@ -206,4 +206,4 @@ $ cd backup/fs && find . -type f | while read f; do mpremote connect $DEV fs cp 
 
 - [How to capture with the vgacap MicroPython module](how-to-capture.md)
 - [The vgacap module inside MicroPython](explanation-borrowing.md)
-- [How to build a demo-board firmware with the module and the SDK](how-to-build-release.md)
+- [How to build the module firmware](how-to-build-release.md)

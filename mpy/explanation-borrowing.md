@@ -7,16 +7,16 @@ review: 2027-05-27
 
 # The vgacap module inside MicroPython
 
-This page explains what the vgacap MicroPython module is, and how it borrows the chip's PIO, DMA and interrupts
-from MicroPython for the length of one capture and gives them back. It is for someone choosing between the
-module and the vgacap firmware, or changing the module. The calls themselves are on
+This page explains what the vgacap MicroPython module is. It also explains how a capture borrows the chip's PIO,
+DMA and interrupts from MicroPython, and gives them back. It is for someone choosing between the module and the
+vgacap firmware, or changing the module. The calls themselves are on
 [The vgacap module's Python API](reference-api.md).
 
-## The firmware's engines in the stock firmware
+## The module firmware
 
-The module is a MicroPython C module, a `USER_C_MODULE`, built into the demo board's MicroPython firmware. It
-is a thin binding over the vgacap firmware's capture engines,
-[`firmware/core/fw_capture.c`](../firmware/core/fw_capture.c), and their RP2350 half,
+The module is a MicroPython C module, a `USER_C_MODULE`. These pages call the demo board's MicroPython firmware
+built with it and with the Tiny Tapeout SDK frozen in **the module firmware**. The module is a thin binding over
+the vgacap firmware's capture engines, [`firmware/core/fw_capture.c`](../firmware/core/fw_capture.c), and their RP2350 half,
 [`firmware/pico/hal_rp2.c`](../firmware/pico/hal_rp2.c). It reimplements neither. Everything else on the board
 stays the stock firmware's: the Tiny Tapeout SDK's `tt.shuttle`, the FPGA loader and the REPL.
 
@@ -25,8 +25,9 @@ it keeps the board as it is and lets ttcap select designs and run the clock thro
 firmware, it runs the capture in C, as one call instead of a program sent over the REPL for each capture.
 
 The keyword arguments of a call are turned back into the firmware protocol's `key=value` text and parsed by the
-firmware's own tables. So the names, the ranges and every refusal message are the firmware's, raised as a
-`ValueError` before anything is written.
+firmware's own tables. So the names, the ranges and the refusal messages are the firmware's, raised as a `ValueError` before anything
+is written. The module adds two refusals of its own, for a key or a word value that is not lower-case letters and
+underscores.
 
 ## What a capture borrows
 
@@ -41,21 +42,21 @@ MicroPython owns the chip, so a capture borrows what it needs and gives all of i
   interrupt that acknowledges only its own two channels.
 - **Heap for the buffers**, unless the caller passes `buf`: freed when the call ends.
 
-Block 0 holds the stock firmware's FPGA bitstream loader, whose window cannot move while it is loaded. ttcap
-refuses `--pio 0` for that reason, and uses block 1 by default. Only one capture runs at a time; a second call
-raises `RuntimeError`.
+Block 0 holds the stock firmware's FPGA bitstream loader, and its window cannot move while that is loaded. So
+ttcap refuses `--pio 0`, and uses block 1 by default. Only one capture runs at a time; a second call raises
+`RuntimeError`.
 
 ## Frames on a fragmented heap
 
-The vgacap firmware owns a static 440 KB buffer, and the module has MicroPython's heap instead, which is rarely
-one free block. `frame()` therefore asks for the whole window in one block, and failing that for blocks of 64,
-16, 4 and 1 lines. The DMA walks the blocks in order through control blocks, as
-[`frame_rp2.py`](../python/ttcap/mp/frame_rp2.py) does, so a window is still one unbroken run of samples and one
-`FRAM` chunk.
+The vgacap firmware owns [a static buffer](../firmware/reference-board.md#memory), and the module has
+MicroPython's heap instead, which is rarely one free block. `frame()` therefore asks for the whole window in one
+block, and failing that for blocks of 64, 16, 4 and 1 lines. The DMA walks the blocks in order through control
+blocks, as [`frame_rp2.py`](../python/ttcap/mp/frame_rp2.py) does. So a window is still one unbroken run of
+samples and one `FRAM` chunk.
 
-On fpga-1, whose largest free block held 188 lines, all 481 lines of 640x480 fitted in 46 blocks. Each picture
-was one captured frame, where one block alone had needed three
-([dated result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-mpy-module-fpga1)).
+On fpga-1 the largest free block held 188 lines, and all 481 lines of 640x480 fitted in 46 blocks. Each picture
+was one captured frame, where one block alone had needed three. The run is in the
+[dated result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-mpy-module-fpga1).
 
 ## Errors while the hardware is held
 
@@ -72,7 +73,7 @@ capture between chunks rather than interrupting it. Once the closing summary is 
 
 ## What stays with the SDK
 
-The project clock, the project reset, `ui_in` and design selection stay the SDK's: `tt.clock_project_PWM`,
-`tt.reset_project` and `tt.shuttle[...].enable()`. ttcap drives them as it does on the stock firmware's path.
-The vgacap firmware's `asic_select` is not in the module, because the module does not build the firmware's
-command layer, and the SDK selects ASIC projects itself.
+The project clock, the project reset, `ui_in` and design selection stay the SDK's. Its calls for them include
+`tt.clock_project_PWM`, `tt.reset_project` and `tt.shuttle[...].enable()`. ttcap drives them as it does on the
+stock firmware's path. The vgacap firmware's `asic_select` is not in the module, which does not build the
+firmware's command layer. The SDK selects ASIC projects itself.

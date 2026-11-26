@@ -1,14 +1,14 @@
 ---
 type: how-to
 owner: vgacap maintainers
-reader: someone who wants a demo-board MicroPython firmware with the vgacap module, built from their own checkout
+reader: someone who wants the module firmware built from their own vgacap checkout
 review: 2027-05-27
 ---
 
-# How to build a demo-board firmware with the module and the SDK
+# How to build the module firmware
 
-**You want a MicroPython firmware for the Tiny Tapeout demo board v3 with the vgacap module and the Tiny Tapeout
-SDK frozen in, built from your vgacap checkout.**
+**You want [the module firmware](explanation-borrowing.md#the-module-firmware), built
+from your vgacap checkout.**
 
 `ttcap capture --firmware mpy-module` needs both the module and the SDK's `ttboard` package in the firmware.
 This page follows the release workflow of the

@@ -13,11 +13,12 @@ the board. The commands are on [The vgacap firmware protocol](PROTOCOL.md).
 
 ## A firmware in place of the stock one
 
-The stock firmware is MicroPython with the Tiny Tapeout SDK. ttcap captures through it by sending a MicroPython
-program over the raw REPL for each capture. The vgacap firmware is a C program built with
-[pico-sdk](https://github.com/raspberrypi/pico-sdk). It holds the same capture code, and answers a line protocol
-over its own USB serial port. It runs instead of the stock firmware: the bootloader loads it into SRAM, and a
-reboot brings the stock firmware back from flash, which it never writes.
+The stock firmware is MicroPython with the Tiny Tapeout SDK. Through it, ttcap sends a MicroPython program over
+the raw REPL for each capture. The vgacap firmware is a C program built with
+[pico-sdk](https://github.com/raspberrypi/pico-sdk), which holds the same capture code.
+
+It answers a line protocol over its own USB serial port. It runs instead of the stock firmware, loaded into SRAM by the bootloader. A reboot
+brings the stock firmware back from flash, which the vgacap firmware never writes.
 
 Its engines are the MicroPython capture programs in [`python/ttcap/mp/`](../python/ttcap/mp/), ported statement
 for statement where the order matters. They write the same chunks, stop at the same points and report in the
@@ -65,9 +66,11 @@ needs the system clock to be a whole multiple of the project clock, which the `c
 
 Two DMA channels carry the window. A control channel feeds the data channel one control block for each buffer.
 After them comes a stopper block, which writes the state machine's enable bit into the PIO's clear alias. The
-stopper is the only transfer that interrupts. The firmware then sends the window as one `FRAM` chunk, between
-frames, and arms the next. The control blocks let one window span several buffers, which [the module firmware](../mpy/README.md)
-uses on its fragmented heap; the vgacap firmware always passes one.
+stopper is the only transfer that interrupts.
+
+The firmware then sends the window as one `FRAM` chunk between frames, and arms the next. The control blocks let
+one window span several buffers. [The module firmware](../mpy/explanation-borrowing.md#the-module-firmware) uses
+that on its fragmented heap; the vgacap firmware always passes one.
 
 ## The PIO programs
 
@@ -85,15 +88,17 @@ with the words MicroPython's `rp2.asm_pio` assembles for `make_sampler()` and `m
 ## What the firmware assumes about the board
 
 The board is an RP2350B, with 48 GPIOs, and `uo_out` sits on GPIO 33 to 40, past GPIO 31. A PIO block reaches
-those only with its GPIO window moved to 16. pico-sdk refuses that move while the block holds another program. So
-a capture takes a block whose window it can move: block 1 by default, as on the stock firmware's path. ttcap
-refuses block 0 here too, which only the stock firmware needs ([issue #44](https://github.com/mithro/vgacap/issues/44)).
+those only with its GPIO window moved to 16. The SDK refuses that move while the block holds another program. So
+a capture takes a block whose window it can move: block 1 by default, as on the stock firmware's path. Here
+too ttcap refuses block 0, which only the stock firmware needs ([issue #44](https://github.com/mithro/vgacap/issues/44)).
 
 The firmware cannot load a bitstream or enable a design by name; the stock firmware knows the shuttle. On an FPGA
 breakout the design is enabled under the stock firmware first. The iCE40 keeps its configuration while the RP2350
 resets into its bootloader and then into this firmware. That held on fpga-4, where every capture after the switch
-was pixel-exact. On an ASIC breakout the project mux's lines float in the bootloader. On tt09 the mux came back
-with nothing selected, and the `asic_select` command replays the stock firmware's mux sequence for that.
+was pixel-exact.
+
+On an ASIC breakout the project mux's lines float in the bootloader. On tt09 the mux came back with nothing
+selected. The `asic_select` command replays the stock firmware's mux sequence to select the project again.
 
 GPIO 1 erases an FPGA breakout's configuration when it is low, as [the GPIO table](reference-board.md#gpios) says.
 The stock firmware leaves it driven high, and the firmware drives it high first thing at boot. It sets the level
@@ -102,6 +107,7 @@ before the direction, so the pin never glitches low. Only `asic_select` drives i
 
 The project clock comes from the PWM on GPIO 16. The firmware sets the system clock the stock firmware picks for
 that project clock. Its search is the stock firmware's, ported to single-precision arithmetic as MicroPython runs
-it. A design therefore runs, and is sampled, at the same ratio under either firmware. Above 66.5 MHz the system
-clock may rise to twice the project clock, and as in MicroPython nothing raises the core voltage for that. No
-capture at such a clock has run on a board ([issue #32](https://github.com/mithro/vgacap/issues/32)).
+it. A design therefore runs, and is sampled, at the same ratio under either firmware.
+
+Above 66.5 MHz the system clock may rise to twice the project clock. As in MicroPython, nothing raises the core
+voltage for that. No capture at such a clock has run on a board ([issue #32](https://github.com/mithro/vgacap/issues/32)).
