@@ -9,8 +9,11 @@ viewer's theme:
       <img src="overview.svg" alt="What the drawing shows" width="100%">
     </picture>
 
-The block has no blank line inside it, so CommonMark reads it as one HTML
-block. After MyST parses a page, this turns each such block into the pair
+CommonMark reads it as one HTML block when a blank line comes before it
+(the block cannot interrupt a paragraph), none comes inside it, and it is
+not wrapped in other HTML such as `<p align="center">`. GitHub renders the
+same block with the dark source in its dark theme.
+After MyST parses a page, this turns each such block into the pair
 the theme switches between: the `<img>` as an image with the class
 `only-light`, the dark `<source>` as one with `only-dark`. They are image
 nodes, so Sphinx copies both files and rebuilds the page when either
