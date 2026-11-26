@@ -68,16 +68,25 @@ def simulate(samples, *, chunk=16, fifo=8, ready=lambda cycle: True, gap=lambda 
     @passive  # runs as long as drive() does, then the simulation ends
     def sink():
         cycle = 0
+        held = None  # (data) of a byte offered and not taken on the last edge
         while True:
-            r = ready(cycle)
-            yield dut.out_ready.eq(int(r))
-            # A byte moves on the edge where valid and ready are both high:
-            # read them before that edge.
+            # A generator's write lands on the edge after its yield, so the
+            # DUT samples, on the coming edge, the out_ready already in place:
+            # read that back rather than trusting the value about to be set.
             valid = yield dut.out_valid
             data = yield dut.out_data
-            yield
-            if valid and r:
+            ready_now = yield dut.out_ready
+            if held is not None:
+                # valid/ready hold: an offered byte stays offered, unchanged,
+                # until it is accepted.
+                assert valid and data == held, (cycle, valid, data, held)
+            if valid and ready_now:
                 out.append(data)
+                held = None
+            else:
+                held = data if valid else None
+            yield dut.out_ready.eq(int(ready(cycle)))
+            yield
             cycle += 1
 
     run_simulation(dut, [drive(), sink()])
@@ -95,6 +104,16 @@ def test_an_always_ready_sink_gets_every_chunk_in_order():
     assert sum(raws, []) == samples
 
 
+def check_whole_chunks(samples, raws, drops, chunk=16):
+    """Every RAW chunk is a whole input chunk, in order; the last TIME chunk
+    accounts for every chunk that did not arrive."""
+    assert drops == sorted(drops) and all(d % chunk == 0 for d in drops)
+    chunks = [samples[i:i + chunk] for i in range(0, len(samples), chunk)]
+    positions = [chunks.index(r) for r in raws]
+    assert positions == sorted(positions) and len(set(positions)) == len(positions)
+    assert (drops[-1] if drops else 0) == chunk * (len(chunks) - len(raws))
+
+
 def test_a_slow_sink_drops_whole_chunks_and_says_so():
     rng = random.Random(2)
     samples = [rng.randrange(256) for _ in range(16 * 20)]
@@ -105,13 +124,39 @@ def test_a_slow_sink_drops_whole_chunks_and_says_so():
 
     assert raws, "nothing got through"
     assert drops, "chunks were lost but no TIME chunk said so"
-    assert drops == sorted(drops) and all(d % 16 == 0 for d in drops)
-    # Every chunk that arrived is a whole, in-order chunk of the input.
-    chunks = [samples[i:i + 16] for i in range(0, len(samples), 16)]
-    positions = [chunks.index(r) for r in raws]
-    assert positions == sorted(positions)
-    # The last report accounts for every chunk that did not arrive.
-    assert drops[-1] == 16 * (len(chunks) - len(raws))
+    check_whole_chunks(samples, raws, drops)
+
+
+# Ready patterns with runs of consecutive ready cycles, which a sink that
+# records a byte on the wrong edge turns into doubled bytes.
+@pytest.mark.parametrize("ready", [
+    lambda c: c % 5 in (0, 1),
+    lambda c: c % 3 != 0,
+    lambda c: c % 7 < 4,
+], ids=["2-in-5", "2-in-3", "4-in-7"])
+def test_runs_of_ready_cycles_move_each_byte_once(ready):
+    rng = random.Random(5)
+    samples = [rng.randrange(256) for _ in range(16 * 12)]
+
+    raws, drops = parse(simulate(samples, ready=ready, gap=lambda i: 3, tail=20000))
+
+    assert drops == [] and sum(raws, []) == samples
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_a_random_sink_holds_each_byte_and_loses_only_whole_chunks(seed):
+    rng = random.Random(100 + seed)
+    samples = [rng.randrange(256) for _ in range(16 * 30)]
+    p_ready = rng.choice([0.2, 0.5, 0.8])
+    pattern = [rng.random() < p_ready for _ in range(1 << 16)]
+
+    # simulate()'s sink asserts the hold rule on every offered byte.
+    stream = simulate(samples, ready=lambda c: pattern[c % len(pattern)],
+                      gap=lambda i: rng.randrange(3), tail=40000)
+    raws, drops = parse(stream)
+
+    assert raws, "nothing got through"
+    check_whole_chunks(samples, raws, drops)
 
 
 def test_gaps_between_samples_change_nothing():
@@ -128,20 +173,35 @@ def test_the_committed_verilog_is_what_the_source_generates():
 
 
 @pytest.mark.skipif(shutil.which("iverilog") is None, reason="needs Icarus Verilog")
-def test_the_generated_verilog_frames_the_same_stream_in_icarus(tmp_path):
+@pytest.mark.parametrize("n_chunks, gap, ready_pct, expect_drops", [
+    (6, 1, 100, False),   # always ready, a sample every other clock
+    (8, 3, 60, False),    # backpressure the FIFO absorbs
+    (12, 0, 30, True),    # a sample every clock into a slow sink: overruns
+    (48, 0, 100, True),   # every clock outruns even an always-ready sink,
+                          # once the 16-clock deficit a chunk fills the FIFO
+], ids=["ready", "backpressure", "slow-sink", "full-rate"])
+def test_the_generated_verilog_frames_the_same_stream_in_icarus(tmp_path, n_chunks, gap, ready_pct,
+                                                                 expect_drops):
     rng = random.Random(4)
-    samples = bytes(rng.randrange(256) for _ in range(256 * 6))
+    samples = bytes(rng.randrange(256) for _ in range(256 * n_chunks))
     (tmp_path / "samples.hex").write_text("\n".join("%02x" % s for s in samples) + "\n")
     tb = RTL / "tb_vgacap_raw_framer.v"
     vvp = tmp_path / "tb.vvp"
     subprocess.run(["iverilog", "-g2012", "-o", str(vvp), str(tb), str(RTL / "vgacap_raw_framer.v")],
                    check=True, capture_output=True, text=True)
+    # The testbench $fatal()s on a valid/ready hold violation: check=True.
     run = subprocess.run(["vvp", "-n", str(vvp), "+samples=%s" % (tmp_path / "samples.hex"),
-                          "+count=%d" % len(samples), "+out=%s" % (tmp_path / "out.hex")],
+                          "+count=%d" % len(samples), "+out=%s" % (tmp_path / "out.hex"),
+                          "+gap=%d" % gap, "+ready_pct=%d" % ready_pct, "+seed=7"],
                          capture_output=True, text=True, check=True, cwd=tmp_path)
     out = bytes(int(x, 16) for x in (tmp_path / "out.hex").read_text().split())
 
     raws, drops = parse(out)
 
-    assert drops == [], run.stdout
-    assert bytes(sum(raws, [])) == samples
+    assert "dropped=%d" % (drops[-1] if drops else 0) in run.stdout, run.stdout
+    if expect_drops:
+        assert raws and drops, run.stdout
+        check_whole_chunks(list(samples), raws, drops, chunk=256)
+    else:
+        assert drops == [], run.stdout
+        assert bytes(sum(raws, [])) == samples

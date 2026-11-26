@@ -13,6 +13,7 @@ from __future__ import annotations
 import bisect
 import builtins
 import pathlib
+import sys
 import types
 import weakref
 from typing import Callable, Sequence
@@ -23,12 +24,21 @@ PIO_STRIDE = 0x100000
 PIO_CTRL = 0x000
 PIO_FDEBUG = 0x008
 PIO_RXF0 = 0x020
+#: SM0_SHIFTCTRL; each further state machine's registers are 0x18 on.
+PIO_SM0_SHIFTCTRL = 0x0D0
+PIO_SM_STRIDE = 0x18
 #: Atomic register aliases (RP2040 datasheet 2.1.2): XOR +0x1000, SET
 #: +0x2000, CLEAR +0x3000.
 ALIAS_XOR, ALIAS_SET, ALIAS_CLR = 0x1000, 0x2000, 0x3000
 DMA_BASE = 0x50000000
 DMA_STRIDE = 0x40
 DMA_READ_ADDR, DMA_WRITE_ADDR, DMA_TRANS_COUNT, DMA_CTRL_TRIG = 0x00, 0x04, 0x08, 0x0C
+#: CTRL without the trigger (alias 1): writing it never starts the channel.
+DMA_AL1_CTRL = 0x10
+#: PWM block (pico-sdk addressmap.h) and a slice's registers (hardware/regs/pwm.h).
+PWM_BASE = {"rp2040": 0x40050000, "rp2350": 0x400A8000}
+PWM_SLICE_STRIDE = 0x14
+PWM_CSR, PWM_DIV, PWM_TOP = 0x00, 0x04, 0x10
 #: Emulated SRAM: buffers get addresses here.
 SRAM_BASE = 0x20000000
 #: DMA TREQ value meaning "unpaced" (RP2040 0x3f; the same here for both).
@@ -170,7 +180,7 @@ class Waveform:
 
 
 #: Decoded instruction kinds.
-_WAIT, _IN, _JMP, _PULL, _PUSH, _MOV, _SET = range(7)
+_WAIT, _IN, _JMP, _PULL, _PUSH, _MOV, _SET, _OUT = range(8)
 
 
 class _SM:
@@ -188,6 +198,11 @@ class _SM:
         self.push_thresh = 32
         self.autopush = False
         self.shift_left = True
+        self.out_right = True
+        #: RP2350 SHIFTCTRL.IN_COUNT: pins visible to `in pins`/`mov x,
+        #: pins`, the rest read as 0. 32 (field value 0) masks nothing.
+        self.in_count = 32
+        self.shiftctrl = 0
         self.rx_depth = 4
         self.tx_depth = 4
         self.reset_state()
@@ -212,6 +227,11 @@ class _SM:
         self.wrap_top = (execctrl >> 12) & 0x1F
         self.autopush = bool((shiftctrl >> 16) & 1)
         self.shift_left = not ((shiftctrl >> 18) & 1)
+        self.out_right = bool((shiftctrl >> 19) & 1)
+        if (shiftctrl >> 17) & 1:
+            raise BoardError("autopull is not emulated")
+        self.shiftctrl = shiftctrl
+        self.in_count = 32
         thresh = (shiftctrl >> 20) & 0x1F
         self.push_thresh = thresh or 32
         if push_thresh is not None:
@@ -251,9 +271,14 @@ class _SM:
             return (_WAIT, polarity, ((index - base) & 31) + base)
         if op == 2:
             src, bits = (word >> 5) & 7, word & 0x1F
-            if src != 0:
-                raise BoardError("in source %d (only pins is emulated)" % src)
-            return (_IN, bits or 32)
+            if src not in (0, 1, 2, 3, 6, 7):
+                raise BoardError("in source %d not emulated" % src)
+            return (_IN, bits or 32, src)
+        if op == 3:
+            dest, bits = (word >> 5) & 7, word & 0x1F
+            if dest not in (1, 2, 3):
+                raise BoardError("out destination %d not emulated" % dest)
+            return (_OUT, bits or 32, dest)
         if op == 4:
             if word & 0x1F:
                 raise BoardError("bad push/pull 0x%04x" % word)
@@ -305,8 +330,11 @@ class _SM:
                 self.now = t + 1 + d
                 self._next_pc()
             elif kind == _IN:
-                bits = ins[1]
-                value = wave.window(self.in_base, bits, self.now)
+                bits, src = ins[1], ins[2]
+                if src == 0:
+                    value = self.read_pins(self.now, bits)
+                else:
+                    value = {1: self.x, 2: self.y, 3: 0, 6: self.isr, 7: self.osr}[src]
                 if bits < 32:
                     value &= (1 << bits) - 1
                 if self.shift_left:
@@ -361,12 +389,34 @@ class _SM:
                 self.osr_count = 0
                 self.now += 1 + d
                 self._next_pc()
+            elif kind == _OUT:
+                bits, dest = ins[1], ins[2]
+                mask = MASK32 if bits == 32 else (1 << bits) - 1
+                if self.out_right:
+                    value = self.osr & mask
+                    self.osr = 0 if bits == 32 else self.osr >> bits
+                else:
+                    value = (self.osr >> (32 - bits)) & mask
+                    self.osr = 0 if bits == 32 else (self.osr << bits) & MASK32
+                self.osr_count = min(self.osr_count + bits, 32)
+                if dest == 1:
+                    self.x = value
+                elif dest == 2:
+                    self.y = value
+                self.now += 1 + d
+                self._next_pc()
             elif kind == _PUSH:
                 if len(self.rx) >= self.rx_depth:
                     if ins[1]:
                         self._rx_stalled()
                         self.now = limit
                         continue
+                    # A nonblocking push to a full FIFO drops the word and
+                    # sets RXSTALL all the same (RP2040 datasheet, FDEBUG:
+                    # "This flag is also set when a nonblocking PUSH to a
+                    # full FIFO took place, in which case the state machine
+                    # has dropped data").
+                    self._rx_stalled()
                 else:
                     word = self.isr
                     self.isr, self.isr_count = 0, 0
@@ -381,7 +431,7 @@ class _SM:
                 _, dest, mov_op, src = ins
                 value = {1: self.x, 2: self.y, 3: 0, 6: self.isr, 7: self.osr}.get(src)
                 if src == 0:
-                    value = wave.window(self.block.base, 32, self.now)
+                    value = self.read_pins(self.now)
                 if mov_op == 1:
                     value = ~value & MASK32
                 elif mov_op == 2:
@@ -406,6 +456,34 @@ class _SM:
                     self.y = ins[2]
                 self.now += 1 + d
                 self._next_pc()
+
+    def read_pins(self, cycle: int, bits: int = 32) -> int:
+        """The IN pin group at `cycle`, as `in pins` and `mov x, pins` read
+        it: 32 GPIOs from IN_BASE upward, wrapping round the block's 32-pin
+        window (RP2040 datasheet 3.4.4, "uses the same pin mapping as IN"),
+        with everything above SHIFTCTRL.IN_COUNT masked to 0 on RP2350."""
+        wave = self.board.wave
+        base = self.block.base
+        count = min(bits, self.in_count)  # only these bits can be nonzero
+        low = self.in_base - base  # in_base's index in the window
+        first = 32 - low
+        if count <= first:
+            return wave.window(self.in_base, count, cycle)
+        value = wave.window(self.in_base, first, cycle)
+        return value | (wave.window(base, count - first, cycle) << first)
+
+    def write_shiftctrl(self, value: int) -> None:
+        """A CPU write to SMn_SHIFTCTRL. Only IN_COUNT (bits 4:0, RP2350)
+        may change; anything else is refused rather than half-modelled."""
+        if (value ^ self.shiftctrl) & ~0x1F:
+            raise BoardError(
+                "SHIFTCTRL write 0x%08x changes more than IN_COUNT (was 0x%08x)"
+                % (value, self.shiftctrl)
+            )
+        if value & 0x1F and self.board.chip != "rp2350":
+            raise BoardError("SHIFTCTRL.IN_COUNT does not exist on RP2040")
+        self.shiftctrl = value
+        self.in_count = (value & 0x1F) or 32
 
     def _rx_stalled(self) -> None:
         self.block.fdebug |= 1 << self.index  # RXSTALL, write-1-to-clear
@@ -531,8 +609,19 @@ class Board:
     PIO block and four more DMA channels). `heap_blocks` lists the free
     heap as contiguous blocks, largest first; the default is fpga-1's
     measured state. `cycles_per_byte` prices USB output (the default,
-    190, is ~700 KB/s at 133 MHz, the RP2350's measured CDC rate).
+    190, is ~700 KB/s at 133 MHz, the RP2350's measured CDC rate); a write
+    goes out `USB_PIECE` bytes at a time and reads its buffer as it goes,
+    so a DMA that rewrites a buffer mid-send tears the chunk as it would
+    on the board. `usb_stalls` lists (output offset, cycles): the link
+    stops for that long once that many bytes have gone out -- a host that
+    stopped reading for a while.
+
+    `pwm` is the clock pin's PWM slice as (CSR, DIV, TOP) register values;
+    the default is the free-running integer divider that makes `wave`'s
+    clock exactly (DIV_INT 1, TOP period - 1).
     """
+
+    USB_PIECE = 512
 
     def __init__(
         self,
@@ -543,6 +632,7 @@ class Board:
         cycles_per_byte: float = 190.0,
         max_cycles: int = 2_000_000_000,
         idle_cycles: int = 2_000,
+        pwm: tuple[int, int, int] | None = None,
     ) -> None:
         if chip not in ("rp2040", "rp2350"):
             raise ValueError("chip must be rp2040 or rp2350")
@@ -557,6 +647,7 @@ class Board:
         self.channels = [_Channel(i) for i in range(16 if chip == "rp2350" else 12)]
         self.heap = list(heap_blocks)
         self.output = bytearray()
+        self.usb_stalls: list[tuple[int, int]] = []
         self.stop_after_bytes: int | None = None
         self.stop_when: Callable[["Board"], bool] | None = None
         self._stop_sent = False
@@ -570,6 +661,10 @@ class Board:
         self._dma_running = False
         #: What one `Pin.value()` costs a MicroPython loop, in cycles.
         self.pin_read_cycles = 150
+        self.pwm = (1, 1 << 4, wave.period - 1) if pwm is None else tuple(pwm)
+        gpio = wave.clk_gpio
+        slice_num = (gpio >> 1) & 7 if gpio < 32 else 8 + ((gpio >> 1) & 3)
+        self.pwm_base = PWM_BASE[chip] + PWM_SLICE_STRIDE * slice_num
 
     # -- time ---------------------------------------------------------------
 
@@ -621,6 +716,9 @@ class Board:
                 return block.fdebug
             if addr == block.address(PIO_CTRL):
                 return sum(1 << sm.index for sm in block.sms if sm.enabled)
+            for sm in block.sms:
+                if addr == block.address(PIO_SM0_SHIFTCTRL + PIO_SM_STRIDE * sm.index):
+                    return sm.shiftctrl
         ch, reg = self._dma_reg(addr)
         if ch is not None:
             if reg == DMA_WRITE_ADDR:
@@ -629,6 +727,11 @@ class Board:
                 return ch.read_addr
             if reg == DMA_TRANS_COUNT:
                 return ch.remaining if ch.busy else ch.reload
+            if reg == DMA_CTRL_TRIG:
+                return ch.ctrl
+        for offset, value in zip((PWM_CSR, PWM_DIV, PWM_TOP), self.pwm):
+            if addr == self.pwm_base + offset:
+                return value
         raise BoardError("mem32 read of unmodelled address 0x%08x" % addr)
 
     def mem32_write(self, addr: int, value: int) -> None:
@@ -641,6 +744,14 @@ class Board:
             if addr == block.address(PIO_FDEBUG):
                 block.fdebug &= ~value  # write-1-to-clear
                 return
+            for sm in block.sms:
+                shiftctrl = block.address(PIO_SM0_SHIFTCTRL + PIO_SM_STRIDE * sm.index)
+                if addr == shiftctrl:
+                    sm.write_shiftctrl(value)
+                    return
+                if addr == shiftctrl | ALIAS_SET:
+                    sm.write_shiftctrl(sm.shiftctrl | value)
+                    return
             if addr == block.address(PIO_CTRL | ALIAS_CLR):
                 for sm in block.sms:
                     if value & (1 << sm.index) and sm.enabled:
@@ -665,12 +776,16 @@ class Board:
                 ch.ctrl = value
                 self.dma_trigger(ch)
                 return
+            if reg == DMA_AL1_CTRL:
+                # Clearing EN pauses a busy channel; it does not abort it.
+                ch.ctrl = value
+                return
         raise BoardError("mem32 write of unmodelled address 0x%08x" % addr)
 
     def _dma_reg(self, addr: int):
         if DMA_BASE <= addr < DMA_BASE + DMA_STRIDE * len(self.channels):
             num, reg = divmod(addr - DMA_BASE, DMA_STRIDE)
-            if reg in (DMA_READ_ADDR, DMA_WRITE_ADDR, DMA_TRANS_COUNT, DMA_CTRL_TRIG):
+            if reg in (DMA_READ_ADDR, DMA_WRITE_ADDR, DMA_TRANS_COUNT, DMA_CTRL_TRIG, DMA_AL1_CTRL):
                 return self.channels[num], reg
         return None, 0
 
@@ -743,7 +858,21 @@ class Board:
         finally:
             self._dma_running = False
 
+    def abort(self, ch: _Channel) -> None:
+        """CHAN_ABORT, as `dma_channel_abort()` does it for `DMA.active(0)`.
+
+        RP2350-E5 (pico-sdk `dma_channel_abort()`): aborting a busy channel
+        can re-trigger the channel it chains to, unless that channel's EN is
+        clear -- modelled as the abort completing the chain.
+        """
+        was_busy = ch.busy
+        ch.busy = False
+        if self.chip == "rp2350" and was_busy and ch.chain_to != ch.num:
+            self.dma_trigger(self.channels[ch.chain_to])
+
     def _service(self, ch: _Channel) -> None:
+        if not ch.enabled:
+            return  # paused: EN cleared through AL1_CTRL
         sm = self._rx_source(ch)
         if sm is not None:
             while ch.busy and sm.rx:
@@ -778,6 +907,7 @@ class Board:
         fake_builtins = dict(vars(builtins))
         fake_builtins["__import__"] = fake_import
         fake_builtins["bytearray"] = modules["_heap"].bytearray
+        fake_builtins["ptr32"] = Ptr32
         namespace = {"__builtins__": fake_builtins, "__name__": "__main__"}
         exec(compile(script, name, "exec"), namespace)  # noqa: S102 - the board script
         return bytes(self.output)
@@ -859,6 +989,10 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
     machine.mem32 = Mem32()
     machine.freq = lambda hz=None: board.sysclk_hz
     machine.idle = lambda: board.advance(board.idle_cycles)
+    # No IRQ can land between two statements of the script here (they run
+    # from DMA activity, not between bytecodes), so masking is a no-op.
+    machine.disable_irq = lambda: 0
+    machine.enable_irq = lambda state: None
 
     # -- micropython --------------------------------------------------------
 
@@ -872,6 +1006,10 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
     micropython.heap_lock = lambda: None
     micropython.heap_unlock = lambda: 0
     micropython.mem_info = lambda *a: None
+    # Viper functions run as plain Python here; `ptr32` (a builtin inside
+    # a viper function on the board) is supplied by `run_script`.
+    micropython.viper = lambda f: f
+    micropython.native = lambda f: f
 
     # -- gc -------------------------------------------------------------------
 
@@ -888,10 +1026,17 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
 
     class Stdout:
         def write(self, data):
-            data = bytes(data)
-            board.output += data
-            board.advance(len(data) * board.cycles_per_byte)
-            return len(data)
+            # Piece by piece from the live buffer: what the DMA rewrites
+            # while a chunk is going out goes out too, as on the board.
+            with memoryview(data) as view:
+                n = len(view)
+                for at in range(0, n, board.USB_PIECE):
+                    while board.usb_stalls and len(board.output) >= board.usb_stalls[0][0]:
+                        board.advance(board.usb_stalls.pop(0)[1])
+                    piece = bytes(view[at : at + board.USB_PIECE])
+                    board.output += piece
+                    board.advance(len(piece) * board.cycles_per_byte)
+            return n
 
         def flush(self):
             pass
@@ -1087,15 +1232,16 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
             if value:
                 board.dma_trigger(ch)
             else:
-                ch.busy = False
+                board.abort(ch)  # rp2_dma.c: dma_channel_abort(), v1.22 on
             return ch.busy
 
         def irq(self, handler=None, hard=False):
             self._ch.handler = handler
 
         def close(self):
+            # MicroPython v1.24's close() only unclaims (no abort), so a
+            # channel still busy here stays busy -- and keeps writing.
             ch = self._ch
-            ch.busy = False
             ch.claimed = False
             ch.handler = None
             ch.owner = None
@@ -1122,6 +1268,23 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
         "_rp2": _rp2,
         "_heap": heap_mod,
     }
+
+
+class Ptr32:
+    """Viper's `ptr32(buf)`: 32-bit word access to a buffer, with the
+    machine-word wraparound viper arithmetic has (a store keeps the low 32
+    bits). Little-endian, like the RP2."""
+
+    def __init__(self, buf) -> None:
+        if sys.byteorder != "little":
+            raise BoardError("ptr32 emulation assumes a little-endian host, as the RP2 is")
+        self._view = memoryview(buf).cast("B").cast("I")
+
+    def __getitem__(self, index: int) -> int:
+        return self._view[index]
+
+    def __setitem__(self, index: int, value: int) -> None:
+        self._view[index] = value & MASK32
 
 
 def _give_back(blocks: list[int], index: int, size: int) -> None:

@@ -55,7 +55,7 @@ const fw_board_t *hal_board(void);
 uint32_t hal_sysclk_hz(void);
 // Switch to `plan` (system clock first, then the PWM on the clock pin), or
 // stop the clock (pin low and released) when plan is NULL. Returns 0, or
-// -1 with *why set.
+// -1 with *why set and the clock stopped.
 int hal_clock(const fw_clock_plan_t *plan, const char **why);
 // Hold (1) or release (0) the project's reset.
 void hal_reset(int hold);
@@ -69,7 +69,11 @@ void hal_ui_in(int value);
 void hal_asic_ctrl(int ena, int nrst, int inc);
 // Level of one GPIO, read directly.
 int hal_gpio_get(unsigned gpio);
+// A short exact wait (busy: microseconds between GPIO reads).
 void hal_delay_us(uint32_t us);
+// Wait at least `us`, servicing the host link meanwhile (milliseconds of
+// pin sequencing, during which USB must not go unserviced).
+void hal_wait_us(uint32_t us);
 // Idle until something might have changed (an interrupt, a byte).
 void hal_idle(void);
 // Reboot: into the flash firmware, or into the USB bootloader.
@@ -87,9 +91,20 @@ uint32_t *hal_arena(size_t *bytes);
 int hal_stream_start(const fw_pio_program_t *prog, unsigned pio, unsigned sm,
                      uint32_t *buf0, uint32_t *buf1, uint32_t buf_words, const char **why);
 // Whether buffer `i` holds samples nobody has sent yet; and to say it has
-// been sent. A completion that finds its buffer still full is an overrun.
+// been sent. Each completion starts the chain partner's fill at once, so
+// the overrun is counted when a fill *starts* on a buffer still full: from
+// then on that buffer's samples mix two fills, whether its send has begun,
+// is under way or has not started. That buffer is marked torn.
 int hal_stream_full(int i);
-void hal_stream_release(int i);
+// hal_stream_release(i) marks buffer `i` sent and returns whether it was
+// torn, clearing that mark, all in one step the DMA interrupt cannot cut
+// into: a fill that starts on `i` after the release tears the *next*
+// contents, and that mark must survive for the next send. (Releasing and
+// reading the mark apart would let a main loop preempted for longer than
+// a fill clear a mark that belongs to the next send.)
+int hal_stream_release(int i);
+// The overruns so far (an upper bound on the buffers lost: a rewrite that
+// started during a send but never overtook it counts too).
 uint32_t hal_stream_overruns(void);
 // Stop everything; return the overrun count and RXSTALL as they were
 // before anything was torn down.

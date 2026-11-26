@@ -35,6 +35,15 @@ So with the stock `rp1-pio` driver, continuous capture is lossless up to about
 that gap only that far. The way past it is a cyclic-DMA kernel module
 (`mithro/rpi5-rp1-pio-bench`, 45-56 MB/s).
 
+Those losses are not counted, so `vgacap-rp1` refuses a `--clock-hz` above
+500000 unless `--unproven-rate` is given. A capture above that rate, or one
+with no `--clock-hz` at all, warns and writes its closing `TIME` chunk with
+`dropped=unknown` in the message and `dropped_samples` = 0xFFFFFFFF, so that
+a check for nothing dropped fails rather than passes. Only a declared rate
+of 500000 or less records `dropped_samples` = 0. The check trusts the
+declared `--clock-hz`: the tool does not measure the clock, and `--gen` /
+`--gen-counter` run at whatever `--gen-div` and `--gen-delay` make them.
+
 ## What the driver needed (all measured, all in the code's comments)
 
 - transfer sizes are `uint16_t` in the ioctl: 64 KB is 0;
