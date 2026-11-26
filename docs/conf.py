@@ -13,13 +13,15 @@ MyST resolves links between pages, and their anchors, itself. After it has
 parsed a page, `link_repository_files` changes the two kinds of link MyST
 cannot resolve, so they go where they go on GitHub:
 
-- a link to a repository file that is not a page (source code, LICENSE),
+- a link to a repository file that is not Markdown (source code, LICENSE),
   which MyST would turn into a download, goes to the file on GitHub at the
-  commit being built;
+  commit being built (a Markdown file has to be in PAGES: a link to one
+  that is not fails the build);
 - a link to a directory goes to its README page when that is a page, and
   otherwise to the directory on GitHub.
 
-A link to a path that does not exist is left alone, so the build reports it.
+A link to a path that does not exist, or that leaves the repository, is
+reported, so the build fails on it.
 MyST drops a #fragment from a link to a file that is not a page (a GitHub
 `file.c#L10` line link), so such a link goes to the top of the file.
 index.html redirects the site root to the README page.
@@ -32,6 +34,9 @@ import subprocess
 
 from docutils import nodes
 from sphinx import addnodes
+from sphinx.util import logging
+
+logger = logging.getLogger(__name__)
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 GITHUB = "https://github.com/mithro/vgacap"
@@ -67,8 +72,10 @@ include_patterns = [page + ".md" for page in PAGES]
 # GitHub-style ids for headings, so `file.md#some-heading` links resolve.
 myst_heading_anchors = 6
 # As on GitHub: a standalone <img> tag is an image (copied into the site),
-# and a bare URL is a link.
+# and a bare http(s):// or www. URL is a link. Not fuzzy: boards.py and
+# README.md are not web sites (.py and .md are country domains).
 myst_enable_extensions = ["html_image", "linkify"]
+myst_linkify_fuzzy_links = False
 
 html_theme = "furo"
 html_title = "vgacap"
@@ -100,25 +107,39 @@ def github_link(node, kind, rel, sha):
     node.replace_self(link)
 
 
+def repository_path(docdir, path):
+    """`path` as linked from a page in `docdir`, relative to the repository
+    root (a leading / is the root, as on GitHub); None if it leaves it."""
+    if path.startswith("/"):
+        rel = posixpath.normpath(path.lstrip("/"))
+    else:
+        rel = posixpath.normpath(posixpath.join(docdir, path))
+    return None if rel == ".." or rel.startswith("../") else rel
+
+
 def link_repository_files(app, doctree):
     """Runs before Sphinx's own collectors, so a file MyST marked for
-    download is never registered as one."""
+    download is never registered as one. A MyST download left over is a
+    link this cannot place, and is reported, so -W fails on it."""
     sha = app.config.vgacap_commit
     docdir = posixpath.dirname(app.env.docname)
     for node in list(doctree.findall(addnodes.download_reference)):
         if node.get("reftype") != "myst":
             continue
-        rel = posixpath.normpath(posixpath.join(docdir, node["reftarget"]))
-        if (REPO / rel).is_file():
+        rel = repository_path(docdir, node["reftarget"])
+        if rel is not None and (REPO / rel).is_file():
             github_link(node, "blob", rel, sha)
+        else:
+            logger.warning("link to %s is outside the repository or not a file",
+                           node["reftarget"], location=node)
     for node in list(doctree.findall(addnodes.pending_xref)):
         if node.get("reftype") != "myst" or node.get("refdomain"):
             continue
         # An unresolved target keeps its #fragment; MyST's page links carry
         # it as reftargetid instead.
         path, _, anchor = node["reftarget"].partition("#")
-        rel = posixpath.normpath(posixpath.join(docdir, path))
-        if not path or not (REPO / rel).is_dir():
+        rel = repository_path(docdir, path) if path else None
+        if rel is None or not (REPO / rel).is_dir():
             continue
         readme = posixpath.join(rel, "README") if rel != "." else "README"
         if readme in PAGES:
