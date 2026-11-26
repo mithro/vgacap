@@ -460,12 +460,31 @@ def test_a_line_back_up_is_a_cross_link(tmp_path):
     assert sidebar(out) == [("1", "One"), ("2", "Page B"), ("1", "Two"), ("2", "Page A")]
 
 
-def test_a_page_on_two_landing_pages_is_in_the_sidebar_once(tmp_path):
+def test_a_page_on_two_landing_pages_fails(tmp_path):
     pages = two_sections("- [B](../b.md): page B.\n- [A](../a.md): page A.\n")
+    warnings, _, _ = build_tree(tmp_path, pages)
+    assert "a is a line on s1/index and on s2/index" in warnings
+
+
+def test_a_cross_link_is_not_a_line(tmp_path):
+    pages = two_sections("- [B](../b.md): page B.\n- Page A is also under [Two](../a.md).\n")
     warnings, _, out = build_tree(tmp_path, pages)
     assert warnings == ""
-    titles = [title for _, title in sidebar(out)]
-    assert titles.count("Page A") == 1 and titles.index("Page A") < titles.index("Two")
+    assert sidebar(out) == [("1", "One"), ("2", "Page B"), ("1", "Two"), ("2", "Page A")]
+
+
+def test_a_toctree_in_a_code_example_is_allowed(tmp_path):
+    text = page("````markdown\n```{toctree}\nother\n```\n````")
+    pages = {"page": text, "other": B,
+             "index": front("landing") + "# Root\n\n- [P](page.md): p.\n- [O](other.md): o.\n"}
+    warnings, _, _ = build(tmp_path, pages)
+    assert warnings == ""
+
+
+def test_a_line_to_a_file_name_with_a_space(tmp_path):
+    pages = {"a b": A, "index": front("landing") + "# Root\n\n- [A](<a b.md>): page A.\n"}
+    warnings, _, out = build(tmp_path, pages)
+    assert warnings == "" and ("1", "Page A") in sidebar(out)
 
 
 @pytest.mark.parametrize("line", [
