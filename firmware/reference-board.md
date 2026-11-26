@@ -46,6 +46,8 @@ Item names a resource a capture uses, and Value gives it.
 | DMA channels | 2, any free ones |
 | DMA interrupt | `DMA_IRQ_0`, a shared handler |
 | ttcap's PIO block | 1, unless `--pio` says otherwise |
+| PIO block 0 through ttcap | refused, as for the stock firmware ([issue #44](https://github.com/mithro/vgacap/issues/44)) |
+| PIO block 0 through the protocol | accepted |
 
 ## USB identity
 

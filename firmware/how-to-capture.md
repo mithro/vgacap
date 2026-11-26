@@ -77,6 +77,7 @@ A good capture reports `overruns=0` and `rxstall=0`, and its PNG shows the desig
 | `board went quiet` and a frame capture writes almost nothing | no sync on `uo_out`: an ASIC project that was not selected again, or no design | Add `--asic-index N` on an ASIC breakout; enable the design again on an FPGA breakout |
 | `overruns=` above 0 in a stream | the project clock is faster than the USB link carries | Lower `--clock-hz`, or use `--mode frame` |
 | `sysclk N is not 2..32 whole project clocks of N` | a frame clock with no whole system clock ratio | Choose a project clock from [the clock table](reference-board.md#clocks) |
+| `pio 0 would have to move its pin window to GPIO 16 ...` | `--pio 0` was given: ttcap refuses it for every firmware ([issue #44](https://github.com/mithro/vgacap/issues/44)) | Use `--pio 1` or `--pio 2` |
 | `--profile ... does not match the capture firmware` | `--profile` names another board | Drop `--profile`, or give `rp2350` |
 
 ## Next
