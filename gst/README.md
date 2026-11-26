@@ -84,6 +84,7 @@ USB serial or over the [fpgas.online bridge](https://tinytapeout.fpgas.online)
 | `ttcap-command` | `uv run --no-sync ttcap` | -- | -- | no | no | command that runs `ttcap` |
 | `stop-timeout` | `15` | s | -- | no | yes | how long a cooperative stop may take |
 | `capture-mode` | `stream` | -- | -- | no | yes | `ttcap capture --mode` |
+| `firmware` | `micropython` | -- | -- | no | yes | `ttcap capture --firmware` |
 | `vga-mode` | `""` | -- | `ttcap`'s default (640x480@60) | no | yes | VGA timing |
 | `window-lines` | `0` | lines | `ttcap`'s default | no | yes | most lines per captured frame |
 
