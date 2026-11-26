@@ -54,6 +54,21 @@ bytes plus one line. If it refuses, reset the board to free its heap.
 For a board on the Welland bench, see
 [Reaching a Welland board](#reaching-a-welland-board-bench-access-needed).
 
+### Run-length capture
+
+`ttcap capture --mode rle` has the PIO run-length encode the samples, so a
+simple picture streams at a clock the link could not carry sample by
+sample.
+
+- `--rle-oneshot` fills the two `--buf-words` buffers once at full speed,
+  then sends them.
+- `--rle-mask` picks the sampling program: `1` (RP2350 only), `0` (any
+  chip) or `-1`, the default, for the board to choose.
+- It stops on `--max-bytes` or `--seconds`; `--frames` is refused.
+- A run whose board reported an RX stall exits 1.
+- Only the stock firmware runs it; `--firmware picosdk` and
+  `--firmware mpy-module` refuse it.
+
 ## Running on a Raspberry Pi
 
 The board tools (`ttcap`) need only [pyserial](https://github.com/pyserial/pyserial) and [websockets](https://github.com/python-websockets/websockets). On a Pi, keep
