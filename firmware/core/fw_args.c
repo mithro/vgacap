@@ -24,6 +24,21 @@ static int parse_int(const char *s, size_t n, int64_t *out) {
     return 0;
 }
 
+// Decimal text of `v`. By hand rather than "%lld": the MicroPython module
+// builds this file into MicroPython, whose own printf has no long long
+// (py/mpprint.c), and whose snprintf that is.
+static const char *i64_text(int64_t v, char buf[24]) {
+    char *p = buf + 23;
+    *p = 0;
+    uint64_t u = v < 0 ? 0u - (uint64_t)v : (uint64_t)v;
+    do {
+        *--p = (char)('0' + (int)(u % 10u));
+        u /= 10u;
+    } while (u);
+    if (v < 0) *--p = '-';
+    return p;
+}
+
 int fw_args_parse(const char *text, const fw_arg_spec_t *specs, size_t nspecs,
                   int64_t *values, char *err, size_t errlen) {
     int seen[MAX_SPECS] = { 0 };
@@ -77,8 +92,9 @@ int fw_args_parse(const char *text, const fw_arg_spec_t *specs, size_t nspecs,
         } else {
             int64_t v;
             if (parse_int(val, vlen, &v) || v < specs[i].min || v > specs[i].max) {
-                snprintf(err, errlen, "%s must be an integer %lld..%lld, got '%.*s'", specs[i].key,
-                         (long long)specs[i].min, (long long)specs[i].max, (int)vlen, val);
+                char lo[24], hi[24];
+                snprintf(err, errlen, "%s must be an integer %s..%s, got '%.*s'", specs[i].key,
+                         i64_text(specs[i].min, lo), i64_text(specs[i].max, hi), (int)vlen, val);
                 return -1;
             }
             values[i] = v;

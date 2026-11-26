@@ -33,8 +33,9 @@ from .boards import RP2350_DBV3, BoardProfile
 from .capture import CaptureError, CaptureRequest, CaptureSession
 from .repl import CHUNK_HEADER_LEN, CHUNK_TAGS, MAX_CHUNK_LEN, ReplFramingError, ReplLink
 
-#: `--firmware` names: what is running on the board.
-FIRMWARES = ("micropython", "picosdk")
+#: `--firmware` names: what is running on the board. "mpy-module" is the
+#: stock firmware built with the vgacap MicroPython module (`ttcap.module`).
+FIRMWARES = ("micropython", "picosdk", "mpy-module")
 
 #: The protocol version this host speaks (`FW_PROTOCOL_VERSION`, fw.h).
 PROTOCOL_VERSION = 1
@@ -99,8 +100,8 @@ class FirmwareLink:
 
         A stop byte first, in case a capture is still running from a host
         that went away; that capture then finishes its chunk, writes its
-        trailer and goes idle, and a stray 0x03 to an idle firmware is
-        ignored. Then an empty line (ends any half-sent command) and
+        trailer and goes idle; to an idle firmware the 0x03 discards any
+        half-sent command. Then an empty line (which does nothing) and
         `hello`, and everything before the hello reply is discarded.
         """
         self._buf = b""
@@ -210,30 +211,39 @@ def profile_for(link: FirmwareLink, name: str) -> BoardProfile:
     return profile
 
 
-def capture_command(req: CaptureRequest) -> str:
-    """The `stream`/`frame` command line for `req` (PROTOCOL.md).
+CAPTURE_KEYS = {
+    "stream": ("buf_words", "max_bytes", "edge", "pio", "sm"),
+    "frame": (
+        "cpl", "region_first", "region_lines", "window_lines", "hsync_active", "vsync_active",
+        "max_frames", "max_bytes", "edge", "sample_delay", "pio", "sm",
+    ),
+}
 
+
+def capture_args(req: CaptureRequest) -> tuple[str, dict]:
+    """The capture command for `req` and its arguments, in PROTOCOL.md order.
+
+    The one place a request becomes the engines' arguments: the firmware
+    sends them as a `stream`/`frame` line (`capture_command`), the
+    MicroPython module takes them as keyword arguments (`ttcap.module`).
     The values are the ones the MicroPython path puts in its `CFG` dict --
     `req.cfg()` is called for both, so the region planning and every check
     `capture_cfg()`/`frame_cfg()` make apply here too.
     """
     if req.profile != RP2350_DBV3:
         raise CaptureError("the capture firmware is built for %s only" % RP2350_DBV3.name)
+    if req.is_rle:
+        # Its CFG has buf_words like a stream's, and would quietly become one.
+        raise CaptureError("the capture firmware has no rle mode; use --firmware micropython")
     cfg = req.cfg()
-    if req.is_frame:
-        return (
-            "frame cpl=%d region_first=%d region_lines=%d window_lines=%d "
-            "hsync_active=%d vsync_active=%d max_frames=%d max_bytes=%d edge=%s "
-            "sample_delay=%d pio=%d sm=%d"
-            % (
-                cfg["cpl"], cfg["region_first"], cfg["region_lines"], cfg["window_lines"],
-                cfg["hsync_active"], cfg["vsync_active"], cfg["max_frames"], cfg["max_bytes"],
-                cfg["edge"], cfg["sample_delay"], cfg["pio"], cfg["sm"],
-            )
-        )
-    return "stream buf_words=%d max_bytes=%d edge=%s pio=%d sm=%d" % (
-        cfg["buf_words"], cfg["max_bytes"], cfg["edge"], cfg["pio"], cfg["sm"],
-    )
+    name = "frame" if req.is_frame else "stream"
+    return name, {key: cfg[key] for key in CAPTURE_KEYS[name]}
+
+
+def capture_command(req: CaptureRequest) -> str:
+    """The `stream`/`frame` command line for `req` (PROTOCOL.md)."""
+    name, args = capture_args(req)
+    return " ".join([name] + ["%s=%s" % item for item in args.items()])
 
 
 def setup(link: FirmwareLink, req: CaptureRequest) -> dict:
@@ -244,6 +254,11 @@ def setup(link: FirmwareLink, req: CaptureRequest) -> dict:
     released last. The firmware cannot select a design: it runs in place of
     the stock firmware, which is what knows the shuttle, so `--project` /
     `--design` are refused rather than ignored.
+
+    `req.asic_index` is sent as is: nothing here knows which board is on
+    the link, and on an FPGA breakout `asic_select` erases the FPGA. A
+    caller other than `ttcap capture` must call
+    `ttcap.demo.check_asic_index()` first (as `cli.capture()` does).
     """
     if req.selection:
         raise CaptureError(
@@ -253,6 +268,12 @@ def setup(link: FirmwareLink, req: CaptureRequest) -> dict:
     did: dict = {"project": None, "enable": "kept (capture firmware)", "clock_hz": req.clock_hz}
     link.command("clock hz=0")
     link.command("reset hold=1")
+    if req.asic_index is not None:
+        # Nothing drives the mux lines while the RP2350 is in its
+        # bootloader, so an ASIC board comes back with no project selected
+        # (tt09, 2026-11-24).
+        link.command("asic_select index=%d" % req.asic_index, timeout=30.0)
+        did["asic_index"] = req.asic_index
     if req.ui_in is not None:
         link.command("ui_in value=%d" % req.ui_in)
         did["ui_in"] = req.ui_in

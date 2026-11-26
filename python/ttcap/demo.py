@@ -51,10 +51,13 @@ import socket
 import subprocess
 import sys
 import threading
+import ipaddress
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 
-from .boards import WELLAND, bridge_ws_url
+from .firmware import FIRMWARES
+from .boards import RP2350_DBV3, WELLAND, bridge_ws_url
 # Same package, and the octet is the one part of a Welland address the tunnel
 # hint has to spell out; `bridge_ws_url` hands back a whole URL.
 from .boards import _welland_host_octet as welland_octet
@@ -199,8 +202,9 @@ def bridge_host(board: str) -> str:
 
 
 def _address_is_local(address: str) -> bool:
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        with socket.socket(family, socket.SOCK_DGRAM) as probe:
             probe.bind((address, 0))
     except OSError:
         return False
@@ -370,6 +374,22 @@ def asic_slugs() -> str:
     return ", ".join(sorted(s for s in WELLAND if not s.startswith(FPGA_SLUG_PREFIX)))
 
 
+def asic_select_boards() -> str:
+    """The bench boards `--asic-index` is for, from `WELLAND`, in words.
+
+    ASIC carriers (not `board_takes_a_design`) on an RP2350 demo board,
+    the only one the capture firmware runs on. Computed, never written
+    out, so it follows the table; the table may have none yet.
+    """
+    slugs = sorted(
+        s for s, (_, profile) in WELLAND.items()
+        if not board_takes_a_design(s) and profile.chip == RP2350_DBV3.chip
+    )
+    if not slugs:
+        return "an RP2350 ASIC carrier; none is in the bench table (boards.WELLAND) yet"
+    return "the RP2350 ASIC carriers: %s" % ", ".join(slugs)
+
+
 def check_board_wants(board: str | None, project: str | None, design: str | None) -> None:
     """Refuse `--project` on an FPGA board, and `--design` on an ASIC.
 
@@ -394,6 +414,186 @@ def check_board_wants(board: str | None, project: str | None, design: str | None
         raise CaptureError(
             "--project is for the ASIC shuttles (%s); %s is an FPGA board, so "
             "name the bitstream with --design instead" % (asic_slugs(), board)
+        )
+
+
+def board_of_this_pi(hostname: str | None = None) -> str | None:
+    """The bench slug whose Pi this process runs on, or None."""
+    for slug in sorted(WELLAND):
+        if running_on_board_pi(slug, hostname):
+            return slug
+    return None
+
+
+def _resolve(host: str) -> list[str]:
+    """Every address `host` resolves to, as a socket would connect to it.
+
+    getaddrinfo, so every spelling the system accepts counts: `127.1`,
+    `2130706433`, `0x7f.0.0.1`, `0`, `localhost.`, `ip6-localhost`, and
+    names that resolve to one of this machine's own addresses. Raises
+    OSError when the name does not resolve.
+    """
+    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    return sorted({info[4][0].split("%", 1)[0] for info in infos})
+
+
+def _is_this_machine(address: str) -> bool:
+    """Loopback, unspecified (0.0.0.0, ::, which connect to this machine),
+    or one of this machine's own addresses (it can be bound)."""
+    ip = ipaddress.ip_address(address)
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback or ip.is_unspecified or _address_is_local(str(ip))
+
+
+def _ws_parts(url: str | None):
+    """(host, port) of a ws:// or wss:// link, else None. A port that does
+    not parse is -1."""
+    if not url:
+        return None
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme.lower() not in ("ws", "wss"):
+        return None
+    try:
+        port = parsed.port
+    except ValueError:
+        port = -1
+    return (parsed.hostname or "").lower(), port
+
+
+def _tunnel_ports() -> dict[int, str]:
+    return {tunnel_port(slug): slug for slug in WELLAND}
+
+
+def link_is_this_machine(url: str | None) -> bool:
+    """True for a ws:// link to this machine that is not a tunnel's near end.
+
+    On a bench Pi, ws://127.0.0.1:8765/serial is the Pi's own bridge to its
+    own board, so the board is the one `board_of_this_pi` names -- and so
+    is every other spelling of it (`_resolve`), 0.0.0.0 and :: (the
+    bridge's listening address, which connects here), and the Pi's own
+    addresses on any network. A port that is some board's `tunnel_port` is
+    a tunnel to that board instead (`board_of_link`).
+
+    A host that does not resolve raises CaptureError: with no way to tell
+    which machine it is, the conservative answer for `--asic-index` is no
+    (the link could not be opened anyway).
+    """
+    parts = _ws_parts(url)
+    if parts is None:
+        return False
+    host, port = parts
+    if port in _tunnel_ports():
+        return False
+    try:
+        addresses = _resolve(host)
+    except OSError as exc:
+        raise CaptureError(
+            "--asic-index needs to know which board %s is, and %r does not "
+            "resolve (%s)" % (url, host, exc)
+        ) from exc
+    return any(_is_this_machine(a) for a in addresses)
+
+
+def board_of_link(url: str | None) -> str | None:
+    """The bench slug a `ws://` link points at, or None.
+
+    The bridge's own address (`bridge_host`, 10.21.2.<octet>, in any
+    spelling that resolves to it), the Pi's name (`pi_hostname`), or a
+    tunnel's near end on this machine at the board's `tunnel_port`
+    (TUNNEL_PORT_BASE + octet, as `tunnel_hint` suggests). A `serial:` link
+    names no board, and neither does a host that does not resolve.
+    """
+    parts = _ws_parts(url)
+    if parts is None:
+        return None
+    host, port = parts
+    for slug in sorted(WELLAND):
+        if host.rstrip(".").split(".", 1)[0] == pi_hostname(slug).lower():
+            return slug
+    try:
+        addresses = _resolve(host)
+    except OSError:
+        return None
+    for slug in sorted(WELLAND):
+        if bridge_host(slug) in addresses:
+            return slug
+    tunnel = _tunnel_ports().get(port)
+    if tunnel is not None and any(_is_this_machine(a) for a in addresses):
+        return tunnel
+    return None
+
+
+def check_asic_index(
+    board: str | None,
+    asic_index: int | None,
+    link: str | None = None,
+    hostname: str | None = None,
+) -> None:
+    """Refuse `--asic-index` on an FPGA board, or where the board is in doubt.
+
+    `asic_select` pulls GPIO 1 low, and on an FPGA breakout that is the
+    iCE40's CRESET_B: the shared FPGA's configuration is erased, for every
+    later visitor too. The firmware cannot tell the carriers apart, so the
+    host refuses it here, as `check_board_wants` refuses --project, by the
+    slug -- from every source that names one: `--board`, the link
+    (`board_of_link`: a bridge address, a Pi name or a tunnel port), and,
+    for a `serial:` link, a ws:// link to this machine that is not a tunnel
+    port (the Pi's own bridge, in any spelling: `link_is_this_machine`) or
+    no link, the bench Pi this runs on, whose board that is. A ws:// host
+    that does not resolve is refused. Refused when any of them is an FPGA board, or when
+    they disagree (which board is it?). With none of them there is no
+    knowing what is on the other end, and nothing is refused.
+
+    `ttcap capture` calls this; a caller of `firmware.setup()` /
+    `FirmwareSession` directly must call it itself.
+    """
+    if asic_index is None:
+        return
+    named = {}
+    if board is not None:
+        named["--board"] = board
+    from_link = board_of_link(link)
+    if from_link is not None:
+        named["the link"] = from_link
+    if link is None or link.startswith("serial:") or link_is_this_machine(link):
+        here = board_of_this_pi(hostname)
+        if here is not None:
+            named["this Pi"] = here
+    fpgas = sorted({s for s in named.values() if board_takes_a_design(s)})
+    if fpgas:
+        raise CaptureError(
+            "--asic-index is for %s; %s is an FPGA board, where asic_select "
+            "pulls GPIO 1 -- the iCE40's CRESET_B -- low and erases the FPGA"
+            % (asic_select_boards(), " and ".join(fpgas))
+        )
+    if len(set(named.values())) > 1:
+        raise CaptureError(
+            "--asic-index needs to know which board it is for, and %s disagree: %s"
+            % (", ".join(named), ", ".join("%s says %s" % kv for kv in named.items()))
+        )
+
+
+def check_firmware_wants(firmware: str, project: str | None, design: str | None) -> None:
+    """Refuse `--project` / `--design` on the pico-sdk capture firmware.
+
+    That firmware runs in place of the stock one, which is what knows the
+    shuttle, so it keeps whatever design was enabled before it was loaded
+    and selects none itself (`ttcap.firmware.setup` refuses any selection).
+    Left to it, the refusal arrives several GStreamer ERROR blocks deep,
+    after the board has been opened; the flags alone already say it will.
+    """
+    # Only the pico-sdk firmware: the MicroPython module (mpy-module) runs
+    # under the stock firmware, which selects the design as usual.
+    if firmware != "picosdk":
+        return
+    given = [flag for flag, value in (("--project", project), ("--design", design)) if value]
+    if given:
+        raise CaptureError(
+            "%s needs the stock firmware: the %s capture firmware keeps whatever "
+            "design was enabled before it was loaded and cannot select one. Enable "
+            "the design with the stock firmware first (firmware/README.md), then "
+            "run without %s" % (" and ".join(given), firmware, " / ".join(given))
         )
 
 
@@ -574,6 +774,7 @@ def source_properties(
     capture_mode: str = "stream",
     vga_mode: str | None = None,
     window_lines: int = 0,
+    firmware: str = "micropython",
 ) -> list[str]:
     """`vgacapttsrc`'s settings, as `name=value` tokens.
 
@@ -596,6 +797,8 @@ def source_properties(
     # Only what differs from the element's own defaults, like buf-words.
     if capture_mode != "stream":
         props.append("capture-mode=%s" % capture_mode)
+    if firmware != "micropython":
+        props.append("firmware=%s" % firmware)
     if vga_mode:
         props.append("vga-mode=%s" % vga_mode)
     if window_lines:
@@ -692,6 +895,7 @@ def build_pipeline(
     capture_mode: str = "stream",
     vga_mode: str | None = None,
     window_lines: int = 0,
+    firmware: str = "micropython",
 ) -> tuple[list[str], list[str]]:
     """The `gst-launch-1.0` argument vector, and what it writes.
 
@@ -759,6 +963,7 @@ def build_pipeline(
             capture_mode=capture_mode,
             vga_mode=vga_mode,
             window_lines=window_lines,
+            firmware=firmware,
         ),
         "!",
         "vgadecode",
@@ -1257,6 +1462,7 @@ def plan_demo(
     # person can fix without installing anything.
     link = resolve_link(args.board, args.link)
     check_board_wants(args.board, args.project, args.design)
+    check_firmware_wants(args.firmware, args.project, args.design)
     # Before the GStreamer check: a mistyped number is the person's to fix
     # and should not wait on anything being installed.
     for warning in check_numbers(args):
@@ -1295,6 +1501,7 @@ def plan_demo(
             capture_mode=args.mode,
             vga_mode=args.vga_mode,
             window_lines=args.window_lines,
+            firmware=args.firmware,
             png=args.png,
             video=args.video,
             video_encoder=args.video_encoder,
@@ -1518,6 +1725,14 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--vga-mode", help="frame/window modes: the VGA timing to expect (ttcap's default 640x480@60)"
+    )
+    parser.add_argument(
+        "--firmware", choices=list(FIRMWARES), default="micropython",
+        help="what runs on the board: the stock MicroPython firmware (default), or "
+        "vgacap's pico-sdk capture firmware, which must already be running: "
+        "`ttcap reboot --to bootsel` and then copy vgacap_fw.uf2 onto the RP2350 "
+        "drive by hand (firmware/README.md). It keeps the design enabled before "
+        "it was loaded and cannot take --project/--design",
     )
     parser.add_argument(
         "--window-lines", type=int, default=0,

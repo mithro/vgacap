@@ -454,7 +454,7 @@ def test_main_cleans_up_in_a_finally_block(source):
 
     finally_src = ast.unparse(ast.Module(body=tries[0].finalbody, type_ignores=[]))
     assert "sm.active(0)" in finally_src
-    assert "dma.close()" in finally_src
+    assert "stop_dma((dma_a, dma_b))" in finally_src  # EN off, abort, close
     assert "write_time_chunk" in finally_src, "the closing TIME chunk is emitted from finally"
 
     # The channels are allocated inside the try, so a failure part-way
@@ -479,7 +479,7 @@ def test_main_restores_the_keyboard_interrupt_last_of_all(source):
     assert "micropython.kbd_intr(3)" in finally_src
     assert finally_src.index("write_time_chunk") < finally_src.index("kbd_intr(3)")
     assert finally_src.index("out.flush()") < finally_src.index("kbd_intr(3)")
-    assert finally_src.index("dma.close()") < finally_src.index("kbd_intr(3)")
+    assert finally_src.index("stop_dma(") < finally_src.index("kbd_intr(3)")
     # Nothing after it: it is the last statement of the block.
     assert finally_src.rstrip().endswith("micropython.kbd_intr(3)")
 

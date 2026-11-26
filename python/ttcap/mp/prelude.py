@@ -184,12 +184,6 @@ def _write_all(out, data):
     return n
 
 
-def write_raw_chunk(out, buf, sample_count):
-    """Emit one `RAW ` chunk and return the number of bytes written."""
-    written = _write_all(out, b"RAW " + _le32(4 + len(buf)) + _le32(sample_count))
-    return written + _write_all(out, buf)
-
-
 def write_time_chunk(out, dropped_samples, msg):
     """Emit one `TIME` chunk and return the number of bytes written.
 
@@ -202,9 +196,7 @@ def write_time_chunk(out, dropped_samples, msg):
     the host already recorded the project clock in the stream header.
     """
     payload = (
-        _le32(0)
-        + _le32(0)  # u64 host_time_ns = 0
-        + _le32(0)  # u32 clock_hz = 0
+        bytes(12)  # u64 host_time_ns = 0, u32 clock_hz = 0
         + _le32(dropped_samples)
         + bytes((len(msg) & 0xFF, (len(msg) >> 8) & 0xFF))
         + msg
@@ -368,6 +360,30 @@ def new_state_machine(program):
         except Exception:
             pass
     return rp2.StateMachine(PIO_NUM * 4 + SM_NUM, program, in_base=machine.Pin(IN_BASE))
+
+
+def stop_dma(dmas):
+    """Stop and close the `rp2.DMA` channels in `dmas` (None entries are
+    skipped), so that none can write into a buffer about to be freed.
+
+    `DMA.active(0)` aborts the channel (rp2_dma.c calls
+    `dma_channel_abort()`, which waits for BUSY to clear; checked in v1.22,
+    v1.24 and master), and v1.24's `close()` only unclaims it. The abort is
+    not enough on its own for channels that chain to each other: RP2350-E5 (pico-sdk's
+    `dma_channel_abort()` notes) -- an abort can re-trigger the chained
+    channel unless EN is clear on it and on the aborted one first, and a
+    re-triggered channel goes on filling a freed buffer. So EN is cleared on
+    every channel, through the non-triggering AL1_CTRL alias (+0x10, from
+    CTRL_TRIG at +0x0c), before any is aborted. Harmless on RP2040.
+    """
+    for dma in dmas:
+        if dma is not None:
+            at = 0x50000000 + 0x40 * dma.channel
+            machine.mem32[at + 16] = machine.mem32[at + 12] & ~1
+    for dma in dmas:
+        if dma is not None:
+            dma.active(0)
+            dma.close()
 
 
 def firmware_problem():

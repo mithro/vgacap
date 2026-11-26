@@ -36,6 +36,17 @@ typedef struct sim_config {
     size_t uo_len;
     double seconds_per_byte;  // USB cost of each byte sent to the host
     size_t arena_bytes;       // the capture buffer (the firmware's is ~440 KB)
+    // An ASIC carrier: 0 for none (the design is always on the pins, as on
+    // an FPGA board), else 1 + the mux index the design sits at; uo_out is
+    // then 0 unless the mux has been reset, clocked to that index and enabled.
+    int asic_index_plus1;
+    // A host that stops reading once: the first write at or after
+    // `stall_at` seconds waits `stall_seconds` first (0: never).
+    double stall_at, stall_seconds;
+    // A host that drops DTR (closes the port) at `host_gone_at` seconds (0:
+    // never): from then on hal_host_gone() is true and writes fail, as
+    // tud_cdc_connected() makes them on the board.
+    double host_gone_at;
 } sim_config_t;
 
 // (Re)start the simulated board: boot state, time 0, empty I/O.
@@ -54,9 +65,19 @@ const uint8_t *sim_output(size_t *len);
 // fd reached end of file.
 int sim_input_closed(void);
 
+// What a front end with its own link (VGACAP_SIM_NO_LINK) has just sent the
+// host: the simulated USB time it costs, as the built-in link charges it.
+void sim_link_sent(size_t len);
+
 double sim_now(void);
 // Force the next frame capture's RXSTALL (tests of the rxstall reports).
 void sim_force_rxstall(int on);
+// How many buffers the last frame capture was armed with (hal_frame_arm's
+// spans): tests of chained buffers.
+unsigned sim_frame_spans(void);
+// Make hal_clock() fail, as set_sys_clock_hz() can, for any plan that
+// needs a different system clock.
+void sim_refuse_sysclk(int on);
 
 #ifdef __cplusplus
 }

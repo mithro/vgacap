@@ -106,6 +106,13 @@ int vgacap_writer_rle(vgacap_writer_t *w, const uint32_t *values, const uint32_t
 int vgacap_writer_frame(vgacap_writer_t *w, uint32_t frame_counter, uint16_t first_line,
                         uint16_t line_count, uint32_t clocks_per_line,
                         const uint32_t *words, uint32_t sample_count);
+// The same FRAM chunk with its packed words in several pieces, in order (a
+// capture into chained buffers): the head, which declares all
+// ceil(sample_count / spw) words, then each piece through
+// vgacap_writer_frame_words(). The caller writes exactly that many words.
+int vgacap_writer_frame_begin(vgacap_writer_t *w, uint32_t frame_counter, uint16_t first_line,
+                              uint16_t line_count, uint32_t clocks_per_line, uint32_t sample_count);
+int vgacap_writer_frame_words(vgacap_writer_t *w, const uint32_t *words, uint32_t nwords);
 int vgacap_writer_events(vgacap_writer_t *w, const uint64_t *clocks, const uint32_t *values,
                          uint32_t count);
 int vgacap_writer_time(vgacap_writer_t *w, uint64_t host_time_ns, uint32_t clock_hz,

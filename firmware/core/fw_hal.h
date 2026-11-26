@@ -55,15 +55,25 @@ const fw_board_t *hal_board(void);
 uint32_t hal_sysclk_hz(void);
 // Switch to `plan` (system clock first, then the PWM on the clock pin), or
 // stop the clock (pin low and released) when plan is NULL. Returns 0, or
-// -1 with *why set.
+// -1 with *why set and the clock stopped.
 int hal_clock(const fw_clock_plan_t *plan, const char **why);
 // Hold (1) or release (0) the project's reset.
 void hal_reset(int hold);
 // Drive ui_in with `value`, or release the pins when value < 0.
 void hal_ui_in(int value);
+// ASIC carriers only: drive the project mux's control lines (demo board
+// v3: ctrl_ena GPIO 0, ctrl_sel_nrst GPIO 1, ctrl_sel_inc GPIO 2) to these
+// levels. On an FPGA carrier GPIO 1 is the iCE40's CRESET_B and low erases
+// the FPGA's configuration, so only the explicit asic_select command, which
+// the host sends only for an ASIC board, calls this.
+void hal_asic_ctrl(int ena, int nrst, int inc);
 // Level of one GPIO, read directly.
 int hal_gpio_get(unsigned gpio);
+// A short exact wait (busy: microseconds between GPIO reads).
 void hal_delay_us(uint32_t us);
+// Wait at least `us`, servicing the host link meanwhile (milliseconds of
+// pin sequencing, during which USB must not go unserviced).
+void hal_wait_us(uint32_t us);
 // Idle until something might have changed (an interrupt, a byte).
 void hal_idle(void);
 // Reboot: into the flash firmware, or into the USB bootloader.
@@ -81,9 +91,20 @@ uint32_t *hal_arena(size_t *bytes);
 int hal_stream_start(const fw_pio_program_t *prog, unsigned pio, unsigned sm,
                      uint32_t *buf0, uint32_t *buf1, uint32_t buf_words, const char **why);
 // Whether buffer `i` holds samples nobody has sent yet; and to say it has
-// been sent. A completion that finds its buffer still full is an overrun.
+// been sent. Each completion starts the chain partner's fill at once, so
+// the overrun is counted when a fill *starts* on a buffer still full: from
+// then on that buffer's samples mix two fills, whether its send has begun,
+// is under way or has not started. That buffer is marked torn.
 int hal_stream_full(int i);
-void hal_stream_release(int i);
+// hal_stream_release(i) marks buffer `i` sent and returns whether it was
+// torn, clearing that mark, all in one step the DMA interrupt cannot cut
+// into: a fill that starts on `i` after the release tears the *next*
+// contents, and that mark must survive for the next send. (Releasing and
+// reading the mark apart would let a main loop preempted for longer than
+// a fill clear a mark that belongs to the next send.)
+int hal_stream_release(int i);
+// The overruns so far (an upper bound on the buffers lost: a rewrite that
+// started during a send but never overtook it counts too).
 uint32_t hal_stream_overruns(void);
 // Stop everything; return the overrun count and RXSTALL as they were
 // before anything was torn down.
@@ -91,11 +112,25 @@ void hal_stream_stop(uint32_t *overruns, int *rxstall);
 
 // ---- frame / window (frame_rp2.py) ------------------------------------------
 
+// One capture buffer: `words` words at `buf`. A frame capture fills a list
+// of them in order, one unbroken run of samples (frame_rp2.py's HEAP: on a
+// fragmented MicroPython heap no one block holds a frame).
+typedef struct fw_span {
+    uint32_t *buf;
+    uint32_t words;
+} fw_span_t;
+
+// Most buffers one frame capture may fill: the host's FRAME_MAX_BUFFERS
+// for frame_rp2.py (python/ttcap/capture.py). They cost no DMA channels,
+// only a 16-byte control block each.
+#define FW_FRAME_MAX_BUFFERS 128u
+
 int hal_frame_start(const fw_pio_program_t *prog, unsigned pio, unsigned sm, const char **why);
 // One capture: the state machine restarted with `skip_lines` in its TX
-// FIFO, RXSTALL cleared, a DMA of `words` into `buf`, and after it the
-// stopper that disables the state machine and raises the interrupt.
-void hal_frame_arm(uint32_t skip_lines, uint32_t *buf, uint32_t words);
+// FIFO, RXSTALL cleared, DMA into each of the `count` (1..FW_FRAME_MAX_
+// BUFFERS) spans in turn, and after them the stopper that disables the
+// state machine and raises the interrupt.
+void hal_frame_arm(uint32_t skip_lines, const fw_span_t *spans, unsigned count);
 int hal_frame_done(void);
 // After done: whether the RX FIFO overflowed during the window.
 int hal_frame_rxstall(void);

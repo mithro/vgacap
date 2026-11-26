@@ -87,14 +87,24 @@ int vgacap_writer_rle(vgacap_writer_t *w, const uint32_t *values, const uint32_t
     return 0;
 }
 
-int vgacap_writer_frame(vgacap_writer_t *w, uint32_t frame_counter, uint16_t first_line,
-                        uint16_t line_count, uint32_t clocks_per_line,
-                        const uint32_t *words, uint32_t sample_count) {
+int vgacap_writer_frame_begin(vgacap_writer_t *w, uint32_t frame_counter, uint16_t first_line,
+                              uint16_t line_count, uint32_t clocks_per_line, uint32_t sample_count) {
     uint32_t spw = w->header.samples_per_word, nwords = (sample_count + spw - 1) / spw;
     if (write_chunk_head(w, VGACAP_TAG_FRAME, 16u + 4u * nwords)) return -1;
     uint8_t c[16]; put_u32(c, frame_counter); put_u16(c + 4, first_line); put_u16(c + 6, line_count);
     put_u32(c + 8, clocks_per_line); put_u32(c + 12, sample_count);
-    if (w->write(w->user, c, 16)) return -1;
+    return w->write(w->user, c, 16);
+}
+
+int vgacap_writer_frame_words(vgacap_writer_t *w, const uint32_t *words, uint32_t nwords) {
+    return write_words(w, words, nwords);
+}
+
+int vgacap_writer_frame(vgacap_writer_t *w, uint32_t frame_counter, uint16_t first_line,
+                        uint16_t line_count, uint32_t clocks_per_line,
+                        const uint32_t *words, uint32_t sample_count) {
+    uint32_t spw = w->header.samples_per_word, nwords = (sample_count + spw - 1) / spw;
+    if (vgacap_writer_frame_begin(w, frame_counter, first_line, line_count, clocks_per_line, sample_count)) return -1;
     return write_words(w, words, nwords);
 }
 

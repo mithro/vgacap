@@ -53,7 +53,7 @@ vgacap_add_test(test_stream_chunks)
 # firmware/CMakeLists.txt, a separate pico-sdk project that needs the ARM
 # toolchain (firmware/README.md); nothing here does.
 add_library(vgacap_fw_core STATIC
-  firmware/core/fw.c firmware/core/fw_args.c firmware/core/fw_board.c
+  firmware/core/fw.c firmware/core/fw_capture.c firmware/core/fw_args.c firmware/core/fw_board.c
   firmware/core/fw_clock.c firmware/core/fw_pio.c)
 target_include_directories(vgacap_fw_core PUBLIC firmware/core)
 target_link_libraries(vgacap_fw_core PUBLIC vgacap_stream)
