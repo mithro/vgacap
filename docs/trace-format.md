@@ -8,112 +8,31 @@ review: 2027-05-27
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The simulation trace format
 
-**The bytes of a vgacap simulation trace: its chunks, its 43-bit sample layout, its clock and time rules, and its zstd container.**
+**What makes a vgacap stream a simulation trace: its header values, its `META` keys, its 43-bit sample layout, its clocks, and its zstd container.**
 
-The writer is [`trace_write.c`](../src/trace/trace_write.c), declared in [`trace.h`](../include/vgacap/trace.h), and the reader is [`trace_read.c`](../src/trace/trace_read.c). [`stream.py`](../python/vgacap/stream.py) reads and writes the uncompressed stream. What a trace is for is on [What a simulation trace records](../src/trace/explanation-traces.md), and reading one with no vgacap code on [How to read a simulation trace without vgacap](how-to-read-trace.md).
+A trace is a version 2 vgacap stream. The chunk bytes, the header fields, the `RUNS`, `BLKH` and `META` encodings and the sample-index rules are on [the stream format](../src/stream/reference-stream-format.md), and are not repeated here. The writer is [`trace_write.c`](../src/trace/trace_write.c), declared in [`trace.h`](../include/vgacap/trace.h), and the reader is [`trace_read.c`](../src/trace/trace_read.c). What a trace is for is on [What a simulation trace records](../src/trace/explanation-traces.md).
 
-In every table, Offset is in bytes from the start of the payload, or of the chunk where it says so. Type is `u8`, `u16`, `u32` or `u64`: an unsigned little-endian integer of that many bits. Field is the name the code uses, and Value what it holds.
+## The header
 
-## Chunks
+Field is a field of the [`VGCH` header](../src/stream/reference-stream-format.md#vgch-the-header), and Trace value what the trace writer puts in it.
 
-The uncompressed trace is a sequence of chunks, with no padding and no sync word. Offset is from the start of the chunk.
-
-| Offset | Type | Field | Value |
-|---|---|---|---|
-| 0 | 4 ASCII bytes | tag | the chunk's kind |
-| 4 | u32 | `length` | the payload's size in bytes: 16 MiB at most |
-| 8 | `length` bytes | payload | as the tag says |
-
-Tag is the chunk's tag, and In a trace whether a trace may hold it. A reader skips a chunk whose tag it does not know, by its length.
-
-| Tag | In a trace |
+| Field | Trace value |
 |---|---|
-| `VGCH` | always the first chunk |
-| `META` | yes |
-| `BLKH` | yes |
-| `RUNS` | yes |
-| `TIME` | allowed |
-| `RAW ` | never |
-| `RLE ` | never |
-| `FRAM` | never |
-| `EVNT` | never |
-
-## VGCH, version 2
-
-The chunk's length is exactly 24 plus `desc_len`. Trace value is what a trace from the trace writer holds.
-
-| Offset | Type | Field | Value | Trace value |
-|---|---|---|---|---|
-| 0 | u16 | `version` | 2 | 2 |
-| 2 | u8 | `sample_bits` | 1 to 64 | 43 |
-| 3 | u8 | `mode` | 0 extclk; 1 selfclk; 2 event; 3 unknown | 2 |
-| 4 | u32 | `clock_hz` | the design clock in whole hertz: the only place it is given | the design's |
-| 8 | 8 × u8 | `signal_map` | the sample bit of hsync, vsync, r1, r0, g1, g0, b1 and b0; `0xFF` for absent | 7 3 0 4 1 5 2 6 |
-| 16 | u8 | `samples_per_word` | 0 when `sample_bits` is over 32; otherwise 1, 2, 4 or 8 | 0 |
-| 17 | u8 | `flags` | bit 0: version 1 word packing | 0 |
-| 18 | u16 | `desc_len` | 251 at most | 0 |
-| 20 | u8 | `samples_per_clock` | 1; or 2 exactly when there is a clock bit | 2 |
-| 21 | u8 | `clock_bit` | 0 to `sample_bits` − 1; or `0xFF` for none | 42 |
-| 22 | u8 | `clock_first` | the clock bit's value in sample 0; 0 with no clock bit | 0 |
-| 23 | u8 | reserved | 0 | 0 |
-| 24 | `desc_len` bytes | description | UTF-8 | none |
-
-## VGCH, version 1
-
-A board capture's header. Item is what differs from version 2, and Version 1 its value there.
-
-| Item | Version 1 |
-|---|---|
-| `sample_bits` | 8, 12, 16 or 32 |
-| Bytes 20 to 23 | absent |
-| Chunk length | 20 plus `desc_len` |
-| `samples_per_clock` as read | 1 |
-| `clock_bit` as read | none |
-
-## Sample numbers
-
-Rule is the name of the rule, and Value the rule.
-
-| Rule | Value |
-|---|---|
-| A sample | a `sample_bits`-bit value |
-| Sample number `n` | 0 after the `VGCH`; grows by each sample a `RUNS` chunk delivers; set by each `BLKH` |
-| Clock bit of sample `n` | `clock_first` XOR (`n` AND 1): it is never stored |
-| Samples a clock | `samples_per_clock`: one with the clock low and one with it high |
-
-## RUNS
-
-| Offset | Type | Field | Value |
-|---|---|---|---|
-| 0 | u32 | `pair_count` | at least 1 |
-| 4 | pairs | pairs | `pair_count` of them |
-
-The chunk's length is exactly 4 plus the pairs' bytes. Part is a part of one pair, and Encoding how it is stored.
-
-| Part | Encoding | Value |
-|---|---|---|
-| `value` | `vbytes` = ceil(`sample_bits` ÷ 8) little-endian bytes: 6 in a trace | the run's value; the clock bit and every bit at or above `sample_bits` stored as 0 |
-| `run` | unsigned LEB128: 1 to 10 bytes; 7 bits a byte; low group first; top bit set when a byte follows | at least 1 and below 2^64; minimally encoded: no final `0x00`; a 10th byte at most `0x01` |
-
-Rule is a rule of the pairs, and Value the rule.
-
-| Rule | Value |
-|---|---|
-| Samples a pair stands for | `n` to `n` + `run` − 1: all `value` but each one's own clock bit |
-| Two adjacent pairs of one chunk | never the same value |
-| A run across chunks or blocks | may continue with the same value: the writer cuts runs at block boundaries |
-
-## BLKH
-
-| Offset | Type | Field | Value |
-|---|---|---|---|
-| 0 | u64 | `first_sample` | the number of the block's first sample: it sets `n` |
-
-In a trace every block starts with one, and it equals the number of samples before it.
+| `version` | 2 |
+| `sample_bits` | 43 |
+| `mode` | 2: event |
+| `clock_hz` | the design clock in whole hertz |
+| `signal_map` | 7 3 0 4 1 5 2 6: the Tiny VGA Pmod on `uo_out` |
+| `samples_per_word` | 0 |
+| `flags` | 0 |
+| `desc_len` | 0 |
+| `samples_per_clock` | 2 |
+| `clock_bit` | 42 |
+| `clock_first` | 0 |
 
 ## META
 
-1 to 4096 bytes of UTF-8 text: `key=value` lines, each ending in `\n`, the last one too. A key matches `[a-z][a-z0-9_]*` and appears once, and the first line is `meta=open` or `meta=close`. Readers ignore keys they do not know.
+The keys a trace writes in its two `META` chunks. The chunk's syntax is on [META in the stream format](../src/stream/reference-stream-format.md#meta-metadata-version-2), and readers ignore keys they do not know.
 
 Chunk is the `META` chunk, and Need whether a key is required. Value is the key's text.
 
@@ -162,7 +81,7 @@ Signal is a Tiny VGA Pmod signal, and `uo_out` bit the bit that carries it, as `
 
 ## Clocks and time
 
-Rule is the name of the rule, and Value the rule. Clock values in `META` and in `frames.txt` use this numbering.
+Rule is the name of the rule, and Value the rule. Clock values in `META` and in [`frames.txt`](frames-format.md) use this numbering. The time of a sample, and its clock bit, follow [the stream format's sample index rules](../src/stream/reference-stream-format.md#the-sample-index-and-the-clock-bit).
 
 | Rule | Value |
 |---|---|
@@ -171,8 +90,7 @@ Rule is the name of the rule, and Value the rule. Clock values in `META` and in 
 | Sample 2`c` | the outputs registered at clock `c` − 1's rising edge; the inputs as driven for clock `c` |
 | Sample 2`c` + 1 | the outputs of clock `c`'s own rising edge |
 | Clock 0's low sample | repeats its high sample's outputs |
-| Time of sample `n` | round(`n` × 10^12 ÷ (`samples_per_clock` × `clock_hz`)) picoseconds with halves rounded up |
-| How the time is computed | exactly in 128-bit integers from the sample number: `vgacap_sample_time_ps` in [`time.c`](../src/stream/time.c) |
+| Time of clock `c` | the time of sample 2`c` |
 | `clock_hz` of 0 | the time is unknown |
 
 ## The container

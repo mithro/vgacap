@@ -9,7 +9,7 @@ review: 2027-05-27
 
 **You want your own program to read the samples of a vgacap simulation trace, with a zstd decoder and no vgacap code.**
 
-Every field named here is in [the simulation trace format](trace-format.md). A reader that needs only part of a long trace uses the seek table there instead of step 1.
+The chunk bytes are in [the stream format](../src/stream/reference-stream-format.md), and what a trace adds in [the simulation trace format](trace-format.md). A reader that needs only part of a long trace uses the seek table of [the container](trace-format.md#the-container) instead of step 1.
 
 ## What you need
 
@@ -23,8 +23,8 @@ Every field named here is in [the simulation trace format](trace-format.md). A r
 3. In your program, take `sample_bits`, `samples_per_clock`, `clock_bit`, `clock_first` and `clock_hz` from the `VGCH` chunk.
 4. In your program, check that the first `META` chunk has the line `layout=tt-um-43`, so the bits are those of the layout table.
 5. In your program, start the sample number `n` at 0, and set it to `first_sample` at each `BLKH` chunk.
-6. In your program, expand each `RUNS` pair into `run` samples from `n` on, each with the clock bit [Sample numbers](trace-format.md#sample-numbers) gives it.
-7. In your program, take clock `n` ÷ 2 for sample `n`, and its time from the rule in [Clocks and time](trace-format.md#clocks-and-time).
+6. In your program, expand each `RUNS` pair into `run` samples from `n` on, each with the clock bit [the sample index rules](../src/stream/reference-stream-format.md#the-sample-index-and-the-clock-bit) give it.
+7. In your program, take clock `n` ÷ 2 for sample `n`, and its time from [the sample index rules](../src/stream/reference-stream-format.md#the-sample-index-and-the-clock-bit).
 
 ## Check
 
