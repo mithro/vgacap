@@ -33,7 +33,7 @@ board can settle and writes a dated Markdown report. The checks are:
 The example runs against `fpga-1`, a demo board with an FPGA breakout on
 the shared Welland bench, and needs bench access (see
 [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed)).
-It needs the calibration bitstream uploaded and enabled first, with
+It needs the calibration bitstream uploaded first, with
 tt-vga-testpatterns'
 [`tools/upload.py`](https://github.com/mithro/tt-vga-testpatterns/blob/main/tools/upload.py):
 
@@ -73,6 +73,5 @@ The Welland bench is shared, so `hil.py` is careful with its boards:
   itself gets SIGINT, SIGTERM, SIGHUP or SIGQUIT (it still writes its
   report).
 
-Before running against a bench board, check its page on
-[tinytapeout.fpgas.online](https://tinytapeout.fpgas.online) (`/board/<slug>/status.json`) for other clients,
-and confirm the board's USB serial: boards move between ports.
+Before running against a bench board, do the checks in
+[Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed).
