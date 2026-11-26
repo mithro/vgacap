@@ -130,14 +130,16 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   breakout, and when these disagree about which board it is:
   - `--board` (`ttcap capture --board SLUG`);
   - a `ws://` or `wss://` link: the address of the fpgas.online bridge
-    (`fpgas-tt`), the Pi's name, or a loopback address (127.0.0.0/8,
-    `localhost`, `::1`) on a tunnel's `18000 + octet` port, which names
-    the tunnel's board;
-  - for a `serial:` link, or a loopback link on any other port (the Pi's
-    own bridge), the Pi it runs on.
+    (`fpgas-tt`), the Pi's name, or a host that resolves to this machine
+    on a tunnel's `18000 + octet` port, which names the tunnel's board;
+  - for a `serial:` link, or a `ws://` link on any other port whose host
+    resolves to this machine (the Pi's own bridge), the Pi it runs on.
 
-  The refusal names the boards with an ASIC breakout in the board table
-  that can run this firmware (RP2350 only), or says that none is listed.
+  A host resolves to this machine if it is loopback, 0.0.0.0 or `::` in
+  any spelling, or one of the machine's own addresses; a host that does
+  not resolve is refused. The refusal names the boards with an ASIC
+  breakout in the board table that can run this firmware (RP2350 only), or
+  says that none is listed.
   [`ttcap.firmware.setup()`](../python/ttcap/firmware.py) called directly
   does not check; its caller must
   ([`ttcap.demo.check_asic_index()`](../python/ttcap/demo.py)).

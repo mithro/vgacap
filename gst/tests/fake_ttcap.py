@@ -141,6 +141,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--pio", type=int)
     parser.add_argument("--buf-words", type=int)
     parser.add_argument("--mode")
+    parser.add_argument("--firmware")
     parser.add_argument("--vga-mode")
     parser.add_argument("--window-lines", type=int)
     parser.add_argument("--edge", choices=["falling", "rising"], default="falling")

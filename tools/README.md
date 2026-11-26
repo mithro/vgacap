@@ -51,7 +51,10 @@ tools/hil.sh --board fpga-1 --design tt_um_vgacal_bars --clock-hz 500000 \
 - `--ui-in` for `tt_um_vgacal_modes`;
 - `--stop-bridge` when running on the board's own Pi with
   `serial:/dev/ttboard` (it stops the fpgas.online bridge (`fpgas-tt`),
-  which holds the device, and starts it again afterwards if it stopped it);
+  which holds the device, and starts it again afterwards if it stopped it).
+  It refuses unless the bridge's `/health` says 0 clients on two reads a
+  few seconds apart; that count covers WebSocket serial sessions only, so
+  an in-flight HTTP request is not seen;
 - `--testpatterns DIR` if tt-vga-testpatterns is not checked out next to
   vgacap (the `reference` and `frame` checks SKIP otherwise).
 
