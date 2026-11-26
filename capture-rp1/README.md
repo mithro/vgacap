@@ -69,6 +69,6 @@ run at whatever `--gen-div` and `--gen-delay` make them.
 - A DMA left waiting on a stopped state machine (a canceled thread, a
   generator stopped mid-transfer) leaves the driver unusable until a
   reboot, so teardown lets every transfer finish first.
-- NULL read-ahead transfers (piolib's `rxsource` example) return `-EINVAL`
+- NULL read-ahead transfers ([piolib's `rxsource` example](https://github.com/raspberrypi/utils/blob/master/piolib/examples/rxsource.c)) return `-EINVAL`
   on this kernel, and blocking calls serialize the whole RP1 firmware
   interface.
