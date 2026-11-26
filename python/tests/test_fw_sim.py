@@ -207,6 +207,12 @@ def test_pio_sources_are_what_the_firmware_builds(fw):
     assert words == _pioasm_hex("vgacap_frame.hex")
 
 
+def test_rle_is_refused_rather_than_run_as_a_stream():
+    req = request(clock_hz=25_000_000, max_bytes=4096, script="rle_rp2.py")
+    with pytest.raises(CaptureError, match="no rle mode"):
+        capture_command(req)
+
+
 # -- streaming -------------------------------------------------------------------------
 
 
