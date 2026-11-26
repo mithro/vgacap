@@ -41,11 +41,12 @@ under it.
 | Developing vgacap | someone with a checkout | building, testing, CI, the hardware-in-the-loop check, the docs themselves, where to make which change |
 
 A heading holds at most seven entries (**5.9**). The sidebar is built from
-the landing pages' list lines (`docs/_ext/vgacap_landing.py`): walked
-breadth-first from the root, each page's parent is the first landing page
-that reaches it, so a page has one place in the sidebar and a later line to
-it, or a line back up, is a cross-link. A group larger than seven gets a
-child landing page, never a caption.
+the landing pages' list lines (`docs/_ext/vgacap_landing.py`). A page is
+the destination of one line, whose landing page is its one place in the
+sidebar; any other mention is a cross-link, a list item that does not start
+with the link, and a second line fails the build. A line back up to a
+landing page above is allowed. A group larger than seven gets a child
+landing page, never a caption.
 
 ## Page types and where each lives
 
