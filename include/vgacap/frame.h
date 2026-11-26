@@ -18,14 +18,23 @@ typedef struct vgaframe_mode {
     uint16_t h_active, h_front, h_sync, h_back;   // clocks
     uint16_t v_active, v_front, v_sync, v_back;   // lines
     uint8_t  h_sync_positive, v_sync_positive;    // 1 = pulse is high
+    uint8_t  extended;   // 1 = added from the simulation testbench; vgaframe_mode_match_cpl skips it
 } vgaframe_mode_t;
 
 // clocks per line = h_active+h_front+h_sync+h_back; lines per frame likewise.
+// The h_* fields are the mode's pixels, which are also its clocks at one
+// clock per pixel; the samplers read them as pixels. The struct's meaning is
+// the same either way. vgaframe_mode_line_px and _frame_lines give that
+// pixel-domain view: the totals per line and per frame.
+uint32_t vgaframe_mode_line_px(const vgaframe_mode_t *m);
+uint32_t vgaframe_mode_frame_lines(const vgaframe_mode_t *m);
 const vgaframe_mode_t *vgaframe_modes(size_t *count);
 // exact match on clocks_per_line and lines_per_frame; NULL if none
 const vgaframe_mode_t *vgaframe_mode_match(uint32_t clocks_per_line, uint32_t lines_per_frame);
 // match on clocks_per_line alone; NULL if none. clocks_per_line is unique
-// across the built-in table, so this is unambiguous; used to recognise a
+// across the non-extended entries, which are all this looks at (extended
+// modes share totals with them, e.g. 800x600@60 and @75 are both 1056), so
+// this is unambiguous; used to recognise a
 // mode from a single FRAM window, which knows its clocks_per_line but not
 // (by itself) the frame's line count.
 const vgaframe_mode_t *vgaframe_mode_match_cpl(uint32_t clocks_per_line);

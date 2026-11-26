@@ -16,7 +16,7 @@ static uint8_t raw[W * H], rgb[W * H * 3], cover[H], rgb6buf[W * H];
 static const uint8_t tiny_map[8] = { 7, 3, 0, 4, 1, 5, 2, 6 };
 
 // 640x480 with one clock more front porch: 801 x 525, which no table mode has.
-static const vgaframe_mode_t odd801 = { "odd801", 640, 17, 96, 48, 480, 10, 2, 33, 0, 0 };
+static const vgaframe_mode_t odd801 = { "odd801", 640, 17, 96, 48, 480, 10, 2, 33, 0, 0, 0 };
 
 // ---- callbacks -------------------------------------------------------------
 

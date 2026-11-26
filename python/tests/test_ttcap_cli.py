@@ -118,3 +118,12 @@ def test_throughput_exits_one_when_the_board_goes_quiet(monkeypatch, capsys):
 
     assert cli.main(["throughput", "serial:/dev/null"]) == 1
     assert "throughput failed: TimeoutError" in capsys.readouterr().err
+
+
+def test_vga_mode_choices_are_exactly_the_base_modes():
+    parser = cli.build_parser()
+    sub = next(a for a in parser._actions if hasattr(a, "choices") and isinstance(a.choices, dict) and "capture" in a.choices)
+    action = next(a for a in sub.choices["capture"]._actions if "--vga-mode" in a.option_strings)
+    assert sorted(action.choices) == sorted(
+        ["640x480@60", "640x480@72", "640x480@75", "720x400@70", "800x600@56", "800x600@60", "1024x768@60"]
+    )

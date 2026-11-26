@@ -134,6 +134,13 @@ def frame_cfg(
     if vga_mode not in MODES:
         raise ValueError(f"unknown VGA mode {vga_mode!r}; known: {', '.join(MODES)}")
     mode = MODES[vga_mode]
+    if mode.extended:
+        base = [m.name for m in MODES.values() if not m.extended]
+        raise ValueError(
+            f"{vga_mode}: frame and window capture support only the base modes, which "
+            f"libvgaframe recognises by clocks per line alone ({', '.join(base)}); "
+            f"streaming capture detects {vga_mode} without --vga-mode"
+        )
     if mode.cpl % profile.samples_per_word:
         raise ValueError(
             f"{vga_mode}: {mode.cpl} clocks per line is not a whole number of "

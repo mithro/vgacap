@@ -960,6 +960,13 @@ def test_a_picture_swept_from_several_frames_says_so():
     assert frame_note(["overruns=0 rxstall=0"], 481) == ""
 
 
+def test_frame_cfg_rejects_extended():
+    from ttcap.capture import frame_cfg
+
+    with pytest.raises(ValueError, match="frame and window capture support only"):
+        frame_cfg(RP2350_DBV3, vga_mode="800x600@72")
+
+
 # -- select_project undoes its own mode change --------------------------------
 
 

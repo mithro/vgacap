@@ -371,6 +371,37 @@ TEST(last_report_values) {
     ASSERT_EQ_U(f.last_report, 1);
 }
 
+// 1688 x 1066 is the largest added mode, beyond the shared 1400 x 900 buffers.
+static uint32_t big_buf[1688 * 1066];
+static uint8_t big_raw[1688 * 1066], big_rgb[1280 * 1024 * 3 + 1688 * 1066 * 3], big_cover[1066];
+static uint8_t big_got[1688 * 1066 * 3]; static unsigned big_w, big_h, big_frames;
+static void big_on_frame(void *u, const vgaframe_output_t *o) {
+    (void)u; big_w = o->width; big_h = o->height; big_frames++;
+    memcpy(big_got, o->rgb24, (size_t)o->width * o->height * 3);
+}
+
+TEST(crop_added_modes) {
+    size_t n; const vgaframe_mode_t *tab = vgaframe_modes(&n);
+    ASSERT_EQ_U(n, 12);
+    for (size_t k = 7; k < 12; k++) {
+        const vgaframe_mode_t *m = &tab[k];
+        size_t ns = synth_frame(m, bars, NULL, big_buf, sizeof big_buf / sizeof big_buf[0]);
+        ASSERT_TRUE(ns > 0);
+        vgaframe_config_t c; memset(&c, 0, sizeof c); c.max_clocks_per_line = 1688; c.max_lines = 1066;
+        static const uint8_t map[8] = { 7, 3, 0, 4, 1, 5, 2, 6 }; memcpy(c.signal_map, map, 8);
+        c.on_frame = big_on_frame; big_frames = 0; big_w = big_h = 0;
+        vgaframe_t f;
+        ASSERT_EQ_U(vgaframe_init(&f, &c, big_raw, big_rgb, big_cover), 0);
+        for (int fr = 0; fr < 3; fr++) for (size_t i = 0; i < ns; i++) vgaframe_push(&f, big_buf[i], 1);
+        ASSERT_TRUE(big_frames >= 1);
+        ASSERT_EQ_U(big_w, m->h_active); ASSERT_EQ_U(big_h, m->v_active);
+        for (unsigned y = 0; y < big_h; y++) for (unsigned x = 0; x < big_w; x++) {
+            uint8_t col = bars(NULL, (uint16_t)x, (uint16_t)y); const uint8_t *q = big_got + ((size_t)y * big_w + x) * 3;
+            ASSERT_EQ_U(q[0], ((col >> 4) & 3) * 85); ASSERT_EQ_U(q[1], ((col >> 2) & 3) * 85); ASSERT_EQ_U(q[2], (col & 3) * 85);
+        }
+    }
+}
+
 int main(void) {
     RUN(colour_helper);
     RUN(reconstructs_640x480_bars);
@@ -388,5 +419,6 @@ int main(void) {
     RUN(frame_x_saturates);
     RUN(frames_are_exact_after_a_long_run);
     RUN(last_report_values);
+    RUN(crop_added_modes);
     RUN_TESTS_END();
 }

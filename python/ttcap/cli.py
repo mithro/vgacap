@@ -993,7 +993,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     capture_parser.add_argument(
         "--vga-mode",
-        choices=sorted(MODES),
+        choices=sorted(m.name for m in MODES.values() if not m.extended),
         default=DEFAULT_VGA_MODE,
         help=f"frame/window modes: the VGA timing to expect (default {DEFAULT_VGA_MODE})",
     )
