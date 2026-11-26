@@ -869,6 +869,74 @@ TEST(test_push2_first_sample) {
     diff_rm(&d);
 }
 
+// ---- the fast paths are taken ----------------------------------------------
+//
+// The byte-identity tests pass even if a fast path never runs (every call
+// going to its slow path writes the same file), which would undo the speed
+// fix. With VGACAP_TEST_WRAP_SLOW the build links this file with
+// --wrap for the three slow paths, so each call into them from the inline
+// fast paths counts here.
+
+#ifdef VGACAP_TEST_WRAP_SLOW
+static uint64_t slow_calls[3];   // push, repeat2, push2
+int __real_vgacap_trace_slow(vgacap_trace_writer_t *t, uint64_t v);
+int __real_vgacap_trace_repeat2_slow(vgacap_trace_writer_t *t);
+int __real_vgacap_trace_push2_slow(vgacap_trace_writer_t *t, uint64_t v0, uint64_t v1);
+int __wrap_vgacap_trace_slow(vgacap_trace_writer_t *t, uint64_t v);
+int __wrap_vgacap_trace_repeat2_slow(vgacap_trace_writer_t *t);
+int __wrap_vgacap_trace_push2_slow(vgacap_trace_writer_t *t, uint64_t v0, uint64_t v1);
+int __wrap_vgacap_trace_slow(vgacap_trace_writer_t *t, uint64_t v) {
+    slow_calls[0]++; return __real_vgacap_trace_slow(t, v);
+}
+int __wrap_vgacap_trace_repeat2_slow(vgacap_trace_writer_t *t) {
+    slow_calls[1]++; return __real_vgacap_trace_repeat2_slow(t);
+}
+int __wrap_vgacap_trace_push2_slow(vgacap_trace_writer_t *t, uint64_t v0, uint64_t v1) {
+    slow_calls[2]++; return __real_vgacap_trace_push2_slow(t, v0, v1);
+}
+
+// One value for 2^25 + 1000 samples (one block end by clock count), after
+// `odd` single pushes, the rest by `op` (0 push, 1 repeat2, 2 push2).
+// Returns the slow calls of each kind, after the first pair.
+static int fast_case(int op, int odd, uint64_t calls[3]) {
+    char path[256]; tmp_path(path, sizeof path, "fast_path.vgct.zst");
+    vgacap_header_t h; header43(&h);
+    char err[256] = "";
+    vgacap_trace_writer_t *t = vgacap_trace_create(path, &h, OPEN_META, 3, err, sizeof err);
+    if (!t) return -1;
+    const uint64_t v = BASE43 | 0x55, end = 2 * VGACAP_TRACE_BLOCK_CLOCKS + 1000;
+    uint64_t n = 0;
+    int bad = 0;
+    for (; n < 2u + (unsigned)odd; n++) bad |= vgacap_trace_push(t, v | ((n & 1) ? CLK42 : 0));
+    memset(slow_calls, 0, sizeof slow_calls);
+    for (; n < end; n += 2) {
+        uint64_t v0 = v | ((n & 1) ? CLK42 : 0);
+        if (op == 0) { bad |= vgacap_trace_push(t, v0); bad |= vgacap_trace_push(t, v0 ^ CLK42); }
+        else if (op == 1) bad |= vgacap_trace_repeat2(t);
+        else bad |= vgacap_trace_push2(t, v0, v0 ^ CLK42);
+    }
+    memcpy(calls, slow_calls, sizeof slow_calls);
+    int rc = vgacap_trace_finish(t, CLOSE_META, err, sizeof err);
+    trace_rm(path);
+    return bad || rc ? -1 : 0;
+}
+
+// Unchanged samples go to a slow path only at the one block end.
+TEST(test_fast_paths_taken) {
+    for (int op = 0; op < 3; op++) {
+        for (int odd = 0; odd < 2; odd++) {
+            uint64_t c[3];
+            ASSERT_TRUE(fast_case(op, odd, c) == 0);
+            fprintf(stderr, "  op %d odd %d: slow calls push %llu, repeat2 %llu, push2 %llu\n", op, odd,
+                    (unsigned long long)c[0], (unsigned long long)c[1], (unsigned long long)c[2]);
+            ASSERT_EQ_U(c[0], op == 0 ? 1 : 0);
+            ASSERT_EQ_U(c[1], op == 1 ? 1 : 0);
+            ASSERT_EQ_U(c[2], op == 2 ? 1 : 0);
+        }
+    }
+}
+#endif
+
 // ---- speed (perf label; run by hand, not in CI) -----------------------------
 
 static double clock_s(clockid_t id) {
@@ -941,5 +1009,10 @@ int main(int argc, char **argv) {
     RUN(test_push2_block_end_by_clock);
     RUN(test_push2_first_and_failure);
     RUN(test_push2_first_sample);
+#ifdef VGACAP_TEST_WRAP_SLOW
+    RUN(test_fast_paths_taken);
+#else
+    fprintf(stderr, "SKIP test_fast_paths_taken (needs GNU ld --wrap)\n");
+#endif
     RUN_TESTS_END();
 }

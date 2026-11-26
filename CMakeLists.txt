@@ -139,6 +139,14 @@ if(VGACAP_HOST_EXTRAS)
   vgacap_add_test(test_trace_write)
   target_link_libraries(test_trace_write PRIVATE vgacap_trace)
   set_tests_properties(test_trace_write PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+  # GNU ld's --wrap sends the test's calls into the slow paths through
+  # counters, so a test can check that the inline fast paths are taken
+  # (the writer's own calls, inside trace_write.c, are not wrapped).
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang)$")
+    target_link_options(test_trace_write PRIVATE
+      "LINKER:--wrap=vgacap_trace_slow,--wrap=vgacap_trace_repeat2_slow,--wrap=vgacap_trace_push2_slow")
+    target_compile_definitions(test_trace_write PRIVATE VGACAP_TEST_WRAP_SLOW=1)
+  endif()
   # The trace reader: ranges, a rebuilt seek table, plain VGCH streams.
   vgacap_add_test(test_trace_read)
   target_link_libraries(test_trace_read PRIVATE vgacap_trace vgacap_zlib)
