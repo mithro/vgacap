@@ -123,7 +123,8 @@ def test_header_v1_defaults():
 @pytest.mark.parametrize("bits", [1, 8, 12, 33, 64])
 def test_runs_other_widths(bits):
     mask = (1 << bits) - 1
-    pairs = [(mask, 1), (0, 300), (mask >> 1, 2 ** 64 - 1)] if bits > 1 else [(1, 1), (0, 300)]
+    # The last run is the largest that keeps n within 64 bits.
+    pairs = [(mask, 1), (0, 300), (mask >> 1, 2 ** 64 - 302)] if bits > 1 else [(1, 1), (0, 300)]
     _, items = read_stream(stream(plain_v2(bits), lambda w, fp: w.runs(pairs)))
     assert items == [("run", v, r) for v, r in pairs]
 
@@ -186,6 +187,9 @@ T = vgch_v2()  # a good trace header
     (T + runs_chunk([(1, b"\x00")]), "RUNS run is zero"),
     (T + runs_chunk([(1, bytes.fromhex("818000"))]), "RUNS run not minimally encoded"),
     (T + runs_chunk([(1, bytes.fromhex("ffffffffffffffffff02"))]), "RUNS run over 64 bits"),
+    (T + runs_chunk([(1, 2**64 - 1)]), None),
+    (T + runs_chunk([(1, 2**64 - 2), (2, 1)]), None),
+    (T + runs_chunk([(1, 2**64 - 1), (2, 1)]), "RUNS run takes n past 64 bits"),
     (T + runs_chunk([(1, 1)]) + b"", None),
     (T + runs_chunk([(1, 1)], count=2), "RUNS pairs do not fill the chunk"),
     (T + chunk(b"RUNS", struct.pack("<I", 1) + bytes(6) + b"\x01\x00"), "RUNS pairs do not fill the chunk"),

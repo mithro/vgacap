@@ -1073,8 +1073,14 @@ static int on_batch(void *user, const vgacap_trace_run_t *runs, size_t n) {
 static void batches_free(struct batches *b) { all_free(&b->a); free(b->size); memset(b, 0, sizeof *b); }
 
 // A RUNS chunk of `pairs` pairs for header h, with fault `fault` (F_NONE:
-// none) planted at pair `at`.
-enum { F_NONE, F_CLK, F_HIGH, F_EQUAL, F_ZERO, F_NOTMIN, F_TENTH, F_COUNT_UP, F_COUNT_DOWN, F_EXTRA, F_KINDS };
+// none) planted at pair `at`. The runs of a stream must keep n within 64
+// bits: at most one run is above 2^63 (huge_left, set per stream), the rest
+// are at most about 2^48, so a stream's total stays below 2^64 unless
+// F_PAST plants a run of 2^64 - 1, which takes n past it unless it is the
+// stream's first.
+enum { F_NONE, F_CLK, F_HIGH, F_EQUAL, F_ZERO, F_NOTMIN, F_TENTH, F_COUNT_UP, F_COUNT_DOWN, F_EXTRA, F_PAST,
+       F_KINDS };
+static int huge_left;
 static void put_runs_vb(struct membuf_t *m, const vgacap_header_t *h, unsigned pairs, int fault, unsigned at) {
     const unsigned bits = h->sample_bits, vb = (bits + 7u) / 8u;
     const uint64_t mask = bits >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << bits) - 1u;
@@ -1096,8 +1102,10 @@ static void put_runs_vb(struct membuf_t *m, const vgacap_header_t *h, unsigned p
         for (unsigned i = 0; i < vb; i++) p[n++] = (uint8_t)(v >> (8 * i));
         uint32_t c = rnd() % 64;
         uint64_t run = c < 40 ? 1 + c % 4 : c < 52 ? 100 + rnd() % 100000
-                     : c < 58 ? ((uint64_t)rnd() << 24 | rnd()) + 1 : UINT64_MAX - rnd();
+                     : c < 58 || !huge_left ? ((uint64_t)rnd() << 16 | rnd()) + 1 : ((uint64_t)1 << 63) + rnd();
+        if (run >> 63) huge_left = 0;
         if (k == at && fault == F_ZERO) run = 0;
+        if (k == at && fault == F_PAST) run = UINT64_MAX;
         if (k == at && fault == F_NOTMIN) {
             p[n++] = (uint8_t)(0x80 | (run & 0x7F)); p[n++] = 0;   // a needless zero byte
         } else if (k == at && fault == F_TENTH) {
@@ -1164,6 +1172,7 @@ static void diff_one(const char *path, unsigned bits, int zstd, int fault, struc
     vgacap_writer_init(&w, mem_put, &blk[0], &h);
     vgacap_writer_meta(&w, OPEN_META, strlen(OPEN_META));
     uint64_t at = 0;
+    huge_left = 1;
     const int faulty_block = (int)(rnd() % 2);
     for (int b = 0; b < 2; b++) {
         size_t start = blk[b].n;
@@ -1230,6 +1239,36 @@ TEST(test_trace_runs_specialised_vs_generic) {
     remove(path);
 }
 
+// n is a u64. In a plain v2 stream (no clock bit) a RUNS chunk whose run
+// would take n past 2^64 - 1 is skipped by the stream reader ("RUNS run takes
+// n past 64 bits"), so neither the sample total nor a read wraps: the chunk
+// after it carries on from 2^64 - 2. Before the fix the skipped run was
+// delivered, n wrapped to 3 and the total was 4.
+static int file_write(void *u, const uint8_t *b, size_t n) { return fwrite(b, 1, n, u) == n ? 0 : -1; }
+
+TEST(test_trace_run_past_64_bits) {
+    char path[256]; tmp_path(path, sizeof path, "read_wrap.vgacap");
+    FILE *f = fopen(path, "wb");
+    ASSERT_TRUE(f != NULL);
+    vgacap_header_t h; vgacap_header_init_v2(&h, 8, 1, VGACAP_CLOCK_BIT_NONE, 0);
+    vgacap_writer_t w; ASSERT_EQ_U(vgacap_writer_init(&w, file_write, f, &h), 0);
+    const uint64_t v[3] = { 1, 2, 3 }, r[3] = { UINT64_MAX - 1u, 5, 1 };
+    for (int i = 0; i < 3; i++) ASSERT_EQ_U(vgacap_writer_runs(&w, &v[i], &r[i], 1), 0);
+    ASSERT_EQ_U(fclose(f), 0);
+    vgacap_trace_reader_t *t = open_or_say(path);
+    ASSERT_TRUE(t != NULL);
+    ASSERT_EQ_U(vgacap_trace_info(t)->samples, UINT64_MAX);
+    struct all_runs a = { 0, 0, NULL, NULL, NULL };
+    char err[256] = "";
+    ASSERT_EQ_U(vgacap_trace_read(t, UINT64_MAX - 4u, UINT64_MAX, on_all, &a, err, sizeof err), 0);
+    ASSERT_EQ_U(a.n, 2);
+    ASSERT_EQ_U(a.first[0], UINT64_MAX - 4u); ASSERT_EQ_U(a.value[0], 1); ASSERT_EQ_U(a.len[0], 3);
+    ASSERT_EQ_U(a.first[1], UINT64_MAX - 1u); ASSERT_EQ_U(a.value[1], 3); ASSERT_EQ_U(a.len[1], 1);
+    all_free(&a);
+    vgacap_trace_close(t);
+    remove(path);
+}
+
 TEST(test_trace_not_a_trace) {
     char path[256]; tmp_path(path, sizeof path, "read_junk.bin");
     char err[256] = "";
@@ -1260,6 +1299,7 @@ int main(void) {
     RUN(test_trace_runs_fast_path);
     RUN(test_trace_runs_against_12dfaf7);
     RUN(test_trace_runs_specialised_vs_generic);
+    RUN(test_trace_run_past_64_bits);
     RUN(test_trace_not_a_trace);
     if (five_ready) remove(five_path());
     RUN_TESTS_END();
