@@ -195,7 +195,7 @@ def test_a_selection_on_the_capture_firmware_fails_before_anything_starts(tmp_pa
 
 def numbers(**overrides) -> argparse.Namespace:
     values = dict(board=None, seconds=10.0, clock_hz=60000, buf_words=None,
-                  serve=None)
+                  serve=None, window_lines=None)
     values.update(overrides)
     return argparse.Namespace(**values)
 
@@ -207,6 +207,7 @@ def numbers(**overrides) -> argparse.Namespace:
         ("clock_hz", 0), ("clock_hz", -1), ("clock_hz", 200_000_001),
         ("buf_words", 0), ("buf_words", -1), ("buf_words", (1 << 24) + 1),
         ("serve", 0), ("serve", -1), ("serve", 65536), ("serve", 70000),
+        ("window_lines", -1), ("window_lines", 4097),
     ],
 )
 def test_a_number_the_pipeline_would_ignore_is_refused(field, value):
@@ -233,6 +234,7 @@ def test_a_number_the_pipeline_would_ignore_is_refused(field, value):
         ("clock_hz", 1), ("clock_hz", 200_000_000),
         ("buf_words", 1), ("buf_words", 4096), ("buf_words", 1 << 24),
         ("serve", 1), ("serve", 8080), ("serve", 65535),
+        ("window_lines", 0), ("window_lines", 48), ("window_lines", 4096),
     ],
 )
 def test_the_edges_of_each_range_are_accepted(field, value):
@@ -1106,7 +1108,7 @@ def test_a_privileged_serve_port_says_why(tmp_path):
 @pytest.mark.parametrize(
     "flag, value",
     [("--seconds", "-5"), ("--clock-hz", "0"), ("--buf-words", "0"),
-     ("--serve", "70000"), ("--fps", "")],
+     ("--serve", "70000"), ("--fps", ""), ("--window-lines", "-1")],
 )
 def test_a_bad_number_stops_the_run_before_the_board(tmp_path, capsys, flag, value):
     """No board, no outdir, no GStreamer needed: the number is wrong and
