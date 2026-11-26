@@ -82,7 +82,7 @@ cc -O2 -I "$VGACAP/include" -o tb tb.c \
 
 ## Check
 
-`build/vgacap-dump design.trace.zst`, from the vgacap checkout, prints a `trace` line with `closed=1`, then the trace's chunks:
+`build/vgacap-dump /path/to/design.trace.zst`, run from the vgacap checkout with the path to the trace step 6 wrote, prints a `trace` line with `closed=1`, then the trace's chunks:
 
 ```text
 trace blocks=… samples=… table_rebuilt=0 closed=1

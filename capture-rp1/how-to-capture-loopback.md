@@ -30,7 +30,7 @@ In the loopback fixture, one RP1 PIO state machine drives a descending count ont
 
 ## Check
 
-Step 1 prints a line ending in `dropped=0`, with the measured rate in `samples_per_s`:
+Step 1 prints a line ending in `dropped=0`, with the measured rate in `samples_per_s`. That rate reads about 500000, the rate declared with `--clock-hz`:
 
 ```text
 rp1 samples=4194304 seconds=… samples_per_s=… dropped=0
@@ -52,6 +52,7 @@ The count is 8 bits wide, so a loss of a whole multiple of 256 samples leaves it
 | `--clock-hz … is above 500000` at step 1 | The declared rate is above the rate proven without loss | Declare 500000 or less, as in step 1 |
 | `receive DMA failed` at step 1 | A DMA transfer left waiting has wedged the `rp1-pio` driver | Reboot the Pi |
 | Every run fails after an interrupted one | A DMA transfer left waiting has wedged the `rp1-pio` driver | Reboot the Pi |
+| `samples_per_s` far from 500000 at step 1 | The generator runs at another rate than the one declared | Note the rate, and declare it with `--clock-hz` if it is 500000 or less |
 | `broken at sample …` at step 2 | Samples were lost or repeated | Remove anything fitted to the header and repeat step 1 |
 
 ## Next

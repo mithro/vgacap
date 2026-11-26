@@ -38,18 +38,18 @@ Chunk is the `META` chunk, and Need whether a key is required. Value is the key'
 
 | Chunk | Key | Need | Value |
 |---|---|---|---|
-| `META(open)` in block 0 | `project` | required | the design's identifier: `tt07/tt_um_example` for one |
-| `META(open)` | `calib_seconds` | required | the calibration length in seconds: a decimal number as C `strtod` reads it |
+| `META(open)` in block 0 | `project` | required | the design's identifier as free text: `tt07/tt_um_example` for one |
+| `META(open)` | `calib_seconds` | required | the calibration length in seconds: an optional sign, digits with an optional point, an optional exponent |
 | `META(open)` | `seconds` | required | the run length in seconds: read the same way |
 | `META(open)` | `layout` | required | `tt-um-43`: the bit layout below |
-| `META(open)` | `override` | optional | |
-| `META(open)` | `simulator` | optional | |
-| `META(open)` | `harness` | optional | |
-| `META(close)` at the end of the last block | `capture_after_clock` | required | a plain decimal integer |
-| `META(close)` | `frames` | required | a plain decimal integer |
+| either | `override` | optional | free text |
+| either | `simulator` | optional | free text |
+| either | `harness` | optional | free text |
+| `META(close)` at the end of the last block | `capture_after_clock` | required | an unsigned decimal integer below 2^64 |
+| `META(close)` | `frames` | required | an unsigned decimal integer below 2^64 |
 | `META(close)` | `status` | required | `ok`, `sim-timeout`, `unstable-sync`, `no-sync` or `bad-timing` |
 
-A trace without `META(close)` was cut short: its status is `truncated`.
+`truncated` is never written in a `META`. A reader gives a trace that has no `META(close)` the status `truncated`, because it was cut short. The C reader skips a `META` chunk whose value breaks this table, and reports `bad META text`.
 
 ## The tt-um-43 bit layout
 
@@ -81,7 +81,7 @@ Signal is a Tiny VGA Pmod signal, and `uo_out` bit the bit that carries it, as `
 
 ## Clocks and time
 
-Rule is the name of the rule, and Value the rule. Clock values in `META` and in [`frames.txt`](frames-format.md) use this numbering. The time of a sample, and its clock bit, follow [the stream format's sample index rules](../src/stream/reference-stream-format.md#the-sample-index-and-the-clock-bit).
+Rule is the name of the rule, and Value the rule. Clock values in `META` and in [`frames.txt`](frames-format.md) use this numbering. The time of a sample, and its clock bit, follow [the stream format's sample index rules](../src/stream/reference-stream-format.md#the-sample-index-the-clock-bit-and-time).
 
 | Rule | Value |
 |---|---|
@@ -91,7 +91,6 @@ Rule is the name of the rule, and Value the rule. Clock values in `META` and in 
 | Sample 2`c` + 1 | the outputs of clock `c`'s own rising edge |
 | Clock 0's low sample | repeats its high sample's outputs |
 | Time of clock `c` | the time of sample 2`c` |
-| `clock_hz` of 0 | the time is unknown |
 
 ## The container
 
