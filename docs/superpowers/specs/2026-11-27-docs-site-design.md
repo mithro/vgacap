@@ -40,8 +40,10 @@ under it.
 | Reference | anyone looking something up | formats, protocol, command options, element properties, mode table, pin maps, exit codes and messages |
 | Developing vgacap | someone with a checkout | building, testing, CI, the hardware-in-the-loop check, the docs themselves, where to make which change |
 
-A heading holds at most seven entries (**5.9**); Capturing is grouped by
-capture source and consumer.
+A heading holds at most seven entries (**5.9**). The sidebar is built from
+the landing pages: a landing page's list lines are its sidebar entries
+(`docs/_ext/vgacap_landing.py`), so a group larger than seven gets a child
+landing page, never a caption.
 
 ## Page types and where each lives
 
@@ -59,12 +61,17 @@ review: 2027-05-27      # six months on
 GitHub shows front matter as a small table above the page; that is accepted.
 
 - A component's `README.md` becomes its **landing page** (**4.7**): one
-  line for each page of that component, nothing else.
-- The top `README.md` becomes an **explanation**, "vgacap" with the
-  overview figure: what it is, the capture sources and consumers, and one
-  line to each section. It is the page GitHub shows first.
-- `docs/index.md` is the site's root landing page (`root_doc`), holding the
-  section toctrees. `docs/<section>/index.md` are the section landings.
+  line for each page of that component, nothing else. A README is the
+  index page of its directory, which is the page structure.md gives the
+  landing type to.
+- The top `README.md` becomes an **explanation** (**4.2**), "vgacap" with
+  the overview figure: what vgacap is, its capture sources and its
+  consumers, in prose. It is the page GitHub shows first. The lines to each
+  section belong to `docs/index.md`, not to it.
+- `docs/index.md` is the site's root landing page (`root_doc`).
+  `docs/<section>/index.md` are the section landings. No page holds a
+  toctree directive: the build makes each landing page's toctree from its
+  lines.
 - New pages sit beside the code they are about, named by type:
   `tutorial-*.md`, `how-to-*.md`, `reference-*.md`, `explanation-*.md`.
   Existing reference files keep their names (`firmware/PROTOCOL.md`,
@@ -110,15 +117,25 @@ the KiCad render already in `docs/diagrams/images/`.
 
 ## Build checks
 
-`docs/_ext/vgacap_rules.py`, with tests, enforces what a machine can decide
-(section 10): front matter (**10.14**), banned words and phrases outside
-code (**10.1**), title length and uniqueness (**10.2**, **10.3**), how-to
-headings (**10.5**, **10.6**), step sentences (**10.4**), alt text
-(**10.8**), light and dark pairs (**10.9**), sidebar groups (**10.10**),
-heading levels (**10.11**), link-only pages (**10.12**); warnings for more
-than 15 links (**10.19**), more than two callouts (**10.20**) and an
-expired review date (**10.21**). Broken internal links already fail
-(**10.16**).
+`docs/_ext/vgacap_rules.py`, with tests in `docs/tests/`, enforces what a
+machine can decide. It fails a page on:
+
+| Rule | Check |
+|---|---|
+| **10.14** | front matter with type, owner, reader and a `YYYY-MM-DD` review date; the type one of **1.1** |
+| **10.1** | a banned word (**6.1**) or a forbidden label (**6.3**) outside code |
+| **10.2**, **10.3** | a title over 65 characters; a title shared with another page |
+| **10.4** | a step sentence over 25 words, a code span counting as one word |
+| **10.5**, **10.6**, **3.2** | a how-to heading missing, extra, out of order, or with sub-headings |
+| **10.8** | an image without alt text, alt text over 150 characters (**5.10**), or an image left in raw HTML |
+| **10.9** | a drawing (a local SVG) not a light and dark pair; a switched image without its twin; a twin shown in every theme |
+| **10.10** | more than seven entries on a landing page |
+| **10.11** | more than five heading levels |
+| **10.12**, **1.6** | a page of links alone; a page of two sentences or fewer, a table row or list item counting as one |
+
+It logs, without failing, more than 15 links (**10.19**), more than two
+callouts (**10.20**) and an expired review date (**10.21**). Broken
+internal links already fail (**10.16**).
 
 A drawing appears on GitHub and on the site as one `<picture>` element
 with a `prefers-color-scheme: dark` source; the build turns it into the
@@ -144,9 +161,9 @@ Each content PR:
 
 ## Order of work
 
-1. Infrastructure (this PR): `docs/index.md`, section landings, the build
-   checks, the `<picture>` handling, the page template, front matter on
-   the existing pages.
+1. Infrastructure (this PR): `docs/index.md`, the section landings, the
+   build checks, the landing-page sidebar and the `<picture>` handling. The
+   existing pages stay on `vgacap_rules_pending` until their content PR.
 2. Content, one PR per component tree, in parallel:
    - **A** `python/ttcap/`: the tutorial, capture how-tos, the CLI
      reference, explanations of PIO capture and run-length capture;
