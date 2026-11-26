@@ -219,6 +219,13 @@ int vgacap_trace_repeat2_slow(vgacap_trace_writer_t *t) {
     return vgacap_trace_push(t, last);
 }
 
+// push2's slow path: its two pushes. A failed push leaves the writer as it
+// was but failed, so the second, which would return -1, is skipped.
+int vgacap_trace_push2_slow(vgacap_trace_writer_t *t, uint64_t v0, uint64_t v1) {
+    if (vgacap_trace_push(t, v0)) return -1;
+    return vgacap_trace_push(t, v1);
+}
+
 // Stops the thread (after it has written every block handed to it), closes
 // the file and frees everything. Returns -1 if closing the file failed.
 static int teardown(vgacap_trace_writer_t *t, int write_seek_table, char *msg, size_t msglen) {

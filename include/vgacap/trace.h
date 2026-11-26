@@ -100,10 +100,21 @@ static inline int vgacap_trace_repeat2(vgacap_trace_writer_t *t) {
     t->run += 2; t->n += 2; return 0;
 }
 
-// Stub for the tests (no block-end check yet).
+int vgacap_trace_push2_slow(vgacap_trace_writer_t *t, uint64_t v0, uint64_t v1);   // not for callers
+
+// Record samples n and n + 1: exactly vgacap_trace_push(t, v0) then
+// vgacap_trace_push(t, v1), with the same result and the same file (if
+// the first fails, so does the second, so it is not made). For a caller
+// that has both samples of a clock but cannot tell "unchanged" itself: the
+// two compares are one test. Valid anywhere, sample 0 included.
+//
+// The fast path: w = cur ^ clk_expect is the value sample n must have to
+// extend the run, and w ^ clk_mask sample n + 1's; limit - n < 2 as in
+// repeat2.
 static inline int vgacap_trace_push2(vgacap_trace_writer_t *t, uint64_t v0, uint64_t v1) {
     uint64_t w = t->cur ^ t->clk_expect;
-    if ((v0 ^ w) | (v1 ^ w ^ t->clk_mask)) return vgacap_trace_push(t, v0) ? -1 : vgacap_trace_push(t, v1);
+    if ((v0 ^ w) | (v1 ^ w ^ t->clk_mask) | (uint64_t)(t->limit - t->n < 2))
+        return vgacap_trace_push2_slow(t, v0, v1);
     t->run += 2; t->n += 2; return 0;
 }
 
