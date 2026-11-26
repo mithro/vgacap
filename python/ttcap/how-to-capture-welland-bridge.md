@@ -38,7 +38,7 @@ Each bench board hangs off its own Raspberry Pi, and the bridge on that Pi carri
 
    ```sh
    uv run ttcap capture ws://127.0.0.1:18034/serial --board fpga-1 --design tt_um_vgacal_bars \
-       --clock-hz 500000 --seconds 10 --out bench.vgacap
+       --clock-hz 400000 --seconds 10 --out bench.vgacap
    ```
 
 6. In the vgacap checkout, put the board back to the stock firmware's start state, which restarts its SDK:
@@ -54,7 +54,7 @@ A bitstream uploaded this way is loaded on the FPGA but is not one of the stock 
 
 ## Check
 
-Step 5 ends with a stats line showing `overruns=0 dropped=0 rxstall=0` and `wrote bench.vgacap`. After step 7, `status.json` shows `"clients": 0` and `"state": "loaded"`, as it did before you started.
+Step 5 ends with a stats line showing `overruns=0 dropped=0 rxstall=0` and `wrote bench.vgacap`. Through the bridge, 400 kHz was clean and 500 kHz overran once or twice in 10 seconds ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). After step 7, `status.json` shows `"clients": 0` and `"state": "loaded"`, as it did before you started.
 
 ## If it fails
 
@@ -67,6 +67,7 @@ Step 5 ends with a stats line showing `overruns=0 dropped=0 rxstall=0` and `wrot
 | 4 | `Connection refused` | the tunnel is not open | repeat step 3 |
 | 5 | `is not a shuttle entry on this board and is not the enabled design either` | the design was not uploaded and enabled | repeat step 4 |
 | 7 | `idle_display` `state` stays other than `loaded` | the SDK did not restart | run step 6 again |
+| 7 | `safe_start` `state` starts with `left:` on an ASIC breakout | the bridge found a design still enabled | run step 6 again |
 
 ## Next
 

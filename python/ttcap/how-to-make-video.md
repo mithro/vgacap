@@ -33,16 +33,18 @@ Without `--fps`, each frame keeps the design's own time, which at a 60 kHz clock
 
 ## Check
 
-The demo prints the detected mode, the frames as they are written, and a summary. From an FPGA breakout running `tt_um_vgacal_bars` ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-demo-fpga1)):
+The demo prints the detected mode, the frames as they are written, and a summary that repeats the mode. This run used `--design tt_um_vgacal_bars` on an FPGA breakout, through the bridge ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
 
 ```text
   mode 640x480@60: 800 clocks/line, 525 lines/frame, hsync negative, vsync negative, glitches 0
-  1 frame(s), 3s elapsed
-  48 frame(s), 13s elapsed
+  1 frame(s), 2s elapsed
+  ...
+  44 frame(s), 12s elapsed
 
-capture finished after 13.9s (gst-launch exit 0)
-  51 png(s) in out
-  out/capture.mkv, 19.8 KiB
+capture finished after 12.7s (gst-launch exit 0)
+  mode 640x480@60: 800 clocks/line, 525 lines/frame, hsync negative, vsync negative, glitches 0
+  51 png(s) in video
+  video/capture.mkv, 19.8 KiB
 ```
 
 ## If it fails
@@ -55,7 +57,7 @@ capture finished after 13.9s (gst-launch exit 0)
 | 2 | `warning: --clock-hz N is above` | the clock is above the measured ceiling | lower `--clock-hz`, or accept overruns |
 | 3 | `nothing was captured`, exit 3 | no frame closed before the end | raise `--seconds` to three frame periods or more |
 
-`--force` deletes only the earlier run's `frame-*.png` files and `capture.mkv`, and names them. The clock warning appears only with `--board`, where the demo knows the board. Its ceilings are 60 kHz on an RP2040 demo board and 750 kHz on an RP2350 one. Every message is on [ttcap exit codes and messages](reference-exit-codes.md#demo).
+`--force` deletes only the earlier run's `frame-*.png` files and `capture.mkv`, and names them. The clock warning appears only with `--board`, where the demo knows the board. Its ceilings are 60 kHz on an RP2040 demo board and 750 kHz on an RP2350 one, which overran on TT SDK 3.1.1 ([#52](https://github.com/mithro/vgacap/issues/52)). Every message is on [ttcap exit codes and messages](reference-exit-codes.md#demo).
 
 ## Next
 

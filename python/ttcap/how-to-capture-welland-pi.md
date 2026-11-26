@@ -31,7 +31,7 @@ The fpgas.online bridge (`fpgas-tt`) holds the board's serial port, `/dev/ttboar
 5. In the checkout on the Pi, capture from the serial port, which runs with no bridge in between:
 
    ```sh
-   uv run --no-sync ttcap capture serial:/dev/ttboard --clock-hz 750000 --seconds 4 --out bench.vgacap
+   uv run --no-sync ttcap capture serial:/dev/ttboard --clock-hz 500000 --seconds 4 --out bench.vgacap
    ```
 
 6. In the checkout on the Pi, restart the stock firmware's SDK, whether or not step 5 succeeded, which leaves no design of yours enabled:
@@ -43,11 +43,11 @@ The fpgas.online bridge (`fpgas-tt`) holds the board's serial port, `/dev/ttboar
 7. On the Pi, run `sudo systemctl start fpgas-tt`, whether or not steps 5 and 6 succeeded, which starts the bridge again.
 8. In the browser, reload `status.json` until it shows `"reachable": true` and `idle_display` shows `"state": "loaded"`.
 
-Step 6 comes before step 7 because the bridge checks the board's state when it starts. On an ASIC board, starting the bridge with the capture's project still enabled left its safe-start check reporting `left:` and that project ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). `ttcap demo --board fpga-4` run on this Pi picks `serial:/dev/ttboard` itself, and says to stop the bridge first.
+Step 6 comes before step 7 because the bridge checks the board's state when it starts. On an ASIC board, starting the bridge with the capture's project still enabled left `safe_start.state` in `status.json` reporting `left:` and that project ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). `ttcap demo --board fpga-4` run on this Pi picks `serial:/dev/ttboard` itself, and says to stop the bridge first.
 
 ## Check
 
-Step 5 ends with `wrote bench.vgacap` and a stats line. On fpga-4 at 750 kHz it was `samples=2834432 ... overruns=0 dropped=0 rxstall=0` ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). After step 7, `systemctl is-active fpgas-tt` prints `active`, and `sudo fuser /dev/ttboard` shows the bridge's process again.
+Step 5 ends with `wrote bench.vgacap` and a stats line. It shows `overruns=0 dropped=0 rxstall=0` when no sample was lost. 500 kHz was clean on an RP2350 demo board, and 750 kHz overran on fpga-4 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). After step 7, `systemctl is-active fpgas-tt` prints `active`, and `sudo fuser /dev/ttboard` shows the bridge's process again.
 
 ## If it fails
 
@@ -61,6 +61,7 @@ Step 5 ends with `wrote bench.vgacap` and a stats line. On fpga-4 at 750 kHz it 
 | 5 | any other failure | see [ttcap exit codes and messages](reference-exit-codes.md) | do steps 6 and 7 before anything else |
 | 7 | `systemctl is-active fpgas-tt` prints `failed` | the bridge did not start | run step 7 again and read `journalctl -u fpgas-tt` |
 | 8 | `idle_display` `state` stays other than `loaded` | the SDK restart came after the bridge started | stop the bridge and repeat steps 6 and 7 |
+| 8 | `safe_start` `state` starts with `left:` on an ASIC breakout | the bridge started before the SDK restart | stop the bridge and repeat steps 6 and 7 |
 
 ## Next
 

@@ -26,7 +26,7 @@ review: 2027-05-27
    ```
 
 2. In the terminal, read the note after the stats, which says how many captured frames each picture is made of.
-3. In the checkout, run `uv run ttcap png window.vgacap out/window`, which writes the joined picture as a PNG.
+3. In the checkout, run `mkdir -p out && uv run ttcap png window.vgacap out/window`, which writes the joined picture as a PNG.
 
 `--frames 1` stops after one whole picture. `--window-lines 0` in window mode takes the default of 48. In frame mode, a `--window-lines` above 0 caps each capture at that many lines.
 

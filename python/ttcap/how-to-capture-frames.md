@@ -27,7 +27,7 @@ review: 2027-05-27
    ```
 
 2. In the terminal, read the stats line, which shows `overruns=0 dropped=0 rxstall=0` when every picture is whole.
-3. In the checkout, run `uv run ttcap png frames.vgacap out/frame`, which writes one PNG for each picture.
+3. In the checkout, run `mkdir -p out && uv run ttcap png frames.vgacap out/frame`, which writes one PNG for each picture.
 
 `--frames N` stops after N pictures. `--vga-mode` is `640x480@60` unless given. The board measures the sync polarities itself, and samples on the rising clock edge unless `--edge` and `--sample-delay` move the sample point.
 

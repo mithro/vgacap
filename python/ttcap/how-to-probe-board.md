@@ -28,10 +28,10 @@ review: 2027-05-27
 
 ## Check
 
-The probe prints two lines and exits 0. From an RP2350 demo board:
+The probe prints two lines and exits 0. From an RP2350 demo board running TT SDK 3.1.1 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
 
 ```text
-sys.version: 3.4.0; MicroPython b006887db6 on 2026-08-11
+sys.version: 3.4.0; MicroPython 970468103d on 2026-09-08
 GPIOMap.all(): {'mng00': 3, 'mng01': 4, ... 'rp_projclk': 16, 'uo_out0': 33, 'uo_out1': 34, ...}
 ```
 
