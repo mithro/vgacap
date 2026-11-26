@@ -1,21 +1,68 @@
 # vgacap
 
-Capture the Tiny VGA Pmod output of a [Tiny Tapeout](https://tinytapeout.com)
-project with the PIO block of the demo board's RP2040 / RP2350 (later the
-Raspberry Pi 5 RP1), reconstruct the picture on a host, and present it as a
-virtual video source through GStreamer.
+Shared libraries and tools for capturing the VGA output of
+[Tiny Tapeout](https://tinytapeout.com) designs (the Tiny VGA Pmod's eight
+`uo_out` pins), turning it into pictures and video, and checking it.
 
-This repository holds the code: the capture stream formats, the
-reconstruction library, the RP2 and RP1 capture backends, the GStreamer
-plugin and the Python tools. The design, research notes, work log and task
-list live in [mithro/tt-vga-capture](https://github.com/mithro/tt-vga-capture).
+Every capture source writes the same thing: a **vgacap stream**, a small
+chunked format that records the design's `uo_out` once per project clock,
+either continuously or as whole frames or windows. Everything after the
+source reads only that stream, so a capture from a demo board, an FPGA, a
+Raspberry Pi 5 or a simulator goes through the same reconstruction, video
+and comparison tools.
+
+```
+ capture sources                 the stream              consumers
+ ---------------                 ----------              ---------
+ TT demo board      ─┐                                ┌─ vgacap-frames, ttcap png (PPM/PNG)
+ Raspberry Pi 5     ─┤                                ├─ GStreamer: vgadecode, vgacapbin
+ FPGA design        ─┼──▶  VGCH header + RAW / RLE ──▶├─ ttcap demo (PNG, MKV, window, MJPEG)
+ simulator dumps    ─┤     / FRAM / EVNT / TIME       ├─ vgacap-dump (chunks, checksum)
+ (BIO, research)    ─┘     chunks (include/vgacap/    └─ pixel-exact checks against
+                           stream.h)                     tt-vga-testpatterns references
+```
+
+The design, research notes, measurements, work log and task list live in
+[mithro/tt-vga-capture](https://github.com/mithro/tt-vga-capture); the
+calibration designs and their reference renders in
+[mithro/tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns).
 
 > **Caution: AI in use.** This project is being built with Claude Code.
 > Check the code and the measurements before relying on them.
 
-## Building and testing
+## What is in it
 
-The core libraries are C99 with no dependencies beyond libc.
+**The common core**, used by every source and consumer:
+
+| | |
+|---|---|
+| stream format | `include/vgacap/stream.h`, `src/stream/`: the `VGCH` header and `RAW`, `RLE`, `FRAM`, `EVNT`, `TIME` chunks; a callback-based C99 writer (no allocation, so it also builds into board firmware) and an incremental reader. Python mirror in `python/vgacap/stream.py`. |
+| reconstruction | `include/vgacap/frame.h`, `src/frame/` (`libvgaframe`): learns the sync timing and polarity from the signal itself, tolerates glitch pulses, matches a mode table, rebuilds frames (continuous streams, and whole frames or windows from `FRAM` chunks). |
+| test data | `python/vgacap/synth.py`: synthetic VGA signals; `vgacap-bin2stream`: wraps a one-byte-per-clock simulator dump as a stream. |
+
+**Capture sources.** Each one is a different way of getting `uo_out` into a
+stream; pick by what hardware you have and how fast the design must run.
+
+| source | where | how it reaches the host | status |
+|---|---|---|---|
+| Tiny Tapeout demo board, stock firmware | `python/ttcap/mp/`: capture programs pushed through the board's MicroPython REPL, run on the PIO of its RP2040 or RP2350; driven by `ttcap` | USB serial, or the fpgas.online websocket bridge | streaming, whole-frame and windowed capture; pixel-exact on RP2350 boards (FPGA and ASIC); on RP2040 boards streaming is proven on silicon, frame/window only in the emulator |
+| demo board, run-length | `ttcap capture --mode rle` (vgacap PR #6): the PIO counts runs itself | as above, fewer bytes for simple pictures | exact up to 25 MHz on an FPGA demo board, and on an ASIC |
+| demo board (RP2350), vgacap firmware | `firmware/`: a pico-sdk firmware loaded into RAM in place of the stock one (`ttcap --firmware picosdk`) | USB serial, its own protocol (`firmware/PROTOCOL.md`) | frame, window, stream pixel-exact on FPGA and ASIC demo boards |
+| demo board (RP2350), MicroPython C module | `mpy/`: the same engines built into a custom MicroPython firmware (`import vgacap`, `ttcap --firmware mpy-module`) | as the stock firmware | pixel-exact on an FPGA demo board |
+| Raspberry Pi 5 | `capture-rp1/` (`vgacap-rp1`): the Pi 5's own PIO (in its RP1 I/O chip), via piolib, with the board's `uo_out` wired to the Pi's GPIO | runs on the Pi itself | proven by loopback; waiting for a Pi 5 wired to a Tiny Tapeout board |
+| FPGA | `rtl/`: capture logic to build into an FPGA design (Migen + generated Verilog) | whatever link the FPGA design has | exact on an iCE40 at 250 kHz and 25 MHz |
+| simulators | `vgacap-bin2stream` today; full simulation traces are being added (tt-vga-capture Milestone 10) | files | in use by the tests |
+| bunnie's BIO | research in tt-vga-capture | -- | simulator only |
+
+**Consumers and tools:** `vgacap-dump` and `vgacap-frames` (C), the
+`ttcap` CLI (`capture`, `png`, `demo`, `probe`, `throughput`, `reboot`),
+the GStreamer plugin in `gst/` (`vgadecode`, `vgacapttsrc`, `vgacapbin`),
+`ttcap.emu` (a cycle-level RP2040/RP2350 emulator that runs the exact
+board programs, used by the tests), and `tools/hil.py` (the
+hardware-in-the-loop check). Each directory's README, linked under
+Layout, covers its part.
+
+## Building and testing
 
 ```sh
 cmake -S . -B build && cmake --build build
@@ -23,59 +70,23 @@ ctest --test-dir build --output-on-failure
 uv run pytest -q
 ```
 
-### Continuous integration
+The core libraries are C99 with no dependencies beyond libc; the GStreamer
+plugin is built only when its development files are present. CI and the
+details: [docs/development.md](docs/development.md).
 
-`.github/workflows/ci.yml` runs three jobs on every push and pull request,
-on a pinned `ubuntu-24.04` image:
-
-| job | what it proves |
-|---|---|
-| `c` | the C libraries and tools build and pass `ctest` on a machine with **no GStreamer** (`PKG_CONFIG_LIBDIR` is emptied), and the plugin is *skipped* there rather than failing the build |
-| `python` | the Python suite passes without GStreamer; plugin tests skip, `build/vgacap-frames` is built first because several tests compare against it |
-| `gstreamer` | with GStreamer installed (the apt list in the workflow says what each package is for), the plugin is built, and its `ctest` and both pytest suites (`python/tests`, `gst/tests`) run for real |
-
-The plugin is optional by design, so both configurations are tested. A
-change in what CI covers is a change to that file.
-
-### Hardware-in-the-loop check
-
-CI cannot see a board. `tools/hil.py` runs the checks only a real board can
-settle and writes a dated Markdown report: `probe` (profile auto-detection),
-`capture` (overruns and `rxstall` from the closing `TIME` chunk), `reconstruct`
-(frame count against the project clock), `reference` (pixel-exact against a
-`tt-vga-testpatterns` calibration render), `demo-frames`, `video`, `serve`,
-`stop` (cooperative stop latency, no orphaned processes) and `board-usable`
-(the board still answers afterwards). `tools/hil.py` lists why each one needs
-hardware.
+## A first capture
 
 ```sh
-# from a workstation: a tunnel to the board's bridge (18000 + the Pi's port)
-ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com
-# upload and enable the calibration bitstream (tt-vga-testpatterns/tools/upload.py), then
-tools/hil.sh --board fpga-1 --design tt_um_vgacal_bars --clock-hz 500000 \
-    --link ws://127.0.0.1:18034/serial docs/results/
+uv run ttcap capture serial:/dev/ttyACM0 \
+    --project tt_um_rejunity_vga --clock-hz 100000 --seconds 1 --out capture.vgacap
+build/vgacap-frames capture.vgacap out/frame      # out/frame-0000.ppm ...
+uv run ttcap demo --link serial:/dev/ttyACM0 --clock-hz 60000 --outdir out   # PNGs + MKV
 ```
 
-`tools/hil.sh` only runs `hil.py` in this checkout's uv environment;
-`tools/hil.py --help` gives every option. Useful ones: `--no-demo` for a host
-without GStreamer (the pipeline checks then SKIP with the reason), `--ui-in`
-for `tt_um_vgacal_modes`, `--stop-bridge` when running on the board's own Pi
-with `serial:/dev/ttboard` (it stops `fpgas-tt`, which holds the device, and
-always restarts it; it refuses unless the bridge's `/health` says 0 clients
-on two reads a few seconds apart, but that count is WebSocket serial sessions
-only, so an in-flight HTTP request -- a design enable, a bitstream upload, a
-demo sync -- is not seen). Every check prints PASS, FAIL or SKIP with what it
-measured. Exit status is 0 if all passed, 1 if any failed, 2 if it could not
-start (lock held, missing tool, bad arguments).
-
-The Welland boards are shared and public. One run per board at a time is
-enforced with a lock file (per user per machine; `--lock-dir` makes it
-shared), every board command has a timeout, and whatever a run started is
-killed on the way out, including when the run itself gets SIGINT, SIGTERM,
-SIGHUP or SIGQUIT (it still writes its report). Before running against a bench board,
-check its page on tinytapeout.fpgas.online (`/board/<slug>/status.json`) for
-other clients, and confirm the board's USB serial: boards move between
-ports.
+More: [python/ttcap/README.md](python/ttcap/README.md) (capturing, the demo,
+Welland boards, Pis), [gst/README.md](gst/README.md) (GStreamer),
+[src/tools/README.md](src/tools/README.md) (the C tools),
+[tools/README.md](tools/README.md) (hardware-in-the-loop check).
 
 ## Layout
 
@@ -83,311 +94,23 @@ ports.
 |---|---|
 | `include/vgacap/stream.h`, `src/stream/` | capture stream format: `VGCH` header, `RAW`, `RLE`, `FRAM`, `EVNT`, `TIME` chunks; writer and incremental reader that emits `(value, run)` pairs |
 | `include/vgacap/frame.h`, `src/frame/` | `libvgaframe`: mode table, sync timing learner, frame reconstruction to RGB24, `FRAM` window reassembly |
-| `src/tools/` | `vgacap-dump` (chunk list, sample checksum), `vgacap-frames` (stream to PPM frames) |
-| `python/vgacap/` | Python mirror of the stream format, synthetic generators, `vgacap-bin2stream` |
-| `tests/`, `python/tests/` | C unit tests (ctest) and Python + end-to-end tests (pytest) |
+| [`src/tools/`](src/tools/README.md) | `vgacap-dump` (chunk list, sample checksum), `vgacap-frames` (stream to PPM frames) |
+| `python/vgacap/` | Python mirror of the stream format, mode table, synthetic generators, `vgacap-bin2stream` |
+| [`python/ttcap/`](python/ttcap/README.md) | the `ttcap` CLI and library: board links (serial, websocket), the capture session for the demo board's RP2040/RP2350, `ttcap demo`; `mp/` the MicroPython board programs, `emu/` the RP2040/RP2350 emulator |
+| [`firmware/`](firmware/README.md) | pico-sdk capture firmware for the Tiny Tapeout demo board v3 (RP2350) (portable core in `firmware/core/`, simulated board in `firmware/sim/`) |
+| [`mpy/`](mpy/README.md) | the same capture engines as a MicroPython `USER_C_MODULE` |
+| [`capture-rp1/`](capture-rp1/README.md) | `vgacap-rp1`, capture with the Raspberry Pi 5's RP1 PIO via piolib |
+| [`rtl/`](rtl/README.md) | FPGA capture modules (Migen source and the generated Verilog) |
+| [`gst/`](gst/README.md) | the GStreamer plugin |
+| [`tools/`](tools/README.md) | `hil.py` (hardware-in-the-loop check), `board_exec.py`, `board_restart.py` |
+| `tests/`, `python/tests/`, `gst/tests/` | C unit tests (ctest) and Python + end-to-end tests (pytest) |
+
+The stream writer (`src/stream/writer.c`) is also compiled on its own into
+`firmware/`, `mpy/` and `capture-rp1/`, so it stays C99 with no
+allocation and no dependencies beyond libc.
 
 The stream format is described in
 [tt-vga-capture/docs/research/2026-09-15-stream-format.md](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-09-15-stream-format.md).
-
-## Tools
-
-```sh
-build/vgacap-dump capture.vgacap              # chunk list, total samples, checksum
-mkdir -p out && build/vgacap-frames capture.vgacap out/frame   # out/frame-0000.ppm ...
-uv run vgacap-bin2stream dump.bin out.vgacap  # wrap a one-byte-per-clock simulator dump
-```
-
-A frame is emitted at the frame boundary that closes it, once the timing is
-known. A capture that starts mid-frame -- the normal case -- claims the frame
-that its first vsync pulse begins, so two frame periods are enough for the
-first picture and each further period adds one. A capture that happens to
-start exactly on a vsync pulse cannot measure that pulse and waits for the
-next one, so capture at least three frame periods to be sure.
-
-Spurious sync pulses are tolerated: a capture whose hsync carries the odd 2
-to 30 clock glitch (real silicon does) still reconstructs. `vgacap-frames`
-reports `glitches=N` per frame, counting the pulses rejected since the
-previous frame, and `glitches_total=N` for the whole stream.
-
-## GStreamer plugin
-
-`gst/` builds `libgstvgacap.so`, with three elements: `vgadecode` turns a
-capture stream (`application/x-vgacap`) into `video/x-raw` RGB frames,
-`vgacapttsrc` produces such a stream live from a board, and `vgacapbin`
-picks a source from a URI and puts `vgadecode` behind it. The plugin is
-optional: CMake skips it when the GStreamer development files are missing,
-and the plugin tests skip with it.
-
-```sh
-export GST_PLUGIN_PATH=$PWD/build
-gst-inspect-1.0 vgadecode
-gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! \
-    pngenc ! multifilesink location=frame-%04d.png
-
-# ...or straight off a board, through either link. The URI is quoted twice:
-# once for the shell, once for GStreamer's pipeline parser -- see below.
-gst-launch-1.0 vgacapbin \
-    'uri="tt-ws://welland:8765/serial?project=tt_um_rejunity_vga&clock-hz=60000"' ! \
-    videoconvert ! autovideosink
-```
-
-| property | default | |
-|---|---|---|
-| `repeat-last-frame` | false | re-push the last frame to hold a steady `output-fps` cadence |
-| `output-fps` | 30/1 | rate used when repeating, and when the stream declares no project clock |
-| `max-width`, `max-height` | 1400, 900 | size of the reconstruction buffers, allocated once when the element starts |
-| `force-mode` | `""` | force a mode table entry instead of detecting one |
-| `partial` | false | also push frames whose lines were not all covered |
-
-Frames are timestamped in project time -- clocks since the first emitted
-frame divided by the stream's `clock_hz` -- when the header declares a clock,
-and at `output-fps` otherwise. A clock rate that changes mid-stream (a `TIME`
-chunk reporting a measured rate, say) freezes the elapsed time and continues
-from there, so the timeline never runs backwards.
-
-A partial frame carries `GST_BUFFER_FLAG_CORRUPTED`, and every frame's
-counter rides in `GST_BUFFER_OFFSET`. That counter is the *source's* frame
-number, not an output index: it skips the frames the `partial` property
-filters out, and it restarts at zero when the stream restarts (a second
-`VGCH` header, or a flushing seek). Number output frames downstream, or use
-the PTS, if you need something that only ever goes up.
-
-The detected timing is posted on the bus as an element message named
-`vgacap-timing`, once when it is first known and again whenever it changes.
-
-### `vgacapttsrc`: capturing from a board
-
-`vgacapttsrc` runs `ttcap capture --out -` as a child process and pushes its
-stdout as 64 KiB `application/x-vgacap` buffers, so the board protocol stays
-in Python and the same element works over serial or over the bridge.
-
-| property | default | |
-|---|---|---|
-| `link` | `""` | `serial:/dev/ttyACM0`, or `ws://host:8765/serial`; required |
-| `clock-hz` | 0 | project clock to program; required |
-| `project`, `design` | `""` | `tt.shuttle` macro / FPGA bitstream to enable |
-| `profile` | `auto` | board profile, or ask the board for its `GPIOMap` |
-| `pio`, `buf-words` | -1 | board tuning; -1 leaves `ttcap`'s own defaults |
-| `seconds` | 0 | capture duration; 0 captures until the element is stopped |
-| `ttcap-command` | `uv run --no-sync ttcap` | split with shell quoting rules, so an absolute path or another interpreter works |
-| `stop-timeout` | 15 | how long a cooperative stop may take |
-
-`ttcap-command` is run with the pipeline's own working directory, which is
-what `uv run` needs to find the project; give an absolute `ttcap` (or an
-absolute interpreter and script) when the pipeline runs from elsewhere.
-
-**Stopping matters.** The board samples into a DMA double buffer and can only
-stop at a buffer boundary -- about 82 ms at 750 kHz, but 2.2 s at the
-RP2040's 60 kHz project-clock ceiling -- and `ttcap` turns its first `SIGINT`
-into a cooperative stop that finishes the chunk, writes its closing `TIME`
-chunk (the only overrun and RXSTALL report there is) and exits 0. So the
-element signals the child's process group and then waits *while draining its
-stdout*, because a child blocked writing into a full pipe never reaches the
-code that emits its trailer. Only when `stop-timeout` runs out does it close
-the read end (`ttcap` reads the `EPIPE` as a clean end and still exits 0, but
-the trailer then has nowhere to go), and only after that does it `SIGKILL`.
-Every path reaps the child. The default command makes `ttcap` a *grandchild*
-(`uv run` is in between), so if the wrapper exits first a `SIGKILL` also goes
-to the process group -- otherwise the capture would carry on holding the
-board with nothing left to signal. No wait in the sequence is unbounded: it
-all runs inside a state change, and a state change that never returns is a
-pipeline nobody can shut down.
-
-**A live capture cannot be paused, only stopped.** The board samples in real
-time and the element's pipe is the only buffer between it and the pipeline,
-so a PAUSED pipeline gives the capture exactly one pipe buffer of grace --
-measured at 65,548 bytes, about 90 ms at 750 kHz and about 1.1 s at 60 kHz --
-and after that the DMA buffers overrun and samples are lost. Worse, the
-overrun count lives in the closing `TIME` chunk, which the stop sequence
-drains and discards, so a capture that was paused and then stopped is
-silently short with nothing on the bus to say so. Go straight to PLAYING and
-stop when finished; if something must pause, treat what comes after as a
-different capture.
-
-A child that exits non-zero raises a pipeline `ERROR` quoting the last lines
-of its stderr, so a capture that fails on the board is an error and not a
-silent end of stream; the rest of its stderr is logged at `INFO` under the
-`vgacapttsrc` debug category.
-
-### `vgacapbin`: a URI in, video out
-
-```sh
-gst-launch-1.0 vgacapbin 'uri="tt-serial:///dev/ttyACM0?project=tt_um_x&clock-hz=60000"' ! ...
-gst-launch-1.0 vgacapbin 'uri="tt-ws://welland:8765/serial?clock-hz=60000"' ! ...   # or tt-wss://
-gst-launch-1.0 vgacapbin 'uri="file:///captures/tt08.vgacap"' ! ...
-```
-
-**Quote the URI twice**, as above. The outer quotes are for the shell, which
-would otherwise background the command at the `&` and glob the `?`; the inner
-ones are for GStreamer's own pipeline parser, needed when the line is handed
-to `gst_parse_launch()` as a single string -- from Python, say -- rather than
-as an already-split argument vector. An unquoted URI usually fails before the
-element ever sees it.
-
-The query string sets the source's properties by name, and the source's
-properties are mirrored on the bin, so `?seconds=10` and `seconds=10` do the
-same thing (the query wins if both are given). `tt-ws://host:8765` with no
-path means the bridge's `/serial` endpoint.
-
-A query may only carry the **capture parameters**: `project`, `design`,
-`clock-hz`, `profile`, `pio`, `buf-words`, `seconds`, `stop-timeout`. Naming
-anything else -- in particular `ttcap-command`, which is a program to run, or
-`link`, which would move the capture somewhere other than where the URI says
--- is an error, not a silent no-op. A URI can arrive from somewhere that is
-not a trusted shell, so those stay settable only as element properties, by
-whoever builds the pipeline.
-
-## `ttcap demo`: a board in, video out
-
-```sh
-uv run ttcap demo --board tt07 --project tt_um_rejunity_vga \
-    --clock-hz 60000 --seconds 60 --outdir out            # PNGs + out/capture.mkv
-uv run ttcap demo --board tt07 --clock-hz 60000 --outdir out --window --serve 8080
-uv run ttcap demo --board tt07 --clock-hz 60000 --outdir out --dry-run   # just the pipeline
-```
-
-One capture feeds every output, through a `tee`:
-
-| output | on by default | pipeline |
-|---|---|---|
-| `out/frame-%04d.png` | yes (`--no-png` to drop) | `pngenc ! multifilesink` |
-| `out/capture.mkv` | yes (`--no-video` to drop) | `x264enc`, else `vp8enc`, into `matroskamux` |
-| a window | `--window` | `autovideosink` |
-| `http://localhost:PORT/` | `--serve PORT` | `jpegenc ! multipartmux` into an MJPEG HTTP server |
-
-`--serve` publishes `multipart/x-mixed-replace` on the loopback address and
-an index page with an `<img src="/stream.mjpg">` in it, which is all a
-browser needs. It is standard library only, and a viewer that falls behind
-loses frames rather than slowing the capture down.
-
-At a 60 kHz project clock a 640x480 frame is 800x525 clocks, so **seven
-seconds long** -- honest timing, and a slideshow rather than a video.
-`--fps 30` (or `30/1`, or `29.97`) sets `vgadecode`'s `repeat-last-frame` and
-`output-fps`, which re-pushes the last frame to fill the gaps so the video
-plays at wall-clock speed. Nothing is invented: a repeated frame is the frame
-that was on the screen. It is set on the decoder, so every output shares the
-one cadence.
-
-`--dry-run` prints the `gst-launch-1.0` command and exits without touching
-the board, the outdir or the port -- the same command a real run prints
-before it starts, so it can be copied, edited and run by hand. The demo
-drives `gst-launch-1.0` as a child process rather than building the pipeline
-in-process, because the GStreamer Python bindings (`python3-gi`) are an OS
-package and `ttcap` runs under `uv`; the pipeline text is the same either
-way, and `ttcap.demo.use_gst_python()` is the check.
-
-Every numeric argument is range-checked before the board is contacted, and a
-bad one is refused with the range it takes. GObject answers an out-of-range
-property with a `CRITICAL` on stderr and then *ignores* it, so `--seconds -5`
-used to leave `seconds` at its default of 0 — which means "capture until
-stopped", so a typo started an unbounded capture on a shared board.
-`--seconds 0` still means exactly that when it is asked for. A `--clock-hz`
-above what the demo board has been measured to keep up with *at the default
-buffer size* (60 kHz on an RP2040 demo board, 750 kHz on an RP2350) is a
-**warning**, not an error: watching the board overrun is a legitimate thing
-to want, the closing `TIME` chunk reports it, and a larger `--buf-words`
-moves the ceiling.
-
-`--outdir` is one run's alone. A directory that already holds a
-`frame-*.png` or a `capture.mkv` is **refused**, because a shorter capture
-would overwrite the first frames and leave the rest — two runs mixed
-together, which is the worst thing to find in `docs/results/` later.
-`--force` deletes every `frame-*.png` and `capture.mkv` in it first (the
-refusal names them, so nothing goes unseen) and leaves everything else
-alone. A run that finishes without producing any frames exits **3**, the
-same code `ttcap capture` uses for "no samples at all" — judged on the
-files when `--no-png`/`--no-video` did not switch them off, and on the
-decoder's own bus messages when the only output is a window or a stream,
-neither of which can be counted.
-
-Ctrl-C ends the run cleanly: the signal is forwarded once to
-`gst-launch -e`, which turns it into an end-of-stream, so the board winds
-down through `vgacapttsrc`'s cooperative stop and the Matroska file is
-finalised rather than truncated. Allow one DMA buffer for that -- 2.2 s at a
-60 kHz project clock. `SIGTERM`, `SIGHUP` and `SIGQUIT` do the same, and
-however the demo ends -- an exception, a `kill`, a closed terminal -- it
-tears the pipeline's whole process group down on the way out, so a capture
-is never left holding a shared bench board. A third signal terminates the
-pipeline and a fourth kills it, at the cost of the video. Only `SIGKILL` is
-uncoverable, since nothing in the process runs after it.
-
-Because every one of those is a *graceful* stop, the demo then exits with
-the pipeline's own status: a `kill` on a run that captured successfully
-exits **0**, not 143. A supervisor reading exit status should treat that as
-the success it is.
-
-### Reaching a Welland board
-
-`--board` takes a slug from the `WELLAND` table (`tt03p5`, `tt04`..`tt08`,
-`fpga-1`, `fpga-3`, `fpga-4`; ports move, see the comment on `WELLAND`)
-and resolves it to a link:
-
-* **on the board's own Pi**, `serial:/dev/ttboard` -- stop the fpgas.online
-  bridge first (`sudo systemctl stop fpgas-tt`), since it holds the device
-  open;
-* **anywhere else**, the bridge at `ws://10.21.2.<port>:8765/serial`, which
-  is on the bench network. From a workstation that means an SSH tunnel:
-
-```sh
-ssh -N -L 18007:10.21.2.7:8765 tweed.welland.mithis.com   # tt07; 18000 + the octet
-uv run ttcap demo --link ws://127.0.0.1:18007/serial --clock-hz 60000 --outdir out
-```
-
-Any free local port works; one per board keeps two tunnels from colliding.
-Not the octet on its own (`-L 7:…`): every Welland slug's octet is below
-1024, which ssh refuses to forward without root.
-
-`--link` overrides the board entirely, and a run over the bridge that fails
-to connect prints that tunnel command before it exits.
-
-The source is built by name with its settings as element properties --
-never as a `vgacapbin` URI. `ttcap-command`, which names the program that
-talks to the board, is one of those settings, and a URI query is not allowed
-to set it (see above); a command that publishes a stream to a browser is
-exactly the place that restriction is for.
-
-## Running on a Raspberry Pi
-
-The board tools (`ttcap`) need only pyserial and websockets. On a Pi, keep
-the dev group (pytest, numpy, Pillow) out of the environment, otherwise `uv`
-will try to build numpy and Pillow from source and can hang a Pi 3:
-
-```sh
-git clone https://github.com/mithro/vgacap.git && cd vgacap
-export UV_NO_DEV=1
-uv sync
-uv run --no-sync ttcap probe ws://127.0.0.1:8765/serial
-```
-
-## Capturing from a board
-
-```sh
-uv run ttcap probe serial:/dev/ttyACM0          # sys.version and the GPIO map
-uv run ttcap throughput serial:/dev/ttyACM0     # what clock the link can keep up with
-uv run ttcap capture serial:/dev/ttyACM0 \
-    --project tt_um_rejunity_vga --clock-hz 100000 --seconds 1 --out capture.vgacap
-uv run ttcap png capture.vgacap out/frame       # out/frame-0000.png ...
-```
-
-`--profile` defaults to `auto`, which reads the board's `GPIOMap` and picks
-the RP2040 or RP2350 layout from it. Stop the capture by time (`--seconds`)
-or by size (`--max-bytes N`, or `--frames N` which works the bytes out from
-640x480@60 timing and the board's packing, adding two frame periods of
-margin for the convergence described above); `--seconds 0` runs until the
-byte limit.
-
-The board has very little heap -- about 80 KB on the RP2040 demo board --
-so `ttcap capture` clears the previous run's names and collects before it
-sends anything, and refuses to start unless the free heap covers the two
-DMA buffers plus room to compile the script (`8 * --buf-words + 24000`
-bytes, so ~56 KB at the default and ~90 KB at `--buf-words 8192`, which no
-demo board has). If it refuses, reset the board: a script that fails to
-compile up there does not always say so, and can halt the firmware outright. `ttcap png` needs Pillow, so it wants
-the `synth` extra (`uv sync --extra synth`) and a built `build/vgacap-frames`.
-
-Performance captures should own the serial device: stop the fpgas.online
-bridge first (`sudo systemctl stop fpgas-tt`) and start it again afterwards.
 
 ## License
 

@@ -1,6 +1,7 @@
 # vgacap-rp1: capture with the Raspberry Pi 5's RP1 PIO
 
-The RP2 sampler (`ttcap/mp/capture_rp2.py`) on the Pi 5's own I/O chip:
+The same PIO sampler the Tiny Tapeout demo board's RP2040/RP2350 runs
+(`ttcap/mp/capture_rp2.py`), on the Pi 5's own I/O chip:
 wait for the project-clock edge, `in pins, 8`, autopush four samples a word
 (first sample in the top byte), DMA into DRAM through
 [piolib](https://github.com/raspberrypi/utils/tree/master/piolib), write a
