@@ -53,8 +53,8 @@ TIMEOUT = 120
 
 #: The properties `vgacapbin` mirrors from `vgacapttsrc`.
 MIRRORED = ("link", "project", "design", "clock-hz", "profile", "pio", "buf-words",
-            "seconds", "ttcap-command", "stop-timeout", "capture-mode", "vga-mode",
-            "window-lines")
+            "seconds", "ttcap-command", "stop-timeout", "capture-mode", "firmware",
+            "vga-mode", "window-lines")
 
 
 def gst_env() -> dict:
@@ -220,6 +220,29 @@ def test_stream_mode_is_the_default_and_frame_options_are_left_out(tmp_path):
     argv = json.loads(argv_file.read_text())
     assert "--mode" not in argv  # ttcap's own default: stream
     assert "--vga-mode" not in argv and "--window-lines" not in argv
+
+
+def test_the_capture_firmware_choice_reaches_ttcap(tmp_path):
+    # vgacap's pico-sdk capture firmware (firmware/) is chosen on the element
+    # and must arrive on ttcap's command line as --firmware.
+    argv_file = tmp_path / "argv.json"
+    proc = run(["gst-launch-1.0", "-q", "vgacapttsrc",
+                f"ttcap-command={fake_command('--frames', '1', '--argv-file', str(argv_file))}",
+                "link=stub://board", "clock-hz=25000000", "capture-mode=frame",
+                "firmware=picosdk", "!", "fakesink", "sync=false"])
+    assert proc.returncode == 0, proc.stderr
+    argv = json.loads(argv_file.read_text())
+    assert argv[argv.index("--firmware") + 1] == "picosdk"
+    assert argv[argv.index("--mode") + 1] == "frame"
+
+
+def test_the_stock_firmware_is_the_default_and_left_out(tmp_path):
+    argv_file = tmp_path / "argv.json"
+    proc = run(["gst-launch-1.0", "-q", "vgacapttsrc",
+                f"ttcap-command={fake_command('--frames', '1', '--argv-file', str(argv_file))}",
+                "link=stub://board", "clock-hz=60000", "!", "fakesink", "sync=false"])
+    assert proc.returncode == 0, proc.stderr
+    assert "--firmware" not in json.loads(argv_file.read_text())
 
 
 def test_the_board_tuning_defaults_are_left_to_ttcap(tmp_path):

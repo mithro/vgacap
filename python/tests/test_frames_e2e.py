@@ -102,3 +102,60 @@ def test_v2_narrow_runs_stream_decodes(tmp_path):
     out, files = run_frames(stream, tmp_path / "f")
     assert files, out
     np.testing.assert_array_equal(read_ppm(files[-1]), colour6_to_rgb(img))
+
+
+def write_overrun_stream(path, marker: bool = True):
+    """Grid and bars on alternate frames, with one whole frame of samples
+    lost part way down the fourth: line and frame timing stay intact, so
+    only the overrun marker can stop a picture being built from the top of
+    one frame and the bottom of another. Returns (wanted pictures, sample
+    count before the gap)."""
+    from vgacap.stream import TINYVGA_MAP, Header, Writer
+
+    mode = MODES["640x480@60"]
+    images = [grid(mode.h_active, mode.v_active), bars(mode.h_active, mode.v_active)]
+    per = [frame_samples(mode, im) for im in images]
+    frame = len(per[0])
+    flat = np.concatenate([per[k % 2] for k in range(7)])
+    cut = frame * 3 + 200_000
+    with open(path, "wb") as fp:
+        w = Writer(fp, Header(sample_bits=8, samples_per_word=4, signal_map=TINYVGA_MAP,
+                              mode=3, clock_hz=0, desc="overrun"))
+        pos = 0
+        while pos < len(flat):
+            if pos <= cut < pos + 16384:
+                w.raw(flat[pos:cut].tolist())
+                if marker:
+                    w.time(0, 0, frame, "overrun")
+                pos = cut + frame
+                continue
+            w.raw(flat[pos:pos + 16384].tolist())
+            pos += 16384
+    return [colour6_to_rgb(im) for im in images], cut
+
+
+def _is_one_of(ppm, wanted) -> bool:
+    got = read_ppm(ppm)
+    return any(np.array_equal(got, w) for w in wanted)
+
+
+def test_an_overrun_marker_stops_a_torn_picture(tmp_path):
+    stream = tmp_path / "overrun.vgacap"
+    wanted, cut = write_overrun_stream(stream)
+
+    proc = subprocess.run([str(FRAMES), str(stream), str(tmp_path / "f")],
+                          capture_output=True, text=True, check=True)
+
+    frames = sorted(tmp_path.glob("f-*.ppm"))
+    assert frames and all(_is_one_of(f, wanted) for f in frames)
+    assert "vgacap-frames: overrun after sample %d (dropped=420000): picture reset" % cut in proc.stderr
+
+
+def test_without_the_marker_the_same_gap_tears_a_picture(tmp_path):
+    # What the marker is for: the gap alone keeps every timing check happy.
+    stream = tmp_path / "gap.vgacap"
+    wanted, _ = write_overrun_stream(stream, marker=False)
+
+    _, frames = run_frames(stream, tmp_path / "f")
+
+    assert not all(_is_one_of(f, wanted) for f in frames)

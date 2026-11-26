@@ -121,6 +121,30 @@ def test_sends_the_setup_commands_in_order():
     }
 
 
+def test_rle_on_an_rp2350_lets_the_sdk_use_150_mhz():
+    """Locked PIO run counting needs 6 system clocks a project clock; the
+    SDK's default would give 25 MHz only 4 (100 MHz)."""
+    board = FakeChunkBoard([])
+    repl = connect(board)
+    select_project(repl, request(profile=RP2350_DBV3, clock_hz=25_000_000,
+                                 script="rle_rp2.py"))
+    assert "tt.clock_project_PWM(25000000, max_rp2040_freq=150000000)" in board.commands
+
+
+@pytest.mark.parametrize("profile, script", [
+    (RP2350_DBV3, "capture_rp2.py"),
+    (RP2350_DBV3, "frame_rp2.py"),
+    (RP2040_TT06, "rle_rp2.py"),
+])
+def test_other_captures_keep_the_sdks_own_system_clock(profile, script):
+    """Frame capture's sample point was measured under the SDK's default
+    system clock; only RLE on an RP2350 asks for more."""
+    board = FakeChunkBoard([])
+    repl = connect(board)
+    select_project(repl, request(profile=profile, clock_hz=1_000_000, script=script))
+    assert "tt.clock_project_PWM(1000000)" in board.commands
+
+
 def test_leaves_the_current_design_alone_when_no_project_is_named():
     board = FakeChunkBoard([])
     repl = connect(board)
@@ -529,6 +553,38 @@ def test_capture_request_rejects_impossible_requests(kwargs):
         request(**kwargs)
 
 
+def rle_chunk(profile, pairs) -> bytes:
+    return _after_header(header_for(profile), lambda w: w.rle(pairs))
+
+
+def test_rle_samples_are_the_sum_of_the_runs():
+    # Not the pair count, nor the payload's words: a picture of long runs
+    # is few pairs and many samples. A saturated run goes out as two pairs
+    # of 2^31, and its 2^32 samples are counted in full.
+    profile = RP2350_DBV3
+    board = FakeChunkBoard(
+        [
+            rle_chunk(profile, [(7, 3), (9, 1), (7, 40)]),
+            rle_chunk(profile, [(9, 1 << 31), (9, 1 << 31), (4, 5)]),
+            time_chunk(profile, 0, "overruns=0 rxstall=0 saturated=1 sysclk_hz=150000000"),
+        ]
+    )
+
+    stats = run_capture(connect(board), request(profile, script="rle_rp2.py"), io.BytesIO())
+
+    assert stats.samples == 3 + 1 + 40 + (1 << 32) + 5
+    assert stats.chunks == 3
+    assert stats.clean
+
+
+def test_an_rle_oneshot_needs_no_other_limit():
+    # It stops by itself after its two buffers, like a frame capture with
+    # max_frames -- but only the oneshot does.
+    request(script="rle_rp2.py", seconds=0, max_bytes=0, rle_oneshot=True)
+    with pytest.raises(ValueError, match="never stop"):
+        request(script="rle_rp2.py", seconds=0, max_bytes=0)
+
+
 def test_clears_the_previous_run_names_before_sending_the_script():
     profile = RP2040_TT06
     board = FakeChunkBoard(sample_run(profile, [1, 2, 3, 4]), mem_free=90_000)
@@ -909,3 +965,43 @@ def test_frame_cfg_rejects_extended():
 
     with pytest.raises(ValueError, match="frame and window capture support only"):
         frame_cfg(RP2350_DBV3, vga_mode="800x600@72")
+
+
+# -- select_project undoes its own mode change --------------------------------
+
+
+def test_a_setup_failure_after_the_mode_switch_puts_the_mode_back():
+    board = FakeChunkBoard(
+        [],
+        replies={"print(int(tt.mode))": "2\r\n"},
+        errors={"tt.clock_project_PWM(100000)": "AttributeError: no clock\r\n"},
+    )
+    repl = connect(board)
+
+    with pytest.raises(CaptureError, match="no clock"):
+        select_project(repl, request(ui_in=3))
+
+    assert board.commands[-2:] == ["tt.clock_project_stop()", "tt.mode = 2"]
+    assert "tt.reset_project(False)" not in board.commands
+
+
+def test_a_request_with_a_bad_cfg_is_refused_when_it_is_built():
+    with pytest.raises(ValueError, match="sample_delay"):
+        request(script="frame_rp2.py", sample_delay=40, ui_in=3)
+
+
+def test_the_cleanup_clears_the_other_programs_names_too():
+    # Stream then frame (or back) on one board: the names the previous
+    # program left must go, not only those the next one is about to define.
+    board = FakeChunkBoard([], mem_free=120_000)
+    repl = connect(board)
+    req = request(script="frame_rp2.py", max_frames=1, max_bytes=0)
+
+    run_capture(repl, req, io.BytesIO())
+
+    cleanup = board.commands[0]
+    assert cleanup.startswith("for _n in ")
+    for stream_only in ("on_a", "FULL", "OVERRUNS"):
+        assert repr(stream_only) in cleanup
+    for frame_only in ("plan_buffers", "make_trigger", "DONE"):
+        assert repr(frame_only) in cleanup
