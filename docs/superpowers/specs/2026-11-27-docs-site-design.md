@@ -41,9 +41,11 @@ under it.
 | Developing vgacap | someone with a checkout | building, testing, CI, the hardware-in-the-loop check, the docs themselves, where to make which change |
 
 A heading holds at most seven entries (**5.9**). The sidebar is built from
-the landing pages: a landing page's list lines are its sidebar entries
-(`docs/_ext/vgacap_landing.py`), so a group larger than seven gets a child
-landing page, never a caption.
+the landing pages' list lines (`docs/_ext/vgacap_landing.py`): walked
+breadth-first from the root, each page's parent is the first landing page
+that reaches it, so a page has one place in the sidebar and a later line to
+it, or a line back up, is a cross-link. A group larger than seven gets a
+child landing page, never a caption.
 
 ## Page types and where each lives
 
@@ -70,8 +72,8 @@ GitHub shows front matter as a small table above the page; that is accepted.
   section belong to `docs/index.md`, not to it.
 - `docs/index.md` is the site's root landing page (`root_doc`).
   `docs/<section>/index.md` are the section landings. No page holds a
-  toctree directive: the build makes each landing page's toctree from its
-  lines.
+  toctree directive, and the build fails one that does: it makes each
+  landing page's toctree from its lines.
 - New pages sit beside the code they are about, named by type:
   `tutorial-*.md`, `how-to-*.md`, `reference-*.md`, `explanation-*.md`.
   Existing reference files keep their names (`firmware/PROTOCOL.md`,
@@ -129,7 +131,7 @@ machine can decide. It fails a page on:
 | **10.5**, **10.6**, **3.2** | a how-to heading missing, extra, out of order, or with sub-headings |
 | **10.8** | an image without alt text, alt text over 150 characters (**5.10**), or an image left in raw HTML |
 | **10.9** | a drawing (a local SVG) not a light and dark pair; a switched image without its twin; a twin shown in every theme |
-| **10.10** | more than seven entries on a landing page |
+| **10.10** | more than seven sidebar entries under one page, the root included |
 | **10.11** | more than five heading levels |
 | **10.12**, **1.6** | a page of links alone; a page of two sentences or fewer, a table row or list item counting as one |
 
