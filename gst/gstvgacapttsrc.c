@@ -16,8 +16,9 @@
  *
  * This is the part worth reading. The board samples into a DMA double buffer
  * and can only stop at a buffer boundary, so a capture takes up to one buffer
- * to wind down - about 82 ms at 750 kHz, but 2.2 s at the RP2040's 60 kHz
- * project-clock ceiling, where a buffer is a long time. `ttcap capture
+ * to wind down - with the default buffer, about 22 ms on an RP2350 at 750 kHz
+ * but about 137 ms on an RP2040 at its 60 kHz project-clock ceiling, where a
+ * buffer is a long time. `ttcap capture
  * --out -` turns its first %SIGINT into a cooperative stop: the board
  * finishes the chunk it is filling, writes its closing `TIME` chunk (the only
  * overrun and RXSTALL report there is), and the process exits 0 with a
@@ -68,9 +69,9 @@
  * Only stopped. The board is sampling in real time and the element's pipe is
  * the only buffer between it and the pipeline: with the pipeline PAUSED, the
  * streaming thread stops reading and the child gets exactly one pipe buffer
- * of grace - **measured at 65548 bytes**, which is about 90 ms of capture at
- * 750 kHz and about 1.1 s at 60 kHz. After that the board's DMA buffers
- * overrun and samples are lost.
+ * of grace - **measured at 65548 bytes**, which is about 87 ms of capture on an
+ * RP2350 at 750 kHz and about 0.55 s on an RP2040 at 60 kHz. After that the
+ * board's DMA buffers overrun and samples are lost.
  *
  * It is worse than it sounds, because the overrun count lives in the closing
  * `TIME` chunk, which `stop()` drains and discards - so a capture that was
@@ -1293,8 +1294,8 @@ static void gst_vgacapttsrc_class_init(GstVgaCapTtSrcClass *klass)
     g_object_class_install_property(gobject_class, PROP_BUF_WORDS,
         g_param_spec_int("buf-words", "DMA buffer words",
                          "Words per DMA buffer, two are allocated; -1 leaves ttcap's "
-                         "default. Also the stop latency: one buffer, which is 2.2 s "
-                         "at a 60 kHz project clock",
+                         "default. Also the stop latency: one buffer, which at the "
+                         "default is about 137 ms on an RP2040 at 60 kHz",
                          -1, 1 << 24, DEFAULT_BUF_WORDS, rw));
     g_object_class_install_property(gobject_class, PROP_SECONDS,
         g_param_spec_double("seconds", "Capture seconds",
