@@ -58,16 +58,16 @@ uv run ttcap capture serial:/dev/ttyACM0 --project tt_um_rejunity_vga \
     --clock-hz 60000 --frames 2 --seconds 0 --out capture.vgacap
 ```
 
-`ttcap` enables the design, clocks it at 60 kHz, and records its `uo_out` pins on every clock. 60 kHz is a clock both the RP2040 and the RP2350 demo boards stream without loss. Two frames take four frame periods of samples, about 28 seconds at that clock. The run ends with lines like these, from the capture pictured above:
+`ttcap` enables the design, clocks it at 60 kHz, and records its `uo_out` pins on every clock. 60 kHz is a clock both the RP2040 and the RP2350 demo boards stream without loss. Two frames take four frame periods of samples, about 28 seconds at that clock. On an RP2040 demo board the run prints these lines, with its own counts:
 
 ```text
 profile=rp2040-tt06map project=tt_um_rejunity_vga enable=index
-bytes=3360410 samples=1675264 chunks=819 seconds=28.377 overruns=0 dropped=0 rxstall=0 samples_per_s=59037 mem_free=82928
+bytes=... samples=... chunks=... seconds=... overruns=0 dropped=0 rxstall=0 ...
   board: overruns=0 rxstall=0 sysclk_hz=132000000
 wrote capture.vgacap
 ```
 
-`overruns=0` and `rxstall=0` say no sample was lost. The numbers differ on an RP2350 demo board, which reports `profile=rp2350-dbv3`.
+The counts on the second line depend on the board and on `--buf-words`; `overruns=0`, `dropped=0` and `rxstall=0` say no sample was lost. An RP2350 demo board reports `profile=rp2350-dbv3`.
 
 ## 4. Turn the capture into a PNG
 

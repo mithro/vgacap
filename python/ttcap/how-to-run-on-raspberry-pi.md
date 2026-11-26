@@ -53,7 +53,7 @@ Step 3 ends by installing three packages:
  + websockets==17.1
 ```
 
-Step 4 prints the board's `sys.version` and `GPIOMap.all()` ([How to probe a demo board](how-to-probe-board.md)). This setup ran `ttcap capture` on the tt07 board's own Pi ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-ttcap-capture-serial-tt07)). The static 32-bit uv ran it on the fpga-4 board's Pi ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)).
+Step 4 prints the board's `sys.version` and `GPIOMap.all()` ([How to probe a demo board](how-to-probe-board.md)). This setup ran `ttcap capture` on the tt07 board's own Pi ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-ttcap-capture-serial-tt07)).
 
 ## If it fails
 
