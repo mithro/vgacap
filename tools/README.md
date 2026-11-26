@@ -26,7 +26,10 @@ tools/hil.sh --board fpga-1 --design tt_um_vgacal_bars --clock-hz 500000 \
 without GStreamer (the pipeline checks then SKIP with the reason), `--ui-in`
 for `tt_um_vgacal_modes`, `--stop-bridge` when running on the board's own Pi
 with `serial:/dev/ttboard` (it stops `fpgas-tt`, which holds the device, and
-always restarts it). Every check prints PASS, FAIL or SKIP with what it
+always restarts it; it refuses unless the bridge's `/health` says 0 clients
+on two reads a few seconds apart, but that count is WebSocket serial sessions
+only, so an in-flight HTTP request -- a design enable, a bitstream upload, a
+demo sync -- is not seen). Every check prints PASS, FAIL or SKIP with what it
 measured. Exit status is 0 if all passed, 1 if any failed, 2 if it could not
 start (lock held, missing tool, bad arguments).
 
