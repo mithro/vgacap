@@ -411,8 +411,8 @@ static void gst_vgacapbin_class_init(GstVgaCapBinClass *klass)
     g_object_class_install_property(gobject_class, PROP_BUF_WORDS,
         g_param_spec_int("buf-words", "DMA buffer words",
                          "Words per DMA buffer, two are allocated; -1 leaves ttcap's "
-                         "default. Also the stop latency: one buffer, which is 2.2 s "
-                         "at a 60 kHz project clock",
+                         "default. Also the stop latency: one buffer, which at the "
+                         "default is about 137 ms on an RP2040 at 60 kHz",
                          -1, 1 << 24, -1, rw));
     g_object_class_install_property(gobject_class, PROP_SECONDS,
         g_param_spec_double("seconds", "Capture seconds",
