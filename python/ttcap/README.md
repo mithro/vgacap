@@ -184,10 +184,11 @@ resolves it to a link:
 
 * **on the board's own Pi**, `serial:/dev/ttboard`. Stop the bridge first
   (`sudo systemctl stop fpgas-tt`), since it holds the device open, after
-  checking it has no clients;
+  checking it has no clients, and start it again afterwards
+  (`sudo systemctl start fpgas-tt`);
 * **anywhere else**, the bridge at `ws://10.21.2.<octet>:8765/serial`, which
   is on the bench network. The octet is the board's bench port number
-  (7 for tt07, 34 for fpga-1). From a workstation that means an SSH
+  (34 for fpga-1, 35 for fpga-4). From a workstation that means an SSH
   tunnel:
 
 ```sh
