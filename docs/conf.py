@@ -55,6 +55,7 @@ extensions = [
     "myst_parser",
     "vgacap_picture",   # <picture> light/dark twins -> the theme-switched pair
     "vgacap_rules",     # the docs.fpgas.online rules a machine can decide
+    "vgacap_developing",  # the Developing vgacap reference tables, from their sources
 ]
 source_suffix = {".md": "markdown"}
 root_doc = "docs/index"
@@ -74,8 +75,8 @@ vgacap_rules_pending = {
     for page in (
         "README", "python/ttcap/README", "firmware/README", "firmware/PROTOCOL",
         "mpy/README", "capture-rp1/README", "rtl/README", "gst/README",
-        "src/tools/README", "tools/README", "docs/development", "docs/frames-format",
-        "docs/trace-format", "third_party/README", "docs/diagrams/NOTICE",
+        "src/tools/README", "docs/frames-format",
+        "docs/trace-format", "docs/diagrams/NOTICE",
     )
 }
 
