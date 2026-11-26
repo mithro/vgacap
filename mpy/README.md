@@ -59,7 +59,7 @@ does.
   chunks, so a chunk is never cut short; `None` for none (the capture then
   ends only by `max_bytes`/`max_frames`). While a capture runs, Ctrl-C is an
   ordinary byte (`micropython.kbd_intr(-1)`), and it is a KeyboardInterrupt
-  again once the closing summary has been written -- the scripts' rule.
+  again once the closing summary has been written: the scripts' rule.
 * `buf`: a writable, 4-byte-aligned buffer to capture into (a `bytearray`),
   instead of the ones allocated per call. A frame capture's window is as
   many lines as fit in it; `stream()` needs `8 * buf_words` bytes.
@@ -94,8 +94,8 @@ nothing more written; a pending exception raised by MicroPython's event
 handling (`mp_sched_exception()`, say) ends it at the next chunk, with the
 summary written. Either way the exception is raised once the hardware has
 been given back. An exception in a scheduled callback (`micropython.schedule`,
-a soft timer) is not one of these: MicroPython prints it to stdout -- into
-the chunk stream -- and carries on.
+a soft timer) is not one of these: MicroPython prints it to stdout (into
+the chunk stream) and carries on.
 
 ### What it borrows from MicroPython
 
