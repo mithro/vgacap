@@ -51,31 +51,40 @@ BANNED_RE = re.compile(
 # 6.3: labels, so matched as written at the start of a paragraph or line.
 BANNED_LABELS = re.compile(r"(?:^|\n)\s*(Future|Sources):", re.MULTILINE)
 
-#: Every rule this module checks: its number, what it catches, and whether
-#: the build fails or only logs it. docs/developing/reference-page-rules.md
-#: is generated from this table, and a test holds it to the checks below.
+#: Every check this module makes: its rule number, the start of the message
+#: it prints (… for a part that varies), what it catches, and whether the
+#: build fails or only logs it. docs/developing/site/reference-page-rules.md
+#: is made from this table, and docs/tests/test_vgacap_developing.py holds
+#: it to the messages in the code, one row for each.
 CHECKS = (
-    ("10.14", "front matter without type, owner, reader or review", "fails"),
-    ("10.14", "a page type that is not one of the five", "fails"),
-    ("10.14", "a review date that is not a YYYY-MM-DD date", "fails"),
-    ("10.21", "a review date that has passed", "logged"),
-    ("10.1", "a banned word or phrase in prose", "fails"),
-    ("10.1", "a paragraph or line that starts with Future: or Sources:", "fails"),
-    ("10.2", "a title over the title limit", "fails"),
-    ("10.3", "a title that another page has, on every page that has it", "fails"),
-    ("3.2", "how-to headings out of order", "fails"),
-    ("10.4", "a how-to step sentence over the sentence limit", "fails"),
-    ("10.5", "a how-to with a fixed heading missing", "fails"),
-    ("10.6", "a how-to with an extra heading or a sub-heading", "fails"),
-    ("10.8", "an image with no alt text or alt text over the alt text limit", "fails"),
-    ("10.8", "an image written in raw HTML other than a picture element", "fails"),
-    ("10.9", "an SVG drawing outside a light and dark pair", "fails"),
-    ("10.10", "more sidebar entries under one page than the sidebar limit", "fails"),
-    ("10.11", "more heading levels than the heading limit", "fails"),
-    ("10.12", "a page other than a landing that is links alone", "fails"),
-    ("1.6", "a page other than a landing with two sentences or facts or fewer", "fails"),
-    ("10.19", "more links than the link limit", "logged"),
-    ("10.20", "more callouts than the callout limit", "logged"),
+    ("10.14", "front matter is missing …", "front matter without type, owner, reader or review", "fails"),
+    ("10.14", "type … is not one of … (1.1)", "a page type that is not one of the five", "fails"),
+    ("10.14", "review … is not a YYYY-MM-DD date", "a review date written another way", "fails"),
+    ("10.14", "review … is not a date", "a review date that is no date", "fails"),
+    ("10.21", "review date … has passed", "a review date that has passed", "logged"),
+    ("10.1", "banned word or phrase … (6.1)", "a banned word or phrase in prose", "fails"),
+    ("10.1", "forbidden label … (6.3)", "a paragraph or line that starts with Future: or Sources:", "fails"),
+    ("10.2", "title is … characters, over …: …", "a title over the title limit", "fails"),
+    ("10.3", "rule 10.3: title … is also the title of …", "a title that another page has, on every page with it", "fails"),
+    ("3.2", "how-to headings are out of order: …", "how-to headings out of order", "fails"),
+    ("10.4", "step sentence of … words, over …: …", "a how-to step sentence over the sentence limit", "fails"),
+    ("10.5", "how-to is missing …", "a how-to with a fixed heading missing", "fails"),
+    ("10.6", "how-to has extra headings …", "a how-to with an extra heading", "fails"),
+    ("10.6", "how-to heading … has sub-headings", "a how-to heading with a sub-heading", "fails"),
+    ("10.8", "image … has no alt text", "an image with no alt text", "fails"),
+    ("10.8", "alt text of … is … characters, over … (5.10)", "alt text over the alt text limit", "fails"),
+    ("10.8", "an image in raw HTML is not checked or copied: …", "an image in raw HTML other than a picture element after a blank line", "fails"),
+    ("10.9", "drawing … is not a light and dark pair …", "an SVG drawing outside a light and dark pair", "fails"),
+    ("10.9", "… is shown only in the … theme", "a theme-switched image without its twin", "fails"),
+    ("10.9", "… and its dark twin are both shown in every theme", "a drawing and its dark twin both shown unswitched", "fails"),
+    ("10.10", "… sidebar entries under this page, over …", "more sidebar entries under one page than the sidebar limit", "fails"),
+    ("10.11", "… heading levels, over …", "more heading levels than the heading limit", "fails"),
+    ("10.12", "the page is links alone", "a page other than a landing that is links alone", "fails"),
+    ("1.6", "the page holds … sentences or facts; more than two are needed", "a page other than a landing with two sentences or facts or fewer", "fails"),
+    ("10.19", "… links, over …", "more links than the link limit", "logged"),
+    ("10.20", "… callouts, over …", "more callouts than the callout limit", "logged"),
+    ("pending", "vgacap_rules_pending names …, which is not a page", "a pending list entry that is not a page", "fails"),
+    ("pending", "… passes every rule: take it out of vgacap_rules_pending (…)", "a page on the pending list that passes every rule", "fails"),
 )
 
 TITLE_MAX = 65          # 5.1

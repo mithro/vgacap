@@ -24,6 +24,9 @@ the page and the table cannot go stale (docs.fpgas.online rules 4.4 and
     ```{vgacap-page-rules}
     ```                     the checks of docs/_ext/vgacap_rules.py
 
+    ```{vgacap-sidebar-checks}
+    ```                     the checks of docs/_ext/vgacap_landing.py
+
     ```{vgacap-page-limits}
     ```                     its limits, front matter, types and headings
 
@@ -41,12 +44,14 @@ import yaml
 from docutils import nodes
 from sphinx.util.docutils import SphinxDirective
 
+import vgacap_landing
 import vgacap_rules
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CI = REPO / ".github" / "workflows" / "ci.yml"
 HIL = REPO / "tools" / "hil.py"
 RULES = pathlib.Path(vgacap_rules.__file__).resolve()
+LANDING = pathlib.Path(vgacap_landing.__file__).resolve()
 
 
 # ------------------------------------------------------------------ tables
@@ -157,16 +162,30 @@ class CiEnv(SourceDirective):
                 for name, value in (step.get("env") or {}).items():
                     where = [code(job_id), " job, step "] + step_text(step)
                     rows.append([code(name), code(str(value)), where])
-        # `on` is read as True by YAML 1.1.
-        events = ci.get("on", ci.get(True))
-        intro = nodes.paragraph()
-        intro += nodes.Text("The workflow runs on ")
-        for i, event in enumerate(events):
-            if i:
-                intro += nodes.Text(" and " if i == len(events) - 1 else ", ")
-            intro += code(event)
-        intro += nodes.Text(" events, for every branch.")
-        return [intro, table(["Variable", "Value", "Set for"], rows)]
+        return [triggers(ci), table(["Variable", "Value", "Set for"], rows)]
+
+
+def triggers(ci):
+    """A sentence naming the events the workflow runs on. `on` is a string,
+    a list or a map of event to filters (and YAML 1.1 reads the key as
+    True); "for every branch" is said only when no event has a filter."""
+    on = ci.get("on", ci.get(True))
+    if isinstance(on, str):
+        events, filtered = [on], False
+    elif isinstance(on, list):
+        events, filtered = list(on), False
+    else:
+        events = list(on)
+        filtered = any(value for value in on.values())
+    intro = nodes.paragraph()
+    intro += nodes.Text("The workflow runs on ")
+    for i, event in enumerate(events):
+        if i:
+            intro += nodes.Text(" and " if i == len(events) - 1 else ", ")
+        intro += code(event)
+    intro += nodes.Text(" events" + ("; each event's filters are in the file." if filtered
+                                     else ", for every branch."))
+    return intro
 
 
 # -------------------------------------------------------------------- HIL
@@ -300,9 +319,16 @@ OPTION_RE = re.compile(r'^\s*option\(\s*(\w+)\s+"([^"]*)"\s+(\w+)\s*\)', re.MULT
 
 
 def cmake_files():
-    return sorted(p for p in REPO.glob("**/CMakeLists.txt")
-                  if not ({"build", "third_party", ".worktrees", "tmp", ".venv"}
-                          & set(p.relative_to(REPO).parts)) and "build-" not in str(p))
+    """Every CMakeLists.txt of vgacap's own, outside build trees, checkouts
+    and the vendored libraries; judged on the path inside the repository."""
+    skip = {"third_party", ".worktrees", "tmp", ".venv"}
+    out = []
+    for path in REPO.glob("**/CMakeLists.txt"):
+        parts = path.relative_to(REPO).parts[:-1]
+        if skip & set(parts) or any(part.startswith("build") for part in parts):
+            continue
+        out.append(path)
+    return sorted(out)
 
 
 class CmakeOptions(SourceDirective):
@@ -326,8 +352,17 @@ class PageRules(SourceDirective):
     source = RULES
 
     def make(self):
-        rows = [[code(rule), what, result] for rule, what, result in vgacap_rules.CHECKS]
-        return [table(["Rule", "What the build catches", "Result"], rows)]
+        rows = [[code(rule), what, code(message), result]
+                for rule, message, what, result in vgacap_rules.CHECKS]
+        return [table(["Rule", "What the build catches", "Message", "Result"], rows)]
+
+
+class SidebarChecks(SourceDirective):
+    source = LANDING
+
+    def make(self):
+        rows = [[what, code(message)] for message, what in vgacap_landing.CHECKS]
+        return [table(["What the build catches", "Message"], rows)]
 
 
 class PageLimits(SourceDirective):
@@ -380,6 +415,7 @@ def setup(app):
     app.add_directive("vgacap-hil-checks", HilChecks)
     app.add_directive("vgacap-cmake-options", CmakeOptions)
     app.add_directive("vgacap-page-rules", PageRules)
+    app.add_directive("vgacap-sidebar-checks", SidebarChecks)
     app.add_directive("vgacap-page-limits", PageLimits)
     app.add_directive("vgacap-banned-words", BannedWords)
     return {"parallel_read_safe": True, "parallel_write_safe": True}
