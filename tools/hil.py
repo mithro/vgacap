@@ -1241,17 +1241,21 @@ def build_parser() -> argparse.ArgumentParser:
                "measured; the exit status is 1 if any check failed.")
     parser.add_argument("report", help="report file, or a directory to put a "
                                        "dated one in (docs/results/, say)")
-    parser.add_argument("--board", help="Welland slug, e.g. fpga-1")
+    parser.add_argument("--board", help="Welland slug, such as fpga-1: names the "
+                                       "board, and gives the link if --link is not given")
     parser.add_argument("--link", help="serial:/dev/ttboard or ws://host:8765/serial; "
                                        "required unless --board resolves one")
     parser.add_argument("--design", help="FPGA boards: the bitstream to enable")
     parser.add_argument("--project", help="ASIC shuttles: the macro to enable")
-    parser.add_argument("--clock-hz", type=int, required=True)
+    parser.add_argument("--clock-hz", type=int, required=True,
+                        help="project clock for the streaming captures and the demo, in Hz")
     parser.add_argument("--seconds", type=float, default=10.0,
                         help="length of each capture (default 10)")
     parser.add_argument("--fps", default="5",
                         help="video rate for the demo runs (default 5)")
-    parser.add_argument("--profile", default="auto")
+    parser.add_argument("--profile", default="auto",
+                        help="ttcap board profile: rp2040, rp2350, or auto to ask "
+                             "the board (default auto)")
     parser.add_argument("--pio", type=int,
                         help="PIO block for the sampler; ttcap's default otherwise")
     parser.add_argument("--ui-in", type=int, default=0,
@@ -1262,22 +1266,25 @@ def build_parser() -> argparse.ArgumentParser:
                              "real one (default 25 MHz; 0 skips the check)")
     parser.add_argument("--frame-vga-mode", default="640x480@60",
                         help="VGA timing the `frame` check expects (default 640x480@60)")
-    parser.add_argument("--serve-port", type=int, default=8099)
+    parser.add_argument("--serve-port", type=int, default=8099,
+                        help="local port for the `serve` check's MJPEG stream (default 8099)")
     parser.add_argument("--timeout", type=float, default=60.0,
                         help="how long a board command may take before its own "
                              "work starts (default 60); captures get this plus "
                              "three times --seconds")
     parser.add_argument("--ttcap", default="uv run --no-sync ttcap",
                         help="the ttcap command (default %(default)r)")
-    parser.add_argument("--vgacap-frames", default=str(ROOT / "build" / "vgacap-frames"))
+    parser.add_argument("--vgacap-frames", default=str(ROOT / "build" / "vgacap-frames"),
+                        help="the vgacap-frames to rebuild frames with (default: this "
+                             "checkout's build/)")
     parser.add_argument("--testpatterns", default=str(ROOT.parent / "tt-vga-testpatterns"),
                         help="the tt-vga-testpatterns checkout, for the "
                              "pixel-exact comparison (default: next door)")
     parser.add_argument("--workdir", default=str(ROOT / "tmp" / "hil"),
                         help="where captures, frames and demo outputs go")
     parser.add_argument("--no-demo", action="store_true",
-                        help="run only the checks that need no GStreamer "
-                             "pipeline: probe, capture, reconstruct, reference")
+                        help="skip the checks that need a GStreamer pipeline "
+                             "(demo-frames, video, serve, stop)")
     parser.add_argument("--stop-bridge", action="store_true",
                         help="stop fpgas-tt first (it holds /dev/ttboard open) "
                              "and start it again afterwards; refused while "
