@@ -147,7 +147,7 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   product `vgacap capture firmware`, serial number the chip's unique ID:
   `/dev/serial/by-id/usb-vgacap_vgacap_capture_firmware_<id>-if00`. A udev
   rule that names the stock firmware's port (`/dev/ttboard` on the
-  Welland Pis) will not match it.
+  Welland bench's Pis) will not match it.
 
 ## PIO programs
 
@@ -176,7 +176,7 @@ program could load the `.pio` files' words the same way.
 
 * `test_fw_units`: argument parsing; the clock plans against the clocks
   the stock firmware was measured to pick on fpga-4 (25 MHz -> 100 MHz,
-  36 MHz -> 72 MHz, 28.322 MHz -> 113 MHz (28.25 MHz project clock), ...); the PIO words.
+  36 MHz -> 72 MHz, 28.322 MHz -> 113 MHz, making 28.25 MHz, ...); the PIO words.
 * `test_fw_core`: every command's exact reply, and the engines' exact
   chunks on the simulated board: max_bytes, overruns (cumulative, and a
   chunk torn while it is being sent, reported straight after it), stop
@@ -196,13 +196,14 @@ The simulator models what the PIO and DMA deliver, not their cycles; see
 These steps run on the machine the board is plugged into, with this
 repository checked out there as in
 [Running on a Raspberry Pi](../python/ttcap/README.md#running-on-a-raspberry-pi)
-and the UF2 copied there. `<dev>` is the stock firmware's serial port. On
+and `firmware/build/vgacap_fw.uf2` built or copied there. `<dev>` is the
+stock firmware's serial port. On
 the Welland bench, which needs
 [bench access](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed),
 that machine is the board's own Pi and `<dev>` is `/dev/ttboard`; the
-bridge's `/designs/<name>/enable` can also enable a design, and the bridge
-(`fpgas-tt`) holds the port until stopped (`sudo systemctl stop fpgas-tt`,
-after checking it has no clients).
+fpgas.online bridge (`fpgas-tt`) can also enable a design
+(`/designs/<name>/enable`), and holds the port until stopped
+(`sudo systemctl stop fpgas-tt`, after checking it has no clients).
 
 1. With the stock firmware, enable the design to capture with
    `ttcap capture`'s `--design`, and take a reference capture the usual
@@ -215,7 +216,7 @@ after checking it has no clients).
 
        sudo mkdir -p /mnt/rp2350
        sudo mount /dev/disk/by-label/RP2350 /mnt/rp2350
-       sudo cp vgacap_fw.uf2 /mnt/rp2350/ && sync
+       sudo cp firmware/build/vgacap_fw.uf2 /mnt/rp2350/ && sync
        sudo umount /mnt/rp2350    # may report the drive already gone
 
    The drive disappears and the vgacap firmware's serial port appears.
