@@ -1,0 +1,29 @@
+hash_method: fnv1a64-tb2026-rgb888
+# FNV-1a 64 loop (prime 0x100000001b3) with a NON-STANDARD offset basis,
+# hash_offset_basis below, not 0xcbf29ce484222325: tb.cpp's constant lost a digit.
+# Over the frame as RGB888, row-major, active area only, at native resolution,
+# each 2-bit channel stored as value * 85.
+hash_offset_basis: 0x14650fb0739d0383
+id: test/bars_cpp2
+status: ok
+sampler: tb-v1
+sampler_status: ok
+mode: 640x480@60
+width: 640
+height: 480
+clock_hz: 50350000
+clocks_per_pixel: 2
+capture_after_clock: 3342336
+frames: 12
+df3e3598442fb824
+fa06554a9bbf992b
+ca9d815bbd97b7e5
+1b8e2249b2448d9e
+c8687acfec56c743
+b94b7566b7fd413c
+3e0174b0b78d87c2
+25238a168c2d7089
+df3e3598442fb824
+fa06554a9bbf992b
+ca9d815bbd97b7e5
+1b8e2249b2448d9e

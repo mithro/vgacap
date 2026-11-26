@@ -1,0 +1,17 @@
+hash_method: fnv1a64-tb2026-rgb888
+# FNV-1a 64 loop (prime 0x100000001b3) with a NON-STANDARD offset basis,
+# hash_offset_basis below, not 0xcbf29ce484222325: tb.cpp's constant lost a digit.
+# Over the frame as RGB888, row-major, active area only, at native resolution,
+# each 2-bit channel stored as value * 85.
+hash_offset_basis: 0x14650fb0739d0383
+id: test/nosync
+status: no-sync
+sampler: tb-v1
+sampler_status: no-sync
+mode: unknown
+width: 0
+height: 0
+clock_hz: 25175000
+clocks_per_pixel: 1
+capture_after_clock: 2517500
+frames: 0
