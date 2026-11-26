@@ -7,13 +7,13 @@ review: 2027-05-27
 
 # How to select an ASIC project with the vgacap firmware
 
-**You want to capture a project on a demo board with an ASIC breakout, and the vgacap firmware sees no picture
-because the chip's project mux came back with nothing selected.**
+**You want to capture a project on a demo board with an ASIC breakout through the vgacap firmware, which sees
+no picture.**
 
-The mux's control lines float while the RP2350 is in its bootloader, so an ASIC breakout loses its selected
-project when the vgacap firmware is loaded. The firmware's `asic_select` command selects it again, by its index
-on the mux, as the stock firmware does. It is never for a demo board with an FPGA breakout: there it erases the
-FPGA.
+The project mux's control lines float while the RP2350 is in its bootloader. So an ASIC breakout comes back with
+no project selected once the vgacap firmware is loaded. The firmware's `asic_select` command selects the project
+again by its index on the mux, as the stock firmware does. It is never for a demo board with an FPGA breakout,
+where [GPIO 1](reference-board.md#gpios) going low erases the FPGA.
 
 ## What you need
 
@@ -45,6 +45,7 @@ The capture's board report shows a full window and sync levels, as on tt09 with 
 
 ```text
 profile=rp2350-dbv3 project=None enable=kept (capture firmware)
+bytes=769803 samples=769600 chunks=4 seconds=4.039 overruns=0 dropped=0 rxstall=0 samples_per_s=190533
   board: frame window=481 buffers=1 hsync_active=1 vsync_active=1
   board: frames=2 stalls=0 rxstall=0 sysclk_hz=101000000
 wrote frame.vgacap
@@ -57,8 +58,9 @@ wrote frame.vgacap
 | What you see | Likely cause | Fix |
 |---|---|---|
 | Step 1 prints nothing | the macro name or shuttle is wrong | Check both on the project's page at [tinytapeout.com](https://tinytapeout.com) |
-| `--asic-index is for ...; ... is an FPGA board` at step 2 | `--board`, the link or this Pi names a demo board with an FPGA breakout | Drop `--asic-index`: an FPGA keeps its design across the switch |
+| `--asic-index is for ...; fpga-1 is an FPGA board, where asic_select pulls GPIO 1 -- the iCE40's CRESET_B -- low and erases the FPGA` at step 2 | `--board`, the link or this Pi names a demo board with an FPGA breakout | Drop `--asic-index`: an FPGA keeps its design across the switch |
 | `--asic-index needs to know which board it is for, and ... disagree` | `--board`, the link and this Pi name different boards | Give the `--board` that the link reaches |
+| `--asic-index needs to know which board ws://... is, and '...' does not resolve (...)` | the host in a `ws://` link has no address | Check the link's host name |
 | `board went quiet` and almost nothing written | the wrong index, or no `--asic-index` | Repeat step 1, and give its number |
 | `--asic-index is for --firmware picosdk` | `--firmware picosdk` missing | Add it; the stock firmware selects a project with `--project` |
 

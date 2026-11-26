@@ -11,8 +11,8 @@ review: 2027-05-27
 `ttcap capture --firmware picosdk`.**
 
 This page covers frame, window and stream captures. The firmware cannot enable a design, so the design must
-already be on the board: [How to run the vgacap firmware from RAM and go back to stock](how-to-load.md) says
-how. Every other `ttcap capture` option is on [ttcap](../python/ttcap/README.md).
+already be on the board. [How to run the vgacap firmware from RAM and go back to stock](how-to-load.md) says
+how, and every other `ttcap capture` option is on [ttcap](../python/ttcap/README.md).
 
 ## What you need
 
