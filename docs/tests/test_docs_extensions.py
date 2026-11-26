@@ -463,7 +463,7 @@ def test_a_line_back_up_is_a_cross_link(tmp_path):
 def test_a_page_on_two_landing_pages_fails(tmp_path):
     pages = two_sections("- [B](../b.md): page B.\n- [A](../a.md): page A.\n")
     warnings, _, _ = build_tree(tmp_path, pages)
-    assert "a is a line on s1/index and on s2/index" in warnings
+    assert "a already has its line on s1/index" in warnings and "s2/index.md:10" in warnings
 
 
 def test_a_cross_link_is_not_a_line(tmp_path):
@@ -535,3 +535,22 @@ def test_a_path_is_not_a_banned_word(tmp_path):
 def test_an_image_in_an_html_comment_is_not_an_image(tmp_path):
     warnings, _, _ = build(tmp_path, {"page": page('<!-- <img src="x.png"> was here -->')})
     assert warnings == ""
+
+
+def test_two_lines_to_one_page_on_one_landing_page_fail(tmp_path):
+    pages = {"a": A, "index": front("landing") + "# Root\n\n- [A](a.md): page A.\n"
+             "- [A again](a.md): page A again.\n"}
+    warnings, _, _ = build(tmp_path, pages)
+    assert "landing line 11: a already has its line on index" in warnings
+
+
+def test_an_eval_rst_toctree_fails(tmp_path):
+    text = page("```{eval-rst}\n.. toctree::\n   :hidden:\n\n   other\n```")
+    warnings, _, _ = build(tmp_path, {"page": text, "other": B})
+    assert "writes no toctree" in warnings
+
+
+def test_a_landing_page_ending_in_an_open_code_block(tmp_path):
+    pages = {"a": A, "index": front("landing") + "# Root\n\n- [A](a.md): page A.\n\n```\nopen\n"}
+    warnings, _, _ = build(tmp_path, pages)
+    assert "code block that is not closed" in warnings
