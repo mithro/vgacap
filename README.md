@@ -75,7 +75,7 @@ design must run.
 | simulator | -- | -- | [clean](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-sim-tt_um_vga_pattern) | -- | -- |
 
 Run-length capture on the stock firmware
-([vgacap PR #6](https://github.com/mithro/vgacap/pull/6), not yet merged) was
+([`ttcap capture --mode rle`](python/ttcap/README.md#run-length-capture)) was
 exact up to
 [25 MHz](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-11-24-pio-run-counting.md)
 with an FPGA breakout and
