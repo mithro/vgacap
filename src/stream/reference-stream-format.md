@@ -9,13 +9,13 @@ review: 2027-05-27
 
 **You want the exact bytes of a vgacap stream: its header, every chunk type, every flag and every rule a reader applies.**
 
-The C writer and reader are [`src/stream/writer.c`](writer.c) and [`src/stream/reader.c`](reader.c), declared in [`include/vgacap/stream.h`](../../include/vgacap/stream.h); [`python/vgacap/stream.py`](../../python/vgacap/stream.py) reads and writes the same bytes. Why the format has this shape is on [The vgacap stream](explanation-stream.md). How a simulation trace cuts a version 2 stream into compressed blocks is on [the simulation trace format](../../docs/trace-format.md).
+The C writer and reader are [`src/stream/writer.c`](writer.c) and [`src/stream/reader.c`](reader.c), declared in [`include/vgacap/stream.h`](../../include/vgacap/stream.h). [`python/vgacap/stream.py`](../../python/vgacap/stream.py) reads and writes the same bytes. Why the format has this shape is on [The vgacap stream](explanation-stream.md); what a simulation trace adds is on [the simulation trace format](../../docs/trace-format.md).
 
-All integers are unsigned and little-endian. In the tables, Offset is the byte offset in the payload, Type the field's width, and Field what it holds.
+All integers are unsigned and little-endian. In the byte tables, Offset is the byte offset in the payload, Type the field's width, and Field what it holds.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../docs/diagrams/stream-chunks-dark.svg">
-  <img src="../../docs/diagrams/stream-chunks.svg" alt="A chunk is a 4-byte tag, a u32 length and a payload; a stream is a VGCH header chunk, then data and TIME chunks in order." width="560">
+  <img src="../../docs/diagrams/stream-chunks.svg" alt="A chunk is a 4-byte tag, a u32 length and a payload; a capture is a VGCH header chunk, then RAW sample chunks and TIME chunks." width="560">
 </picture>
 
 ## Chunk framing
@@ -28,44 +28,64 @@ All integers are unsigned and little-endian. In the tables, Offset is the byte o
 
 - Chunks follow each other with no padding and no sync word.
 - The first chunk is `VGCH`. A later `VGCH` starts the stream again: the sample index goes back to 0.
-- A tag of four printable ASCII bytes that the reader does not know is skipped by its length.
 - Tags end in a space where the name is three letters: `RAW ` and `RLE `.
+- A tag the reader does not know is skipped by its length, except under a header with a clock bit, where it is reported (see [what a reader does](#what-a-reader-does-with-a-bad-chunk)).
 
 ## Chunk types
 
-| Tag | Version | Holds |
-|---|---|---|
-| `VGCH` | 1 and 2 | the header |
-| `RAW ` | 1 and 2 | samples packed into 32-bit words |
-| `RLE ` | 1 only | (value, run) pairs, 32 bits each |
-| `FRAM` | 1 and 2 | a frame, or a window of lines, packed as `RAW ` |
-| `EVNT` | 1 and 2 | sample values at increasing clocks |
-| `TIME` | 1 and 2 | host time, a clock rate, dropped samples and a message |
-| `RUNS` | 2 only | (value, run) pairs, the run in LEB128 |
-| `BLKH` | 2 only | the sample index of the next sample |
-| `META` | 2 only | `key=value` text |
+| Tag | Version 1 | Version 2 | Holds |
+|---|---|---|---|
+| `VGCH` | yes | yes | the header |
+| `RAW ` | yes | yes | samples packed into 32-bit words |
+| `RLE ` | yes | no | (value, run) pairs of 32 bits each |
+| `FRAM` | yes | yes | a frame, or a window of lines, packed as `RAW ` |
+| `EVNT` | yes | yes | sample values at increasing clocks |
+| `TIME` | yes | yes | host time, a clock rate, dropped samples and a message |
+| `RUNS` | no | yes | (value, run) pairs, the run in LEB128 |
+| `BLKH` | no | yes | the sample index of the next sample |
+| `META` | no | yes | `key=value` text |
 
 ## VGCH: the header
 
-| Offset | Type | Field |
-|---|---|---|
-| 0 | u16 | `version`: 1 or 2 |
-| 2 | u8 | `sample_bits`: 8, 12, 16 or 32 in version 1; 1 to 64 in version 2 |
-| 3 | u8 | `mode` |
-| 4 | u32 | `clock_hz`: the project clock in Hz; 0 is unknown |
-| 8 | u8[8] | `signal_map`: the sample bit of hsync, vsync, r1, r0, g1, g0, b1, b0; `0xFF` is absent |
-| 16 | u8 | `samples_per_word`: 1, 2, 4 or 8, with `samples_per_word * sample_bits` at most 32; version 2 with `sample_bits` over 32: 0 |
-| 17 | u8 | `flags` |
-| 18 | u16 | `desc_len`: at most 255 in version 1, 251 in version 2 |
-| 20 | u8 | version 2 only: `samples_per_clock`, 1, or 2 exactly when there is a clock bit |
-| 21 | u8 | version 2 only: `clock_bit`, 0 to `sample_bits` - 1, or `0xFF` for none |
-| 22 | u8 | version 2 only: `clock_first`, the clock bit in sample 0, 0 or 1; 0 with no clock bit |
-| 23 | u8 | version 2 only: reserved, 0 |
-| 20 or 24 | `desc_len` bytes | `desc`: free text, UTF-8 |
+| Offset | Type | Field | Version 1 | Version 2 |
+|---|---|---|---|---|
+| 0 | u16 | `version` | 1 | 2 |
+| 2 | u8 | `sample_bits` | see [field values](#vgch-field-values) | 1 to 64 |
+| 3 | u8 | `mode` | see [mode](#mode) | see [mode](#mode) |
+| 4 | u32 | `clock_hz` | the project clock in Hz; 0 is unknown | the same |
+| 8 | u8[8] | `signal_map` | see [signal map](#signal-map) | the same |
+| 16 | u8 | `samples_per_word` | see [field values](#vgch-field-values) | see [field values](#vgch-field-values) |
+| 17 | u8 | `flags` | see [flags](#flags) | the same |
+| 18 | u16 | `desc_len` | 0 to 255 | 0 to 251 |
+| 20 | u8 | `samples_per_clock` | absent: reads as 1 | 1 without a clock bit; 2 with one |
+| 21 | u8 | `clock_bit` | absent: reads as none | 0 to `sample_bits` - 1; `0xFF` for none |
+| 22 | u8 | `clock_first` | absent: reads as 0 | the clock bit in sample 0, 0 or 1; 0 without a clock bit |
+| 23 | u8 | reserved | absent | 0 |
+| 20 in version 1; 24 in version 2 | `desc_len` bytes | `desc` | free text, UTF-8 | the same |
 
-- The chunk's length is exactly 20 + `desc_len` in version 1 and 24 + `desc_len` in version 2.
-- A version 1 header reads as `samples_per_clock` 1, no clock bit, `clock_first` 0.
-- Any other `version` is an error, and the reader stops.
+| Item | Version 1 | Version 2 |
+|---|---|---|
+| Fixed part | 20 bytes | 24 bytes |
+| Chunk length | exactly 20 + `desc_len` | exactly 24 + `desc_len` |
+| Largest chunk | 275 bytes | 275 bytes, so a version 1 reader reaches its version check |
+
+### VGCH field values
+
+Field names the field, When the header it applies to, and Allowed one allowed value.
+
+| Field | When | Allowed |
+|---|---|---|
+| `sample_bits` | version 1 | 8 |
+| `sample_bits` | version 1 | 12 |
+| `sample_bits` | version 1 | 16 |
+| `sample_bits` | version 1 | 32 |
+| `samples_per_word` | `sample_bits` 32 or fewer | 1 |
+| `samples_per_word` | `sample_bits` 32 or fewer | 2 |
+| `samples_per_word` | `sample_bits` 32 or fewer | 4 |
+| `samples_per_word` | `sample_bits` 32 or fewer | 8 |
+| `samples_per_word` | version 2, `sample_bits` over 32 | 0 |
+
+`samples_per_word` × `sample_bits` is at most 32.
 
 ### mode
 
@@ -83,12 +103,25 @@ All integers are unsigned and little-endian. In the tables, Offset is the byte o
 | 0 | `FIRST_SAMPLE_MSB` | a word's first sample is in its most significant slot |
 | 1 to 7 | -- | written as 0 |
 
-### Signal maps in use
+### signal map
 
-| Map | Wiring |
+Byte is the byte of `signal_map`, and Signal the signal whose sample bit it holds; `0xFF` means the signal is absent.
+
+| Byte | Signal |
 |---|---|
-| `7, 3, 0, 4, 1, 5, 2, 6` | the [Tiny VGA Pmod](https://github.com/mole99/tiny-vga) on `uo_out[7:0]`, bit 0 = `uo_out[0]` |
-| `11, 3, 0, 8, 1, 9, 2, 10` | a 12-bit read from GPIO 5 on an RP2040 demo board |
+| 0 | hsync |
+| 1 | vsync |
+| 2 | r1 |
+| 3 | r0 |
+| 4 | g1 |
+| 5 | g0 |
+| 6 | b1 |
+| 7 | b0 |
+
+| Map, bytes 0 to 7 | Wiring |
+|---|---|
+| `7 3 0 4 1 5 2 6` | the [Tiny VGA Pmod](https://github.com/mole99/tiny-vga) on `uo_out[7:0]`, bit 0 = `uo_out[0]` |
+| `11 3 0 8 1 9 2 10` | a 12-bit read from GPIO 5 on an RP2040 demo board |
 
 ## RAW: packed samples
 
@@ -99,7 +132,7 @@ All integers are unsigned and little-endian. In the tables, Offset is the byte o
 
 - Sample i is in word i / `samples_per_word`, slot i % `samples_per_word`, shifted left by slot × `sample_bits`.
 - With `FIRST_SAMPLE_MSB` the slot is `samples_per_word` - 1 - (i % `samples_per_word`).
-- The word count must match the chunk's length exactly.
+- The word count matches the chunk's length exactly.
 
 ## RLE: 32-bit runs
 
@@ -134,6 +167,7 @@ The chunk's length is exactly 4 + 8 × `pair_count`.
 
 - Clocks strictly increase.
 - Each value holds until the next event's clock; the last holds for one clock.
+- The chunk's length is exactly 4 + 12 × `event_count`.
 
 ## TIME: time and losses
 
@@ -155,10 +189,12 @@ The chunk's length is exactly 4 + 8 × `pair_count`.
 | 0 | u32 | `pair_count`: at least 1 |
 | 4 | pairs | `value`, then `run` |
 
-- `value` is ceil(`sample_bits` / 8) bytes, little-endian, with the clock bit stored as 0 and no bit set at or above `sample_bits`.
-- `run` is unsigned LEB128: 1 to 10 bytes, 7 bits a byte, least significant first, the top bit set when a byte follows.
-- `run` is at least 1, minimally encoded, and below 2^64; a 10th byte is at most `0x01`.
-- Two adjacent pairs of one chunk never share a value.
+- `value` is ceil(`sample_bits` / 8) bytes, little-endian.
+- In `value`, the clock bit is stored as 0, and no bit at or above `sample_bits` is set.
+- `run` is unsigned LEB128: 7 bits a byte, least significant group first, the top bit set when another byte follows.
+- `run` is 1 to 10 bytes, at least 1, minimally encoded (no final `0x00`), and below 2^64; a 10th byte is at most `0x01`.
+- A pair is `run` consecutive samples, n to n + `run` - 1.
+- Two adjacent pairs of one chunk never share a value; a run may go on in the next chunk with the same value.
 - The chunk's length is exactly 4 plus its pairs' bytes.
 
 ## BLKH: block header (version 2)
@@ -173,37 +209,80 @@ The chunk's length is exactly 4 + 8 × `pair_count`.
 ## META: metadata (version 2)
 
 - 1 to 4096 bytes of strict UTF-8: `key=value` lines, each ending in `\n`, the last too.
-- A key matches `[a-z][a-z0-9_]*` and appears once.
+- A key matches `[a-z][a-z0-9_]*` and appears once in a chunk.
 - The first line is `meta=open` or `meta=close`.
-- The keys each kind requires, and their values, are on [the simulation trace format](../../docs/trace-format.md#meta).
+- A reader ignores a key it does not know.
 
-## The sample index and the clock bit
+Key is the key, Chunk the META kind that requires it, and Value what it holds.
+
+| Key | Chunk | Value |
+|---|---|---|
+| `project` | `meta=open` | the design's name, free text |
+| `calib_seconds` | `meta=open` | a decimal number as C `strtod` reads it |
+| `seconds` | `meta=open` | a decimal number as C `strtod` reads it |
+| `layout` | `meta=open` | `tt-um-43` |
+| `capture_after_clock` | `meta=close` | an unsigned decimal integer below 2^64 |
+| `frames` | `meta=close` | an unsigned decimal integer below 2^64 |
+| `status` | `meta=close` | one of the [run statuses](../../docs/frames-format.md#status) except `truncated` |
+| `override` | optional | free text |
+| `simulator` | optional | free text |
+| `harness` | optional | free text |
+
+## The sample index, the clock bit and time
 
 | Item | Rule |
 |---|---|
 | Sample index n | 0 after a `VGCH`; grows by every sample delivered; set by every `BLKH` |
 | Clock bit of sample n | `clock_first` XOR (n AND 1), never stored |
 | Samples a clock | `samples_per_clock`: 2 with a clock bit, one low and one high |
-| Time of sample n | round(n × 10^12 / (`samples_per_clock` × `clock_hz`)) ps, halves rounded up |
+| Time of sample n | round(n × 10^12 / (`samples_per_clock` × `clock_hz`)) ps, halves rounded up, in exact integer arithmetic |
+| Time with `clock_hz` 0 | 0 |
+| Time past 2^64 - 1 ps | 2^64 - 1 |
 
-## Chunks a version 2 header allows
+## Chunks a header allows
 
-| Header | Allowed | Skipped and reported |
-|---|---|---|
-| version 1 | every version 1 chunk | `RUNS`, `BLKH`, `META` |
-| version 2 with a clock bit | `RUNS`, `BLKH`, `META`, `TIME` | every other chunk |
-| version 2, `sample_bits` over 32 | `RUNS`, `BLKH`, `META`, `TIME` | `RAW `, `FRAM`, `EVNT`, `RLE ` |
-| version 2, 32 bits or fewer, no clock bit | all but `RLE ` | `RLE ` |
+Allowed means the chunk is read; skipped means it is skipped by its length and reported.
+
+| Tag | Version 1 | Version 2, no clock bit, 32 bits or fewer | Version 2, no clock bit, over 32 bits | Version 2 with a clock bit |
+|---|---|---|---|---|
+| `RAW ` | allowed | allowed | skipped | skipped |
+| `FRAM` | allowed | allowed | skipped | skipped |
+| `EVNT` | allowed | allowed | skipped | skipped |
+| `RLE ` | allowed | skipped | skipped | skipped |
+| `TIME` | allowed | allowed | allowed | allowed |
+| `RUNS` | skipped | allowed | allowed | allowed |
+| `BLKH` | skipped | allowed | allowed | allowed |
+| `META` | skipped | allowed | allowed | allowed |
+| an unknown tag | skipped silently | skipped silently | skipped silently | skipped |
 
 ## What a reader does with a bad chunk
 
-| Fault | What the C reader does | Event reported |
-|---|---|---|
-| a `version` other than 1 or 2 | stops reading | error `unsupported version` |
-| a tag that is not printable, or a length over 16 MiB | scans byte by byte for the next known tag with a plausible length | resync, with the bytes skipped |
-| a count that does not match the length (`RAW `, `RLE `, `FRAM`, `EVNT`, `TIME`) | scans for the next chunk | resync |
-| a chunk before the first `VGCH` | scans for the next chunk | resync `chunk before header` |
-| a bad `RUNS`, `BLKH` or `META`, or a chunk the header forbids | skips the chunk by its length | resync, with the whole chunk skipped |
-| input that ends while scanning | stops | none: the caller reports it |
+The C reader reports a loss as a resync event, with the bytes lost and a reason, and goes on. Scan means it searches the input byte by byte for the next known tag with a plausible length. Skip means it steps over the chunk by its length.
 
-[`vgacap-dump`](../tools/reference-options.md#vgacap-dump) prints each resync as a `resync skipped=N reason=...` line. The Python reader raises `ValueError` with the same reason text instead of resynchronising.
+| Fault | Reason reported | Action |
+|---|---|---|
+| a `version` other than 1 or 2 | `unsupported version` | stops: an error, not a resync |
+| a tag that is not printable | `non-printable chunk tag` | scan |
+| a length over 16 MiB | `chunk length too large` | scan |
+| a `VGCH` length under 20 or over 275 | `bad VGCH length` | scan |
+| `desc_len` that does not match the `VGCH` length | `VGCH desc length mismatch` | scan |
+| a `sample_bits` not allowed | `bad sample_bits` | scan |
+| a `samples_per_word` not allowed | `bad samples_per_word` | scan |
+| bad version 2 clock fields | `bad VGCH v2 clock fields` | scan |
+| a chunk before the first `VGCH` | `chunk before header` | scan |
+| a length under the tag's fixed part | `bad RAW length` (and so on for each tag) | scan |
+| a count that does not fill the length | `RAW sample count does not match chunk length` (and so on) | scan |
+| an `EVNT` clock that does not increase | `EVNT clock not increasing` | scan |
+| a `TIME` `msg_len` that does not fill the length | `TIME msg_len does not match chunk length` | scan |
+| a chunk the header does not allow | `chunk needs a version 2 header` (and the like) | skip |
+| a bad `RUNS` pair | `RUNS run is zero` (and the like) | skip |
+| a `RUNS` chunk while n is unknown | `RUNS discarded: sample position unknown until BLKH` | skip |
+| a `BLKH` length other than 8 | `bad BLKH length` | skip |
+| a `META` length of 0 or over 4096 | `bad META length` | skip |
+| `META` text that breaks its rules | `bad META text` | skip |
+| a `BLKH` that does not follow | `BLKH first_sample does not follow` | adopt its `first_sample` |
+| input that ends while scanning | none: the caller reports it | stop |
+
+Under a header with a clock bit, n becomes unknown after any loss that could have carried samples. Until the next `BLKH`, every `RUNS` chunk is skipped. A lost `META`, or a scan that lost exactly one `TIME` chunk, leaves n known.
+
+[`vgacap-dump`](../tools/reference-options.md#vgacap-dump) prints each resync as a `resync skipped=N reason=...` line. The Python reader raises `ValueError` instead of going on. Its message is the C reason text for a chunk the header does not allow, a bad `RUNS` pair, and a bad `BLKH` or `META` length or text. For every other fault, a non-following `BLKH` included, its wording differs.

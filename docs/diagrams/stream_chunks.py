@@ -6,7 +6,7 @@ stream as bytes, a run of chunks, each a tag, a length and a payload.
     uv run --no-project python docs/diagrams/stream_chunks.py
 
 Hand-placed. The top row is one chunk's framing, with byte offsets; below
-it, the chunks of a capture in the order they arrive, the header first.
+it, the chunks of a stream-mode capture in the order they arrive.
 Colours follow docs/diagrams/overview.py: blue for the header that says
 how to read the signals, orange for captured data, grey for the rest.
 """
@@ -34,14 +34,16 @@ X0 = MARGIN
 FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
 MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
 
-# The chunks of a capture, in order: tag, what its payload holds, kind.
+# The chunks of one capture, as ttcap writes a stream-mode capture from the
+# stock firmware: the header, RAW chunks, an overrun marker, and the closing
+# TIME chunk with the board's summary.
 CHUNKS = (
     ("VGCH", "header: bits, signal map, clock", "HDR"),
     ("RAW ", "samples, packed in 32-bit words", "DATA"),
     ("RAW ", "samples, packed in 32-bit words", "DATA"),
-    ("TIME", "host time, dropped samples", "DIAG"),
-    ("FRAM", "one frame's lines of samples", "DATA"),
-    ("TIME", "host time, dropped samples", "DIAG"),
+    ("TIME", "overrun: dropped samples", "DIAG"),
+    ("RAW ", "samples, packed in 32-bit words", "DATA"),
+    ("TIME", "closing: overruns, rxstall", "DIAG"),
 )
 
 
@@ -93,15 +95,12 @@ def draw(p):
 
     # The stream: chunks one after another, down the page.
     y = ry + 34
-    text(X0, y - 4, "a stream", 13, 600, p["MUTED"])
+    text(X0, y - 4, "a capture", 13, 600, p["MUTED"])
     y += 6
     for i, (tag, payload, kind) in enumerate(CHUNKS):
         chunk(y, tag, payload, kind)
         y += ROW_H + 8
-    # The stream goes on.
-    for k in range(3):
-        add(f'<circle cx="{X0 + TAG_W / 2}" cy="{y + 4 + 9 * k}" r="2.2" fill="{p["MUTED"]}"/>')
-    height = y + 4 + 18 + 2.2 + MARGIN
+    height = y - 8 + MARGIN
 
     head = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height:.0f}" '
             f'viewBox="0 0 {width} {height:.0f}" role="img" aria-labelledby="t">',
