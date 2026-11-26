@@ -13,7 +13,7 @@ The build compiles [piolib](https://github.com/raspberrypi/utils/tree/master/pio
 
 ## What you need
 
-- A vgacap checkout, and a shell in its top directory.
+- A vgacap checkout, made with `git clone https://github.com/mithro/vgacap`, and a shell in its `vgacap` directory.
 - `git`, `make` and a C compiler (`cc`).
 - Network access to GitHub, for [raspberrypi/utils](https://github.com/raspberrypi/utils).
 
