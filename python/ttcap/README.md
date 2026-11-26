@@ -11,8 +11,8 @@ run them on.
 ## Capturing with the stock firmware
 
 This capture source needs nothing installed on the board: `ttcap` pushes
-the capture program through the
-[stock Tiny Tapeout firmware](https://github.com/TinyTapeout/tt-micropython-firmware)'s MicroPython
+the capture program through
+[the stock firmware](https://github.com/TinyTapeout/tt-micropython-firmware)'s MicroPython
 REPL. The other capture sources have their own READMEs:
 [`firmware/`](../../firmware/README.md) (the vgacap firmware),
 [`mpy/`](../../mpy/README.md) (MicroPython C module),
@@ -181,9 +181,10 @@ Raspberry Pi, which runs the fpgas.online bridge (`fpgas-tt`).
 [`boards.py`](boards.py), such as `fpga-1`, `fpga-3` or `fpga-4`, and
 resolves it to a link:
 
-* **on the board's own Pi**, `serial:/dev/ttboard`. Stop the bridge
-  first (`sudo systemctl stop fpgas-tt`), since it holds the device
-  open;
+* **on the board's own Pi**, `serial:/dev/ttboard`. Stop the bridge first
+  (`sudo systemctl stop fpgas-tt`), since it holds the device open, after
+  checking it has no clients
+  ([Running on shared boards](../../tools/README.md#running-on-shared-boards));
 * **anywhere else**, the bridge at `ws://10.21.2.<octet>:8765/serial`, which
   is on the bench network. The octet is the board's bench port number
   (7 for tt07, 34 for fpga-1). From a workstation that means an SSH
