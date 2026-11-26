@@ -20,14 +20,15 @@ gst-inspect-1.0 vgadecode
 gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! \
     pngenc ! multifilesink location=frame-%04d.png
 
-# ...or straight off a board, through the bridge:
+# ...or straight off a board, through the fpgas.online bridge (fpgas-tt):
 gst-launch-1.0 vgacapbin \
     'uri="tt-ws://127.0.0.1:18034/serial?design=tt_um_vga_pattern&clock-hz=60000"' ! \
     videoconvert ! autovideosink
 ```
 
-`127.0.0.1:18034` is an SSH tunnel to fpga-1, which needs bench access
-([Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed)).
+`127.0.0.1:18034` is an SSH tunnel to fpga-1, which needs bench access;
+before running it, do the checks in
+[Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed).
 On quoting, see [`vgacapbin`](#vgacapbin-a-uri-in-video-out).
 
 ## `vgadecode`: a stream in, video out
@@ -43,8 +44,8 @@ On quoting, see [`vgacapbin`](#vgacapbin-a-uri-in-video-out).
 
 The reconstruction buffers are allocated once, when the element starts.
 
-Frames are timestamped in project time -- clocks since the first emitted
-frame divided by the stream's `clock_hz` -- when the header declares a clock,
+Frames are timestamped in project time (clocks since the first emitted
+frame divided by the stream's `clock_hz`) when the header declares a clock,
 and at `output-fps` otherwise. A clock rate that changes mid-stream (a `TIME`
 chunk reporting a measured rate, say) freezes the elapsed time and continues
 from there, so the timeline never runs backwards.
@@ -68,8 +69,7 @@ carries `GST_BUFFER_FLAG_DISCONT`.
 `vgacapttsrc` runs `ttcap capture --out -` as
 a child process and pushes its stdout as 64 KiB `application/x-vgacap`
 buffers. The board protocol stays in Python ([`ttcap`](../python/ttcap/README.md)), and the same element works over
-USB serial or over the [fpgas.online bridge](https://tinytapeout.fpgas.online)
-(`fpgas-tt`).
+USB serial or over the [bridge](https://tinytapeout.fpgas.online).
 
 | property | default | unit | default means | required | in a URI query | description |
 |---|---|---|---|---|---|---|
