@@ -7,9 +7,11 @@ that GitHub and the built site show the same text:
     uv run --locked --python 3.13 --only-group docs sphinx-build -W --keep-going -c docs . build/docs
 
 The source directory is the repository root and this directory holds only
-the configuration (`-c docs`). docs/index.md is the root landing page; a page
-joins the site through a toctree line on the landing page above it, and a
-page in no toctree fails the build. The writing rules, and the checks in
+the configuration (`-c docs`). The pages are the Markdown files git knows
+of, tracked or new, so nothing .gitignore'd is read. docs/index.md is the
+root landing page; a page joins the sidebar through its line on the landing
+page above it (docs/_ext/vgacap_landing.py), and a page on no landing page
+fails the build. The writing rules, and the checks in
 docs/_ext/vgacap_rules.py, are those of docs.fpgas.online
 (docs/superpowers/specs/2026-11-27-docs-site-design.md).
 
@@ -53,18 +55,29 @@ copyright = "vgacap contributors, Apache-2.0"
 sys.path.insert(0, str(REPO / "docs" / "_ext"))
 extensions = [
     "myst_parser",
+    "vgacap_landing",   # a landing page's lines -> its hidden toctree
     "vgacap_picture",   # <picture> light/dark twins -> the theme-switched pair
     "vgacap_rules",     # the docs.fpgas.online rules a machine can decide
     "ttcap_reference",  # ttcap's options, pin maps and bench boards, from its source
 ]
 source_suffix = {".md": "markdown"}
 root_doc = "docs/index"
-include_patterns = ["*.md", "**/*.md"]  # "**/" needs a directory, so the root is "*.md"
-exclude_patterns = [
-    "build/**", "build-*/**", ".venv/**", ".worktrees/**", "tmp/**", ".pytest_cache/**",
-    "**/.pytest_cache/**", "third_party/*/**",
-    # design specs and plans: working documents for contributors, not pages
-    "docs/superpowers/**",
+
+
+def markdown_files():
+    """Every Markdown file git tracks or would track, so a new page builds
+    before it is committed and nothing .gitignore'd is read."""
+    listed = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files", "--cached", "--others", "--exclude-standard",
+         "--", "*.md"], capture_output=True, text=True, check=True).stdout.split("\n")
+    return sorted(f for f in listed if f and (REPO / f).is_file())
+
+
+include_patterns = [
+    f for f in markdown_files()
+    # design specs and plans are working documents for contributors, and
+    # vendored code keeps its own Markdown
+    if not f.startswith(("docs/superpowers/", "third_party/")) or f == "third_party/README.md"
 ]
 
 # Pages written before the site followed the docs.fpgas.online rules. Each

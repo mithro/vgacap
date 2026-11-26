@@ -12,17 +12,4 @@ review: 2027-05-27
 - [The simulation trace format](../trace-format.md): the trace a simulated design writes.
 - [Vendored third-party code](../../third_party/README.md): the libraries built into vgacap, with their versions and licenses.
 - [Images and logos in the overview figure](../diagrams/NOTICE.md): where each picture comes from, and its license.
-- [ttcap commands and options](../../python/ttcap/reference-commands.md): every `ttcap` subcommand and option.
-- [ttcap exit codes and messages](../../python/ttcap/reference-exit-codes.md): what each exit code and error message means.
-- [Demo board GPIO maps for capture](../../python/ttcap/reference-gpio-maps.md): the pins the RP2040 and RP2350 demo boards sample.
-- [Welland bench boards in ttcap](../../python/ttcap/reference-welland-boards.md): the bench boards `ttcap demo --board` names.
-
-```{toctree}
-:hidden:
-
-../../firmware/PROTOCOL
-../frames-format
-../trace-format
-../../third_party/README
-../diagrams/NOTICE
-```
+- [ttcap reference](../../python/ttcap/index-reference.md): the `ttcap` commands, exit codes, pin maps and bench boards.
