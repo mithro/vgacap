@@ -64,7 +64,7 @@ the run could not start (lock held, missing tool, bad arguments).
 
 ## Running on shared boards
 
-The Welland boards are shared and public, so `hil.py` is careful with
+The Welland boards are shared, so `hil.py` is careful with
 them:
 
 - one run per board at a time is enforced with a lock file (per user per
