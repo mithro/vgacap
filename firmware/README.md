@@ -121,7 +121,7 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   `tt_um_rejunity_vga_logo` was clean, but this firmware's, after the
   switch, saw no sync at all: the mux comes back with nothing selected.
   So this firmware selects the project itself with
-  `asic_select index=N`, using the stock SDK's sequence
+  `asic_select index=N`, using the stock firmware's sequence
   ([PROTOCOL.md](PROTOCOL.md)); `ttcap capture --firmware picosdk
   --asic-index N` sends it. N is `tt.shuttle.<name>.count` under the stock
   firmware.
@@ -203,7 +203,8 @@ the Welland bench, which needs
 that machine is the board's own Pi and `<dev>` is `/dev/ttboard`; the
 fpgas.online bridge (`fpgas-tt`) can also enable a design
 (`/designs/<name>/enable`), and holds the port until stopped
-(`sudo systemctl stop fpgas-tt`, after checking it has no clients).
+(`sudo systemctl stop fpgas-tt`, after
+[checking it has no clients](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed)).
 
 1. With the stock firmware, enable the design to capture with
    `ttcap capture`'s `--design`, and take a reference capture the usual
@@ -230,7 +231,7 @@ fpgas.online bridge (`fpgas-tt`) can also enable a design
 
 6. Back to the stock firmware: `uv run --no-sync ttcap reboot serial:$FW`
    (or reset / power cycle the board), then, on the bench, restart the
-   bridge.
+   bridge (`sudo systemctl start fpgas-tt`).
    `ttcap reboot` asks the board which firmware it runs (the vgacap
    firmware's `hello`, then the raw REPL); `--firmware picosdk` skips the
    question.
