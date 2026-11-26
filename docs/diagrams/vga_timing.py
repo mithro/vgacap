@@ -76,7 +76,7 @@ def draw(p):
     rect(xs[2], ys[2], xs[3] - xs[2], ys[3] - ys[2], p["ACTIVE"], p["ACTIVE_EDGE"], 2)
     cx, cy = (xs[2] + xs[3]) / 2, (ys[2] + ys[3]) / 2
     text(cx, cy - 6, "active area", 18, 700, p["PIC"])
-    text(cx, cy + 18, "640 x 480: the picture", 14, 400, p["PIC"])
+    text(cx, cy + 18, "640x480@60: the picture", 14, 400, p["PIC"])
 
     # Band names along the top and down the left, with their sizes.
     for i, (name, n) in enumerate(H):
