@@ -10,7 +10,7 @@ same tools as the MicroPython ones.
 
 It is built **no_flash**: the UF2 is loaded into SRAM by the RP2350's
 bootloader and runs from there, and flash is never written. A reset, a
-power cycle or `ttcap reboot --firmware picosdk` brings the board's stock
+power cycle or `ttcap reboot` brings the board's stock
 firmware back.
 
 ## Layout
@@ -73,20 +73,41 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   BOOTSEL and this firmware, frame, window and streaming captures of
   `tt_um_vgacal_bars` were pixel-exact, so the iCE40 kept its configuration
   (tt-vga-capture `docs/results/2026-11-24-picosdk-firmware-fpga4/`).
-  GPIO 1 is the iCE40's `CRESET_B` there (and the mux controller's reset
-  on an ASIC carrier). The stock firmware leaves it driven high; while the
-  RP2350 is in reset and in its bootloader it is an input with the pad's
-  default pull-down, and this firmware leaves GPIO 0/1/2 alone unless told
-  otherwise (`asic_select`). On fpga-4 the FPGA's configuration survived
-  that anyway.
+  GPIO 1 (`ctrl_sel_nrst`) is the iCE40's `CRESET_B` there, and the mux
+  controller's reset on an ASIC carrier; low erases the FPGA or resets the
+  mux. The stock firmware leaves it driven high once a design is enabled
+  (`fabricfoxv2.py` raises `CRESET_B` and keeps it there after loading a
+  bitstream; `ProjectMux.reset()` ends with `ncrst(1)`). While the RP2350
+  is in reset and in its bootloader it is an input with the pad's default
+  pull-down (the stock firmware's own boot does the same,
+  `DemoboardDetect.rp_all_inputs()`), so the FPGA surviving the switch
+  means the board's pull-up wins there, as it did on fpga-4. **This
+  firmware drives GPIO 1 high first thing at boot** (`hal_pico_init()`),
+  level before direction so it never glitches low: the level the stock
+  firmware left, so nothing then depends on the pull-up. Only
+  `asic_select` ever drives it low. On an ASIC carrier that only holds
+  the mux out of reset, the stock firmware's idle level. GPIO 0
+  (`ctrl_ena`) and GPIO 2 (`ctrl_sel_inc`) are not driven until an
+  `asic_select`.
 * **ASIC boards lose their project across the switch.** On tt09
   (2026-11-24) the stock firmware's frame capture of
   `tt_um_rejunity_vga_logo` was clean, and this firmware's, after the
-  switch, saw no sync at all: the mux lines float in the bootloader and
-  the mux comes back with nothing selected. So this firmware selects the
+  switch, saw no sync at all: nothing drives the mux lines while the
+  RP2350 is in reset and in its bootloader (pad pull-downs), so the mux
+  comes back with nothing selected, and driving GPIO 1 high at boot does
+  not select anything. So this firmware selects the
   project itself with `asic_select index=N`, the stock SDK's sequence
   (PROTOCOL.md); `ttcap capture --firmware picosdk --asic-index N` sends
-  it. N is `tt.shuttle.<name>.count` under the stock firmware.
+  it. N is `tt.shuttle.<name>.count` under the stock firmware. The
+  firmware cannot tell an FPGA breakout from an ASIC carrier, so `ttcap`
+  refuses `--asic-index` for an FPGA bench board, named by `--board`, by
+  a `ws://` link (the bridge's address, the Pi's name or a tunnel's
+  `18000 + octet` port) or by the Pi it runs on (for a `serial:` link, or a
+  `ws://` link, not on a tunnel port, whose host resolves to this machine:
+  loopback, 0.0.0.0 or :: in any spelling, or one of its own addresses --
+  the Pi's own bridge; a host that does not resolve is refused),
+  and when those disagree. `ttcap.firmware.setup()` called directly does
+  not check: its caller must (`ttcap.demo.check_asic_index()`).
 * `ui_in` and `rst_n` are left untouched until `ui_in` / `reset` commands
   drive them; `ttcap` holds reset while it programs the clock and releases
   it last, as `select_project()` does.
@@ -136,9 +157,10 @@ program could load the `.pio` files' words the same way.
   the stock firmware was measured to pick on fpga-4 (25 MHz -> 100 MHz,
   36 MHz -> 72 MHz, 28.322 MHz -> 113 MHz = 28.25 MHz, ...); the PIO words.
 * `test_fw_core`: every command's exact reply, and the engines' exact
-  chunks on the simulated board: max_bytes, overruns (cumulative), stop
-  bytes, frame windows, the arena limit, chained buffers (the MicroPython
-  module's), rxstall reports, refusals.
+  chunks on the simulated board: max_bytes, overruns (cumulative, and a
+  chunk torn while it is being sent reported straight after it), stop
+  bytes, a host that drops DTR, frame windows, the arena limit, chained
+  buffers (the MicroPython module's), rxstall reports, refusals.
 * `test_fw_sim.py`: the transport end to end against `vgacap-fw-sim`, with
   a synthetic VGA design: byte-exact streams, pixel-exact frames and
   windows through `vgacap-frames`, stops, overruns, the CLI, and the same
@@ -176,5 +198,7 @@ fpgas.online Pis).
        ttcap capture --firmware picosdk serial:$FW --clock-hz 750000 --seconds 4 --out stream.vgacap
        ttcap png frame.vgacap frame
 
-6. Back to the stock firmware: `ttcap reboot serial:$FW --firmware picosdk`
-   (or reset / power cycle the board), then restart `fpgas-tt`.
+6. Back to the stock firmware: `ttcap reboot serial:$FW` (or reset / power
+   cycle the board), then restart `fpgas-tt`. `ttcap reboot` asks the board
+   which firmware it runs (the capture firmware's `hello`, then the raw
+   REPL); `--firmware picosdk` skips the question.

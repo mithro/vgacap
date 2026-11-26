@@ -50,6 +50,7 @@ import contextlib
 import datetime
 import fcntl
 import http.client
+import json
 import os
 import pathlib
 import re
@@ -122,6 +123,136 @@ def _on_stop_signal(signum, _frame):
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
 
 
+@contextlib.contextmanager
+def signals_ignored():
+    """SIGINT and every stop signal ignored, then put back as they were."""
+    saved = {}
+    try:
+        for sig in (signal.SIGINT, *STOP_SIGNALS):
+            saved[sig] = signal.signal(sig, signal.SIG_IGN)
+        yield
+    finally:
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
+
+
+@contextlib.contextmanager
+def signals_deferred():
+    """SIGINT and every stop signal held until the block ends, then
+    delivered to whatever handled them before.
+
+    Unlike signals_ignored(), nothing is lost, and a child started inside
+    the block does not inherit an ignored disposition (exec resets a
+    caught signal to its default; an ignored one stays ignored).
+    """
+    pending: list[int] = []
+    saved = {}
+    deferring = {}
+    try:
+        for sig in (signal.SIGINT, *STOP_SIGNALS):
+            deferring[sig] = lambda signum, _f: pending.append(signum)
+            saved[sig] = signal.signal(sig, deferring[sig])
+        yield
+    finally:
+        _restore_deferred(saved, deferring, pending)
+
+
+#: Attempts at putting one handler back. `signal.signal()` runs any
+#: Python handler already due before it installs, and that one may raise;
+#: each raise consumes a signal, so a handful is plenty.
+_RESTORE_ATTEMPTS = 50
+
+
+def _restore_deferred(saved: dict, deferring: dict, pending: list[int]) -> None:
+    """Put `saved` back and re-send `pending`, whatever arrives meanwhile.
+
+    The signals are blocked here, but only in this thread: another thread
+    can still take a process-directed one, and CPython then runs its
+    Python handler here at the next check -- inside `signal.signal()`
+    itself. So every handler is put back in its own attempt loop, every
+    pending signal is re-sent with its own catch, and the first exception
+    is raised only once all of that is done. (Threads hil.py starts block
+    these signals; this does not rely on it.)
+    """
+    sigs = tuple(saved)
+    first: BaseException | None = None
+    old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
+    try:
+        try:
+            # A signal Python already knows about gets its (deferring)
+            # handler now, before any real one is back.
+            _run_pending_signal_handlers()
+        except BaseException as exc:  # noqa: BLE001 - raised after the restore
+            first = first or exc
+        for sig, handler in saved.items():
+            # Retried only while it is still ours: a real handler run in
+            # here (_on_stop_signal sets every stop signal to SIG_IGN)
+            # has the last word on its disposition.
+            for _attempt in range(_RESTORE_ATTEMPTS):
+                if signal.getsignal(sig) is not deferring[sig]:
+                    break
+                try:
+                    signal.signal(sig, handler)
+                except BaseException as exc:  # noqa: BLE001 - raised after the restore
+                    first = first or exc
+        # To this thread, which has them blocked: each waits in the kernel
+        # until the mask is lifted, then goes to the real handler.
+        for sig in dict.fromkeys(list(pending)):
+            try:
+                signal.raise_signal(sig)
+            except BaseException as exc:  # noqa: BLE001 - one cannot stop the rest
+                first = first or exc
+    finally:
+        # Lifting the mask delivers the re-sent signals, and their handlers
+        # run -- and may raise -- inside the call or just after it. Run them
+        # all here; the first exception from above still names the cause.
+        later: list[BaseException] = []
+        for _attempt in range(_RESTORE_ATTEMPTS):
+            try:
+                if signal.pthread_sigmask(signal.SIG_BLOCK, []) != old_mask:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+                _run_pending_signal_handlers()
+                break
+            except BaseException as exc:  # noqa: BLE001 - chained below
+                later.append(exc)
+    if first is None and later:
+        first = later.pop(0)
+    if first is not None:
+        if later and first.__context__ is None:
+            first.__context__ = later[0]
+        raise first
+
+
+def _run_pending_signal_handlers() -> None:
+    """A Python-level call: entering it is where CPython runs any signal
+    handler whose C-level flag is already set."""
+
+
+#: How long `--stop-bridge` waits between its two reads of the bridge's
+#: client count. A count of 0 read once can be a visitor between two
+#: connections; it has to stay 0 across this wait as well.
+BRIDGE_SETTLE_S = 3.0
+
+
+def bridge_state() -> str:
+    """`fpgas-tt` as systemd sees it: "active", "inactive", or anything
+    else (another state, or why it could not be asked) -- which is neither,
+    and so never a reason to act."""
+    try:
+        proc = subprocess.run(["systemctl", "is-active", "fpgas-tt"],
+                              capture_output=True, text=True, check=False,
+                              timeout=60, start_new_session=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "unknown (%s: %s)" % (type(exc).__name__, exc)
+    if proc.returncode == 0:
+        return "active"
+    state = (proc.stdout or "").strip()
+    # `failed` is stopped too: nothing holds the device.
+    if state in ("inactive", "failed"):
+        return "inactive"
+    return state or "unknown (systemctl is-active exit %d)" % proc.returncode
+
+
 class Fatal(Exception):
     """Cannot start, or cannot go on: reported, not a check result."""
 
@@ -154,6 +285,35 @@ def _tail(text: str, lines: int = 12) -> str:
     return "\n".join(kept)
 
 
+#: How long one write to the board may block while restarting it.
+RESTART_WRITE_TIMEOUT_S = 2.0
+
+#: `ps` is local and quick; one that takes longer than this is stuck, and
+#: cleanup -- deaf to signals -- must not wait on it for ever.
+PS_TIMEOUT_S = 30.0
+
+
+def _sessions_now() -> dict[str, list[str]]:
+    """Every live process as `pid args`, by session id: one `ps`.
+
+    A `ps` that fails or outlives PS_TIMEOUT_S is a Fatal, so a run that
+    meets one is still reported.
+    """
+    try:
+        proc = subprocess.run(["ps", "-eo", "pid=,sid=,args="],
+                              capture_output=True, text=True, check=False,
+                              timeout=PS_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise Fatal("`ps` could not list this host's processes (%s: %s)"
+                    % (type(exc).__name__, exc)) from None
+    table: dict[str, list[str]] = {}
+    for line in proc.stdout.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) == 3:
+            table.setdefault(fields[1], []).append("%s %s" % (fields[0], fields[2]))
+    return table
+
+
 def _survivors(sid: int) -> list[str]:
     """Processes still alive in session `sid`, as `pid args` strings.
 
@@ -162,23 +322,19 @@ def _survivors(sid: int) -> list[str]:
     the group of the process we spawned does not contain the grandchild that
     actually holds the board. The session does.
     """
-    proc = subprocess.run(["ps", "-eo", "pid=,sid=,args="],
-                          capture_output=True, text=True, check=False)
-    found = []
-    for line in proc.stdout.splitlines():
-        fields = line.split(None, 2)
-        if len(fields) == 3 and fields[1] == str(sid):
-            found.append("%s %s" % (fields[0], fields[2]))
-    return found
+    return _sessions_now().get(str(sid), [])
 
 
-def _reap(sid: int) -> None:
-    """Leave nothing of session `sid` running. Belt and braces: this runs
-    even when the command we spawned exited cleanly, because the whole point
-    of the orphan check is that a clean exit is not proof."""
-    for entry in _survivors(sid):
-        with contextlib.suppress(ValueError, ProcessLookupError, PermissionError):
-            os.kill(int(entry.split()[0]), signal.SIGKILL)
+def _reap(*sids: int) -> None:
+    """Leave nothing of sessions `sids` running, from one `ps` snapshot.
+    Belt and braces: this runs even when the command we spawned exited
+    cleanly, because the whole point of the orphan check is that a clean
+    exit is not proof."""
+    table = _sessions_now()
+    for sid in sids:
+        for entry in table.get(str(sid), []):
+            with contextlib.suppress(ValueError, ProcessLookupError, PermissionError):
+                os.kill(int(entry.split()[0]), signal.SIGKILL)
 
 
 # -------------------------------------------------------------------- the run
@@ -250,10 +406,14 @@ class Hil:
                    time.monotonic() - started)
 
     def spawn(self, argv: list[str]) -> subprocess.Popen:
-        proc = subprocess.Popen(
-            [str(a) for a in argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, start_new_session=True, env=self.env(), cwd=ROOT)
-        self.sessions.append(proc.pid)
+        # Deferred, not ignored: a signal between Popen returning and the
+        # append would otherwise leave a session cleanup never reaps, and
+        # the board command must not inherit an ignored SIGTERM.
+        with signals_deferred():
+            proc = subprocess.Popen(
+                [str(a) for a in argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, start_new_session=True, env=self.env(), cwd=ROOT)
+            self.sessions.append(proc.pid)
         return proc
 
     def env(self) -> dict:
@@ -601,34 +761,122 @@ class Hil:
         """
         if shutil.which("systemctl") is None:
             raise Fatal("--stop-bridge, but there is no systemctl on this host")
-        active = subprocess.run(["systemctl", "is-active", "--quiet", "fpgas-tt"],
-                                check=False, timeout=60).returncode == 0
-        if not active:
+        state = bridge_state()
+        if state == "inactive":
             self.notes.append("fpgas-tt was already stopped; left alone.")
             return
-        # Marked before the attempt: a stop that takes effect and then times
-        # out must still be undone.
+        if state != "active":
+            raise Fatal("--stop-bridge refused: fpgas-tt is %s" % state)
+        # The bridge serves visitors of the public site too, who cannot see
+        # a claims file: never cut one off. Read twice, a settle apart, the
+        # second time immediately before stopping.
+        for attempt in range(2):
+            if attempt:
+                time.sleep(BRIDGE_SETTLE_S)
+            clients = bridge_clients(self.args.bridge_health)
+            if clients != 0:
+                raise Fatal("--stop-bridge refused: the bridge at %s has %s "
+                            "client(s) connected" % (self.args.bridge_health, clients))
+        # Marked before the attempt: however it ends -- a failure, a
+        # timeout, a signal, systemd finishing a stop job sudo was killed
+        # after queueing -- cleanup must then look. That is safe for a stop
+        # that never took effect: restore_bridge resets the board only when
+        # systemd says fpgas-tt is down, and `systemctl start` on an active
+        # unit does nothing.
         self.bridge_stopped = True
-        subprocess.run(["sudo", "-n", "systemctl", "stop", "fpgas-tt"],
-                       check=True, timeout=120)
+        try:
+            # Deaf to signals for its (bounded) length, and in a session of
+            # its own so a terminal Ctrl-C cannot reach sudo or systemctl.
+            with signals_ignored():
+                subprocess.run(["sudo", "-n", "systemctl", "stop", "fpgas-tt"],
+                               check=True, timeout=120, start_new_session=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise Fatal("--stop-bridge: `sudo -n systemctl stop fpgas-tt` failed "
+                        "(%s: %s); fpgas-tt is now %s"
+                        % (type(exc).__name__, exc, bridge_state())) from None
         self.notes.append("fpgas-tt stopped for this run, and started again after.")
 
     def restore_bridge(self) -> None:
+        """Start `fpgas-tt` again, whatever else goes wrong on the way."""
         if not self.bridge_stopped:
             return
-        self.bridge_stopped = False
+        try:
+            # Put the board back first. fpgas-tt judges the board when it
+            # starts ("safe start"); started while the capture's design is
+            # still enabled, it reported `left: <design>` on tt09 until
+            # restarted again (2026-11-24). Only with the daemon known to be
+            # down: never reset a board under a running bridge's users.
+            state = bridge_state()
+            if state == "inactive":
+                self.restart_board()
+            else:
+                self.notes.append(
+                    "WARNING: fpgas-tt was %s at cleanup, so the board was not "
+                    "restarted under it." % state)
+        finally:
+            # In a `finally`: a restart that raises, or anything that gets
+            # past cleanup's signal guard, must not leave the bridge down.
+            # The gate is cleared only after the start, so a cleanup cut
+            # short before it is retried in full.
+            self.start_bridge()
+            self.bridge_stopped = False
+
+    def start_bridge(self) -> None:
         try:
             code = subprocess.run(["sudo", "-n", "systemctl", "start", "fpgas-tt"],
-                                  check=False, timeout=120).returncode
+                                  check=False, timeout=120,
+                                  start_new_session=True).returncode
         except (OSError, subprocess.SubprocessError) as exc:
             code, why = -1, str(exc)
         else:
             why = "exit %d" % code
-        if code != 0:
+        if code == 0:
+            return
+        state = bridge_state()
+        if state == "active":
+            # After a stop that never took effect: the start had nothing to do.
+            self.notes.append("`sudo systemctl start fpgas-tt` failed (%s), but "
+                              "fpgas-tt is active." % why)
+        else:
             self.notes.append(
                 "WARNING: `sudo systemctl start fpgas-tt` failed (%s) -- the "
-                "bridge is still down and the next user of this board will "
-                "find it so." % why)
+                "bridge is %s and the next user of this board will find it "
+                "so." % (why, "still down" if state == "inactive" else state))
+
+    def restart_board(self) -> None:
+        """Ctrl-B, Ctrl-D on the run's own serial link (see restart_sdk)."""
+        if not self.args.link.startswith("serial:"):
+            return
+        from ttcap.cli import link_from_url
+        from ttcap.repl import restart_sdk
+        try:
+            # A write timeout: a USB CDC port that stops draining must not
+            # block cleanup before `systemctl start`.
+            link = link_from_url(self.args.link, write_timeout=RESTART_WRITE_TIMEOUT_S)
+            try:
+                ok, _text = restart_sdk(link)
+            except BaseException:
+                # Output stuck behind a write timeout would make close()
+                # wait out the tty's closing_wait (30 s by default) before
+                # `systemctl start`: drop it.
+                discard = getattr(link, "discard_output", None)
+                if discard is not None:
+                    with contextlib.suppress(Exception):
+                        discard()
+                raise
+            finally:
+                link.close()
+        except Exception as exc:  # noqa: BLE001 - reported, then the bridge still starts
+            ok, why = False, "%s: %s" % (type(exc).__name__, exc)
+        else:
+            why = "no soft reboot seen"
+        if ok:
+            self.notes.append("Board restarted to the SDK's start state before "
+                              "fpgas-tt was started again.")
+        else:
+            self.notes.append("WARNING: restarting the board before fpgas-tt "
+                              "failed (%s); the bridge may report the capture's "
+                              "design as left enabled." % why)
 
     # ------------------------------------------------------------------ main
 
@@ -672,10 +920,28 @@ class Hil:
         return ""
 
     def cleanup(self) -> None:
-        """Never leave a capture running, whatever happened above."""
-        for sid in self.sessions:
-            _reap(sid)
-        self.restore_bridge()
+        """Never leave a capture running, whatever happened above.
+
+        Deaf to SIGINT and the stop signals while it runs: a second Ctrl-C
+        or a SIGHUP here would otherwise leave board commands running, or
+        the bridge stopped, with no warning and no report. Idempotent, so
+        main() can run it again if a signal lands before that guard is up.
+        """
+        with signals_ignored():
+            try:
+                # One `ps` for every session: a stuck one costs PS_TIMEOUT_S
+                # once, not once a session, while this is deaf to signals.
+                if self.sessions:
+                    try:
+                        _reap(*self.sessions)
+                    except Exception as exc:  # noqa: BLE001 - reported, then the bridge
+                        self.notes.append(
+                            "WARNING: could not check session(s) %s for leftover "
+                            "board commands (%s: %s)."
+                            % (", ".join(map(str, self.sessions)),
+                               type(exc).__name__, exc))
+            finally:
+                self.restore_bridge()
 
 
 # ------------------------------------------------------------- measurements
@@ -699,6 +965,17 @@ class MjpegReader(threading.Thread):
         # join() calls, and an Event under that name makes join() raise.
         self._halt = threading.Event()
 
+    def start(self) -> None:
+        """Start the thread with SIGINT and the stop signals already
+        blocked: a new thread inherits its creator's mask, and run()'s own
+        block comes too late for a signal sent as start() returns."""
+        sigs = (signal.SIGINT, *STOP_SIGNALS)
+        old = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
+        try:
+            super().start()
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old)
+
     def stop(self) -> None:
         self._halt.set()
         self.join(timeout=10)
@@ -706,15 +983,35 @@ class MjpegReader(threading.Thread):
     #: The boundary `multipartmux` and `ttcap.mjpeg` agree on.
     SEPARATOR = b"--vgacapframe"
 
+    #: How long the response and its first part may take. The first frame
+    #: waits for the design to be enabled: ~4-5 s on fpga-1 (2026-11-25),
+    #: which a 5 s read timeout failed as "read failed: timed out".
+    FIRST_PART_TIMEOUT_S = 30.0
+
+    #: How long any later read may block: a stream that stalls is a failure.
+    PART_TIMEOUT_S = 5.0
+
     def run(self) -> None:
+        # Signals are the main thread's: a stop signal or Ctrl-C taken by
+        # this thread would land in the middle of whatever main is doing.
+        signal.pthread_sigmask(signal.SIG_BLOCK, (signal.SIGINT, *STOP_SIGNALS))
         deadline = time.monotonic() + self.budget
-        conn, response = None, None
+        conn, response, sock = None, None, None
         # The server does not exist until the demo has built its pipeline, so
         # connecting is a retry loop, not a single attempt.
         while not self._halt.is_set() and time.monotonic() < deadline:
-            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            conn = http.client.HTTPConnection("127.0.0.1", self.port,
+                                              timeout=self.PART_TIMEOUT_S)
             try:
                 conn.request("GET", "/stream.mjpg")
+                # Connected; now patient until the first part is in, but
+                # never past the budget.
+                # Held here: a response that will close (no keep-alive)
+                # makes getresponse() drop `conn.sock`, though the response
+                # still reads from it.
+                sock = conn.sock
+                sock.settimeout(max(1.0, min(self.FIRST_PART_TIMEOUT_S,
+                                             deadline - time.monotonic())))
                 response = conn.getresponse()
             except OSError as exc:
                 self.note = "%s: %s" % (type(exc).__name__, exc)
@@ -732,12 +1029,16 @@ class MjpegReader(threading.Thread):
         tail = b""
         while not self._halt.is_set() and time.monotonic() < deadline:
             try:
-                block = response.read(4096)
+                # read1: what has arrived, not "4096 bytes or EOF" -- so
+                # each part, not each 4 KiB, is what the timeout bounds.
+                block = response.read1(4096)
             except OSError as exc:
                 self.note += "; read failed: %s" % exc
                 break
             if not block:
                 break
+            if sock is not None:
+                sock.settimeout(self.PART_TIMEOUT_S)
             buffered = tail + block
             self.parts += buffered.count(self.SEPARATOR)
             # Keep just enough of the tail to notice a separator split across
@@ -897,6 +1198,25 @@ def resolve_link(args: argparse.Namespace) -> str:
     return bridge_ws_url(args.board)
 
 
+def bridge_clients(url: str, timeout: float = 5.0) -> int | str:
+    """`clients` from fpgas-tt's /health, or why it could not be read.
+
+    Anything but an int is a refusal to stop the bridge: a bridge that
+    cannot say it is idle is not known to be idle.
+    """
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            clients = json.load(resp).get("clients")
+    except Exception as exc:  # noqa: BLE001 - every failure is a refusal
+        return "unknown (%s: %s)" % (type(exc).__name__, exc)
+    # `type() is int`, not isinstance: JSON `false` is a bool, which is an
+    # int, and would read as 0 clients.
+    if type(clients) is int and clients >= 0:
+        return clients
+    return "unknown (%r)" % (clients,)
+
+
 def parse_fps(text: str) -> tuple[float, str]:
     """`30`, `30/1` and `29.97` as a number and as GStreamer spells it."""
     if "/" in text:
@@ -960,7 +1280,12 @@ def build_parser() -> argparse.ArgumentParser:
                              "pipeline: probe, capture, reconstruct, reference")
     parser.add_argument("--stop-bridge", action="store_true",
                         help="stop fpgas-tt first (it holds /dev/ttboard open) "
-                             "and start it again afterwards")
+                             "and start it again afterwards; refused while "
+                             "the bridge has clients, and the board is "
+                             "restarted (Ctrl-B, Ctrl-D) before it starts")
+    parser.add_argument("--bridge-health", default="http://127.0.0.1:8765/health",
+                        help="fpgas-tt's /health, read for its client count "
+                             "before --stop-bridge (default: %(default)s)")
     parser.add_argument("--lock-dir",
                         help="where the per-board lock file lives "
                              "(default $XDG_RUNTIME_DIR, else the temp dir)")
@@ -1032,7 +1357,15 @@ def main(argv: list[str] | None = None) -> int:
                 hil.notes.append("Run interrupted by %s; everything it "
                                  "started was stopped." % why)
             finally:
-                hil.cleanup()
+                # A signal between this `finally` starting and cleanup()'s
+                # guard going up would skip it; cleanup() is idempotent, so
+                # run it until it completes.
+                while True:
+                    try:
+                        hil.cleanup()
+                        break
+                    except (Interrupted, KeyboardInterrupt):
+                        continue
     except Fatal as exc:
         print("hil: %s" % exc, file=sys.stderr)
         return 2
