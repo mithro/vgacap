@@ -5,7 +5,7 @@ Scripts that work against real [Tiny Tapeout](https://tinytapeout.com) demo boar
 - [`board_exec.py`](board_exec.py) runs a MicroPython file on a board through [ttcap](../python/ttcap/README.md)'s raw
   REPL.
 - [`board_restart.py`](board_restart.py) puts a demo board back to the [stock firmware](https://github.com/TinyTapeout/tt-micropython-firmware)'s start state
-  (Ctrl-B, Ctrl-D).
+  (Ctrl-C, Ctrl-B, Ctrl-D).
 - [`hil.py`](hil.py) is the [hardware-in-the-loop check](#hardware-in-the-loop-check).
 
 ## Hardware-in-the-loop check
