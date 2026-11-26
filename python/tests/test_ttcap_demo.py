@@ -157,6 +157,39 @@ def test_nothing_is_assumed_about_a_board_reached_by_link():
     demo_mod.check_board_wants(None, None, "bitstream")
 
 
+@pytest.mark.parametrize("project, design, named", [
+    ("tt_um_x", None, "--project"),
+    (None, "bitstream", "--design"),
+])
+def test_the_capture_firmware_refuses_a_design_selection(project, design, named):
+    # It keeps whatever design the stock firmware enabled; `ttcap.firmware.setup`
+    # would refuse the selection too, but only once the board is open.
+    with pytest.raises(CaptureError) as exc:
+        demo_mod.check_firmware_wants("picosdk", project, design)
+    message = str(exc.value)
+    assert named in message and "picosdk" in message and "stock firmware" in message
+
+
+def test_the_capture_firmware_takes_a_run_without_a_selection():
+    demo_mod.check_firmware_wants("picosdk", None, None)
+    demo_mod.check_firmware_wants("micropython", "tt_um_x", None)
+    demo_mod.check_firmware_wants("micropython", None, "bitstream")
+    # The module runs under the stock firmware, which selects the design.
+    demo_mod.check_firmware_wants("mpy-module", "tt_um_x", None)
+    demo_mod.check_firmware_wants("mpy-module", None, "bitstream")
+
+
+def test_a_selection_on_the_capture_firmware_fails_before_anything_starts(tmp_path, capsys):
+    # A dry run, and no GStreamer needed: the refusal comes before either.
+    code = main(["demo", "--link", "serial:/dev/ttyACM0", "--project", "tt_um_x",
+                 "--firmware", "picosdk", "--clock-hz", "25000000",
+                 "--outdir", str(tmp_path / "out"), "--dry-run"])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "--project" in err and "picosdk" in err
+    assert not (tmp_path / "out").exists()
+
+
 # ------------------------------------------------------------- the numbers
 
 
@@ -572,6 +605,29 @@ def test_a_stream_demo_leaves_the_capture_mode_to_the_element(tmp_path, capsys):
     assert code == 0
     printed = capsys.readouterr().out
     assert "capture-mode=" not in printed and "vga-mode=" not in printed
+
+
+@needs_gstreamer
+def test_a_demo_on_the_capture_firmware_tells_the_source(tmp_path, capsys):
+    code = main([
+        "demo", "--link", "serial:/dev/ttyACM0",
+        "--clock-hz", "25000000", "--seconds", "10", "--outdir", str(tmp_path / "o"),
+        "--mode", "frame", "--firmware", "picosdk", "--dry-run",
+    ])
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "firmware=picosdk" in printed and "capture-mode=frame" in printed
+
+
+@needs_gstreamer
+def test_a_stock_firmware_demo_leaves_the_firmware_to_the_element(tmp_path, capsys):
+    code = main([
+        "demo", "--board", "tt07", "--project", "tt_um_rejunity_vga",
+        "--clock-hz", "60000", "--seconds", "10", "--outdir", str(tmp_path / "o"),
+        "--dry-run",
+    ])
+    assert code == 0
+    assert "firmware=" not in capsys.readouterr().out
 
 
 @needs_gstreamer

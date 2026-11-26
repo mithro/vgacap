@@ -22,17 +22,29 @@ the stream format, which vgacap's C and Python readers check.
   `samples_per_word=4`, flags `VGACAP_FLAG_FIRST_SAMPLE_MSB`. The host writes
   the `VGCH` header in front.
 - A chunk is admitted at its first sample only if the FIFO (`fifo_words`,
-  default 128) has room for all of it; otherwise it is dropped whole and the
-  next chunk out is followed by a `TIME` chunk with the cumulative dropped
-  count and the message `overrun`. The stream is always parseable.
-- One byte a clock out, so samples on every clock need slightly more than
-  the output carries (12 header bytes a chunk); see the module docstring.
+  default 128) has room for all of it; otherwise it is dropped whole and a
+  `TIME` chunk (message `overrun`) follows the next RAW chunk to finish. Its
+  count is the cumulative number of samples dropped as of the clock that
+  `TIME` chunk starts; its position in the stream does not mark the gap
+  (RAW chunks admitted before a drop can come out after the report).
+- No flush: if `sample_valid` stops mid-chunk the stream ends in a
+  truncated RAW chunk (its header went out when it was admitted) and any
+  `TIME` report still due is never sent. Everything before that parses; stop
+  a capture on a chunk boundary to end it cleanly.
+- One byte a clock out at best: a chunk of 256 samples takes 272 clocks (12
+  header bytes and 4 idle FSM clocks), so an always-ready sink keeps up with
+  samples on at most 256/272, about 94.1%, of clocks; see the module
+  docstring.
 
 Regenerate the Verilog after changing the source (a test fails otherwise):
 
     uv run python rtl/vgacap_raw_framer.py > rtl/vgacap_raw_framer.v
 
 Tests (`python/tests/test_rtl_raw_framer.py`): Migen simulation with an
-always-ready, a slow (drops whole chunks, reports them) and a gappy input;
-Icarus on the committed `.v` with `tb_vgacap_raw_framer.v`; every output
-parsed by `vgacap.stream.read_chunks`.
+always-ready, a slow (drops whole chunks, reports them), a gappy, runs of
+ready cycles and a random sink, checking the valid/ready hold rule every
+clock; Icarus on the committed `.v` with `tb_vgacap_raw_framer.v` (always
+ready, random backpressure, overruns from a slow sink and from full rate,
+with the same hold check); every output parsed by `vgacap.stream.read_chunks`.
+CI runs the Icarus test in the GStreamer job, which installs `iverilog` and
+fails if it is skipped.
