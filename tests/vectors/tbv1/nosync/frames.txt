@@ -1,0 +1,19 @@
+id: test/nosync
+status: no-sync
+sampler: tb-v1
+sampler_status: no-sync
+pixel_format: rgb6
+width: 0
+height: 0
+mode: unknown
+clock_hz: 25175000
+clocks_per_pixel: 1
+capture_after_clock: 2517500
+frame_clocks: 0
+frames: 0
+distinct_frames: 0
+store: nosync_tb-v1_frames.rgb6.zst
+store_length: 0
+store_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+distinct:
+runs:
