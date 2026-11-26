@@ -19,8 +19,8 @@ Option is the flag, and Value what follows it. Default is what the tool uses wit
 |---|---|---|---|---|
 | `--out` | a path | none: required | | the vgacap stream to write |
 | `--samples` | an integer | none: required | at least 1 | how many samples to capture |
-| `--data-base` | a GPIO number | 4 | `--data-base` + 8 at most 28 | the first data GPIO: `uo_out[0]` |
-| `--clk` | a GPIO number | 12 | 0 to 27 and outside the data GPIOs | the project clock GPIO |
+| `--data-base` | a GPIO number | 4 | `--data-base` + 8 at most 28 | the first of the eight data GPIOs: sample bit 0 |
+| `--clk` | a GPIO number | 12 | 0 to 27 and outside the data GPIOs | the clock GPIO each sample waits for |
 | `--edge` | `rising` or `falling` | `rising` | | the clock edge each sample is taken on |
 | `--clock-hz` | hertz | 0 (unknown) | 500000 at most without `--unproven-rate` | the project clock written into the stream header |
 | `--unproven-rate` | none | off | | allows a `--clock-hz` above 500000 |
@@ -50,4 +50,4 @@ Variable is the name, and Effect what setting it to any value does.
 
 | Variable | Effect |
 |---|---|
-| `VGACAP_RP1_DEBUG` | prints the sampler's and the generator's PIO instruction words on standard error |
+| `VGACAP_RP1_DEBUG` | prints the PIO instruction words of the sampler and of the `--gen` generator on standard error |

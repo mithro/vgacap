@@ -5,7 +5,8 @@ the sample before it, modulo 256.
     python3 capture-rp1/check_counter.py run.vgacap
 
 The counter generator drives a descending 8-bit count onto the data pins, one
-value a clock, so a capture that lost or repeated a sample breaks the count.
+value a clock, so a capture that lost or repeated samples breaks the count,
+unless the loss is a whole multiple of 256 samples: that this cannot see.
 Prints one line and exits 0 when the count is unbroken; otherwise it names
 the first break and exits 1. A stream that cannot be read exits 2.
 Standard library and vgacap.stream only, so it runs on the Pi as it is.

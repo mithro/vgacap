@@ -13,14 +13,14 @@ The values come from [`vgacap_rp1.c`](vgacap_rp1.c) and [`programs.h`](programs.
 
 ## GPIOs
 
-Signal is the Tiny Tapeout signal, and Default GPIO the RP1 GPIO it is read from without options. Option is the flag that moves it.
+Role is what the tool does with the GPIO, and Default GPIO the RP1 GPIO without options. Option is the flag that moves it.
 
-| Signal | Default GPIO | Option |
+| Role | Default GPIO | Option |
 |---|---|---|
-| `uo_out[0]` to `uo_out[7]` | GPIO 4 to GPIO 11 | `--data-base` |
-| project clock | GPIO 12 | `--clk` |
+| data: sample bits 0 to 7 | GPIO 4 to GPIO 11 | `--data-base` |
+| clock: the edge each sample waits for | GPIO 12 | `--clk` |
 
-The data GPIOs are always eight in a row, `uo_out[0]` on the lowest.
+The data GPIOs are always eight in a row, with sample bit 0 on the lowest. The generators drive the same GPIOs.
 
 ## PIO programs
 
@@ -51,7 +51,7 @@ Setting is the PIO configuration, and the other columns its value on each state 
 | Clock divider | 1.0 | `--gen-div` | `--gen-div` |
 | PIO clocks for each generated clock | | 2 × (`--gen-delay` + 1) × `--gen-div` | 2 × (`--gen-delay` + 1) × `--gen-div` |
 
-The generator changes the data with the clock low, and raises the clock `--gen-delay` + 1 PIO clocks later.
+The generator changes the data with the clock low, and raises the clock (`--gen-delay` + 1) × `--gen-div` PIO clocks later.
 
 ## DMA
 
@@ -80,7 +80,7 @@ Field is a field of the stream, and Value what `vgacap-rp1` writes. The format i
 | `flags` | `VGACAP_FLAG_FIRST_SAMPLE_MSB`: first sample in bits 31:24 |
 | `mode` | 0: extclk |
 | `clock_hz` | `--clock-hz` |
-| `signal_map` | the Tiny VGA Pmod on `uo_out` |
+| `signal_map` | 7 3 0 4 1 5 2 6: the Tiny VGA Pmod map |
 | Samples in each `RAW ` chunk | 32768 (the last chunk fewer) |
 | Closing `TIME` chunk's `dropped_samples` | 0 at a declared rate of 1 to 500000 Hz |
 | Closing `TIME` chunk's `dropped_samples` otherwise | `0xFFFFFFFF`: unknown |

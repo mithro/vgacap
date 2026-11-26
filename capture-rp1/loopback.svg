@@ -34,11 +34,11 @@
 <path d="M155.08 351 L161.08 360 L167.08 351 Z" fill="#14845a"/>
 <text x="171.08" y="346" font-size="12" fill="#14845a" text-anchor="start" font-weight="normal">DMA</text>
 <rect x="22" y="360" width="366" height="52" rx="8" fill="#e7f6ef" stroke="#14845a" stroke-width="1.5"/>
-<text x="205.0" y="383" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold">DRAM: 4 buffers of 32 KB</text>
-<text x="205.0" y="401" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal" font-family="ui-monospace, Menlo, Consolas, monospace">vgacap-rp1</text>
+<text x="205.0" y="383" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold">DRAM: one capture buffer</text>
+<text x="205.0" y="401" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal">32 KB a transfer, 4 queued</text>
 <line x1="161.08" y1="412" x2="161.08" y2="445" stroke="#14845a" stroke-width="2.5"/>
 <path d="M155.08 443 L161.08 452 L167.08 443 Z" fill="#14845a"/>
 <rect x="22" y="452" width="366" height="52" rx="8" fill="#e7f6ef" stroke="#14845a" stroke-width="1.5"/>
-<text x="205.0" y="475" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">run.vgacap</text>
+<text x="205.0" y="475" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">counter.vgacap</text>
 <text x="205.0" y="493" font-size="12" fill="#5b6577" text-anchor="middle" font-weight="normal">VGCH, RAW chunks, TIME</text>
 </svg>

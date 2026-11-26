@@ -108,12 +108,12 @@ def draw(p):
     text(dx + 10, ay + 26, "DMA", 12, p["host"], "start")
     bw = gw
     box(gx, ay + 40, bw, 52, p["host"], p["host_fill"])
-    text(mid, ay + 63, "DRAM: 4 buffers of 32 KB", 14, weight="bold")
-    text(mid, ay + 81, "vgacap-rp1", 12, p["muted"], mono=True)
+    text(mid, ay + 63, "DRAM: one capture buffer", 14, weight="bold")
+    text(mid, ay + 81, "32 KB a transfer, 4 queued", 12, p["muted"])
     fy = ay + 40 + 52 + 40
     arrow(dx, ay + 92, dx, fy, p["host"])
     box(gx, fy, bw, 52, p["host"], p["host_fill"])
-    text(mid, fy + 23, "run.vgacap", 14, weight="bold", mono=True)
+    text(mid, fy + 23, "counter.vgacap", 14, weight="bold", mono=True)
     text(mid, fy + 41, "VGCH, RAW chunks, TIME", 12, p["muted"])
 
     body.extend(out)

@@ -9,11 +9,11 @@ review: 2027-05-27
 
 **You want to see `vgacap-rp1` capture every sample on your Raspberry Pi 5, with nothing wired to its header.**
 
-In the loopback fixture, one RP1 PIO state machine drives a descending count onto the GPIOs that the capture samples. This is the setup the tool was proven on. Wiring a Tiny Tapeout board to a Pi 5 is not covered: it has not been tried ([issue #27](https://github.com/mithro/vgacap/issues/27)).
+In the loopback fixture, one RP1 PIO state machine drives a descending count onto the GPIOs that the capture samples. This is the setup the tool was proven on. Wiring a Tiny Tapeout board to a Pi 5 is not covered ([#27](https://github.com/mithro/vgacap/issues/27)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="loopback-dark.svg">
-  <img src="loopback.svg" alt="Inside the RP1, a generator state machine drives GPIO 4 to 11 and a clock on GPIO 12; a sampler reads them back, and DMA writes run.vgacap.">
+  <img src="loopback.svg" alt="In the RP1, a generator drives GPIO 4 to 11 and a clock on GPIO 12; a sampler reads them back, and DMA fills the buffer saved as counter.vgacap.">
 </picture>
 
 ## What you need
@@ -41,6 +41,8 @@ Step 2 prints this, and exits with status 0:
 ```text
 ok: 4194304 samples, every step -1
 ```
+
+The count is 8 bits wide, so a loss of a whole multiple of 256 samples leaves it unbroken. Step 2 cannot see such a loss.
 
 ## If it fails
 

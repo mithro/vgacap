@@ -13,17 +13,17 @@ This page explains how `vgacap-rp1` captures with the PIO block of the Raspberry
 
 The RP1 has a PIO block like the RP2040's and the RP2350's. `vgacap-rp1` loads the demo board's own sampler onto one of its state machines, word for word. The sampler waits for an edge of the project clock, then reads the eight data GPIOs. Four samples fill a 32-bit word, the first in the top byte, and the state machine pushes each full word into its receive FIFO.
 
-The tool talks to the PIO through [piolib](https://github.com/raspberrypi/utils/tree/master/piolib) and the kernel's `rp1-pio` driver. DMA moves the words from the FIFO into DRAM, one 32 KB buffer at a time. After the capture the tool writes the words out unchanged as `RAW ` chunks of a vgacap stream, behind a `VGCH` header and ahead of a closing `TIME` chunk. piolib is compiled into the tool, so a 32-bit or a 64-bit userland needs no extra package.
+The tool talks to the PIO through [piolib](https://github.com/raspberrypi/utils/tree/master/piolib) and the kernel's `rp1-pio` driver. DMA moves the words from the FIFO into one buffer in DRAM, 32 KB a transfer. After the capture the tool writes the words out unchanged, as `RAW ` chunks of a vgacap stream. A `VGCH` header goes before them, and a closing `TIME` chunk after. piolib is compiled into the tool, so a 32-bit or a 64-bit userland needs no extra package.
 
 ## The loopback fixture
 
-No Pi 5 has been wired to a Tiny Tapeout board ([issue #27](https://github.com/mithro/vgacap/issues/27)). So `vgacap-rp1` carries its own source: a second state machine on the same PIO that drives the same GPIOs. `--gen-counter` drives a descending count with no help from the host, and `--gen` drives the bytes of a file. The sampler cannot tell these pins from a wired board, and a lost sample breaks the count.
+`vgacap-rp1` carries its own source, as no Tiny Tapeout board is wired to a Pi 5 ([#27](https://github.com/mithro/vgacap/issues/27)). A second state machine on the same PIO drives the same GPIOs. `--gen-counter` drives a descending 8-bit count with no help from the host, and `--gen` drives the bytes of a file. A loss of samples breaks the count, unless it is a whole multiple of 256.
 
 ## Why 500000 samples a second
 
-The stock `rp1-pio` driver arms its DMA again for each buffer. While it does, the 8-word FIFO holds the samples that arrive, and it covers that gap only up to a rate. On pi-sw2-p4, a counter of 4,194,304 samples at 500000 samples a second stepped down by exactly one every sample. The 640x480 bars picture, 1,310,720 samples at that rate, came back pixel-identical twice ([the measurements](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-11-24-capture-modes-measured.md)).
+The stock `rp1-pio` driver arms its DMA again for each transfer. While it does, the 8-word FIFO holds the samples that arrive, and it covers that gap only up to a rate. On pi-sw2-p4, a counter of 4,194,304 samples at 500000 samples a second stepped down by exactly one every sample. The 640x480 bars picture at that rate came back pixel-identical ([the work log, 2026-11-24](https://github.com/mithro/tt-vga-capture/blob/main/LOG.md)).
 
-From 1.25 to 5 million samples a second, about 150 to 320 samples were lost at every 32 KB buffer. Nothing between the two rates was measured. The tool cannot count those losses, so it refuses a `--clock-hz` above 500000 unless `--unproven-rate` is given ([issue #28](https://github.com/mithro/vgacap/issues/28) is the way past it).
+The log records 500000 samples a second as the stock driver's lossless ceiling. The tool cannot count losses above it, so it refuses a `--clock-hz` above 500000 unless `--unproven-rate` is given ([#28](https://github.com/mithro/vgacap/issues/28)).
 
 A capture above that rate, or with no `--clock-hz`, warns on standard error. Its `TIME` chunk then says `dropped=unknown` and carries a dropped count of `0xFFFFFFFF`, so a check for nothing dropped fails. The tool does not measure the clock: it trusts the declared `--clock-hz`. The generators run at whatever `--gen-div` and `--gen-delay` make them.
 
