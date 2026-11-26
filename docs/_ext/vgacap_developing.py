@@ -366,7 +366,7 @@ class BannedWords(SourceDirective):
     source = RULES
 
     def make(self):
-        words = vgacap_rules.BANNED + vgacap_rules.BANNED_DOTTED
+        words = vgacap_rules.BANNED_WORDS + vgacap_rules.BANNED_DOTTED
         para = nodes.paragraph()
         for node in join_code(words):
             para += nodes.Text(node) if isinstance(node, str) else node

@@ -54,25 +54,27 @@ BANNED_LABELS = re.compile(r"(?:^|\n)\s*(Future|Sources):", re.MULTILINE)
 #: the build fails or only logs it. docs/developing/reference-page-rules.md
 #: is generated from this table, and a test holds it to the checks below.
 CHECKS = (
-    ("1.1", "a page type that is not one of the five", "fails"),
-    ("1.3", "front matter without type, owner, reader or review", "fails"),
-    ("1.3", "a review date that is not YYYY-MM-DD", "fails"),
+    ("10.14", "front matter without type, owner, reader or review", "fails"),
+    ("10.14", "a page type that is not one of the five", "fails"),
+    ("10.14", "a review date that is not a YYYY-MM-DD date", "fails"),
+    ("10.21", "a review date that has passed", "logged"),
     ("10.1", "a banned word or phrase in prose", "fails"),
+    ("10.1", "a paragraph or line that starts with Future: or Sources:", "fails"),
     ("10.2", "a title over the title limit", "fails"),
-    ("10.3", "a title that another page has", "fails"),
+    ("10.3", "a title that another page has, on every page that has it", "fails"),
+    ("3.2", "how-to headings out of order", "fails"),
     ("10.4", "a how-to step sentence over the sentence limit", "fails"),
     ("10.5", "a how-to with a fixed heading missing", "fails"),
     ("10.6", "a how-to with an extra heading or a sub-heading", "fails"),
-    ("3.2", "how-to headings out of order", "fails"),
-    ("10.8", "an image with no alt text", "fails"),
-    ("5.10", "alt text over the alt text limit", "fails"),
+    ("10.8", "an image with no alt text or alt text over the alt text limit", "fails"),
+    ("10.8", "an image written in raw HTML other than a picture element", "fails"),
     ("10.9", "an SVG drawing outside a light and dark pair", "fails"),
-    ("10.10", "a toctree with more entries than the sidebar limit", "fails"),
+    ("10.10", "more sidebar entries under one page than the sidebar limit", "fails"),
     ("10.11", "more heading levels than the heading limit", "fails"),
-    ("10.12", "a page other than a landing with two sentences or fewer", "fails"),
+    ("10.12", "a page other than a landing that is links alone", "fails"),
+    ("1.6", "a page other than a landing with two sentences or facts or fewer", "fails"),
     ("10.19", "more links than the link limit", "logged"),
     ("10.20", "more callouts than the callout limit", "logged"),
-    ("10.21", "a review date that has passed", "logged"),
 )
 
 TITLE_MAX = 65          # 5.1

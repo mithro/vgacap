@@ -76,8 +76,9 @@ def markdown_files():
 include_patterns = [
     f for f in markdown_files()
     # design specs and plans are working documents for contributors, and
-    # vendored code keeps its own Markdown
-    if not f.startswith(("docs/superpowers/", "third_party/")) or f == "third_party/README.md"
+    # the vendored libraries in third_party/*/ keep their own Markdown
+    if not f.startswith("docs/superpowers/")
+    and not (f.startswith("third_party/") and f.count("/") > 1)
 ]
 
 # Pages written before the site followed the docs.fpgas.online rules. Each
