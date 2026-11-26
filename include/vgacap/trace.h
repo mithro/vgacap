@@ -63,8 +63,35 @@ static inline int vgacap_trace_push(vgacap_trace_writer_t *t, uint64_t v) {
     t->run++; t->n++; t->clk_expect ^= t->clk_mask; return 0;
 }
 
-// Stub for the tests (not yet the specified behaviour).
+int vgacap_trace_repeat2_slow(vgacap_trace_writer_t *t);          // not for callers
+
+// Record samples n and n + 1 as repeats of the last sample pushed: exactly
+// vgacap_trace_push(t, last ^ clk) then vgacap_trace_push(t, last), where
+// `last` is the last sample's value (clock bit included) and clk is
+// 1 << clock_bit, or 0 when the header has no clock bit. With a clock bit,
+// the two samples hold the current run's value, the clock bit alternating
+// on from `last`. At samples_per_clock 2 and pair-aligned pushes (sample n
+// even), that is one more clock equal to the last: clk-low and clk-high
+// samples with the same pins, so the current run grows by 2. It is also
+// defined off the pairs (n odd), as the same two pushes. Without a clock
+// bit, it is `last` twice. (No trace without a clock bit can be created
+// today: the only layout, tt-um-43, has one.)
+//
+// A caller uses it when it knows, from its own state (for example the
+// model's raw port bytes), that the next two samples are these, without
+// building their values. The writer trusts it and does not check them.
+// It is valid only after at least one sample: at sample 0 there is no
+// `last`, so it fails the writer and returns -1. Otherwise it returns what
+// the two pushes would: 0, or -1 once the writer has failed. The file is
+// byte-identical to the one the two pushes would write; a block end inside
+// or at the pair splits the run there, as push does.
+//
+// Its fast path is one test: n <= limit always, so limit - n < 2 covers a
+// block end at sample n or n + 1, sample 0 (limit 0) and a failed writer
+// (limit == n). The current run then has at least one sample (only sample
+// 0 has none), so adding 2 to it is what the two pushes would do.
 static inline int vgacap_trace_repeat2(vgacap_trace_writer_t *t) {
+    if (t->limit - t->n < 2) return vgacap_trace_repeat2_slow(t);
     t->run += 2; t->n += 2; return 0;
 }
 
