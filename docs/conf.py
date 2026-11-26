@@ -7,7 +7,13 @@ that GitHub and the built site show the same text:
     uv run --locked --python 3.13 --only-group docs sphinx-build -W --keep-going -c docs . build/docs
 
 The source directory is the repository root and this directory holds only
-the configuration (`-c docs`). PAGES is the whole site, in navigation order.
+the configuration (`-c docs`). The pages are the Markdown files git knows
+of, tracked or new, so nothing .gitignore'd is read. docs/index.md is the
+root landing page; a page joins the sidebar through its line on the landing
+page above it (docs/_ext/vgacap_landing.py), and a page on no landing page
+fails the build. The writing rules, and the checks in
+docs/_ext/vgacap_rules.py, are those of docs.fpgas.online
+(docs/superpowers/specs/2026-11-27-docs-site-design.md).
 
 MyST resolves links between pages, and their anchors, itself. After it has
 parsed a page, `link_repository_files` changes the two kinds of link MyST
@@ -15,8 +21,8 @@ cannot resolve, so they go where they go on GitHub:
 
 - a link to a repository file that is not Markdown (source code, LICENSE),
   which MyST would turn into a download, goes to the file on GitHub at the
-  commit being built (a Markdown file has to be in PAGES: a link to one
-  that is not fails the build);
+  commit being built (a Markdown file has to be a page: a link to one that
+  is not fails the build);
 - a link to a directory goes to its README page when that is a page, and
   otherwise to the directory on GitHub.
 
@@ -24,13 +30,14 @@ A link to a path that does not exist, or that leaves the repository, is
 reported, so the build fails on it.
 MyST drops a #fragment from a link to a file that is not a page (a GitHub
 `file.c#L10` line link), so such a link goes to the top of the file.
-index.html redirects the site root to the README page.
+index.html redirects the site root to the root landing page.
 """
 
 import os
 import pathlib
 import posixpath
 import subprocess
+import sys
 
 from docutils import nodes
 from sphinx import addnodes
@@ -41,33 +48,52 @@ logger = logging.getLogger(__name__)
 REPO = pathlib.Path(__file__).resolve().parent.parent
 GITHUB = "https://github.com/mithro/vgacap"
 
-# Every page on the site, in navigation order. README is the front page.
-PAGES = [
-    "README",
-    "python/ttcap/README",
-    "firmware/README",
-    "firmware/PROTOCOL",
-    "mpy/README",
-    "capture-rp1/README",
-    "rtl/README",
-    "gst/README",
-    "src/tools/README",
-    "tools/README",
-    "docs/development",
-    "docs/frames-format",
-    "docs/trace-format",
-    "third_party/README",
-    "docs/diagrams/NOTICE",
-]
-
 project = "vgacap"
 author = "vgacap contributors"
 copyright = "vgacap contributors, Apache-2.0"
 
-extensions = ["myst_parser"]
+sys.path.insert(0, str(REPO / "docs" / "_ext"))
+extensions = [
+    "myst_parser",
+    "vgacap_landing",   # a landing page's lines -> its hidden toctree
+    "vgacap_picture",   # <picture> light/dark twins -> the theme-switched pair
+    "vgacap_rules",     # the docs.fpgas.online rules a machine can decide
+]
 source_suffix = {".md": "markdown"}
-root_doc = "README"
-include_patterns = [page + ".md" for page in PAGES]
+root_doc = "docs/index"
+
+
+def markdown_files():
+    """Every Markdown file git tracks or would track, so a new page builds
+    before it is committed and nothing .gitignore'd is read."""
+    result = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files", "--cached", "--others", "--exclude-standard",
+         "--", "*.md"], capture_output=True, text=True)
+    if result.returncode:
+        raise SystemExit(f"the docs build reads its page list from git, which failed in "
+                         f"{REPO}: {result.stderr.strip()}")
+    return sorted(f for f in result.stdout.split("\n") if f and (REPO / f).is_file())
+
+
+include_patterns = [
+    f for f in markdown_files()
+    # design specs and plans are working documents for contributors, and
+    # vendored code keeps its own Markdown
+    if not f.startswith(("docs/superpowers/", "third_party/")) or f == "third_party/README.md"
+]
+
+# Pages written before the site followed the docs.fpgas.online rules. Each
+# is split into typed pages by the content change named here, which takes it
+# off this list; the build fails on a listed page that already passes.
+vgacap_rules_pending = {
+    page: "split into typed pages (docs/superpowers/specs/2026-11-27-docs-site-design.md)"
+    for page in (
+        "README", "python/ttcap/README", "firmware/README", "firmware/PROTOCOL",
+        "mpy/README", "capture-rp1/README", "rtl/README", "gst/README",
+        "src/tools/README", "tools/README", "docs/development", "docs/frames-format",
+        "docs/trace-format", "third_party/README", "docs/diagrams/NOTICE",
+    )
+}
 
 # GitHub-style ids for headings, so `file.md#some-heading` links resolve.
 myst_heading_anchors = 6
@@ -81,8 +107,7 @@ myst_linkify_fuzzy_links = False
 html_theme = "furo"
 html_title = "vgacap"
 html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "")
-# The Markdown is on GitHub; the copy Sphinx would publish carries the
-# navigation appended to README below, which is not in the file.
+# The Markdown is on GitHub, one click from every page.
 html_copy_source = False
 
 
@@ -93,13 +118,6 @@ def commit():
         return sha
     return subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"],
                           capture_output=True, text=True, check=True).stdout.strip()
-
-
-def on_source_read(app, docname, source):
-    """The navigation, as a hidden toctree appended to the front page."""
-    if docname == root_doc:
-        entries = "\n".join(PAGES[1:])
-        source[0] += f"\n\n```{{toctree}}\n:hidden:\n\n{entries}\n```\n"
 
 
 def github_link(node, kind, rel, sha):
@@ -143,7 +161,7 @@ def link_repository_files(app, doctree):
         if rel is None or not (REPO / rel).is_dir():
             continue
         readme = posixpath.join(rel, "README") if rel != "." else "README"
-        if readme in PAGES:
+        if readme in app.env.found_docs:
             node["refdomain"], node["reftarget"] = "doc", readme
             node["reftargetid"] = anchor or None
         else:
@@ -159,8 +177,8 @@ INDEX = """<!DOCTYPE html>
 
 
 def write_index(app, exception):
-    """The front page is README.html (README.md stays where GitHub shows
-    it), and a web server serves index.html for the site root."""
+    """The root landing page is docs/index.html, and a web server serves
+    index.html for the site root."""
     if exception is None and app.builder.format == "html":
         page = app.builder.get_target_uri(root_doc)
         (pathlib.Path(app.outdir) / "index.html").write_text(INDEX.format(page=page))
@@ -168,7 +186,6 @@ def write_index(app, exception):
 
 def setup(app):
     app.add_config_value("vgacap_commit", commit(), "env")
-    app.connect("source-read", on_source_read)
     app.connect("doctree-read", link_repository_files, priority=100)
     app.connect("build-finished", write_index)
     return {"parallel_read_safe": True, "parallel_write_safe": True}
