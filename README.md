@@ -95,7 +95,7 @@ in one-shot bursts (`--rle-oneshot`) with an FPGA breakout and
 
 ## Building and testing
 
-Building needs CMake and [uv](https://docs.astral.sh/uv/); see
+Building needs [CMake](https://cmake.org) and [uv](https://docs.astral.sh/uv/); see
 [docs/development.md](docs/development.md).
 
 ## A first capture
