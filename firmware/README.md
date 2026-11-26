@@ -125,24 +125,9 @@ to hold to that); the host build of `core/` and `sim/` adds `-Wshadow
   ([PROTOCOL.md](PROTOCOL.md)); `ttcap capture --firmware picosdk
   --asic-index N` sends it. N is `tt.shuttle.<name>.count` under the stock
   firmware.
-* The firmware cannot tell an FPGA breakout from an ASIC breakout, so
-  `ttcap` refuses `--asic-index` for a bench demo board with an FPGA
-  breakout, and when these disagree about which board it is:
-  - `--board` (`ttcap capture --board SLUG`);
-  - a `ws://` or `wss://` link: the address of the fpgas.online bridge
-    (`fpgas-tt`), the Pi's name, or a host that resolves to this machine
-    on a tunnel's `18000 + octet` port, which names the tunnel's board;
-  - for a `serial:` link, or a `ws://` link on any other port whose host
-    resolves to this machine (the Pi's own bridge), the Pi it runs on.
-
-  A host resolves to this machine if it is loopback, 0.0.0.0 or `::` in
-  any spelling, or one of the machine's own addresses; a host that does
-  not resolve is refused. The refusal names the boards with an ASIC
-  breakout in the board table that can run this firmware (RP2350 only), or
-  says that none is listed.
-  [`ttcap.firmware.setup()`](../python/ttcap/firmware.py) called directly
-  does not check; its caller must
-  ([`ttcap.demo.check_asic_index()`](../python/ttcap/demo.py)).
+* `ttcap` refuses `--asic-index` when `--board`, the link or the bench Pi
+  it runs on names a demo board with an FPGA breakout, or when they
+  disagree ([`check_asic_index()`](../python/ttcap/demo.py)).
 * `ui_in` and `rst_n` are left untouched until `ui_in` / `reset` commands
   drive them; `ttcap` holds reset while it programs the clock and releases
   it last, as [`select_project()`](../python/ttcap/capture.py) does.
@@ -232,7 +217,8 @@ and the UF2 copied there. `<dev>` is the stock firmware's serial port
        sudo umount /mnt/rp2350    # may report the drive already gone
 
    The drive disappears and the vgacap firmware's serial port appears.
-5. Capture, e.g.
+5. Capture, e.g. (with an ASIC breakout add `--asic-index N`; see the
+   [hardware notes](#hardware-notes-and-assumptions)):
 
        FW=$(ls /dev/serial/by-id/usb-vgacap_vgacap_capture_firmware_*-if00)
        uv run --no-sync ttcap capture --firmware picosdk serial:$FW --clock-hz 25000000 --mode frame --frames 2 --out frame.vgacap
