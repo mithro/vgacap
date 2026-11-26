@@ -9,18 +9,18 @@ review: 2027-05-27
 
 **You have a capture file, a vgacap stream, and want each frame of it as a picture.**
 
-This page runs `vgacap-frames`, which writes one PPM image a frame. It works on a capture from any source: `ttcap capture`, the Raspberry Pi 5, an FPGA or `vgacap-bin2stream`. A simulation trace is turned into frames by `vgacap-sample` instead ([options](reference-options.md#vgacap-sample)).
+This page runs `vgacap-frames`, which writes one PPM image a frame. It works on a capture from [`ttcap capture`](../../python/ttcap/README.md), from FPGA capture logic, or from `vgacap-bin2stream`. A simulation trace is turned into frames by `vgacap-sample` instead ([options](reference-options.md#vgacap-sample)).
 
 ## What you need
 
-- A vgacap checkout built with CMake, so that `build/vgacap-frames` exists ([Developing vgacap](../../docs/development.md)).
+- A vgacap checkout built with [CMake](https://cmake.org), so that `build/vgacap-frames` exists ([Developing vgacap](../../docs/development.md)).
 - A capture of at least three frame periods: 1,260,000 clocks of a 640x480@60 design. Why it takes that many is on [How libvgaframe rebuilds frames](../frame/explanation-rebuilding-frames.md#when-the-first-frame-appears).
 
 ## Steps
 
 1. In the vgacap checkout, run `mkdir -p frames`, which makes the directory the frames go into.
 2. In the same directory, run `build/vgacap-frames capture.vgacap frames/frame`, and it writes `frames/frame-0000.ppm` onwards, one line a frame.
-3. To keep frames whose lines were not all covered as well, run step 2 again with `--partial` added.
+3. In the same directory, to keep partly covered frames as well, run step 2's command with `--partial` added, and those frames are written too.
 
 ## Check
 
@@ -38,11 +38,12 @@ The exit code is 0, and `frames/` holds one `.ppm` for each `frame` line. Every 
 
 | Step | What you see | Likely cause | Fix |
 |---|---|---|---|
-| 2 | `frames=0` and exit code 2 | the capture is under two frame periods, or holds no sync | capture for longer; run `build/vgacap-dump capture.vgacap` to see what it holds |
+| 2 | `frames=0` and exit code 2 | the capture is under two frame periods | capture for longer |
+| 2 | `frames=0` and exit code 2 | the capture holds no sync | run `build/vgacap-dump capture.vgacap` to see what it holds |
 | 2 | `a simulation trace (samples_per_clock 2) is read with vgacap-sample` | the file is a simulation trace | run `vgacap-sample` on it instead |
 | 2 | `failed to write frames/frame-0000.ppm` | the directory does not exist | run step 1 |
-| 2 | `mode=?` on the frame lines | the timing matches no mode in [the mode table](../frame/reference-modes.md) | read the cropped frames as they are, or look at `cpl` and `lpf` |
-| 2 | `overrun after sample S` on stderr | the board's buffers overran; that frame was dropped | capture at a lower clock |
+| 2 | `mode=?` on the frame lines | the timing matches no mode in [the mode table](../frame/reference-modes.md) | read `cpl` and `lpf` on the line for the timing it found |
+| 2 | `overrun after sample S` on stderr | the board's buffers overran, and that frame was dropped | capture at a lower clock |
 | 2 | `resync skipped=N` on stderr | bytes of the capture were lost on the way | capture again over a better link |
 
 ## Next

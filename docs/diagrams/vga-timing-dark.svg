@@ -19,7 +19,7 @@
 <rect x="578.3" y="465.6" width="46.0" height="46.0" fill="#232834" stroke="#454c5c" stroke-width="1"/>
 <rect x="181.5" y="168.0" width="396.8" height="297.6" fill="#10291f" stroke="#3fcf91" stroke-width="2"/>
 <text x="379.9" y="310.8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#3fcf91" text-anchor="middle">active area</text>
-<text x="379.9" y="334.8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#3fcf91" text-anchor="middle">640 x 480: the picture</text>
+<text x="379.9" y="334.8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#3fcf91" text-anchor="middle">640x480@60: the picture</text>
 <text x="105.8" y="55.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#e6e9ef" text-anchor="middle">sync</text>
 <text x="105.8" y="70.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#a3acbd" text-anchor="middle">96</text>
 <text x="158.5" y="55.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#e6e9ef" text-anchor="middle">back</text>

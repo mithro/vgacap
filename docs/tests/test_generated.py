@@ -5,6 +5,7 @@ their source at build time.
     uv run --locked --python 3.13 --only-group docs --with pytest pytest -q docs/tests
 """
 
+import argparse
 import html as htmllib
 import io
 import pathlib
@@ -58,7 +59,8 @@ def test_an_unreadable_entry_is_an_error(tmp_path):
 
 
 def test_the_modes_directive_renders_every_mode(tmp_path):
-    warnings, html = build(tmp_path, "```{vgacap-modes}\n```\n")
+    warnings, html = build(tmp_path, "```{vgacap-modes} horizontal\n```\n\n"
+                                     "```{vgacap-modes} vertical\n```\n")
     assert warnings == ""
     for m in vgacap_generated.read_modes():
         assert m["name"] in html
@@ -74,3 +76,72 @@ def test_the_argparse_directive_renders_every_option(tmp_path):
 def test_a_missing_parser_is_an_error(tmp_path):
     warnings, _ = build(tmp_path, "```{vgacap-argparse} vgacap.bin2stream:nothing\n```\n")
     assert "cannot build the parser" in warnings
+
+
+def test_a_polarity_other_than_0_or_1_is_an_error():
+    mode = {"name": "x", "h_sync_positive": 2}
+    with pytest.raises(vgacap_generated.SourceError):
+        vgacap_generated.polarity(mode, "h_sync_positive")
+
+
+def test_the_modes_directive_wants_an_axis(tmp_path):
+    warnings, _ = build(tmp_path, "```{vgacap-modes} sideways\n```\n")
+    assert "write horizontal or vertical" in warnings
+
+
+def text_rows(ap):
+    def text(cell):
+        return cell.astext() if hasattr(cell, "astext") else str(cell)
+    return [[text(c) for c in row] for row in vgacap_generated.argparse_rows(ap)]
+
+
+def test_an_optional_positional_is_bracketed_and_not_required():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("where", nargs="?", default="here", help="where")
+    assert text_rows(ap) == [["where", "", "'here'", "", "where"]]
+
+
+def test_a_suppressed_argument_is_left_out():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--hidden", help=argparse.SUPPRESS)
+    ap.add_argument("--shown", help="shown")
+    assert [r[0] for r in text_rows(ap)] == ["--shown"]
+
+
+def test_a_suppressed_default_is_blank():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--x", default=argparse.SUPPRESS, help="x")
+    assert text_rows(ap)[0][2] == ""
+
+
+def test_help_placeholders_are_filled_in():
+    ap = argparse.ArgumentParser(prog="tool")
+    ap.add_argument("--n", type=int, default=4, help="%(prog)s uses %(default)s")
+    assert text_rows(ap)[0][4] == "tool uses 4"
+
+
+def test_a_required_option_says_so():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", required=True, help="out")
+    assert text_rows(ap)[0][2] == "required"
+
+
+def test_a_tuple_metavar_names_each_value():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--size", nargs=2, metavar=("W", "H"), help="size")
+    assert text_rows(ap)[0][1] == "W H"
+
+
+def test_each_choice_is_a_row():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--mode", choices=("a", "b"), default="a", help="mode")
+    assert text_rows(ap) == [["--mode", "MODE", "'a'", "a", "mode"], ["", "", "", "b", ""]]
+
+
+def test_subcommands_follow_with_their_names():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--v", action="store_true", help="v")
+    sub = ap.add_subparsers(dest="cmd")
+    go = sub.add_parser("go")
+    go.add_argument("--fast", action="store_true", help="fast")
+    assert [r[0] for r in text_rows(ap)] == ["--v", "go --fast"]

@@ -15,9 +15,19 @@ The three elements are in `libgstvgacap.so`, built from [`gst/`](.). `gst-inspec
 
 | Element | Sink pad | Source pad |
 |---|---|---|
-| `vgadecode` | `application/x-vgacap` | `video/x-raw`, format `RGB`, 1 to 4096 pixels each way, 0 to 120 frames a second |
-| `vgacapttsrc` | none | `application/x-vgacap`, 64 KiB buffers |
-| `vgacapbin` | none | as `vgadecode` |
+| `vgadecode` | `application/x-vgacap` | `video/x-raw` |
+| `vgacapttsrc` | none | `application/x-vgacap` in 64 KiB buffers |
+| `vgacapbin` | none | `video/x-raw` |
+
+Field is a field of the `video/x-raw` caps that `vgadecode` and `vgacapbin` push, and Value its range.
+
+| Field | Value |
+|---|---|
+| `format` | `RGB` |
+| `width` | 1 to 4096 |
+| `height` | 1 to 4096 |
+| `framerate` | 0/1 to 120/1 |
+| `pixel-aspect-ratio` | 1/1 |
 
 ## vgadecode properties
 
@@ -37,13 +47,17 @@ The three elements are in `libgstvgacap.so`, built from [`gst/`](.). `gst-inspec
 | Field | Value |
 |---|---|
 | PTS | clocks since the first frame divided by the header's `clock_hz`; at `output-fps` with no clock |
-| `GST_BUFFER_OFFSET` | the source's frame number: the `FRAM` counter, or the capture's own count; skips filtered partial frames; back to 0 on a new `VGCH` or a flushing seek |
+| `GST_BUFFER_OFFSET` | the source's frame number |
 | `GST_BUFFER_OFFSET_END` | the offset + 1 |
 | `GST_BUFFER_FLAG_CORRUPTED` | set on a partial frame |
 | `GST_BUFFER_FLAG_DISCONT` | set on the first frame after an overrun reset |
-| caps frame rate | `clock_hz` / (clocks a line × lines a frame), or `output-fps` with no clock or with `repeat-last-frame` |
+| caps frame rate, with a clock | `clock_hz` / (clocks a line × lines a frame) |
+| caps frame rate, with no clock | `output-fps` |
+| caps frame rate, with `repeat-last-frame` | `output-fps` |
 
-A clock rate that changes mid-stream, from a `TIME` chunk, keeps the time reached and goes on at the new rate, so PTS never goes back.
+The frame number in `GST_BUFFER_OFFSET` is the `FRAM` counter in a frame capture, and the capture's own count otherwise. It skips partial frames that are not pushed. It goes back to 0 on a new `VGCH` or a flushing seek.
+
+A `TIME` chunk can change the clock rate mid-stream. The PTS then keeps the time reached and goes on at the new rate, so it never goes back.
 
 ## vgadecode bus message
 
@@ -64,11 +78,11 @@ In a URI says whether a `vgacapbin` URI's query may set the property.
 
 | Property | Type | Default | Range | In a URI | What it sets |
 |---|---|---|---|---|---|
-| `link` | string | empty | -- | no | the board: `serial:/dev/ttyACM0`, or `ws://host:8765/serial` for the bridge; required |
+| `link` | string | empty | -- | no | the board, as `ttcap capture` takes it; required |
 | `clock-hz` | unsigned | 0 | 0 to 200,000,000 | yes | the project clock to program, in Hz; required |
 | `project` | string | empty | -- | yes | the `tt.shuttle` project to enable; empty keeps the one selected |
 | `design` | string | empty | -- | yes | on an FPGA board, the bitstream to enable |
-| `profile` | string | `auto` | `rp2040`, `rp2350`, `auto` | yes | the board profile; `auto` asks the board |
+| `profile` | string | `auto` | `ttcap capture --profile`'s choices | yes | the board profile; `auto` asks the board |
 | `pio` | integer | -1 | -1 to 7 | yes | the PIO block for the sampler; -1 leaves `ttcap`'s default |
 | `buf-words` | integer | -1 | -1 to 16,777,216 | yes | words a DMA buffer; -1 leaves `ttcap`'s default |
 | `seconds` | double | 0 | 0 to 86,400 | yes | how long to capture; 0 until the element stops |
@@ -79,7 +93,7 @@ In a URI says whether a `vgacapbin` URI's query may set the property.
 | `window-lines` | integer | 0 | 0 to 4096 | yes | frame and window modes: most lines a frame; 0 leaves `ttcap`'s default |
 | `ttcap-command` | string | `uv run --no-sync ttcap` | -- | no | the command that runs `ttcap`, split by shell rules |
 
-The element runs `ttcap capture LINK --out - --clock-hz N --seconds S`, adding an option for each property set away from its default. The choices of `ttcap capture` are on [the ttcap page](../python/ttcap/README.md). `ttcap-command` runs in the pipeline's working directory, so give an absolute path when that is not the vgacap checkout.
+A `link` is `serial:/dev/ttyACM0` for a board on USB, or `ws://host:8765/serial` for the fpgas.online bridge (`fpgas-tt`). The element runs `ttcap capture LINK --out - --clock-hz N --seconds S`, adding an option for each property set away from its default. The choices of `ttcap capture` are on [the ttcap page](../python/ttcap/README.md). `ttcap-command` runs in the pipeline's working directory, so give an absolute path when that is not the vgacap checkout.
 
 ## vgacapbin properties
 
@@ -92,28 +106,31 @@ A key in the URI's query wins over the same property set on the bin.
 
 ## vgacapbin URIs
 
-| Scheme | Form | Source made |
-|---|---|---|
-| `tt-serial` | `tt-serial:///dev/ttyACM0?clock-hz=60000` | `vgacapttsrc`, `link` `serial:/dev/ttyACM0` |
-| `tt-ws` | `tt-ws://host:8765/serial?clock-hz=60000` | `vgacapttsrc`, `link` `ws://host:8765/serial` |
-| `tt-wss` | `tt-wss://host/serial?clock-hz=60000` | `vgacapttsrc`, `link` `wss://host/serial` |
-| `file` | `file:///captures/tt08.vgacap` | `filesrc`, `location` the path |
+Scheme is the URI's scheme, Example a URI, Source the element made, and Set the property the URI's location sets on it.
+
+| Scheme | Example | Source | Set |
+|---|---|---|---|
+| `tt-serial` | `tt-serial:///dev/ttyACM0?clock-hz=60000` | `vgacapttsrc` | `link=serial:/dev/ttyACM0` |
+| `tt-ws` | `tt-ws://host:8765/serial?clock-hz=60000` | `vgacapttsrc` | `link=ws://host:8765/serial` |
+| `tt-wss` | `tt-wss://host/serial?clock-hz=60000` | `vgacapttsrc` | `link=wss://host/serial` |
+| `file` | `file:///captures/tt08.vgacap` | `filesrc` | `location=/captures/tt08.vgacap` |
 
 | Rule | What happens |
 |---|---|
 | a `tt-ws` or `tt-wss` URI with no path | the path is `/serial` |
 | a `tt-serial` URI with a host (two slashes) | an error: write three slashes |
 | a `file` URI with a host other than `localhost` | an error |
-| user information, or a `#` fragment | an error |
-| a query key not marked "in a URI" above, such as `link` or `ttcap-command` | an error naming the allowed keys |
+| user information | an error |
+| a `#` fragment | an error |
+| a query key not marked "in a URI" above, such as `link` | an error naming the allowed keys |
 | a value that does not convert to the property's type, such as `clock-hz=sixty` | an error |
+
+A URI can come from somewhere that is not trusted: a form field, a saved playlist or a shared link. So its query may set only capture parameters. `ttcap-command`, a program to run, and `link`, which would move the capture away from the URI's own location, stay element properties.
 
 On a command line, quote the URI twice: `'uri="tt-serial:///dev/ttyACM0?project=tt_um_x&clock-hz=60000"'`. The outer quotes stop the shell at `&` and `?`; the inner ones are for GStreamer's pipeline parser.
 
 ## Debug categories
 
-| Category | Logs |
-|---|---|
-| `vgadecode` | timing, caps and frames |
-| `vgacapttsrc` | the child's command, its stderr at `INFO`, and the stop sequence |
-| `vgacapbin` | the source built from the URI |
+- `vgadecode` logs the timing, the caps and the frames.
+- `vgacapttsrc` logs the child's command, its stderr at `INFO`, and the stop sequence.
+- `vgacapbin` logs the source it built from the URI.

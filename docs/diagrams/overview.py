@@ -9,7 +9,7 @@ theme.
 Hand-placed, not auto-laid-out. Few words: each capture source is drawn
 as the parts that do the work (the chip, and the PIO or logic inside it),
 and the colours carry the rest (see the legend). The board photo, the
-Tiny Tapeout and the Raspberry Pi logos are embedded from images/ and
+Tiny Tapeout logo are embedded from images/ and
 logos/; NOTICE.md says where each is from and under what terms.
 
 Every colour comes from one palette, THEMES, which has a light and a dark
@@ -178,8 +178,8 @@ def canvas(w, h):
     add('<title id="t">vgacap overview</title>')
     add('<desc id="d">A Tiny Tapeout demo board\'s uo_out is captured by the board\'s own '
         'RP2040 or RP2350 (PIO, DMA, USB to ttcap), either straight from the design\'s breakout or '
-        'as framed bytes from capture logic beside the design on an iCE40UP5K FPGA breakout; or by '
-        'a Raspberry Pi 5 wired to the board (RP1 PIO and DMA); or a simulator runs the design\'s '
+        'as framed bytes from capture logic beside the design on an iCE40UP5K FPGA breakout; '
+        'or a simulator runs the design\'s '
         'RTL. All write one vgacap stream, which libvgaframe turns into pictures, video and '
         'pixel-exact checks.</desc>')
     add(f"""<style>
@@ -202,12 +202,11 @@ def canvas(w, h):
 
 
 # ---- geometry: data flows down the page ----------------------------------------------
-# Columns: Raspberry Pi 5 | the demo board | simulator.
+# Columns: the demo board | simulator.
 COL_W, BOARD_W, GAP = 210, 560, 22
-PI_X = MARGIN
-BOARD_X = PI_X + COL_W + GAP
+BOARD_X = MARGIN
 SIM_X = BOARD_X + BOARD_W + GAP
-LEFT, RIGHT = PI_X, SIM_X + COL_W
+LEFT, RIGHT = BOARD_X, SIM_X + COL_W
 BOARD_Y = MARGIN
 SRC_Y, SRC_H = 240, 236               # the Pi and simulator boxes
 BOARD_B = SRC_Y + SRC_H               # the board box ends level with them
@@ -313,16 +312,6 @@ def draw():
     leader(PH_X + 0.31 * PW, PH_Y + 0.34 * PHH, B_X + bw, BK_Y + BK_H / 2)
     leader(PH_X + 0.51 * PW, PH_Y + 0.50 * PHH, mid + MCU_W / 2, MCU_Y + MCU_H / 2)
 
-    # ---- the Raspberry Pi 5, wired to the same uo_out -------------------------------------------------
-    container(PI_X, "Raspberry Pi 5", lambda x, y: nested_svg(
-        HERE / "logos" / "raspberry-pi.svg", x - 12, y - 15, 24, 30))
-    inner(PI_X, "chip", "RP1", ("PIO", "DMA"), "DRAM")
-    PI_C = PI_X + COL_W / 2
-    TAP_Y = BK_Y + BK_H + 12
-    assert TAP_Y < SRC_Y - 16, "the Pi's tap must drop into its box"
-    line([(A_C, TAP_Y), (PI_C, TAP_Y), (PI_C, SRC_Y - 2)], "sig")
-    add(f'<circle cx="{A_C:.1f}" cy="{TAP_Y}" r="4.5" fill="{SIG}"/>')
-
     # ---- the simulator ---------------------------------------------------------------------------------
     container(SIM_X, "Simulator", lambda x, y: add(
         f'<path d="M{x - 11} {y + 4} L{x - 11} {y - 4} L{x - 4} {y - 4} L{x - 4} {y + 4} '
@@ -339,12 +328,12 @@ def draw():
     laptop(usb_x - 29, HOST_Y, 58, 32)
     text(usb_x + 40, HOST_Y + 22, "ttcap", "title")
     line([(usb_x, HOST_Y + 40), (usb_x, STREAM_Y - 2)], "str")
-    for cx in (PI_C, SIM_C):
+    for cx in (SIM_C,):
         line([(cx, SRC_Y + SRC_H - 16), (cx, STREAM_Y - 2)], "str")
-    # The three sources are alternatives: an "or" between each pair of the
-    # arrows into the stream, as between the two breakouts above.
+    # The two sources are alternatives: an "or" between the arrows into the
+    # stream, as between the two breakouts above.
     OR_Y = STREAM_Y - 26
-    for ox in ((PI_C + usb_x) / 2, (usb_x + SIM_C) / 2):
+    for ox in ((usb_x + SIM_C) / 2,):
         add(f'<circle cx="{ox:.1f}" cy="{OR_Y}" r="14" fill="{PAPER}" stroke="{STR_EDGE}" '
             f'stroke-width="1.25"/>')
         text(ox, OR_Y + 4.5, "or", "part", "middle")

@@ -63,12 +63,18 @@ The C writer is [`src/sample/outputs.c`](../src/sample/outputs.c); [`python/vgac
 
 A run can have `status` `ok` and `sampler_status` `bad-timing`. With any value but `ok`, `frames` is 0 and there are no distinct frames or runs.
 
+A value can have more than one row, one for each cause.
+
 | Value | Meaning |
 |---|---|
 | `ok` | the sampler found the geometry and decoded frames |
 | `no-sync` | the sampler saw no periodic hsync and vsync |
-| `bad-timing` | no period; a vsync period under two line periods; a size outside 16 to 4096; or, for centre-v1, a window outside the line or frame |
-| `bad-window` | centre-v1 only: `window_offset` puts the window outside the line or frame |
+| `bad-timing` | the sync has no period |
+| `bad-timing` | the vsync period is under two line periods |
+| `bad-timing` | the frame is under 16 or over 4096 pixels wide |
+| `bad-timing` | the frame is under 16 or over 4096 lines high |
+| `bad-timing` | centre-v1 only: the window the timing gives, with no override, does not fit in the line or frame |
+| `bad-window` | centre-v1 only: the timing's own window fits, but `window_offset` moves it outside the line or frame |
 
 ## frames.txt
 
