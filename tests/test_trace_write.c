@@ -485,6 +485,262 @@ TEST(test_trace_seek_table) {
     trace_rm(path);
 }
 
+// ---- vgacap_trace_repeat2: differential against vgacap_trace_push -----------
+//
+// Two writers take the same samples: `a` through vgacap_trace_repeat2 where
+// the test calls it, `b` through vgacap_trace_push only, repeat2 replaced by
+// its definition, push(last ^ clk) then push(last). Every call's result
+// must match, and the two files must be byte-identical.
+
+struct diff {
+    vgacap_trace_writer_t *a, *b;
+    char pa[256], pb[256];
+    uint64_t n;      // samples pushed (the next sample's number)
+    uint64_t last;   // the last sample's value, clock bit included
+    int bad;         // a call's results differed
+};
+
+static uint64_t rng_state = 0x9e3779b97f4a7c15ull;
+static uint64_t rnd64(void) {   // xorshift64*
+    rng_state ^= rng_state >> 12; rng_state ^= rng_state << 25; rng_state ^= rng_state >> 27;
+    return rng_state * 2685821657736338717ull;
+}
+
+static int diff_open(struct diff *d, const char *name, int zstd_level) {
+    memset(d, 0, sizeof *d);
+    char fa[128], fb[128];
+    snprintf(fa, sizeof fa, "%s_a.vgct.zst", name);
+    snprintf(fb, sizeof fb, "%s_b.vgct.zst", name);
+    tmp_path(d->pa, sizeof d->pa, fa);
+    tmp_path(d->pb, sizeof d->pb, fb);
+    vgacap_header_t h; header43(&h);
+    char err[256] = "";
+    d->a = vgacap_trace_create(d->pa, &h, OPEN_META, zstd_level, err, sizeof err);
+    d->b = vgacap_trace_create(d->pb, &h, OPEN_META, zstd_level, err, sizeof err);
+    if (!d->a || !d->b) { fprintf(stderr, "  create: %s\n", err); return -1; }
+    return 0;
+}
+
+static int d_push(struct diff *d, uint64_t v) {
+    int ra = vgacap_trace_push(d->a, v), rb = vgacap_trace_push(d->b, v);
+    if (ra != rb && !d->bad) fprintf(stderr, "  sample %llu: push %d vs %d\n", (unsigned long long)d->n, ra, rb);
+    d->bad |= ra != rb;
+    d->n++; d->last = v;
+    return ra;
+}
+
+// The next sample's value at clock value `v` (no clock bit), the clock bit
+// as the writer expects it (clock_first 0: 1 at odd samples).
+static uint64_t at_n(const struct diff *d, uint64_t v) { return v | ((d->n & 1) ? CLK42 : 0); }
+
+static int d_repeat2(struct diff *d) {
+    int ra = vgacap_trace_repeat2(d->a);
+    int r0 = vgacap_trace_push(d->b, d->last ^ CLK42);
+    int r1 = vgacap_trace_push(d->b, d->last);
+    int rb = (r0 || r1) ? -1 : 0;
+    if (ra != rb && !d->bad) fprintf(stderr, "  sample %llu: repeat2 %d vs push %d\n", (unsigned long long)d->n, ra, rb);
+    d->bad |= ra != rb;
+    d->n += 2;
+    return ra;
+}
+
+static int files_equal(const char *pa, const char *pb) {
+    size_t la, lb;
+    uint8_t *a = slurp(pa, &la), *b = slurp(pb, &lb);
+    int eq = a && b && la == lb && memcmp(a, b, la) == 0;
+    if (!eq) {
+        size_t i = 0;
+        if (a && b) while (i < la && i < lb && a[i] == b[i]) i++;
+        fprintf(stderr, "  %s (%zu bytes) and %s (%zu bytes) differ at byte %zu\n", pa, la, pb, lb, i);
+    }
+    free(a); free(b);
+    return eq;
+}
+
+// Finishes both writers; 0 if their results, errors and files are the same.
+// `want_rc` is what finish must return. The files stay for the caller to
+// read; diff_rm removes them.
+static int diff_finish(struct diff *d, int want_rc) {
+    char ea[256] = "", eb[256] = "";
+    int ra = vgacap_trace_finish(d->a, CLOSE_META, ea, sizeof ea);
+    int rb = vgacap_trace_finish(d->b, CLOSE_META, eb, sizeof eb);
+    int ok = !d->bad;
+    if (ra != rb || strcmp(ea, eb) != 0) {
+        fprintf(stderr, "  finish: %d '%s' vs %d '%s'\n", ra, ea, rb, eb); ok = 0;
+    }
+    if (ra != want_rc) { fprintf(stderr, "  finish returned %d (%s), want %d\n", ra, ea, want_rc); ok = 0; }
+    if (!files_equal(d->pa, d->pb)) ok = 0;
+    return ok ? 0 : -1;
+}
+
+static void diff_rm(struct diff *d) { trace_rm(d->pa); trace_rm(d->pb); }
+
+// Random mixes of push and repeat2: a busy phase (a change most clocks,
+// with odd-length stretches that put repeat2 off the clock pairs) fills
+// blocks by size, then a quiet phase of long repeats ends one by clock count.
+TEST(test_repeat2_random_mix) {
+    struct diff d;
+    ASSERT_TRUE(diff_open(&d, "repeat2_mix", 1) == 0);
+    rng_state = 0x2545f4914f6cdd1dull;
+    uint64_t v = BASE43;
+    d_push(&d, at_n(&d, v));
+    const uint64_t busy = 4000000, quiet = VGACAP_TRACE_BLOCK_CLOCKS + 3000000;
+    for (uint64_t c = 0; c < busy + quiet; c++) {
+        uint64_t r = rnd64();
+        unsigned p = (unsigned)(r % 1000);
+        uint64_t change_per_mille = c < busy ? 700 : 1;
+        if (p < change_per_mille) {
+            // A change at one or both of the next two samples, or (rarely)
+            // one sample alone, which shifts repeat2 off the pairs.
+            unsigned how = (unsigned)((r >> 10) % 8);
+            v = BASE43 | ((r >> 16) & 0x3FF);
+            d_push(&d, at_n(&d, how == 0 ? d.last & ~CLK42 : v));
+            if (how != 7) d_push(&d, at_n(&d, how == 1 ? v ^ 1 : v));
+        } else {
+            d_repeat2(&d);
+        }
+    }
+    ASSERT_EQ_U(d.bad, 0);
+    ASSERT_TRUE(diff_finish(&d, 0) == 0);
+    struct readback *rb = calloc(1, sizeof *rb);
+    ASSERT_TRUE(read_back(d.pa, rb) == 0);
+    ASSERT_EQ_U(rb->resyncs + rb->errors, 0);
+    ASSERT_EQ_U(rb->samples, d.n);
+    // Both kinds of block end happened: one by size (nearly full), one by
+    // clock count (2^25 samples).
+    int by_size = 0, by_clock = 0;
+    for (unsigned b = 0; b + 1 < rb->nblocks; b++) {
+        if (rb->block_bytes[b] > VGACAP_TRACE_BLOCK_BYTES - VGACAP_TRACE_BLOCK_RESERVE - 64) by_size = 1;
+        if (rb->block_samples[b] == 2 * VGACAP_TRACE_BLOCK_CLOCKS) by_clock = 1;
+    }
+    fprintf(stderr, "  %llu samples, %u blocks, %u runs\n", (unsigned long long)d.n, rb->nblocks, rb->nruns);
+    ASSERT_TRUE(by_size);
+    ASSERT_TRUE(by_clock);
+    free(rb);
+    diff_rm(&d);
+}
+
+// A block end by clock count (2^25 samples) inside a stretch of repeat2s:
+// `odd` starts with one sample alone, so the block end falls inside a
+// repeat2's pair; `push_at` pushes the two samples at the block end, so the
+// next repeat2 is the first call after it.
+static int clock_end_case(const char *name, int odd, int push_at) {
+    struct diff d;
+    if (diff_open(&d, name, 3)) return -1;
+    const uint64_t v = BASE43 | 0x55, end = 2 * VGACAP_TRACE_BLOCK_CLOCKS;
+    d_push(&d, at_n(&d, v));
+    if (!odd) d_push(&d, at_n(&d, v));
+    while (d.n < end + 1000) {
+        if (push_at && d.n == end) { d_push(&d, at_n(&d, v)); d_push(&d, at_n(&d, v)); }
+        else d_repeat2(&d);
+    }
+    int rc = diff_finish(&d, 0);
+    struct readback *rb = calloc(1, sizeof *rb);
+    if (rc == 0 && (read_back(d.pa, rb) || rb->nblocks != 2 || rb->blkh_first[1] != end ||
+                    rb->samples != d.n || rb->resyncs + rb->errors)) {
+        fprintf(stderr, "  %s: %u blocks, second at %llu, %llu samples\n", name, rb->nblocks,
+                (unsigned long long)rb->blkh_first[1], (unsigned long long)rb->samples);
+        rc = -1;
+    }
+    free(rb);
+    diff_rm(&d);
+    return rc;
+}
+
+TEST(test_repeat2_block_end_by_clock) {
+    ASSERT_TRUE(clock_end_case("repeat2_clock_even", 0, 0) == 0);
+    ASSERT_TRUE(clock_end_case("repeat2_clock_odd", 1, 0) == 0);
+    ASSERT_TRUE(clock_end_case("repeat2_clock_pushed", 0, 1) == 0);
+}
+
+// Every change is a single push followed at once by a repeat2 (three
+// samples a run, so the clock phase alternates), so whichever push ends a
+// block by size, the next call is a repeat2 on the new block's first run.
+TEST(test_repeat2_block_end_by_size) {
+    struct diff d;
+    ASSERT_TRUE(diff_open(&d, "repeat2_size", 1) == 0);
+    for (uint64_t g = 0; g < 6000000; g++) {
+        d_push(&d, at_n(&d, BASE43 | (g & 0xFF)));
+        d_repeat2(&d);
+    }
+    ASSERT_EQ_U(d.bad, 0);
+    ASSERT_TRUE(diff_finish(&d, 0) == 0);
+    struct readback *rb = calloc(1, sizeof *rb);
+    ASSERT_TRUE(read_back(d.pa, rb) == 0);
+    ASSERT_EQ_U(rb->resyncs + rb->errors, 0);
+    ASSERT_EQ_U(rb->samples, d.n);
+    ASSERT_TRUE(rb->nblocks >= 3);
+    for (unsigned b = 0; b + 1 < rb->nblocks; b++) {
+        ASSERT_TRUE(rb->block_bytes[b] > VGACAP_TRACE_BLOCK_BYTES - VGACAP_TRACE_BLOCK_RESERVE - 64);
+        ASSERT_EQ_U(rb->blkh_first[b + 1] % 3, 0);   // the block ended at a push
+    }
+    free(rb);
+    diff_rm(&d);
+}
+
+// Before the first sample there is no value to repeat: repeat2 fails the
+// writer, as a bad push does.
+TEST(test_repeat2_at_sample_0) {
+    char path[256]; tmp_path(path, sizeof path, "repeat2_sample0.vgct.zst");
+    vgacap_header_t h; header43(&h);
+    char err[256] = "";
+    vgacap_trace_writer_t *t = vgacap_trace_create(path, &h, OPEN_META, 3, err, sizeof err);
+    ASSERT_TRUE(t != NULL);
+    ASSERT_EQ_U((unsigned)(vgacap_trace_repeat2(t) + 1), 0);          // -1
+    ASSERT_EQ_U((unsigned)(vgacap_trace_push(t, BASE43) + 1), 0);     // still -1
+    ASSERT_EQ_U((unsigned)(vgacap_trace_repeat2(t) + 1), 0);          // still -1
+    ASSERT_EQ_U((unsigned)(vgacap_trace_finish(t, CLOSE_META, err, sizeof err) + 1), 0);
+    const char *want = "sample 0: vgacap_trace_repeat2 before the first sample";
+    if (strcmp(err, want) != 0) fprintf(stderr, "  err: %s\n", err);
+    ASSERT_TRUE(strcmp(err, want) == 0);
+    trace_rm(path);
+}
+
+// After a failed push (a clock bit out of turn, or a bit above sample_bits)
+// repeat2 returns -1 as push does, and finish reports the first failure.
+TEST(test_repeat2_after_failure) {
+    struct diff d;
+    ASSERT_TRUE(diff_open(&d, "repeat2_failed_clock", 3) == 0);
+    d_push(&d, at_n(&d, BASE43));
+    d_repeat2(&d);
+    ASSERT_EQ_U((unsigned)(d_push(&d, BASE43 | 1 | (d.n & 1 ? 0 : CLK42)) + 1), 0);   // wrong clock bit
+    ASSERT_EQ_U((unsigned)(d_repeat2(&d) + 1), 0);
+    ASSERT_EQ_U((unsigned)(d_repeat2(&d) + 1), 0);
+    ASSERT_TRUE(diff_finish(&d, -1) == 0);
+    diff_rm(&d);
+
+    ASSERT_TRUE(diff_open(&d, "repeat2_failed_bits", 3) == 0);
+    d_push(&d, at_n(&d, BASE43));
+    d_push(&d, at_n(&d, BASE43));
+    ASSERT_EQ_U((unsigned)(d_push(&d, at_n(&d, (uint64_t)1 << 50)) + 1), 0);   // bit 50 of a 43-bit sample
+    ASSERT_EQ_U((unsigned)(d_repeat2(&d) + 1), 0);
+    ASSERT_TRUE(diff_finish(&d, -1) == 0);
+    diff_rm(&d);
+}
+
+// More than 2^32 samples of one value, all but the first pair by repeat2:
+// 129 blocks, one pair each.
+TEST(test_repeat2_long_run) {
+    struct diff d;
+    ASSERT_TRUE(diff_open(&d, "repeat2_long", 3) == 0);
+    const uint64_t total = (1ull << 32) + 10;
+    d_push(&d, at_n(&d, BASE43 | 1));
+    d_push(&d, at_n(&d, BASE43 | 1));
+    int bad = 0;
+    while (d.n < total) bad |= d_repeat2(&d);
+    ASSERT_EQ_U(bad, 0);
+    ASSERT_EQ_U(d.bad, 0);
+    ASSERT_TRUE(diff_finish(&d, 0) == 0);
+    struct readback *rb = calloc(1, sizeof *rb);
+    ASSERT_TRUE(read_back(d.pa, rb) == 0);
+    ASSERT_EQ_U(rb->resyncs + rb->errors, 0);
+    ASSERT_EQ_U(rb->samples, total);
+    ASSERT_EQ_U(rb->nblocks, 129);
+    for (unsigned b = 0; b < rb->nblkh; b++) ASSERT_EQ_U(rb->pairs_in_block[b], 1);
+    free(rb);
+    diff_rm(&d);
+}
+
 // ---- speed (perf label; run by hand, not in CI) -----------------------------
 
 static double clock_s(clockid_t id) {
@@ -546,5 +802,11 @@ int main(int argc, char **argv) {
     RUN(test_trace_sigkill_keeps_blocks);
     RUN(test_trace_bad_meta);
     RUN(test_trace_seek_table);
+    RUN(test_repeat2_random_mix);
+    RUN(test_repeat2_block_end_by_clock);
+    RUN(test_repeat2_block_end_by_size);
+    RUN(test_repeat2_at_sample_0);
+    RUN(test_repeat2_after_failure);
+    RUN(test_repeat2_long_run);
     RUN_TESTS_END();
 }

@@ -63,6 +63,11 @@ static inline int vgacap_trace_push(vgacap_trace_writer_t *t, uint64_t v) {
     t->run++; t->n++; t->clk_expect ^= t->clk_mask; return 0;
 }
 
+// Stub for the tests (not yet the specified behaviour).
+static inline int vgacap_trace_repeat2(vgacap_trace_writer_t *t) {
+    t->run += 2; t->n += 2; return 0;
+}
+
 // Ends the last run, writes META(close) in the last block, the seek table,
 // joins the thread, frees `t`. Returns 0, or -1 with `err` set.
 int vgacap_trace_finish(vgacap_trace_writer_t *t, const char *close_meta, char *err, size_t errlen);
