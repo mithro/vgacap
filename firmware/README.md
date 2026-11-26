@@ -15,7 +15,7 @@ or `ttcap reboot` brings the board's stock firmware back.
 
 The [hardware notes](#hardware-notes-and-assumptions) name the boards they
 were measured on: `fpga-4` is a demo board with an FPGA breakout on the
-shared Welland bench (see
+Welland bench (see
 [python/ttcap/README.md](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed)),
 and `tt09` is a demo board with an ASIC breakout (a TT09 chip) at Welland.
 
@@ -193,19 +193,21 @@ The simulator models what the PIO and DMA deliver, not their cycles; see
 
 ## Running it on a board
 
-These steps run on the Raspberry Pi the board is attached to (on the
-Welland bench, the board's own Pi), with this repository checked out
-there as in
+These steps run on the machine the board is plugged into, with this
+repository checked out there as in
 [Running on a Raspberry Pi](../python/ttcap/README.md#running-on-a-raspberry-pi)
-and the UF2 copied there. `<dev>` is the stock firmware's serial port
-(`/dev/ttboard` on the Welland Pis).
+and the UF2 copied there. `<dev>` is the stock firmware's serial port. On
+the Welland bench, which needs
+[bench access](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed),
+that machine is the board's own Pi and `<dev>` is `/dev/ttboard`; the
+bridge's `/designs/<name>/enable` can also enable a design, and the bridge
+(`fpgas-tt`) holds the port until stopped (`sudo systemctl stop fpgas-tt`,
+after checking it has no clients).
 
-1. With the stock firmware, enable the design to capture
-   (`/designs/<name>/enable` on the bridge, or
-   `ttcap capture`'s `--design`), and take a reference capture the usual
+1. With the stock firmware, enable the design to capture with
+   `ttcap capture`'s `--design`, and take a reference capture the usual
    way if wanted.
-2. Stop anything else that owns the port, such as the bridge
-   (`sudo systemctl stop fpgas-tt`, after checking it has no clients).
+2. Stop anything else that owns the port.
 3. Into the bootloader:
    `uv run --no-sync ttcap reboot serial:<dev> --to bootsel`. The board
    reappears as a USB drive labeled `RP2350`.
@@ -226,7 +228,8 @@ and the UF2 copied there. `<dev>` is the stock firmware's serial port
        uv run --no-sync ttcap capture --firmware picosdk serial:$FW --clock-hz 750000 --seconds 4 --out stream.vgacap
 
 6. Back to the stock firmware: `uv run --no-sync ttcap reboot serial:$FW`
-   (or reset / power cycle the board), then restart the bridge.
+   (or reset / power cycle the board), then, on the bench, restart the
+   bridge.
    `ttcap reboot` asks the board which firmware it runs (the vgacap
    firmware's `hello`, then the raw REPL); `--firmware picosdk` skips the
    question.
