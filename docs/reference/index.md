@@ -7,7 +7,8 @@ review: 2027-05-27
 
 # Reference
 
-- [The vgacap firmware protocol](../../firmware/PROTOCOL.md): the commands, replies and capture output of the vgacap firmware.
+- [The vgacap firmware reference](../../firmware/reference.md): the vgacap firmware's protocol, board facts and source files.
+- [The vgacap module reference](../../mpy/reference.md): the vgacap MicroPython module's Python API and source files.
 - [`frames.txt` and `frame_hashes.<method>.txt`](../frames-format.md): the frame list and frame hashes a sampler writes.
 - [The simulation trace format](../trace-format.md): the trace a simulated design writes.
 - [Vendored third-party code](../../third_party/README.md): the libraries built into vgacap, with their versions and licenses.
