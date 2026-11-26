@@ -4,23 +4,34 @@
 The pages are the repository's own Markdown files, read where they are so
 that GitHub and the built site show the same text:
 
-    uv run --only-group docs sphinx-build -W --keep-going -c docs . build/docs
+    uv run --locked --python 3.13 --only-group docs sphinx-build -W --keep-going -c docs . build/docs
 
 The source directory is the repository root and this directory holds only
-the configuration (`-c docs`). PAGES is the whole site, in navigation
-order. A Markdown link to a repository file that is not a page (source
-code, LICENSE, a directory without a README) is rewritten to that file on
-GitHub at the commit being built. Images referenced by raw HTML `<img>` tags
-are copied next to the page that uses them, at the same relative path, and
+the configuration (`-c docs`). PAGES is the whole site, in navigation order.
+
+MyST resolves links between pages, and their anchors, itself. After it has
+parsed a page, `link_repository_files` changes the two kinds of link MyST
+cannot resolve, so they go where they go on GitHub:
+
+- a link to a repository file that is not a page (source code, LICENSE),
+  which MyST would turn into a download, goes to the file on GitHub at the
+  commit being built;
+- a link to a directory goes to its README page when that is a page, and
+  otherwise to the directory on GitHub.
+
+A link to a path that does not exist is left alone, so the build reports it.
+MyST drops a #fragment from a link to a file that is not a page (a GitHub
+`file.c#L10` line link), so such a link goes to the top of the file.
 index.html redirects the site root to the README page.
 """
 
 import os
 import pathlib
 import posixpath
-import re
-import shutil
 import subprocess
+
+from docutils import nodes
+from sphinx import addnodes
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 GITHUB = "https://github.com/mithro/vgacap"
@@ -55,9 +66,16 @@ include_patterns = [page + ".md" for page in PAGES]
 
 # GitHub-style ids for headings, so `file.md#some-heading` links resolve.
 myst_heading_anchors = 6
+# As on GitHub: a standalone <img> tag is an image (copied into the site),
+# and a bare URL is a link.
+myst_enable_extensions = ["html_image", "linkify"]
 
 html_theme = "furo"
 html_title = "vgacap"
+html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "")
+# The Markdown is on GitHub; the copy Sphinx would publish carries the
+# navigation appended to README below, which is not in the file.
+html_copy_source = False
 
 
 def commit():
@@ -69,86 +87,45 @@ def commit():
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
-MD_LINK = re.compile(r"(\]\()([^)\s]+)(\))")
-HTML_SRC = re.compile(r"""(<img\b[^>]*\bsrc=")([^"]+)(")""")
-# Fenced code blocks, then inline code spans (a run of backticks closed by
-# the same run). Links and tags inside either are examples, not links.
-FENCE = re.compile(r"^([ \t]*)(`{3,}|~{3,}).*?^\1\2[ \t]*$", re.M | re.S)
-SPAN = re.compile(r"(`+).+?\1", re.S)
-
-
-def prose_and_code(text):
-    """Split `text` into alternating (is_code, piece) parts, in order."""
-    parts, at = [], 0
-    for fence in FENCE.finditer(text):
-        parts += split_spans(text[at:fence.start()])
-        parts.append((True, fence[0]))
-        at = fence.end()
-    return parts + split_spans(text[at:])
-
-
-def split_spans(text):
-    parts, at = [], 0
-    for span in SPAN.finditer(text):
-        parts.append((False, text[at:span.start()]))
-        parts.append((True, span[0]))
-        at = span.end()
-    parts.append((False, text[at:]))
-    return parts
-
-
-def is_local(target):
-    return not (target.startswith("#") or re.match(r"[a-z][a-z0-9+.-]*:", target))
-
-
-def resolve(docname, target):
-    """(repository-relative path, anchor) for a local link from `docname`."""
-    path, _, anchor = target.partition("#")
-    rel = posixpath.normpath(posixpath.join(posixpath.dirname(docname), path))
-    return rel, anchor
-
-
-def rewrite_link(docname, target, sha):
-    if not is_local(target):
-        return target
-    rel, anchor = resolve(docname, target)
-    on_disk = REPO / rel
-    if on_disk.is_dir() and (on_disk / "README.md").is_file() and \
-            posixpath.join(rel, "README") in PAGES:
-        rel = posixpath.join(rel, "README.md")
-        on_disk = REPO / rel
-    if rel.endswith(".md") and rel[:-3] in PAGES:
-        page = posixpath.relpath(rel, posixpath.dirname(docname) or ".")
-        return page + ("#" + anchor if anchor else "")
-    if not on_disk.exists():
-        return target  # left alone, so Sphinx reports it and -W fails the build
-    kind = "tree" if on_disk.is_dir() else "blob"
-    return f"{GITHUB}/{kind}/{sha}/{rel}" + ("#" + anchor if anchor else "")
-
-
-def toctree():
-    entries = "\n".join(PAGES[1:])
-    return f"\n\n```{{toctree}}\n:hidden:\n\n{entries}\n```\n"
-
-
 def on_source_read(app, docname, source):
-    sha = app.config.vgacap_commit
-    pieces = []
-    for is_code, piece in prose_and_code(source[0]):
-        if not is_code:
-            piece = MD_LINK.sub(lambda m: m[1] + rewrite_link(docname, m[2], sha) + m[3], piece)
-            for m in HTML_SRC.finditer(piece):
-                if is_local(m[2]):
-                    app.env.vgacap_images.add(resolve(docname, m[2])[0])
-        pieces.append(piece)
-    text = "".join(pieces)
+    """The navigation, as a hidden toctree appended to the front page."""
     if docname == root_doc:
-        text += toctree()
-    source[0] = text
+        entries = "\n".join(PAGES[1:])
+        source[0] += f"\n\n```{{toctree}}\n:hidden:\n\n{entries}\n```\n"
 
 
-def on_env_before_read_docs(app, env, docnames):
-    env.vgacap_images = set()
+def github_link(node, kind, rel, sha):
+    link = nodes.reference("", "", *node.children, internal=False,
+                           refuri=f"{GITHUB}/{kind}/{sha}/{rel}")
+    node.replace_self(link)
+
+
+def link_repository_files(app, doctree):
+    """Runs before Sphinx's own collectors, so a file MyST marked for
+    download is never registered as one."""
+    sha = app.config.vgacap_commit
+    docdir = posixpath.dirname(app.env.docname)
+    for node in list(doctree.findall(addnodes.download_reference)):
+        if node.get("reftype") != "myst":
+            continue
+        rel = posixpath.normpath(posixpath.join(docdir, node["reftarget"]))
+        if (REPO / rel).is_file():
+            github_link(node, "blob", rel, sha)
+    for node in list(doctree.findall(addnodes.pending_xref)):
+        if node.get("reftype") != "myst" or node.get("refdomain"):
+            continue
+        # An unresolved target keeps its #fragment; MyST's page links carry
+        # it as reftargetid instead.
+        path, _, anchor = node["reftarget"].partition("#")
+        rel = posixpath.normpath(posixpath.join(docdir, path))
+        if not path or not (REPO / rel).is_dir():
+            continue
+        readme = posixpath.join(rel, "README") if rel != "." else "README"
+        if readme in PAGES:
+            node["refdomain"], node["reftarget"] = "doc", readme
+            node["reftargetid"] = anchor or None
+        else:
+            github_link(node, "tree", rel, sha)
 
 
 INDEX = """<!DOCTYPE html>
@@ -159,24 +136,17 @@ INDEX = """<!DOCTYPE html>
 """
 
 
-def on_build_finished(app, exception):
-    if exception is not None or app.builder.format != "html":
-        return
-    # The front page is README.html (README.md stays where GitHub shows it),
-    # and a web server serves index.html for the site root.
-    index = pathlib.Path(app.outdir) / "index.html"
-    index.write_text(INDEX.format(page=app.builder.get_target_uri(root_doc)))
-    for rel in sorted(getattr(app.env, "vgacap_images", ())):
-        src = REPO / rel
-        if not src.is_file():
-            raise FileNotFoundError(f"<img> source {rel} does not exist")
-        dst = pathlib.Path(app.outdir) / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dst)
+def write_index(app, exception):
+    """The front page is README.html (README.md stays where GitHub shows
+    it), and a web server serves index.html for the site root."""
+    if exception is None and app.builder.format == "html":
+        page = app.builder.get_target_uri(root_doc)
+        (pathlib.Path(app.outdir) / "index.html").write_text(INDEX.format(page=page))
 
 
 def setup(app):
     app.add_config_value("vgacap_commit", commit(), "env")
-    app.connect("env-before-read-docs", on_env_before_read_docs)
     app.connect("source-read", on_source_read)
-    app.connect("build-finished", on_build_finished)
+    app.connect("doctree-read", link_repository_files, priority=100)
+    app.connect("build-finished", write_index)
+    return {"parallel_read_safe": True, "parallel_write_safe": True}
