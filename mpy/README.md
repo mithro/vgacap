@@ -57,17 +57,23 @@ multiple of it, as the firmware does.
   ordinary byte (`micropython.kbd_intr(-1)`), and it is a KeyboardInterrupt
   again once the closing summary has been written -- the scripts' rule.
 * `buf`: a writable, 4-byte-aligned buffer to capture into (a `bytearray`),
-  instead of one allocated per call. A frame capture's window is as many
-  lines as fit; `stream()` needs `8 * buf_words` bytes. Allocating it early,
-  while the heap is in one piece, gets the biggest window.
+  instead of the ones allocated per call. A frame capture's window is as
+  many lines as fit in it; `stream()` needs `8 * buf_words` bytes.
 
 Without `buf`, `stream()` allocates its two buffers (`8 * buf_words` bytes;
-`MemoryError` if they do not fit), and `frame()` the largest block of whole
-lines, up to the window, that the heap holds -- one contiguous block, so on
-a fragmented heap a picture is swept in several windows (the `frame
-window=N` TIME message says how many lines each took). The firmware
-captures into a 440 KB static arena; the scripts chain many smaller heap
-blocks with DMA control blocks. Either way the frames reconstruct the same.
+`MemoryError` if they do not fit), and `frame()` allocates heap blocks of
+whole lines for the window as `frame_rp2.py` plans them: the whole window
+in one block if the heap has one, else blocks of 64, 16, 4 and 1 lines,
+biggest first, at most 128, with 4 KB held back while planning. The
+capture's DMA walks them in order through control blocks (as
+`frame_rp2.py` does; `firmware/pico/hal_rp2.c`), so a fragmented heap
+still gives one captured frame the whole region: on fpga-1, whose largest
+free block held 188 lines, all 481 lines of 640x480 in a handful of blocks.
+Only a heap with less free memory in total than the region sweeps a
+picture in several windows. The opening `frame window=W buffers=N` TIME
+message says how many lines a window takes and in how many blocks; the
+FRAM chunks are the firmware's (one chunk per window whatever N is), whose
+`buffers` is always 1 (its 440 KB static arena).
 
 **Output:** vgacap chunks only, `RAW `/`FRAM`/`TIME`, exactly as the firmware
 writes them after its `ok` (PROTOCOL.md, "Capture output"), and no `DONE`
@@ -123,8 +129,9 @@ The unix port, on the simulated board (`firmware/sim`), for the tests:
 
 Both pin MicroPython to b006887db6 (1.29.0-preview), what the demo boards
 run. The unix build adds `vgacap.sim_board(path, *, bytes_per_s, rxstall)`,
-`vgacap.sim_clock(hz)` and `vgacap.sim_now()`, to set up the simulated
-board; the rp2 build has none of them.
+`vgacap.sim_clock(hz)`, `vgacap.sim_now()` and `vgacap.sim_frame_spans()`
+(the buffers the last frame window was captured into), to set up and
+inspect the simulated board; the rp2 build has none of them.
 
 ## Tests
 
@@ -132,6 +139,8 @@ board; the rp2 build has none of them.
 (`python/tests/mpy_unix_board.py` plays the board) and drives it through
 ttcap: frame and window captures byte-identical to the pico-sdk firmware's
 (same engines, same simulator) and pixel-exact through `vgacap-frames`,
+a heap fragmented into ~144 KB holes giving all 481 lines in one captured
+frame through chained buffers,
 streams of the design's consecutive samples, stops between chunks,
 overruns, rxstall, refusals, a caller's buffer, and `ttcap capture
 --firmware mpy-module`. The tests skip without `build/mpy-unix/micropython`

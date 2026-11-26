@@ -11,6 +11,8 @@ plays the board side) and check, as test_fw_sim.py does for the firmware:
 * frame and window captures are the firmware's chunks byte for byte and
   reconstruct pixel-exactly with vgacap-frames;
 * a streamed capture is the design's consecutive samples;
+* a fragmented heap (no block as big as a frame) still gives a whole
+  481-line frame in one captured frame, through chained buffers;
 * stops between chunks, overruns, rxstall, refusals (the firmware's `err`
   texts, as ValueError), and `ttcap capture --firmware mpy-module`.
 
@@ -361,6 +363,109 @@ def test_a_small_heap_gets_most_of_it_as_window(bars_uo, tmp_path):
     assert window * 800 > 0.9 * (stats.mem_free_before - 4096 - 800), (window, stats.mem_free_before)
     assert sum(f[2] for f in frams(data)) == 481
     assert_pictures_exact(pictures(tmp_path, data), bars_uo[1])
+
+
+#: Fragments a heap into ~144 KB free blocks -- fpga-1's largest measured
+#: 142 KB (frame_rp2.py, HEAP) -- with nothing as big as a 481-line frame
+#: (385 KB; a 640x480 line is 800 one-byte samples): fill the heap with 4 KB blocks, keep every 36th in address
+#: order (`_pins`, in the REPL's globals) and free the rest, leaving 35 x
+#: 4 KB holes. By address, not by allocation order: MicroPython allocates
+#: first fit, so the fill also lands in whatever gaps the REPL left.
+_FRAGMENT = (
+    "import gc, uctypes\n"
+    "gc.collect()\n"
+    "_fill = []\n"
+    "try:\n"
+    "    while True:\n"
+    "        _fill.append(bytearray(4096))\n"
+    "except MemoryError:\n"
+    "    pass\n"
+    "del _fill[-4:]\n"
+    "_fill.sort(key=uctypes.addressof)\n"
+    "_pins = _fill[::36]\n"
+    "_fill = None\n"
+    "gc.collect()\n"
+    "try:\n"
+    "    bytearray(481 * 800)\n"
+    "    print('whole')\n"
+    "except MemoryError:\n"
+    "    print('fragmented', len(_pins), gc.mem_free())\n"
+)
+
+
+def fragmented_board(uo_path) -> tuple[MpyUnixLink, RawRepl, int]:
+    link, repl = open_board(uo_path, heapsize="2M")
+    stdout, stderr = repl.exec(_FRAGMENT)
+    assert stderr == ""
+    word, holes, free = stdout.split()
+    # No single block holds the frame, but the heap as a whole does.
+    assert word == "fragmented", stdout
+    assert int(holes) >= 12 and int(free) > 481 * 800 + 12 * 4096, stdout
+    return link, repl, int(holes)
+
+
+def test_a_fragmented_heap_still_takes_a_whole_frame_in_one_capture(bars_uo, tmp_path):
+    # The DMA walks a chain of heap blocks (control blocks), as frame_rp2.py
+    # does: ONE captured frame fills the whole 481-line region, sent as one
+    # FRAM chunk per picture, the firmware's bytes exactly.
+    link, repl, _ = fragmented_board(bars_uo[0])
+    req = frame_request()
+    try:
+        stats, data = capture(repl, req)
+        spans = repl.exec("import vgacap\nprint(vgacap.sim_frame_spans())")[0].strip()
+    finally:
+        link.close()
+    assert stats.clean, stats.format()
+    opening = stats.messages[0].split()
+    assert opening[:2] == ["frame", "window=481"], stats.messages[0]
+    buffers = int(opening[2].split("=")[1])
+    # A line is 800 bytes: 64-line blocks (51 KB), 2 to a hole, 8 in all.
+    assert 1 < buffers <= 128 and int(spans) == buffers, (stats.messages[0], spans)
+    assert opening[3:] == ["hsync_active=0", "vsync_active=0"]
+    assert frams(data) == [(0, 34, 481, 800, 481 * 800), (1, 34, 481, 800, 481 * 800)]
+    # The firmware's arena: the same header (the host's), FRAM chunks and
+    # summary; only the opening message's buffer count differs.
+    want = firmware_capture(bars_uo[0], req)
+    got_chunks, want_chunks = list(read_chunks(data)), list(read_chunks(want))
+    assert [t for t, _ in got_chunks] == ["VGCH", "TIME", "FRAM", "FRAM", "TIME"]
+    assert got_chunks[0] == want_chunks[0]
+    assert want_chunks[1][1][18:] == b"frame window=481 buffers=1 hsync_active=0 vsync_active=0"
+    assert got_chunks[1][1][18:] == stats.messages[0].encode()
+    assert got_chunks[2:] == want_chunks[2:]
+    assert_pictures_exact(pictures(tmp_path, data), bars_uo[1])
+
+
+def test_a_fragmented_heap_window_capture(bars_uo, tmp_path):
+    # A window bigger than any hole (300 lines, 240 KB): still one window
+    # per captured frame.
+    link, repl, _ = fragmented_board(bars_uo[0])
+    req = frame_request(window_lines=300, max_frames=1)
+    try:
+        stats, data = capture(repl, req)
+    finally:
+        link.close()
+    assert stats.clean, stats.format()
+    assert stats.messages[0] == "frame window=300 buffers=5 hsync_active=0 vsync_active=0"
+    assert [f[1:3] for f in frams(data)] == [(34, 300), (334, 181)]
+    want = firmware_capture(bars_uo[0], req)
+    got_chunks, want_chunks = list(read_chunks(data)), list(read_chunks(want))
+    assert got_chunks[0] == want_chunks[0]
+    assert got_chunks[2:] == want_chunks[2:]
+    assert_pictures_exact(pictures(tmp_path, data), bars_uo[1])
+
+
+def test_the_heap_is_given_back_after_a_chained_capture(bars_uo):
+    link, repl, _ = fragmented_board(bars_uo[0])
+    try:
+        before = int(repl.exec("import gc\ngc.collect()\nprint(gc.mem_free())")[0])
+        capture(repl, frame_request(max_frames=1))
+        after = int(repl.exec("import gc\ngc.collect()\nprint(gc.mem_free())")[0])
+        # and a second capture plans the same buffers again
+        stats, _ = capture(repl, frame_request(max_frames=1))
+    finally:
+        link.close()
+    assert abs(after - before) < 4096, (before, after)
+    assert stats.messages[0].startswith("frame window=481 buffers=")
 
 
 def test_keys_cannot_carry_protocol_text(board):

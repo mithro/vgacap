@@ -6,8 +6,10 @@
 // the board, and the comments there carry the measurements:
 //   streaming   python/ttcap/mp/capture_rp2.py (ping-pong DMA re-armed from
 //               each channel's own completion interrupt)
-//   frame       python/ttcap/mp/frame_rp2.py (a data channel chained to a
-//               "stopper" that disables the state machine and interrupts)
+//   frame       python/ttcap/mp/frame_rp2.py (control-block DMA: a control
+//               channel feeds the data channel one block per buffer, then
+//               a "stopper" block that disables the state machine and
+//               interrupts)
 //   pins/PIO    python/ttcap/mp/prelude.py (GPIO window at 16, absolute GPIO
 //               numbers, the clock pad never reconfigured as an input)
 #include <string.h>
@@ -105,7 +107,7 @@ enum { MODE_NONE, MODE_STREAM, MODE_FRAME };
 
 static struct {
     volatile int mode;
-    int ch[2];  // stream: the ping-pong pair; frame: data, stopper
+    int ch[2];  // stream: the ping-pong pair; frame: data, control
     uint32_t *buf[2];
     uint32_t words;
     volatile int full[2];
@@ -135,8 +137,9 @@ static void __isr dma_irq(void) {
             D.full[i] = 1;
         }
     } else if (D.mode == MODE_FRAME) {
-        if (dma_irqn_get_channel_status(HAL_RP2_DMA_IRQ_INDEX, (uint)D.ch[1])) {
-            dma_irqn_acknowledge_channel(HAL_RP2_DMA_IRQ_INDEX, (uint)D.ch[1]);
+        // Only the stopper block raises the data channel's interrupt.
+        if (dma_irqn_get_channel_status(HAL_RP2_DMA_IRQ_INDEX, (uint)D.ch[0])) {
+            dma_irqn_acknowledge_channel(HAL_RP2_DMA_IRQ_INDEX, (uint)D.ch[0]);
             D.frame_done = 1;
         }
     }
@@ -154,9 +157,12 @@ static void irq_off(void) {
 }
 
 // RP2350-E5: clear the enable bit of both chained channels before aborting
-// either, or the partner can re-trigger the one being aborted.
+// either, or the partner can re-trigger the one being aborted. ch[1] first:
+// in a frame capture it is the control channel, which could otherwise write
+// a block that enables the data channel again (frame_rp2.py stops ctl
+// first too).
 static void release_channels(void) {
-    for (int i = 0; i < 2; i++) {
+    for (int i = 1; i >= 0; i--) {
         if (D.ch[i] < 0) continue;
         dma_irqn_set_channel_enabled(HAL_RP2_DMA_IRQ_INDEX, (uint)D.ch[i], false);
         hw_clear_bits(&dma_hw->ch[D.ch[i]].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
@@ -274,11 +280,17 @@ int hal_frame_start(const fw_pio_program_t *prog, unsigned pio, unsigned sm, con
     D.stop_word = 1u << (PIO_CTRL_SM_ENABLE_LSB + sm);
     D.frame_done = 0;
     D.mode = MODE_FRAME;
-    dma_irqn_set_channel_enabled(HAL_RP2_DMA_IRQ_INDEX, (uint)D.ch[1], true);
+    dma_irqn_set_channel_enabled(HAL_RP2_DMA_IRQ_INDEX, (uint)D.ch[0], true);
     return 0;
 }
 
-void hal_frame_arm(uint32_t skip_lines, uint32_t *buf, uint32_t words) {
+// The control blocks, 4 words each, in the order of the data channel's
+// alias-0 registers (READ_ADDR, WRITE_ADDR, TRANS_COUNT, CTRL_TRIG): one per
+// buffer, then the stopper. Static, so a capture needs no heap for it.
+static uint32_t blocks[(FW_FRAME_MAX_BUFFERS + 1u) * 4u];
+
+void hal_frame_arm(uint32_t skip_lines, const fw_span_t *spans, unsigned count) {
+    const uint data = (uint)D.ch[0], ctl = (uint)D.ch[1];
     // A clean state machine at its first instruction, the skip count in its
     // TX FIFO -- frame_rp2.py's sm.active(0); drain; sm.restart(); put().
     pio_sm_set_enabled(P.pio, P.sm, false);
@@ -287,28 +299,53 @@ void hal_frame_arm(uint32_t skip_lines, uint32_t *buf, uint32_t words) {
     pio_sm_exec(P.pio, P.sm, pio_encode_jmp((uint)P.offset));
     pio_sm_put(P.pio, P.sm, skip_lines);
 
+    // A buffer block: paced by the RX FIFO, quiet (an interrupt from one
+    // would end the capture early), then back to the control channel.
+    dma_channel_config f = dma_channel_get_default_config(data);
+    channel_config_set_transfer_data_size(&f, DMA_SIZE_32);
+    channel_config_set_read_increment(&f, false);
+    channel_config_set_write_increment(&f, true);
+    channel_config_set_dreq(&f, pio_get_dreq(P.pio, P.sm, false));
+    channel_config_set_chain_to(&f, ctl);
+    channel_config_set_irq_quiet(&f, true);
     // The stopper: one unpaced word, this state machine's enable bit, into
-    // the PIO CTRL atomic-clear alias; the only transfer that interrupts.
-    dma_channel_config s = dma_channel_get_default_config((uint)D.ch[1]);
-    channel_config_set_transfer_data_size(&s, DMA_SIZE_32);
-    channel_config_set_read_increment(&s, false);
-    channel_config_set_write_increment(&s, false);
-    channel_config_set_dreq(&s, DREQ_FORCE);
-    channel_config_set_irq_quiet(&s, false);
-    dma_channel_configure((uint)D.ch[1], &s, hw_clear_alias(&P.pio->ctrl), &D.stop_word, 1, false);
-    // The window: paced by the RX FIFO, then the stopper.
-    dma_channel_config d = dma_channel_get_default_config((uint)D.ch[0]);
-    channel_config_set_transfer_data_size(&d, DMA_SIZE_32);
-    channel_config_set_read_increment(&d, false);
-    channel_config_set_write_increment(&d, true);
-    channel_config_set_dreq(&d, pio_get_dreq(P.pio, P.sm, false));
-    channel_config_set_chain_to(&d, (uint)D.ch[1]);
-    channel_config_set_irq_quiet(&d, true);
-    dma_channel_configure((uint)D.ch[0], &d, buf, &P.pio->rxf[P.sm], words, false);
+    // the PIO CTRL atomic-clear alias; chains nowhere, and is the only
+    // transfer that interrupts.
+    dma_channel_config h = dma_channel_get_default_config(data);
+    channel_config_set_transfer_data_size(&h, DMA_SIZE_32);
+    channel_config_set_read_increment(&h, false);
+    channel_config_set_write_increment(&h, false);
+    channel_config_set_dreq(&h, DREQ_FORCE);
+    channel_config_set_irq_quiet(&h, false);
+    uint32_t *at = blocks;
+    for (unsigned i = 0; i < count; i++) {
+        *at++ = (uint32_t)(uintptr_t)&P.pio->rxf[P.sm];
+        *at++ = (uint32_t)(uintptr_t)spans[i].buf;
+        *at++ = spans[i].words;
+        *at++ = channel_config_get_ctrl_value(&f);
+    }
+    *at++ = (uint32_t)(uintptr_t)&D.stop_word;
+    *at++ = (uint32_t)(uintptr_t)hw_clear_alias(&P.pio->ctrl);
+    *at++ = 1;
+    *at++ = channel_config_get_ctrl_value(&h);
+
+    // The control channel: 4 words per trigger into the data channel's
+    // alias-0 registers, the last of which starts it; the 16-byte write
+    // ring brings it back to READ_ADDR for the next block, and the read
+    // address walks on through the table.
+    dma_channel_config c = dma_channel_get_default_config(ctl);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
+    channel_config_set_read_increment(&c, true);
+    channel_config_set_write_increment(&c, true);
+    channel_config_set_ring(&c, true, 4);
+    channel_config_set_dreq(&c, DREQ_FORCE);
+    channel_config_set_irq_quiet(&c, true);
+    dma_channel_configure(ctl, &c, &dma_hw->ch[data].read_addr, blocks, 4, false);
 
     D.frame_done = 0;
     P.pio->fdebug = rxstall_bit();
-    dma_channel_start((uint)D.ch[0]);
+    // The DMA before the state machine, so the first samples cannot stall.
+    dma_channel_start(ctl);
     pio_sm_set_enabled(P.pio, P.sm, true);
 }
 

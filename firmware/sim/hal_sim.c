@@ -58,6 +58,7 @@ static struct {
     int framing;
     unsigned hs_bit, vs_bit, hs_act, vs_act;
     double done_at;
+    unsigned frame_spans;  // buffers the last frame capture was armed with
     int asic_ena, asic_nrst, asic_inc;
     unsigned asic_count;
 } S;
@@ -426,7 +427,21 @@ static int wait_level(uint64_t *c, unsigned bit, unsigned level) {
     return 0;
 }
 
-void hal_frame_arm(uint32_t skip_lines, uint32_t *buf, uint32_t words) {
+// The control-block DMA walks the spans in order, one unbroken run of
+// samples: each span takes up where the one before it stopped. A span list
+// the hardware could not run is a bug in the caller, and fatal here.
+void hal_frame_arm(uint32_t skip_lines, const fw_span_t *spans, unsigned count) {
+    if (!count || count > FW_FRAME_MAX_BUFFERS) {
+        fprintf(stderr, "sim: hal_frame_arm with %u spans\n", count);
+        exit(3);
+    }
+    for (unsigned i = 0; i < count; i++) {
+        if (!spans[i].buf || !spans[i].words) {
+            fprintf(stderr, "sim: hal_frame_arm span %u is empty\n", i);
+            exit(3);
+        }
+    }
+    S.frame_spans = count;
     uint64_t c = clock_at(S.now) + 1u;
     S.done_at = INFINITY;
     if (!S.clock_on) return;
@@ -434,9 +449,14 @@ void hal_frame_arm(uint32_t skip_lines, uint32_t *buf, uint32_t words) {
     for (uint32_t i = 0; i < skip_lines; i++) {
         if (!wait_level(&c, S.hs_bit, 1u - S.hs_act) || !wait_level(&c, S.hs_bit, S.hs_act)) return;
     }
-    pack(buf, words, c);
-    S.done_at = time_of_clock(c + (uint64_t)words * SPW);
+    for (unsigned i = 0; i < count; i++) {
+        pack(spans[i].buf, spans[i].words, c);
+        c += (uint64_t)spans[i].words * SPW;
+    }
+    S.done_at = time_of_clock(c);
 }
+
+unsigned sim_frame_spans(void) { return S.frame_spans; }
 
 int hal_frame_done(void) { return S.now >= S.done_at; }
 int hal_frame_rxstall(void) { return S.force_rxstall; }

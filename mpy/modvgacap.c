@@ -37,15 +37,19 @@
 // Ctrl-C, the keyboard interrupt the raw REPL runs code with.
 #define CTRL_C 3
 
-// The link's streams and a kept exception (hal_mpy.c), the capture buffer
-// while a capture runs, and in the simulator build the design.
+// The link's streams and a kept exception (hal_mpy.c); while a capture
+// runs, a caller's buffer, or the heap blocks the module allocated (rooted
+// from the first allocation on: a later one that fails collects first).
 MP_REGISTER_ROOT_POINTER(mp_obj_t vgacap_link[3]);
 MP_REGISTER_ROOT_POINTER(mp_obj_t vgacap_buf);
-MP_REGISTER_ROOT_POINTER(void *vgacap_arena);
-#if VGACAP_MPY_SIM
-#endif
+MP_REGISTER_ROOT_POINTER(void *vgacap_bufs[128]);
 
 static int busy;
+
+// The capture's buffers: a stream's one (both its halves), a frame
+// capture's one or more (fw_hal.h). Static: a frame's 128 do not belong on
+// the caller's stack.
+static fw_span_t spans[FW_FRAME_MAX_BUFFERS];
 
 // ---- arguments ---------------------------------------------------------------------
 
@@ -128,28 +132,36 @@ static uint32_t *given_buffer(mp_obj_t buf, size_t *bytes) {
 
 // ---- running a capture ---------------------------------------------------------------
 
-typedef int (*engine_fn)(const void *args, uint32_t *arena, size_t arena_bytes, char *why,
-                         size_t whylen);
+typedef int (*engine_fn)(const void *args, unsigned count, char *why, size_t whylen);
 
-static int run_stream(const void *a, uint32_t *arena, size_t bytes, char *why, size_t whylen) {
+static int run_stream(const void *a, unsigned count, char *why, size_t whylen) {
+    (void)count;  // one: both halves of the ping-pong
     fw_capture_result_t res;
-    return fw_stream_run(a, arena, bytes, NULL, NULL, &res, why, whylen);
+    return fw_stream_run(a, spans[0].buf, (size_t)spans[0].words * 4u, NULL, NULL, &res, why, whylen);
 }
 
-static int run_frame(const void *a, uint32_t *arena, size_t bytes, char *why, size_t whylen) {
+static int run_frame(const void *a, unsigned count, char *why, size_t whylen) {
     fw_capture_result_t res;
-    return fw_frame_run(a, arena, bytes, NULL, NULL, &res, why, whylen);
+    return fw_frame_run(a, spans, count, NULL, NULL, &res, why, whylen);
 }
 
-// The capture, with Ctrl-C an ordinary byte for its whole length (the
-// cooperative stop: prelude.py), and the arena released after. An
-// exception MicroPython raised during it is raised once everything has been
-// given back; a refusal is a ValueError with the firmware's `err` text.
-static mp_obj_t run(engine_fn engine, const void *args, const own_args_t *own, uint32_t *arena,
-                    size_t bytes, int allocated) {
+// Give back the `count` blocks the module allocated (spans[]).
+static void free_spans(unsigned count) {
+    for (unsigned i = 0; i < count; i++) {
+        m_del(uint32_t, spans[i].buf, spans[i].words);
+        MP_STATE_PORT(vgacap_bufs)[i] = NULL;
+    }
+}
+
+// The capture into spans[0..count), with Ctrl-C an ordinary byte for its
+// whole length (the cooperative stop: prelude.py), and the buffers released
+// after when the module allocated them. An exception MicroPython raised
+// during it is raised once everything has been given back; a refusal is a
+// ValueError with the firmware's `err` text.
+static mp_obj_t run(engine_fn engine, const void *args, const own_args_t *own, unsigned count,
+                    int allocated) {
     char why[FW_WHY_MAX] = "";
     MP_STATE_PORT(vgacap_buf) = own->buf;
-    MP_STATE_PORT(vgacap_arena) = allocated ? arena : NULL;
     busy = 1;
 #if VGACAP_MPY_SIM
     int saved_intr = CTRL_C;  // the unix port keeps its own; the REPL's is Ctrl-C
@@ -158,15 +170,14 @@ static mp_obj_t run(engine_fn engine, const void *args, const own_args_t *own, u
 #endif
     mp_hal_set_interrupt_char(-1);
     vgacap_link_begin(own->out, own->stop);
-    int refused = engine(args, arena, bytes, why, sizeof why);
+    int refused = engine(args, count, why, sizeof why);
     mp_obj_t exc = vgacap_link_end();
     // Last, as in the scripts' `finally`: from here a Ctrl-C interrupts again
     // (or whatever the caller had set before).
     mp_hal_set_interrupt_char(saved_intr);
     busy = 0;
     MP_STATE_PORT(vgacap_buf) = MP_OBJ_NULL;
-    MP_STATE_PORT(vgacap_arena) = NULL;
-    if (allocated) m_del(uint8_t, arena, bytes);
+    if (allocated) free_spans(count);
     if (exc != MP_OBJ_NULL) nlr_raise(exc);
     if (refused) mp_raise_msg_varg(&mp_type_ValueError, MP_ERROR_TEXT("%s"), why);
     return mp_const_none;
@@ -194,10 +205,14 @@ static mp_obj_t vgacap_stream(size_t n_args, const mp_obj_t *pos, mp_map_t *kw) 
         mp_raise_msg_varg(&mp_type_ValueError, MP_ERROR_TEXT("%s"), why);
     }
     vstr_clear(&text);
-    if (arena) return run(run_stream, &a, &own, arena, bytes, 0);
-    bytes = (size_t)a.buf_words * 8u;
-    arena = m_malloc(bytes);  // MemoryError if the heap cannot hold the two buffers
-    return run(run_stream, &a, &own, arena, bytes, 1);
+    if (arena) {
+        spans[0] = (fw_span_t){ arena, (uint32_t)(bytes / 4u) };
+        return run(run_stream, &a, &own, 1, 0);
+    }
+    // MemoryError if the heap cannot hold the two buffers.
+    spans[0] = (fw_span_t){ m_new(uint32_t, (size_t)a.buf_words * 2u), a.buf_words * 2u };
+    MP_STATE_PORT(vgacap_bufs)[0] = spans[0].buf;
+    return run(run_stream, &a, &own, 1, 1);
 }
 static MP_DEFINE_CONST_FUN_OBJ_KW(vgacap_stream_obj, 0, vgacap_stream);
 
@@ -206,39 +221,44 @@ static MP_DEFINE_CONST_FUN_OBJ_KW(vgacap_stream_obj, 0, vgacap_stream);
 // must still fit. frame_rp2.py holds back 4 KB the same way.
 #define HEAP_RESERVE_BYTES 4096u
 
-// The largest block of whole lines, up to `wanted` bytes, the heap holds
-// with HEAP_RESERVE_BYTES still free: halving down to one that fits, then a
-// binary search back up -- the block found so far freed before each larger
-// probe, or no larger one could ever fit beside it. Each miss costs
-// MicroPython a collection, so about 2 log2(lines) of them.
-static uint32_t *largest_lines(size_t wanted, size_t line, size_t *bytes) {
+// One heap block of `lines` lines as spans[n], rooted. 0 if it does not fit.
+static int take_block(unsigned n, uint32_t lines, uint32_t line_words) {
+    MP_STATIC_ASSERT(MP_ARRAY_SIZE(MP_STATE_PORT(vgacap_bufs)) == FW_FRAME_MAX_BUFFERS);
+    uint32_t *p = m_new_maybe(uint32_t, (size_t)lines * line_words);
+    if (!p) return 0;
+    MP_STATE_PORT(vgacap_bufs)[n] = p;
+    spans[n] = (fw_span_t){ p, lines * line_words };
+    return 1;
+}
+
+// Heap blocks of whole lines for a window of `lines` (frame_rp2.py
+// plan_buffers()), with HEAP_RESERVE_BYTES held back while planning, into
+// spans[]; returns how many. The whole window in one block when the heap
+// has one (one buffer, as the firmware's arena); otherwise blocks of 64,
+// 16, 4 and 1 lines, biggest first, up to FW_FRAME_MAX_BUFFERS: a block
+// that fits is kept, so each size fails only once, and a failure is what
+// costs (MicroPython collects before giving up). On a fragmented heap the
+// capture DMA chains them (control blocks, firmware/pico/hal_rp2.c), so one
+// captured frame can still fill the whole region. The total may be less
+// than `lines`; the engine then sweeps the region in windows.
+static unsigned plan_buffers(uint32_t lines, uint32_t line_words) {
+    static const uint32_t sizes[] = { 64, 16, 4, 1 };
     void *reserve = m_malloc_maybe(HEAP_RESERVE_BYTES);
-    size_t hi = wanted / line, lo = 0;  // lo fits (0: nothing yet), hi + 1 does not
-    void *p = NULL;
-    for (size_t n = hi; n; n /= 2) {
-        p = m_malloc_maybe(n * line);
-        if (p) {
-            lo = n;
-            break;
-        }
-        hi = n - 1;
+    unsigned n = 0;
+    if ((size_t)lines <= SIZE_MAX / 4u / line_words && take_block(0, lines, line_words)) {
+        n = 1;
+        lines = 0;
     }
-    while (lo && lo < hi) {
-        size_t mid = lo + (hi - lo + 1) / 2;
-        m_del(uint8_t, p, lo * line);
-        p = m_malloc_maybe(mid * line);
-        if (p) {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-            // The block just given back: nothing else has allocated since.
-            p = m_malloc_maybe(lo * line);
-            if (!p) lo = 0;
+    for (size_t k = 0; k < MP_ARRAY_SIZE(sizes); k++) {
+        while (lines && n < FW_FRAME_MAX_BUFFERS) {
+            uint32_t take = sizes[k] < lines ? sizes[k] : lines;
+            if (!take_block(n, take, line_words)) break;
+            n++;
+            lines -= take;
         }
     }
     if (reserve) m_del(uint8_t, reserve, HEAP_RESERVE_BYTES);
-    *bytes = lo * line;
-    return lo ? p : NULL;
+    return n;
 }
 
 // frame(*, clock_hz, cpl, region_first, region_lines, window_lines,
@@ -261,18 +281,20 @@ static mp_obj_t vgacap_frame(size_t n_args, const mp_obj_t *pos, mp_map_t *kw) {
     // Before the engine reads the sync lines for their polarity.
     hal_rp2_uo_inputs();
 #endif
-    size_t bytes = 0;
     if (own.buf != mp_const_none) {
+        size_t bytes;
         uint32_t *given = given_buffer(own.buf, &bytes);
-        return run(run_frame, &a, &own, given, bytes, 0);
+        spans[0] = (fw_span_t){ given, (uint32_t)(bytes / 4u) };
+        return run(run_frame, &a, &own, 1, 0);
     }
     const fw_board_t *b = hal_board();
-    size_t wanted = fw_frame_wanted_bytes(&a);
-    size_t line = (size_t)a.cpl / (b->push_thresh / b->in_count) * 4u;
-    // Nothing allocated when the arguments are refused anyway, or the heap
-    // holds not one line: the engine then says why, as the firmware does.
-    uint32_t *arena = wanted ? largest_lines(wanted, line, &bytes) : NULL;
-    return run(run_frame, &a, &own, arena, bytes, arena != NULL);
+    uint32_t spw = b->push_thresh / b->in_count;
+    uint32_t lines = a.region_lines;
+    if (a.window_lines && a.window_lines < lines) lines = a.window_lines;
+    // Nothing allocated when the engine refuses the line length anyway, or
+    // the heap holds not one line: it then says why, as the firmware does.
+    unsigned count = a.cpl && a.cpl % spw == 0 ? plan_buffers(lines, a.cpl / spw) : 0;
+    return run(run_frame, &a, &own, count, 1);
 }
 static MP_DEFINE_CONST_FUN_OBJ_KW(vgacap_frame_obj, 0, vgacap_frame);
 
@@ -349,6 +371,10 @@ static MP_DEFINE_CONST_FUN_OBJ_1(vgacap_sim_clock_obj, vgacap_sim_clock);
 // sim_now(): the simulated board's time in seconds.
 static mp_obj_t vgacap_sim_now(void) { return mp_obj_new_float((mp_float_t)sim_now()); }
 static MP_DEFINE_CONST_FUN_OBJ_0(vgacap_sim_now_obj, vgacap_sim_now);
+
+// sim_frame_spans(): how many buffers the last frame capture's DMA walked.
+static mp_obj_t vgacap_sim_frame_spans(void) { return MP_OBJ_NEW_SMALL_INT(sim_frame_spans()); }
+static MP_DEFINE_CONST_FUN_OBJ_0(vgacap_sim_frame_spans_obj, vgacap_sim_frame_spans);
 #endif
 
 // ---- the module ----------------------------------------------------------------------
@@ -362,6 +388,7 @@ static const mp_rom_map_elem_t vgacap_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_sim_board), MP_ROM_PTR(&vgacap_sim_board_obj) },
     { MP_ROM_QSTR(MP_QSTR_sim_clock), MP_ROM_PTR(&vgacap_sim_clock_obj) },
     { MP_ROM_QSTR(MP_QSTR_sim_now), MP_ROM_PTR(&vgacap_sim_now_obj) },
+    { MP_ROM_QSTR(MP_QSTR_sim_frame_spans), MP_ROM_PTR(&vgacap_sim_frame_spans_obj) },
 #endif
 };
 static MP_DEFINE_CONST_DICT(vgacap_globals, vgacap_globals_table);
