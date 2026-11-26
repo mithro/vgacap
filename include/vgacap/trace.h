@@ -33,7 +33,7 @@ extern "C" {
 #define VGACAP_TRACE_BLOCK_CLOCKS  (1ull << 24)
 #define VGACAP_TRACE_RUNS_MAX      1024u           // runs a vgacap_trace_read_runs batch holds at most
 
-// Fields above `impl` are read by the inline push; do not touch them.
+// Fields above `impl` are read and written by the inline calls; do not touch them.
 typedef struct vgacap_trace_writer {
     uint64_t cur;        // the current run's value, clock bit cleared
     uint64_t run;        // samples in the current run
@@ -57,8 +57,13 @@ int vgacap_trace_slow(vgacap_trace_writer_t *t, uint64_t v);       // not for ca
 // -1 once the writer has failed (a clock bit that breaks the alternation,
 // a bit at or above sample_bits, or an I/O error); every later push then
 // returns -1 too, and vgacap_trace_finish() reports why.
+//
+// The test is v ^ cur ^ clk_expect: cur never has the clock bit and
+// clk_expect has nothing else, so its clock bit is (v ^ clk_expect) & clk_mask
+// and its other bits are (v & ~clk_mask) ^ cur. It is 0 exactly when the
+// clock bit is as expected and the value is the current run's.
 static inline int vgacap_trace_push(vgacap_trace_writer_t *t, uint64_t v) {
-    if (((v ^ t->clk_expect) & t->clk_mask) | ((v & ~t->clk_mask) ^ t->cur) | (uint64_t)(t->n == t->limit))
+    if ((v ^ t->cur ^ t->clk_expect) | (uint64_t)(t->n == t->limit))
         return vgacap_trace_slow(t, v);
     t->run++; t->n++; t->clk_expect ^= t->clk_mask; return 0;
 }
