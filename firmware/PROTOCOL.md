@@ -64,7 +64,7 @@ fields, or `err` followed by a message for a person.
   does: `ctrl_sel_inc` (GPIO 2), `ctrl_sel_nrst` (GPIO 1) and `ctrl_ena`
   (GPIO 0) low, 10 ms, `ctrl_sel_nrst` high, 10 ms, N pulses on
   `ctrl_sel_inc` (1 ms high, 1 ms low), then `ctrl_ena` high. N is the
-  stock SDK's `tt.shuttle.<name>.count`. The reply comes after about
+  stock firmware's `tt.shuttle.<name>.count`. The reply comes after about
   20 ms + 2 ms per index. **Never on an FPGA breakout**: GPIO 1 is the
   iCE40's `CRESET_B` there, and pulling it low erases the FPGA's
   configuration; `asic_select` is the only thing that ever drives it low.
