@@ -11,13 +11,16 @@ review: 2027-05-27
 
 The table is built from [`src/frame/modes.c`](modes.c) each time these pages are built, so it is the code's own table. How libvgaframe matches a capture against it is on [How libvgaframe rebuilds frames](explanation-rebuilding-frames.md).
 
-The columns:
+In both tables, Mode is the name: width x height @ refresh in Hz. Active, Front porch, Sync and Back porch are the parts of a line, in clocks, or of a frame, in lines. The total is their sum. A positive pulse is high, and a negative pulse low.
 
-- Mode is the name: width x height @ refresh in Hz.
-- H active, H front, H sync and H back are the active pixels, front porch, sync pulse and back porch, in clocks; Clocks a line is their sum.
-- V active, V front, V sync and V back are the same in lines; Lines a frame is their sum.
-- Hsync and Vsync are the level of each sync pulse: negative pulses low, positive pulses high.
-- Window match says whether the mode is found from clocks a line alone, as for a `FRAM` window. The modes marked no came from the simulation testbench, and only an exact match on both totals finds them.
+Window match says whether a `FRAM` window, which knows only its clocks a line, finds the mode. The modes marked no came from the simulation testbench. Only an exact match on both totals finds them.
 
-```{vgacap-modes}
+## Horizontal: a line
+
+```{vgacap-modes} horizontal
+```
+
+## Vertical: a frame
+
+```{vgacap-modes} vertical
 ```

@@ -25,7 +25,8 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--desc", default="", help="text for the header's desc field")
     ap.add_argument("--clock-hz", type=int, default=0,
                     help="the design clock in Hz, for the header; 0 means unknown")
-    ap.add_argument("--mode", type=int, default=3, help="0 extclk, 1 selfclk, 2 event, 3 unknown")
+    ap.add_argument("--mode", type=int, default=3, choices=(0, 1, 2, 3),
+                    help="the header's mode: 0 extclk; 1 selfclk; 2 event; 3 unknown")
     return ap
 
 
