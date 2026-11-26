@@ -1,7 +1,7 @@
 ---
 type: tutorial
 owner: vgacap maintainers
-reader: someone with a Tiny Tapeout demo board on USB and a VGA design on it
+reader: someone with an RP2040 Tiny Tapeout demo board on USB and a VGA design on its chip
 review: 2027-05-27
 ---
 
@@ -9,15 +9,15 @@ review: 2027-05-27
 
 **This tutorial takes you from a demo board on your desk to one PNG of the picture its design draws.**
 
-It is for someone with a Tiny Tapeout demo board running the stock firmware, plugged into a Linux computer by USB, and a design that drives the [Tiny VGA Pmod](https://github.com/mole99/tiny-vga). It does not cover the other capture modes, video, or the boards on the Welland bench; [Next](#next) links to those.
+It follows one board: an RP2040 demo board running the stock firmware, with a Tiny Tapeout chip whose design drives the [Tiny VGA Pmod](https://github.com/mole99/tiny-vga). The board is plugged into a Linux computer by USB. Other boards, modes and the Welland bench are on the pages under [Next](#next).
 
 ![A red and pink checkerboard of nested squares, 640 by 480 pixels, captured from tt_um_rejunity_vga on a Tiny Tapeout 7 chip](images/tt07-rejunity-vga.png)
 
-This is what you will have at the end: a frame of `tt_um_rejunity_vga`, captured from a Tiny Tapeout 7 chip on an RP2040 demo board. It came from the commands below, run on [2026-09-15](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-ttcap-capture-serial-tt07).
+At the end you will have a frame like this: `tt_um_rejunity_vga` on a Tiny Tapeout 7 chip, from a capture like the one below ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-ttcap-capture-serial-tt07)).
 
 ## Before you start
 
-You need [Git](https://git-scm.com), [CMake](https://cmake.org) with a C compiler, and [uv](https://docs.astral.sh/uv/). Your user needs to open the board's serial port, which on Debian means being in the `dialout` group. You need the name of your design: a `tt_um_` project name on an ASIC breakout, or the bitstream's name on an FPGA breakout.
+You need [Git](https://git-scm.com), [CMake](https://cmake.org) with a C compiler, and [uv](https://docs.astral.sh/uv/). Your user needs to open the board's serial port, which on Debian means being in the `dialout` group. You need your design's project name, which starts `tt_um_`.
 
 ## 1. Get vgacap and build its tools
 
@@ -40,25 +40,18 @@ Plug the demo board in by USB. It appears as a serial device, `/dev/ttyACM0` whe
 uv run ttcap probe serial:/dev/ttyACM0
 ```
 
-It answers with its MicroPython version and its pin map. On an RP2350 demo board the answer starts like this:
-
-```text
-sys.version: 3.4.0; MicroPython b006887db6 on 2026-08-11
-GPIOMap.all(): {'mng00': 3, 'mng01': 4, ... 'rp_projclk': 16, 'uo_out0': 33, ...}
-```
-
-`ttcap` reads the same map during a capture to pick the board's pin layout. A `probe failed:` line instead means the port is wrong or busy; [How to probe a demo board](how-to-probe-board.md) lists the causes.
+It answers with two lines: `sys.version:` and the firmware's version, then `GPIOMap.all():` and its pin map. On an RP2040 demo board the map holds `'rp_projclk': 0` and `'uo_out0': 5`. `ttcap` reads the same map during a capture to pick the board's pin layout. A `probe failed:` line means the port is wrong or busy; [How to probe a demo board](how-to-probe-board.md) lists the causes.
 
 ## 3. Capture two frames
 
-Run the capture, putting your design's name after `--project`. On an FPGA breakout, write `--design` in place of `--project`.
+Run the capture, putting your design's name after `--project`:
 
 ```sh
 uv run ttcap capture serial:/dev/ttyACM0 --project tt_um_rejunity_vga \
     --clock-hz 60000 --frames 2 --seconds 0 --out capture.vgacap
 ```
 
-`ttcap` enables the design, clocks it at 60 kHz, and records its `uo_out` pins on every clock. 60 kHz is a clock both the RP2040 and the RP2350 demo boards stream without loss. Two frames take four frame periods of samples, about 28 seconds at that clock. On an RP2040 demo board the run prints these lines, with its own counts:
+`ttcap` enables the design, clocks it at 60 kHz, and records its `uo_out` pins on every clock. 60 kHz is the clock an RP2040 demo board streams without loss. Two frames take four frame periods of samples, about 28 seconds at that clock. The run prints these lines, with its own counts:
 
 ```text
 profile=rp2040-tt06map project=tt_um_rejunity_vga enable=index
@@ -67,7 +60,7 @@ bytes=... samples=... chunks=... seconds=... overruns=0 dropped=0 rxstall=0 ...
 wrote capture.vgacap
 ```
 
-The counts on the second line depend on the board and on `--buf-words`; `overruns=0`, `dropped=0` and `rxstall=0` say no sample was lost. An RP2350 demo board reports `profile=rp2350-dbv3`.
+`overruns=0`, `dropped=0` and `rxstall=0` say no sample was lost.
 
 ## 4. Turn the capture into a PNG
 
@@ -78,19 +71,21 @@ mkdir -p out
 uv run ttcap png capture.vgacap out/frame
 ```
 
-Each frame found is listed, then the count written:
+Each frame found is listed, then the count written. For the capture pictured above it printed this:
 
 ```text
-frame 0: 640x480 mode=640x480@60 cpl=800 lpf=525 hsync=pos vsync=pos partial=0 glitches=0
-frames=1 glitches_total=0
+frame 0: 640x480 mode=640x480@60 cpl=800 lpf=525 hsync=pos vsync=pos partial=0 glitches=2
+frames=1 glitches_total=10
 wrote 1 png(s)
 ```
 
 Open `out/frame-0000.png`. It is the picture your design drew, rebuilt from its sync signals and its six colour bits. The first frame of a capture is never whole, so a two-frame capture gives one or two PNGs.
 
+`glitches=2` counts the sync pulses the rebuild rejected as too short since the previous frame, and `glitches_total` counts them over the whole capture. Real chips put out a few such pulses, and the picture is still rebuilt whole ([Glitches](../../src/tools/README.md#glitches)). `partial=0` says every line of the frame was captured.
+
 ## Next
 
-- [How to capture a stream from a demo board](how-to-capture-stream.md), with every limit and option.
+- [How to capture a stream from a demo board](how-to-capture-stream.md), with every limit and option, and the RP2350 demo board.
 - [How to capture whole frames at the design's own clock](how-to-capture-frames.md), for a design that must run at full speed.
 - [How to make a video of a design with ttcap demo](how-to-make-video.md).
 - [Capture on the demo board](explanation-demo-board-capture.md): what happened between the pins and the file.

@@ -19,17 +19,18 @@ A stream holds one sample per project clock, so the design runs at a clock the U
 
 ## Steps
 
-1. In the checkout, choose when the capture stops: `--seconds N` for a time, `--max-bytes N` for a size, or `--frames N` for N whole 640x480 frames.
-2. In the checkout, run the capture with your design's name, which enables the design, starts its clock and writes the file:
+1. In the checkout, choose the limit that stops the capture: `--seconds N`, `--max-bytes N` or `--frames N` for 640x480 frames.
+2. In the checkout, run the capture with the clock and limit you chose, which starts the clock and writes the file:
 
    ```sh
-   uv run ttcap capture serial:/dev/ttyACM0 --project tt_um_rejunity_vga \
-       --clock-hz 60000 --frames 2 --seconds 0 --out capture.vgacap
+   uv run ttcap capture serial:/dev/ttyACM0 --clock-hz 750000 --seconds 4 --out capture.vgacap
    ```
 
 3. In the terminal, read the stats line, which ends the run with `overruns=0 dropped=0 rxstall=0` when no sample was lost.
 
-`--frames N` asks for N + 2 frame periods of 640x480 timing, because a capture starts part way through a frame. A design with other timing needs `--max-bytes` worked out by hand. `--seconds` is 5 unless given, and `--seconds 0` leaves only the other limit. On an FPGA breakout, `--design` names the bitstream in place of `--project`; with neither, the design already enabled is captured.
+This command captures the design already enabled on the board, for 4 seconds at 750 kHz, which suits an RP2350 demo board. On an RP2040 demo board use `--clock-hz 60000`. Add `--project NAME` to enable a project on an ASIC breakout, or `--design NAME` for a bitstream on an FPGA breakout.
+
+`--frames N` asks for N + 2 frame periods of 640x480 timing, because a capture starts part way through a frame. A design with other timing needs `--max-bytes` worked out by hand. `--seconds` is 5 unless given, and `--seconds 0` leaves only the other limit.
 
 ## Check
 
@@ -42,7 +43,7 @@ bytes=2836574 samples=2834432 chunks=174 seconds=4.021 overruns=0 dropped=0 rxst
 wrote capture.vgacap
 ```
 
-That is a 4-second capture at 750 kHz on an RP2350 demo board, from [this run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4). `ttcap png capture.vgacap out/frame` turns the file into pictures ([How to turn a capture into PNG images](how-to-render-png.md)).
+That is the command in step 2, run on `serial:/dev/ttboard` with an RP2350 demo board and an FPGA breakout, from [this run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4). `ttcap png capture.vgacap out/frame` turns the file into pictures ([How to turn a capture into PNG images](how-to-render-png.md)).
 
 ## If it fails
 
