@@ -36,7 +36,7 @@ The options of step 4:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--clock-hz` | 0 (unknown) | the design clock, in hertz |
+| `--clock-hz` | 0 (unknown) | the design clock in hertz |
 | `--mode` | 3 (unknown) | the header's capture mode: 0 is one sample each clock |
 | `--desc` | empty | the header's description |
 

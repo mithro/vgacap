@@ -38,7 +38,7 @@ total_samples=10080000 crc64=782dfffdda11f725
 
 | What you see | Likely cause | Fix |
 |---|---|---|
-| `zstd: design.trace.zst: unsupported format` at step 1 | The file is a plain stream, not compressed | Skip step 1: a file starting with `VGCH` is already the stream |
+| `zstd: design.trace.zst: unsupported format` at step 1 | The file is a plain uncompressed stream | Skip step 1: a file starting with `VGCH` is already the stream |
 | `Read error (39) : premature end` at step 1 | The trace was cut short by a killed run | Read its complete frames only, as [A trace cut short](trace-format.md#a-trace-cut-short) says |
 | A count one sample out at a block boundary | `n` was not set at a `BLKH` | Set `n` from each `BLKH`, as in step 5 |
 

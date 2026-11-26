@@ -84,8 +84,8 @@ The [C tools](../tools/README.md) turn the trace into frames and waveforms.
 
 | What you see | Likely cause | Fix |
 |---|---|---|
-| `vgacap_trace_create` returns NULL at step 2 | The header or the opening `META` is not valid, or the file cannot be created | Read `err`, and compare the `META` with step 2 |
-| `vgacap_trace_push2` returns -1 at step 3 | A clock bit out of turn, or a bit at or above bit 43 | Push the clock-low sample first, with only the 43 bits set |
+| `vgacap_trace_create` returns NULL at step 2 | The header or `META` is invalid or the file cannot be created | Read `err` and compare the `META` with step 2 |
+| `vgacap_trace_push2` returns -1 at step 3 | A clock bit out of turn or a bit above bit 42 | Push the clock-low sample first with only bits 0 to 42 set |
 | `undefined reference to pthread_create` at step 5 | POSIX threads are not linked | Add `-pthread`, as in step 5 |
 | `closed=0` in the check | The testbench stopped before step 4 | Call `vgacap_trace_finish` on every way out of the testbench |
 

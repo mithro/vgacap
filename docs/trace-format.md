@@ -92,14 +92,14 @@ The chunk's length is exactly 4 plus the pairs' bytes. Part is a part of one pai
 
 | Part | Encoding | Value |
 |---|---|---|
-| `value` | `vbytes` = ceil(`sample_bits` ÷ 8) bytes, little-endian: 6 in a trace | the run's value; the clock bit and every bit at or above `sample_bits` stored as 0 |
-| `run` | unsigned LEB128: 1 to 10 bytes; 7 bits a byte; low group first; top bit set when a byte follows | at least 1, below 2^64, minimally encoded: no final `0x00`, and a 10th byte at most `0x01` |
+| `value` | `vbytes` = ceil(`sample_bits` ÷ 8) little-endian bytes: 6 in a trace | the run's value; the clock bit and every bit at or above `sample_bits` stored as 0 |
+| `run` | unsigned LEB128: 1 to 10 bytes; 7 bits a byte; low group first; top bit set when a byte follows | at least 1 and below 2^64; minimally encoded: no final `0x00`; a 10th byte at most `0x01` |
 
 Rule is a rule of the pairs, and Value the rule.
 
 | Rule | Value |
 |---|---|
-| Samples a pair stands for | `n` to `n` + `run` − 1, all with `value` apart from each one's own clock bit |
+| Samples a pair stands for | `n` to `n` + `run` − 1: all `value` but each one's own clock bit |
 | Two adjacent pairs of one chunk | never the same value |
 | A run across chunks or blocks | may continue with the same value: the writer cuts runs at block boundaries |
 
@@ -119,16 +119,16 @@ Chunk is the `META` chunk, and Need whether a key is required. Value is the key'
 
 | Chunk | Key | Need | Value |
 |---|---|---|---|
-| `META(open)`, in block 0 | `project` | required | the design's identifier, such as `tt07/tt_um_example` |
-| `META(open)` | `calib_seconds` | required | the calibration length in seconds, a decimal number as C `strtod` reads it |
-| `META(open)` | `seconds` | required | the run length in seconds, read the same way |
+| `META(open)` in block 0 | `project` | required | the design's identifier: `tt07/tt_um_example` for one |
+| `META(open)` | `calib_seconds` | required | the calibration length in seconds: a decimal number as C `strtod` reads it |
+| `META(open)` | `seconds` | required | the run length in seconds: read the same way |
 | `META(open)` | `layout` | required | `tt-um-43`: the bit layout below |
 | `META(open)` | `override` | optional | |
 | `META(open)` | `simulator` | optional | |
 | `META(open)` | `harness` | optional | |
-| `META(close)`, at the end of the last block | `capture_after_clock` | required | a plain decimal integer |
+| `META(close)` at the end of the last block | `capture_after_clock` | required | a plain decimal integer |
 | `META(close)` | `frames` | required | a plain decimal integer |
-| `META(close)` | `status` | required | `ok`, `sim-timeout`, `unstable-sync`, `no-sync` or `bad-timing`, as in [`frames.txt`](frames-format.md) |
+| `META(close)` | `status` | required | `ok`, `sim-timeout`, `unstable-sync`, `no-sync` or `bad-timing` |
 
 A trace without `META(close)` was cut short: its status is `truncated`.
 
@@ -171,8 +171,8 @@ Rule is the name of the rule, and Value the rule. Clock values in `META` and in 
 | Sample 2`c` | the outputs registered at clock `c` − 1's rising edge; the inputs as driven for clock `c` |
 | Sample 2`c` + 1 | the outputs of clock `c`'s own rising edge |
 | Clock 0's low sample | repeats its high sample's outputs |
-| Time of sample `n` | round(`n` × 10^12 ÷ (`samples_per_clock` × `clock_hz`)) picoseconds, halves rounded up |
-| How the time is computed | exactly, in 128-bit integers from the sample number: [`time.c`](../src/stream/time.c), `vgacap_sample_time_ps` |
+| Time of sample `n` | round(`n` × 10^12 ÷ (`samples_per_clock` × `clock_hz`)) picoseconds with halves rounded up |
+| How the time is computed | exactly in 128-bit integers from the sample number: `vgacap_sample_time_ps` in [`time.c`](../src/stream/time.c) |
 | `clock_hz` of 0 | the time is unknown |
 
 ## The container
@@ -181,20 +181,20 @@ A trace file, named `.trace.zst` by convention, is a zstd seekable-format file (
 
 | Part | Value |
 |---|---|
-| A block | one ordinary zstd frame, with its content size and its XXH64 checksum |
-| Block 0 | `VGCH`, `META(open)`, `BLKH(0)`, then `RUNS` |
-| Every later block | `BLKH(first_sample)`, then `RUNS` |
+| A block | one ordinary zstd frame with its content size and XXH64 checksum |
+| Block 0 | `VGCH` then `META(open)` then `BLKH(0)` then `RUNS` |
+| Every later block | `BLKH(first_sample)` then `RUNS` |
 | The last block | ends with `META(close)` |
 | All blocks in order | one valid VGCH stream: `zstd -d` on the file gives it whole |
-| Largest block, in clocks | 2^24 clocks from its first sample |
-| Largest block, in bytes | 16 MiB uncompressed; a block closes before it would pass 16 MiB − 64 KiB |
-| A run at a block boundary | split, so no run crosses a `BLKH` |
-| The seek table | a skippable frame at the very end: u32 magic `0x184D2A5E`, then u32 size of what follows |
-| A seek table entry, one a block | compressed size u32; decompressed size u32; the low 32 bits of the block's XXH64 |
+| Largest block in clocks | 2^24 clocks from its first sample |
+| Largest block in bytes | 16 MiB uncompressed: it closes before it would pass 16 MiB − 64 KiB |
+| A run at a block boundary | split: no run crosses a `BLKH` |
+| The seek table | a skippable frame at the very end: u32 magic `0x184D2A5E` then u32 size of what follows |
+| A seek table entry for each block | compressed size u32; decompressed size u32; the low 32 bits of the block's XXH64 |
 | The seek table footer | u32 number of frames; a descriptor byte with bit 7 set for checksums; u32 magic `0x8F92EAB1` |
-| Block `i`'s first sample | its `BLKH`, read by decompressing only the start of its frame |
-| Samples `from` to `to` | the last block starting at or below `from`, and each later block starting below `to` |
-| A plain uncompressed VGCH version 2 stream | also a valid trace: one block, read from its start |
+| Block `i`'s first sample | its `BLKH`: read by decompressing only the start of its frame |
+| Samples `from` to `to` | the last block starting at or below `from` and each later block starting below `to` |
+| A plain uncompressed VGCH version 2 stream | also a valid trace: one block read from its start |
 
 ## A trace cut short
 
@@ -204,8 +204,8 @@ A killed run leaves no seek table, and perhaps a half-written last frame. Case i
 |---|---|
 | No seek table | walks the frames from the start by their headers (`ZSTD_findFrameCompressedSize`) |
 | Frames kept | every complete frame up to the first incomplete one or the first skippable frame |
-| The last kept frame | decompressed whole; dropped if its checksum fails, and the one before it tried |
+| The last kept frame | decompressed whole; if its checksum fails it is dropped and the one before it tried |
 | A seek table that does not agree with the frames | rebuilt the same way |
-| Disagreement | an entry whose offset, frame header or size does not match; a table that does not end the file |
+| Disagreement | an entry whose offset or frame header or size does not match; a table that does not end the file |
 | Samples of a rebuilt trace | those of the kept blocks |
 | Status with no `META(close)` | `truncated` |

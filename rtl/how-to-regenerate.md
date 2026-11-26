@@ -37,8 +37,8 @@ The Icarus tests run [`tb_vgacap_raw_framer.v`](tb_vgacap_raw_framer.v), which s
 
 | What you see | Likely cause | Fix |
 |---|---|---|
-| `test_the_committed_verilog_is_what_the_source_generates` fails | The Verilog was not regenerated, or was edited by hand | Repeat step 1 |
-| `4 skipped` at step 2 | Icarus Verilog is not installed | Install `iverilog`, then repeat step 2 |
+| `test_the_committed_verilog_is_what_the_source_generates` fails | The Verilog is stale or was edited by hand | Repeat step 1 |
+| `4 skipped` at step 2 | Icarus Verilog is not installed | Install `iverilog` and repeat step 2 |
 | `hold violation` in a failing Icarus test | A change lets an offered byte change before it is taken | Fix the source so `out_data` holds until `out_ready` |
 
 ## Next

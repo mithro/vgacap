@@ -57,7 +57,7 @@ wrote out.vgacap: 4 RAW chunks, 1024 samples, 0 dropped
 | `samples_per_chunk must be a positive multiple of 4` at step 2 | The chunk size cannot be packed into words | Give a multiple of 4 |
 | `fifo_words must hold at least one chunk` at step 2 | The FIFO is smaller than a chunk | Give at least `samples_per_chunk` ÷ 4 words |
 | `truncated chunk 'RAW '` at step 6 | Sampling stopped in the middle of a chunk | Stop after a multiple of 256 samples, as in step 4 |
-| More than `0 dropped` at step 6 | The link took bytes more slowly than samples arrived | Sample less often, or give the link more bandwidth |
+| More than `0 dropped` at step 6 | The link took bytes more slowly than samples arrived | Sample less often or use a faster link |
 
 ## Next
 

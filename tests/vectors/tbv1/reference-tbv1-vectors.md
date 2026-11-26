@@ -19,10 +19,10 @@ Case is the directory, and Design what its test design drives on `uo_out`. The d
 |---|---|
 | `bars640` | 640x480@60 at one pixel a clock: eight bars that rotate by one bar each frame |
 | `bars_cpp2` | the bars of `bars640` with each pixel held for 2 clocks |
-| `frac` | 640x480@60 timing with 1,525-clock lines: 1.90625 clocks a pixel |
+| `frac` | 640x480@60 timing with 1525-clock lines: 1.90625 clocks a pixel |
 | `glitch` | `bars640` with a one-clock break in the vsync pulse of every fourth frame |
 | `nosync` | a constant `uo_out`: no sync signal at all |
-| `playground` | the VGA Playground's sync timing, with a pattern that moves one pixel a frame |
+| `playground` | the VGA Playground's sync timing with a pattern that moves one pixel a frame |
 
 ## Results
 

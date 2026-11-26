@@ -18,7 +18,7 @@ Port is the name in the Verilog and in Migen, and Direction is seen from the fra
 | Port | Direction | Width | Meaning |
 |---|---|---|---|
 | `sys_clk` | in | 1 | the clock every register runs on |
-| `sys_rst` | in | 1 | synchronous reset, active high |
+| `sys_rst` | in | 1 | synchronous reset: active high |
 | `sample` | in | 8 | one sample: a Tiny Tapeout `uo_out` |
 | `sample_valid` | in | 1 | high on each clock that `sample` is to be taken |
 | `out_data` | out | 8 | the next byte of the chunk stream |
@@ -46,7 +46,7 @@ Offset is in bytes from the chunk's start, and every field is little-endian. The
 | 0 | 4 | tag | `RAW ` |
 | 4 | 4 | length | 4 + `samples_per_chunk` |
 | 8 | 4 | sample count | `samples_per_chunk` |
-| 12 | `samples_per_chunk` | samples | four to a 32-bit word, the first sample in bits 31:24 |
+| 12 | `samples_per_chunk` | samples | four to a 32-bit word with the first in bits 31:24 |
 
 ## TIME chunk
 
@@ -73,7 +73,7 @@ The framer sends no `VGCH` header. [`framer_to_stream.py`](framer_to_stream.py) 
 | `samples_per_word` | 4 |
 | `flags` | `VGACAP_FLAG_FIRST_SAMPLE_MSB` |
 | `signal_map` | the Tiny VGA Pmod on `uo_out` |
-| `clock_hz` | the rate samples went in, which only the host knows |
+| `clock_hz` | the sample rate: only the host knows it |
 
 ## Throughput
 
@@ -81,6 +81,6 @@ Item is what is counted, and Value its size at 256 samples a chunk.
 
 | Item | Value |
 |---|---|
-| Bytes out on each clock, at most | 1 |
-| Clocks to send one `RAW ` chunk | 272: 256 sample bytes, 12 header bytes and 4 idle clocks |
-| Share of clocks that can carry a sample, with a sink always ready | 256 ÷ 272: about 94.1% |
+| Most bytes out in one clock | 1 |
+| Clocks to send one `RAW ` chunk | 272: 256 sample bytes + 12 header bytes + 4 idle clocks |
+| Share of clocks that can carry a sample into an always-ready sink | 256 ÷ 272: about 94.1% |

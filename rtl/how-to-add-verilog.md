@@ -53,8 +53,8 @@ wrote out.vgacap: 4 RAW chunks, 1024 samples, 0 dropped
 | What you see | Likely cause | Fix |
 |---|---|---|
 | `truncated chunk 'RAW '` at step 7 | Sampling stopped in the middle of a chunk | Stop after a multiple of 256 samples, as in step 5 |
-| More than `0 dropped` at step 7 | The link took bytes more slowly than samples arrived | Sample less often, or give the link more bandwidth |
-| `non-printable chunk tag` at step 7 | The host lost or added bytes | Check the link, then repeat steps 6 and 7 |
+| More than `0 dropped` at step 7 | The link took bytes more slowly than samples arrived | Sample less often or use a faster link |
+| `non-printable chunk tag` at step 7 | The host lost or added bytes | Check the link and repeat steps 6 and 7 |
 
 ## Next
 

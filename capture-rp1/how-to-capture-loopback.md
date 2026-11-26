@@ -46,10 +46,11 @@ ok: 4194304 samples, every step -1
 
 | What you see | Likely cause | Fix |
 |---|---|---|
-| `Failed to open PIO device 0` at step 1 | The machine is not a Raspberry Pi 5, or its kernel has no `rp1-pio` driver | Run on a Pi 5 with a kernel that provides `/dev/pio0` |
+| `Failed to open PIO device 0` at step 1 | The machine is not a Raspberry Pi 5 or has no `rp1-pio` driver | Run on a Pi 5 with a kernel that provides `/dev/pio0` |
 | `--clock-hz … is above 500000` at step 1 | The declared rate is above the rate proven without loss | Declare 500000 or less, as in step 1 |
-| `receive DMA failed` at step 1, or every run fails after an interrupted one | A DMA transfer was left waiting, and the `rp1-pio` driver is unusable | Reboot the Pi |
-| `broken at sample …` at step 2 | Samples were lost or repeated | Check that nothing is fitted to the header, then repeat step 1 |
+| `receive DMA failed` at step 1 | A DMA transfer left waiting has wedged the `rp1-pio` driver | Reboot the Pi |
+| Every run fails after an interrupted one | A DMA transfer left waiting has wedged the `rp1-pio` driver | Reboot the Pi |
+| `broken at sample …` at step 2 | Samples were lost or repeated | Remove anything fitted to the header and repeat step 1 |
 
 ## Next
 

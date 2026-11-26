@@ -38,7 +38,7 @@ write_trace("synth.vgch", uo, rst_n, clock_hz=25175000, project="tt_um_synth",
 | Argument | Default | Meaning |
 |---|---|---|
 | `phase` | `"testpatterns"` | when the syncs change: `"testpatterns"` or `"playground"` |
-| `cpp` | 1 | clocks a pixel, which may be fractional |
+| `cpp` | 1 | clocks a pixel: may be fractional |
 | `reset_clocks` | 10 | clocks in reset at the start |
 | `reset_uo` | 0 | `uo_out` during reset |
 | `h_glitches` | none | pairs of clock and length with hsync inverted |
