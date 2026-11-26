@@ -144,7 +144,7 @@ Only these:
   sample in the most significant byte (`VGACAP_FLAG_FIRST_SAMPLE_MSB`);
 * `TIME`, with `host_time_ns` and `clock_hz` zero and a message:
   * `frame window=W buffers=1 hsync_active=H vsync_active=V` opens a frame
-    capture (the firmware's one arena; the MicroPython module and
+    capture (the firmware's one arena; the [MicroPython module](../mpy/README.md) and
     `frame_rp2.py` say how many heap blocks a window is captured into);
   * `overrun` (streaming) and `rxstall` (one frame window lost samples in
     the RX FIFO) as they happen;
