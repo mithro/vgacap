@@ -22,7 +22,7 @@ review: 2027-05-27
 1. In your testbench, open `dump.bin` for binary writing once, before the first clock.
 2. In your testbench, write `uo_out` to `dump.bin` as one byte once a clock, at the same point of every clock.
 3. Run the simulation for at least two whole frames, which fills `dump.bin`.
-4. In the vgacap checkout, run `uv run vgacap-bin2stream dump.bin out.vgacap --clock-hz 25175000 --mode 0`, with your design's clock, to write the stream.
+4. In the vgacap checkout, run `uv run vgacap-bin2stream /path/to/dump.bin out.vgacap --clock-hz 25175000 --mode 0`, with your dump's path and design's clock.
 
 In Icarus Verilog, steps 1 and 2 are these lines:
 
@@ -32,13 +32,7 @@ initial fd = $fopen("dump.bin", "wb");
 always @(negedge clk) $fwrite(fd, "%c", uo_out);
 ```
 
-The options of step 4:
-
-| Option | Default | Meaning |
-|---|---|---|
-| `--clock-hz` | 0 (unknown) | the design clock in hertz |
-| `--mode` | 3 (unknown) | the header's capture mode: 0 is one sample each clock |
-| `--desc` | empty | the header's description |
+Every option of step 4 is on [the options of vgacap-bin2stream](../../src/tools/reference-options.md#vgacap-bin2stream).
 
 ## Check
 

@@ -10,7 +10,7 @@ review: 2027-05-27
 
 **What makes a vgacap stream a simulation trace: its header values, its `META` keys, its 43-bit sample layout, its clocks, and its zstd container.**
 
-A trace is a version 2 vgacap stream. The chunk bytes, the header fields, the `RUNS`, `BLKH` and `META` encodings and the sample-index rules are on [the stream format](../src/stream/reference-stream-format.md), and are not repeated here. The writer is [`trace_write.c`](../src/trace/trace_write.c), declared in [`trace.h`](../include/vgacap/trace.h), and the reader is [`trace_read.c`](../src/trace/trace_read.c). What a trace is for is on [What a simulation trace records](../src/trace/explanation-traces.md).
+A trace is a version 2 vgacap stream. Its chunk bytes, header fields, chunk encodings and sample index rules are on [the stream format](../src/stream/reference-stream-format.md). The writer is [`trace_write.c`](../src/trace/trace_write.c), declared in [`trace.h`](../include/vgacap/trace.h), and the reader is [`trace_read.c`](../src/trace/trace_read.c). What a trace is for is on [What a simulation trace records](../src/trace/explanation-traces.md).
 
 ## The header
 

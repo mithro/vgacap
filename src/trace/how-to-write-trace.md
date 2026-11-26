@@ -23,7 +23,7 @@ The writer is the trace library in this directory, declared in [`trace.h`](../..
 2. In your testbench, include `vgacap/trace.h` and create the writer with the header and opening `META` shown below.
 3. In your testbench, push each clock's two samples with `vgacap_trace_push2`, packed as shown below, the clock-low sample first.
 4. In your testbench, after the last clock, call `vgacap_trace_finish` with the closing `META` shown below.
-5. Compile the testbench with `-I` on the checkout's `include`, and link `libvgacap_trace.a`, `libvgacap_stream.a`, `third_party/libvgacap_zstd.a` and `-pthread`.
+5. Compile the testbench with `-I` on the checkout's `include`, linking the three libraries in `build/` and `-pthread`, as shown below.
 6. Run the testbench, which writes `design.trace.zst`.
 
 The code for step 2. `project` names the design, and `calib_seconds` and `seconds` are what a sampler of the trace reads ([the `META` keys](../../docs/trace-format.md#meta)):
@@ -45,17 +45,20 @@ if (!t) { fprintf(stderr, "%s\n", err); return 1; }
 The code for step 3, in the `tt-um-43` layout. The clock-low sample holds the outputs from before the clock's rising edge, and the clock-high sample those after it:
 
 ```c
-static uint64_t pack(uint8_t uo_out, uint8_t uio_out, uint8_t uio_oe, uint8_t ui_in,
-                     uint8_t uio_in, int rst_n, int ena, int clk) {
-    return (uint64_t)uo_out | (uint64_t)uio_out << 8 | (uint64_t)uio_oe << 16 |
+struct outputs { uint8_t uo_out, uio_out, uio_oe; };
+
+static uint64_t pack(struct outputs o, uint8_t ui_in, uint8_t uio_in, int rst_n, int ena, int clk) {
+    return (uint64_t)o.uo_out | (uint64_t)o.uio_out << 8 | (uint64_t)o.uio_oe << 16 |
            (uint64_t)ui_in << 24 | (uint64_t)uio_in << 32 |
            (uint64_t)rst_n << 40 | (uint64_t)ena << 41 | (uint64_t)clk << 42;
 }
 
-/* each clock: b holds the outputs before the rising edge, a those after it */
-if (vgacap_trace_push2(t,
-        pack(b.uo_out, b.uio_out, b.uio_oe, ui_in, uio_in, rst_n, 1, 0),
-        pack(a.uo_out, a.uio_out, a.uio_oe, ui_in, uio_in, rst_n, 1, 1)))
+/* each clock: b holds the outputs before the rising edge, a those after it,
+   and ui_in, uio_in and rst_n are the inputs driven for this clock */
+struct outputs b, a;                        /* fill b before the edge and a after it, from your model */
+uint8_t ui_in = 0, uio_in = 0;
+int rst_n = 1;
+if (vgacap_trace_push2(t, pack(b, ui_in, uio_in, rst_n, 1, 0), pack(a, ui_in, uio_in, rst_n, 1, 1)))
     break;                                  /* the writer has failed: finish says why */
 ```
 
@@ -69,12 +72,20 @@ if (vgacap_trace_finish(t, "meta=close\ncapture_after_clock=0\nstatus=ok\nframes
 }
 ```
 
+The command for step 5, from the testbench's directory, with `VGACAP` set to the vgacap checkout:
+
+```sh
+cc -O2 -I "$VGACAP/include" -o tb tb.c \
+    "$VGACAP/build/libvgacap_trace.a" "$VGACAP/build/libvgacap_stream.a" \
+    "$VGACAP/build/third_party/libvgacap_zstd.a" -pthread
+```
+
 ## Check
 
 `build/vgacap-dump design.trace.zst`, from the vgacap checkout, prints a `trace` line with `closed=1`, then the trace's chunks:
 
 ```text
-trace blocks=1 samples=10080000 table_rebuilt=0 closed=1
+trace blocks=… samples=… table_rebuilt=0 closed=1
 VGCH v2 bits=43 spc=2 clock_bit=42 clock_first=0 spw=0 flags=0 clock=25175000 map=7,3,0,4,1,5,2,6 desc=""
 ```
 
