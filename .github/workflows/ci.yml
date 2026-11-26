@@ -129,6 +129,17 @@ jobs:
           make -C build/micropython/ports/rp2 -j"$(nproc)" BOARD=tt_rp2350_board \
             USER_C_MODULES="$PWD/mpy/micropython.cmake"
 
+  # The documentation site (docs/conf.py), as Read the Docs builds it
+  # (.readthedocs.yaml). Warnings are errors, so a broken link or anchor
+  # between the Markdown pages fails here, not on the published site.
+  docs:
+    name: Documentation site (Sphinx)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv run --locked --only-group docs sphinx-build -W --keep-going -c docs . build/docs
+
   python:
     name: Python suite, no GStreamer
     runs-on: ubuntu-24.04
