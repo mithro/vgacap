@@ -128,7 +128,7 @@ for the tests:
     uv run pytest -q python/tests/test_mpy_module.py
 
 CI also compiles the rp2 port (RP2350B) with the module, as a compile
-check only: that build has no frozen `ttboard` or `microcotb` SDK, which
+check only: that build has no frozen `ttboard` or [`microcotb`](https://github.com/psychogenic/microcotb) SDK, which
 `--firmware mpy-module` needs. On a board, use the
 [release UF2](https://github.com/mithro/tt-micropython-firmware/releases/tag/dev-vgacap-module),
 loaded and restored as in
