@@ -11,8 +11,11 @@
 #include "harness.h"
 #include "vgacap/trace.h"
 #include <errno.h>
+#include <signal.h>
 #include <stdint.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <time.h>
 #include <zstd.h>
 #include <zstd_seekable.h>
@@ -359,6 +362,50 @@ TEST(test_trace_abandon) {
     trace_rm(path);
 }
 
+// A writer killed with SIGKILL keeps every block it finished: each frame is
+// flushed out of the stdio buffer as it is written. The child pushes two
+// compressible blocks and part of a third, then waits; the parent waits until
+// the file reads back two blocks, kills the child, and reads the file again.
+TEST(test_trace_sigkill_keeps_blocks) {
+    char path[256]; tmp_path(path, sizeof path, "trace_sigkill.vgct.zst");
+    trace_rm(path);
+    pid_t pid = fork();
+    ASSERT_TRUE(pid >= 0);
+    if (pid == 0) {
+        vgacap_header_t h; header43(&h);
+        char err[256] = "";
+        vgacap_trace_writer_t *t = vgacap_trace_create(path, &h, OPEN_META, 3, err, sizeof err);
+        if (!t) _exit(2);
+        for (uint64_t c = 0; c < 2 * VGACAP_TRACE_BLOCK_CLOCKS + 100; c++) {
+            vgacap_trace_push(t, BASE43);
+            vgacap_trace_push(t, BASE43 | CLK42);
+        }
+        for (;;) pause();   // never finish: the parent kills this process
+    }
+    char err[256] = "";
+    int seen = 0;
+    for (int i = 0; i < 1000 && !seen; i++) {   // up to 10 s
+        vgacap_trace_reader_t *r = vgacap_trace_open(path, err, sizeof err);
+        if (r) { seen = vgacap_trace_info(r)->blocks == 2; vgacap_trace_close(r); }
+        if (!seen) { struct timespec ts = {0, 10 * 1000 * 1000}; nanosleep(&ts, NULL); }
+    }
+    kill(pid, SIGKILL);
+    int st = 0;
+    ASSERT_TRUE(waitpid(pid, &st, 0) == pid);
+    ASSERT_TRUE(WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL);
+    ASSERT_TRUE(seen);
+    vgacap_trace_reader_t *r = vgacap_trace_open(path, err, sizeof err);
+    if (!r) fprintf(stderr, "  open: %s\n", err);
+    ASSERT_TRUE(r != NULL);
+    const vgacap_trace_info_t *in = vgacap_trace_info(r);
+    ASSERT_EQ_U(in->blocks, 2);
+    ASSERT_EQ_U(in->table_rebuilt, 1);
+    ASSERT_TRUE(in->close_meta == NULL);   // truncated: no META(close)
+    ASSERT_EQ_U(in->samples, 4 * VGACAP_TRACE_BLOCK_CLOCKS);
+    vgacap_trace_close(r);
+    trace_rm(path);
+}
+
 TEST(test_trace_bad_meta) {
     char path[256]; tmp_path(path, sizeof path, "trace_bad_meta.vgct.zst");
     vgacap_header_t h; header43(&h);
@@ -489,6 +536,7 @@ int main(int argc, char **argv) {
     RUN(test_trace_clock_rule_violation);
     RUN(test_trace_io_error);
     RUN(test_trace_abandon);
+    RUN(test_trace_sigkill_keeps_blocks);
     RUN(test_trace_bad_meta);
     RUN(test_trace_seek_table);
     RUN_TESTS_END();
