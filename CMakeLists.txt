@@ -50,6 +50,21 @@ if(VGACAP_HOST_EXTRAS)
   # Test-only helper for python/tests/test_roundtrip_c.py: writes a trace.
   add_executable(trace-make tests/trace_make.c)
   target_link_libraries(trace-make PRIVATE vgacap_trace)
+  # --- sample: the shared calibration and frame clock (src/sample), host only ---
+  add_library(vgacap_sample STATIC src/sample/calib.c src/sample/frameclock.c src/sample/tbv1.c src/sample/centrev1.c src/sample/hashes.c src/sample/outputs.c)
+  target_link_libraries(vgacap_sample PUBLIC vgacap_frame vgacap_trace vgacap_stream vgacap_sha256 vgacap_zstd m)
+  # Test-only helper for python/tests/test_calib.py: calibration and frame
+  # clock of a trace.
+  add_executable(vgacap-calib-dump tests/calib_dump.c)
+  target_link_libraries(vgacap-calib-dump PRIVATE vgacap_sample)
+  # Test-only helper for python/tests/test_samplers.py: tb-v1's frames of a
+  # trace.
+  add_executable(vgacap-tbv1-dump tests/tbv1_dump.c)
+  target_link_libraries(vgacap-tbv1-dump PRIVATE vgacap_sample)
+  # Test-only helper for python/tests/test_samplers.py: centre-v1's frames,
+  # raw clock-resolution frames and diagnostics of a trace.
+  add_executable(vgacap-centre-dump tests/centre_dump.c)
+  target_link_libraries(vgacap-centre-dump PRIVATE vgacap_sample)
 endif()
 
 function(vgacap_add_test name)
@@ -92,6 +107,25 @@ if(VGACAP_HOST_EXTRAS)
     VGACAP_DUMP_PATH="$<TARGET_FILE:vgacap-dump>" VGACAP_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
   add_dependencies(test_trace_read vgacap-dump)
   set_tests_properties(test_trace_read PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+  # The shared calibration (port of tb.cpp) and the frame clock.
+  vgacap_add_test(test_calib tests/synth.c)
+  target_link_libraries(test_calib PRIVATE vgacap_sample)
+  # tb-v1, the port of tb.cpp's frame decoding.
+  vgacap_add_test(test_tbv1 tests/synth.c)
+  target_link_libraries(test_tbv1 PRIVATE vgacap_sample)
+  # centre-v1: libvgaframe's lines and frames, its own mid-pixel pick.
+  vgacap_add_test(test_centrev1 tests/synth.c)
+  target_link_libraries(test_centrev1 PRIVATE vgacap_sample)
+  # frames.txt and the hash files.
+  vgacap_add_test(test_outputs)
+  target_link_libraries(test_outputs PRIVATE vgacap_sample)
+  # Test-only helper for python/tests/test_framesfile.py: writes the text
+  # outputs of a fixed run.
+  add_executable(vgacap-outputs-dump tests/outputs_dump.c)
+  target_link_libraries(vgacap-outputs-dump PRIVATE vgacap_sample)
+  # The frame hash methods.
+  vgacap_add_test(test_hashes)
+  target_link_libraries(test_hashes PRIVATE vgacap_sample)
   # Timing, meaningful only on big-storage: labelled perf, kept out of CI
   # (ctest -LE perf) and run by hand.
   add_test(NAME test_trace_push_speed COMMAND test_trace_write --speed)
@@ -132,3 +166,8 @@ vgacap_add_test(test_time)
 # Test-only helper for python/tests/test_timebase.py; includes time.c to reach
 # its static 128-bit helpers, so it links no library.
 add_executable(test_time_dump tests/test_time_dump.c)
+# Test-only helper for python/tests/test_calib.py: one frame of
+# synth_frame_hvsync, to compare with synthtrace's testpatterns phase.
+add_executable(synth-hvsync-dump tests/synth_hvsync_dump.c tests/synth.c)
+target_include_directories(synth-hvsync-dump PRIVATE tests)
+target_link_libraries(synth-hvsync-dump PRIVATE vgacap_frame)
