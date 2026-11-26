@@ -199,14 +199,12 @@ These steps run on the machine the board is plugged into, with this
 repository checked out there as in
 [Running on a Raspberry Pi](../python/ttcap/README.md#running-on-a-raspberry-pi)
 and `firmware/build/vgacap_fw.uf2` built or copied there. `<dev>` is the
-stock firmware's serial port. On
-the Welland bench, which needs
-[bench access](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed),
+stock firmware's serial port. On the
+[Welland bench](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed),
 that machine is the board's own Pi and `<dev>` is `/dev/ttboard`; the
 fpgas.online bridge (`fpgas-tt`) can also enable a design
 (`/designs/<name>/enable`), and holds the port until stopped
-(`sudo systemctl stop fpgas-tt`, after
-[checking it has no clients](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed)).
+(`sudo systemctl stop fpgas-tt`, after checking it has no clients).
 
 1. With the stock firmware, enable the design to capture with
    `ttcap capture`'s `--design`, and take a reference capture the usual
