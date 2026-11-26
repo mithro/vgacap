@@ -7,12 +7,12 @@ review: 2027-05-27
 
 # How to flash the module firmware and restore the board's own
 
-**You want a demo board running a MicroPython firmware with the vgacap module, and afterwards its own firmware
-back, byte for byte.**
+**You want a demo board running the module firmware for a while, and afterwards its own firmware back, byte for
+byte.**
 
-Unlike the vgacap firmware, the module lives in the board's flash. So this page backs up the board's firmware
-region and every file first, writes only the firmware region, and restores the backup at the end. It is the
-method of the
+The module firmware is a demo-board MicroPython firmware with the vgacap module and the Tiny Tapeout SDK built in.
+It lives in the board's flash, so this page backs up the board's firmware region and every file first. It writes
+only the firmware region, then restores the backup. It follows the
 [fpga-1 run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-mpy-module-fpga1), which
 needed no power cycle.
 
@@ -22,12 +22,12 @@ needed no power cycle.
 
   <img src="../docs/diagrams/images/tt-etr-dbv3p2.jpg" alt="The Tiny Tapeout demo board v3, with a breakout plugged into its centre socket." width="240">
 
-- On that machine: `sudo`, Python 3, `curl` and [mpremote](https://docs.micropython.org/en/latest/reference/mpremote.html).
+- On that machine: `sudo`, Python 3, `curl`, `timeout` and [mpremote](https://docs.micropython.org/en/latest/reference/mpremote.html).
 - `DEV`, the stock firmware's serial port, set in the shell. On the Welland bench it is `/dev/ttboard` on the board's own Pi.
-- `IMAGE`, the module firmware's UF2, set in the shell: the `tt-demo-rp2350-vgacap-module-*.uf2` asset of the
+- `IMAGE`, the module firmware's UF2, set in the shell. It is the `tt-demo-rp2350-vgacap-module-*.uf2` asset of the
   [`dev-vgacap-module` pre-release](https://github.com/mithro/tt-micropython-firmware/releases/tag/dev-vgacap-module),
   or the `firmware.uf2` from [How to build a demo-board firmware with the module and the SDK](how-to-build-release.md).
-- An empty working directory, with about 10 MB free.
+- An empty working directory with about 10 MB free, and `/mnt/rp2350`, made with `sudo mkdir -p /mnt/rp2350`.
 
 The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then the littlefs filesystem from
 `0x100C8000`. Every image written here stops at `0x100C8000`, so the filesystem is never written.
@@ -40,69 +40,126 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
    $ for f in fw_probe.py fw_dump.py fs_dump.py manifest.py unpack_backup.py uf2tool.py fs_start.py; do curl -fsSLO https://raw.githubusercontent.com/mithro/tt-vga-capture/e4427aaadae934539590bf9ae89c17ed451bdf71/docs/results/2026-11-24-mpy-module-fpga1/$f; done
    ```
 
-2. On the Welland bench, check that the fpgas.online bridge has no clients and stop it, which frees `/dev/ttboard`.
+2. On the Welland bench, read the fpgas.online bridge's health, which must show `"clients": 0` before you go on.
 
    ```console
    $ curl -s localhost:8765/health
+   ```
+
+3. On the Welland bench, stop the bridge, which frees `/dev/ttboard`.
+
+   ```console
    $ sudo systemctl stop fpgas-tt
    ```
 
-3. In the working directory, back up the board and check the backup against the board's own hashes, which prints `MATCH` and `0 do not`.
+4. In the working directory, dump the board's firmware region and files, which writes four text files.
 
    ```console
    $ mpremote connect $DEV run fw_probe.py > probe_before.txt
    $ mpremote connect $DEV run manifest.py > manifest_before.txt
    $ mpremote connect $DEV run fw_dump.py > fw_dump.txt
    $ mpremote connect $DEV run fs_dump.py > fs_dump.txt
+   ```
+
+5. In the working directory, unpack the dumps into `backup/` and check them against the board's own hashes, which prints `MATCH` and `0 do not`.
+
+   ```console
    $ python3 unpack_backup.py fw_dump.txt fs_dump.txt manifest_before.txt probe_before.txt backup
    ```
 
-4. In the working directory, make the module image and the restore image, both covering the whole firmware region, which prints their hashes.
+6. In the working directory, make the module image over the whole firmware region, which prints `wrote 3200 blocks`.
 
    ```console
    $ python3 uf2tool.py tobin $IMAGE module.bin 0x10000000 0x100C8000
    $ python3 uf2tool.py frombin module.bin module.uf2 0x10000000 0xe48bff59
+   ```
+
+7. In the working directory, make the restore image from the backup and decode it again, which gives two equal hashes.
+
+   ```console
    $ python3 uf2tool.py frombin backup/firmware_region.bin restore.uf2 0x10000000 0xe48bff59
    $ python3 uf2tool.py tobin restore.uf2 restore.bin 0x10000000 0x100C8000
-   $ sha256sum module.bin restore.bin backup/firmware_region.bin
+   $ sha256sum restore.bin backup/firmware_region.bin
    ```
 
-5. In the working directory, write the module image and probe the board, which shows `fw_sha256` equal to `module.bin`'s hash and `vgacap.API` as `1`.
+8. In the working directory, check where the image's MicroPython mounts its filesystem, which must be `0x100C8000`.
+
+   ```console
+   $ python3 fs_start.py $IMAGE
+   ```
+
+   A release UF2 carries a filesystem image, and its list must include `0x100c8008`, the superblock of a
+   filesystem at `0x100C8000`. A `firmware.uf2` you built carries none, so the list cannot show it. That build
+   mounts at `0x100C8000` because the board definition at `596f456`,
+   [`mpconfigboard.h`](https://github.com/psychogenic/tinytapeout_rp2350b/blob/596f456/mpconfigboard.h), gives
+   4 MB of flash and leaves the first 800 KB to MicroPython. Stop here if neither holds.
+
+9. In the working directory, reboot the board into its bootloader, which brings up the `RP2350` drive within 60 seconds.
 
    ```console
    $ mpremote connect $DEV bootloader
-   $ until [ -e /dev/disk/by-label/RP2350 ]; do sleep 1; done
-   $ sudo mkdir -p /mnt/rp2350 && sudo mount /dev/disk/by-label/RP2350 /mnt/rp2350
-   $ sudo cp module.uf2 /mnt/rp2350/ && sync; sudo umount /mnt/rp2350
-   $ until [ -e $DEV ]; do sleep 1; done; sleep 3
-   $ mpremote connect $DEV run fw_probe.py > probe_module.txt
-   $ mpremote connect $DEV exec "import vgacap; print(vgacap.API)"
+   $ timeout 60 sh -c "until [ -e /dev/disk/by-label/RP2350 ]; do sleep 1; done"
    ```
 
-6. Capture with the module, as on [How to capture with the vgacap MicroPython module](how-to-capture.md), for as long as you need it.
+10. In the working directory, copy the module image to the drive, which disappears as the board starts the module firmware.
 
-7. In the working directory, write the restore image and probe the board again, whether or not the steps before succeeded.
+    ```console
+    $ sudo mount /dev/disk/by-label/RP2350 /mnt/rp2350 && sudo cp module.uf2 /mnt/rp2350/ && sync; sudo umount /mnt/rp2350
+    $ timeout 60 sh -c "until [ -e $DEV ]; do sleep 1; done"; sleep 3
+    ```
 
-   ```console
-   $ mpremote connect $DEV bootloader
-   $ until [ -e /dev/disk/by-label/RP2350 ]; do sleep 1; done
-   $ sudo mount /dev/disk/by-label/RP2350 /mnt/rp2350
-   $ sudo cp restore.uf2 /mnt/rp2350/ && sync; sudo umount /mnt/rp2350
-   $ until [ -e $DEV ]; do sleep 1; done; sleep 3
-   $ mpremote connect $DEV run fw_probe.py > probe_after.txt
-   $ mpremote connect $DEV run manifest.py > manifest_after.txt
-   ```
+11. In the working directory, probe the module firmware, whose `fw_sha256` line must equal `module.bin`'s hash.
 
-8. On the Welland bench, start the bridge again.
+    ```console
+    $ mpremote connect $DEV run fw_probe.py > probe_module.txt
+    $ grep fw_sha256 probe_module.txt; sha256sum module.bin
+    ```
 
-   ```console
-   $ sudo systemctl start fpgas-tt
-   ```
+12. In the working directory, compare the board's files with the backup, which prints `files identical`.
+
+    ```console
+    $ mpremote connect $DEV run manifest.py > manifest_module.txt
+    $ diff <(grep '^F ' manifest_before.txt) <(grep '^F ' manifest_module.txt) && echo files identical
+    ```
+
+13. In the working directory, import the module, which prints `1`.
+
+    ```console
+    $ mpremote connect $DEV exec "import vgacap; print(vgacap.API)"
+    ```
+
+14. Capture with the module, as on [How to capture with the vgacap MicroPython module](how-to-capture.md), for as long as you need it.
+
+15. In the working directory, bring the board to its bootloader for the restore, which skips the reboot when the `RP2350` drive is already there.
+
+    ```console
+    $ [ -e /dev/disk/by-label/RP2350 ] || mpremote connect $DEV bootloader
+    $ timeout 60 sh -c "until [ -e /dev/disk/by-label/RP2350 ]; do sleep 1; done"
+    ```
+
+16. In the working directory, copy the restore image to the drive, whether or not the steps before succeeded.
+
+    ```console
+    $ sudo mount /dev/disk/by-label/RP2350 /mnt/rp2350 && sudo cp restore.uf2 /mnt/rp2350/ && sync; sudo umount /mnt/rp2350
+    $ timeout 60 sh -c "until [ -e $DEV ]; do sleep 1; done"; sleep 3
+    ```
+
+17. In the working directory, probe the board and list its files again, which writes `probe_after.txt` and `manifest_after.txt`.
+
+    ```console
+    $ mpremote connect $DEV run fw_probe.py > probe_after.txt
+    $ mpremote connect $DEV run manifest.py > manifest_after.txt
+    ```
+
+18. On the Welland bench, start the bridge again.
+
+    ```console
+    $ sudo systemctl start fpgas-tt
+    ```
 
 ## Check
 
-The hashes match at each point. In step 4, the hashes of `restore.bin` and `backup/firmware_region.bin` are
-equal. After step 7, the board's firmware region is its own again, and so is every file:
+The board's firmware region is its own again, and so is every file:
 
 ```console
 $ grep fw_sha256 probe_before.txt probe_after.txt
@@ -114,21 +171,36 @@ The two `fw_sha256` lines show the same hash, `diff` prints `files identical`, a
 `ImportError`, as on the stock firmware. On fpga-1 the hashes were `69745ff3…` before and after, with all 65 files
 identical.
 
+The fpga-1 run made its module image with `uf2tool.py cut $IMAGE module.uf2 0x100C8000`. Step 6's `tobin` and
+`frombin` also cover a `firmware.uf2` that stops short of `0x100C8000`. For the release UF2 the two give
+byte-identical images, whose region hashes to `5dc230b2…`, the hash fpga-1 reported.
+
 ## If it fails
 
 | What you see | Likely cause | Fix |
 |---|---|---|
 | `"clients":` above 0 at step 2 | someone is using the board through the bridge | Wait until the count is 0 |
-| `MISMATCH` or `1 do not` at step 3 | a dump was cut short | Run step 3 again; never go on with a backup that does not match |
-| `restore.bin` and `backup/firmware_region.bin` hash differently at step 4 | the restore image is wrong | Make it again; do not write anything until they match |
-| No `RP2350` drive after `bootloader` | the board did not reach its bootloader | At the bench, hold BOOTSEL while resetting the board |
-| `fw_sha256` after step 5 differs from `module.bin` | the copy was cut short | Repeat the writing commands of step 5 |
-| `ImportError` for `vgacap` after step 5 | `IMAGE` is a firmware without the module | Restore with step 7, and start again with the right image |
-| A capture fails for want of `ttboard` | `IMAGE` is CI's rp2 compile check, which has no SDK | Restore with step 7, and use a release or a build from the release how-to |
-| The files differ after step 7 | the module firmware mounted a filesystem at another address | Restore the files from `backup/fs/` with `mpremote fs cp` |
+| `MISMATCH` or `1 do not` at step 5 | a dump was cut short | Repeat step 4; never go on with a backup that does not match |
+| Two different hashes at step 7 | the restore image is wrong | Repeat step 7; write nothing until they match |
+| Step 8 shows no `0x100c8008` for a release UF2 | that image mounts its filesystem elsewhere | Stop: writing it would lose the files |
+| Step 9's `timeout` ends with no `RP2350` drive | the board did not reach its bootloader | Stop; see the last row |
+| Step 10's `timeout` ends with no `$DEV` | the module firmware did not start | If `/dev/disk/by-label/RP2350` exists, the bootrom fell back to it: go to step 16 |
+| `fw_sha256` at step 11 differs from `module.bin` | the copy was cut short | Go to step 15 and restore |
+| Step 12 prints a difference | the module firmware mounted its filesystem elsewhere | Restore with steps 15 to 17, then the files as below |
+| `ImportError` at step 13 | `IMAGE` has no module | Restore with steps 15 to 17, and start again with the right image |
+| A capture fails for want of `ttboard` | `IMAGE` is CI's rp2 compile check, which has no SDK | Restore with steps 15 to 17, and use the module firmware |
+| Neither `$DEV` nor the `RP2350` drive appears | the board runs nothing that answers on USB | Stop; recovery needs someone at the Welland bench to hold BOOTSEL while resetting the board |
 
-`python3 fs_start.py $IMAGE` lists where a UF2 that holds a filesystem has the word `littlefs`. A release UF2's
-list includes `0x100c8008`, the superblock of a filesystem at `0x100C8000`, as the stock firmware's does.
+The fpgas-online broker's `power_cycle` switches the Pi's PoE port, so it restarts the Pi. A board that restarts
+with it boots the same flash again, so `power_cycle` cannot bring up the `RP2350` drive.
+
+To put the files back from `backup/`, make each directory in `dirs.txt`, then copy each file. `mkdir` reports a
+directory that exists already, which does no harm.
+
+```console
+$ while read d; do mpremote connect $DEV fs mkdir ":$d" < /dev/null; done < backup/dirs.txt
+$ cd backup/fs && find . -type f | while read f; do mpremote connect $DEV fs cp "$f" ":${f#.}" < /dev/null; done
+```
 
 ## Next
 
