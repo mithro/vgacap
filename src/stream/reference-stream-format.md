@@ -212,21 +212,7 @@ The chunk's length is exactly 4 + 8 × `pair_count`.
 - A key matches `[a-z][a-z0-9_]*` and appears once in a chunk.
 - The first line is `meta=open` or `meta=close`.
 - A reader ignores a key it does not know.
-
-Key is the key, Chunk the META kind that requires it, and Value what it holds.
-
-| Key | Chunk | Value |
-|---|---|---|
-| `project` | `meta=open` | the design's name, free text |
-| `calib_seconds` | `meta=open` | a decimal number as C `strtod` reads it |
-| `seconds` | `meta=open` | a decimal number as C `strtod` reads it |
-| `layout` | `meta=open` | `tt-um-43` |
-| `capture_after_clock` | `meta=close` | an unsigned decimal integer below 2^64 |
-| `frames` | `meta=close` | an unsigned decimal integer below 2^64 |
-| `status` | `meta=close` | one of the [run statuses](../../docs/frames-format.md#status) except `truncated` |
-| `override` | optional | free text |
-| `simulator` | optional | free text |
-| `harness` | optional | free text |
+- The keys a trace writes, and their values, are on [the simulation trace format](../../docs/trace-format.md#meta).
 
 ## The sample index, the clock bit and time
 
@@ -236,8 +222,10 @@ Key is the key, Chunk the META kind that requires it, and Value what it holds.
 | Clock bit of sample n | `clock_first` XOR (n AND 1), never stored |
 | Samples a clock | `samples_per_clock`: 2 with a clock bit, one low and one high |
 | Time of sample n | round(n × 10^12 / (`samples_per_clock` × `clock_hz`)) ps, halves rounded up, in exact integer arithmetic |
-| Time with `clock_hz` 0 | 0 |
 | Time past 2^64 - 1 ps | 2^64 - 1 |
+| `clock_hz` 0 | the clock is unknown, so samples have no time |
+
+The time rule is [`vgacap_sample_time_ps`](time.c) in `src/stream/time.c`, mirrored by [`python/vgacap/timebase.py`](../../python/vgacap/timebase.py). With `clock_hz` 0 that function returns 0 for every sample (`time.c` line 57), a placeholder, not a time. [`vgacap-export`](../tools/reference-options.md#vgacap-export) refuses such a header and exits 1 (`vgacap_export.c` line 603).
 
 ## Chunks a header allows
 
