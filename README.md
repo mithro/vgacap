@@ -44,7 +44,7 @@ calibration designs and their reference renders live in
   `TIME` chunks. The writer is callback-based C99 with no allocation, so it
   also builds into board firmware; the reader is incremental.
 - The reconstruction learns the sync timing and polarity from the signal,
-  tolerates glitch pulses, matches a mode table, and rebuilds frames from
+  tolerates glitch pulses, matches a [mode table](src/frame/modes.c), and rebuilds frames from
   continuous streams and from the whole frames or windows in `FRAM` chunks.
 
 **Capture sources.** Pick one by the hardware you have and how fast the
@@ -104,7 +104,7 @@ These commands assume a demo board on `/dev/ttyACM0` running a 640x480 VGA
 design, such as a [tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns)
 bitstream on an FPGA breakout. 500 kHz suits an RP2350 demo board; an
 RP2040 demo board keeps up with 60 kHz, where the demo needs `--seconds 21`
-or more for three frames.
+or more for its first picture.
 
 ```sh
 uv run ttcap capture serial:/dev/ttyACM0 --clock-hz 500000 --frames 2 --seconds 0 --out capture.vgacap
