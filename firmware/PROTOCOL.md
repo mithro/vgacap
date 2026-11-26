@@ -37,8 +37,8 @@ Item names a property of the serial link, and Value gives it.
 | DTR | must be asserted |
 | Writes while DTR is clear | none |
 | DTR dropped during a capture | ends the capture with nothing more written |
-| DTR through the fpgas.online bridge (`fpgas-tt`) | held for as long as the bridge holds the port |
-| DTR when a bridge client leaves | still held |
+| DTR through the fpgas.online bridge (`fpgas-tt`) | held for as long as the bridge holds the port ([`bridge.py`](https://github.com/fpgas-online/fpgas.online-tt/blob/7550559838eea5f6759498a5a32e273d552ff6e2/src/fpgas_tt/bridge.py)) |
+| DTR when a bridge client leaves | still held: the bridge keeps the port open without clients |
 
 ## Command lines
 
@@ -206,10 +206,18 @@ Command names the command, and Effect what it changes on the board.
 | `reboot` | a watchdog reboot, 100 ms after the reply |
 | `bootsel` | a reboot into the USB bootloader, 100 ms after the reply |
 
-GPIO 14 is left alone until the first `reset`, and GPIO 17 to 24 until the first `ui_in`. Step is a step of
-`asic_select`, and Pins what it does. The reply comes after the last step, about 20 ms plus 2 ms for each index.
-GPIO 1 erases an FPGA breakout's configuration when low, as [the GPIO table](reference-board.md#gpios) says.
-[How to select an ASIC project with the vgacap firmware](how-to-select-asic-project.md) says when to send it.
+Item names a fact about these commands, and Value gives it.
+
+| Item | Value |
+|---|---|
+| GPIO 14 before the first `reset` | left alone |
+| GPIO 17 to 24 before the first `ui_in` | left alone |
+| `asic_select` reply | after the last step below |
+| `asic_select` time | about 20 ms plus 2 ms for each index |
+| `asic_select` on an FPGA breakout | erases the FPGA: [GPIO 1](reference-board.md#gpios) goes low |
+| When to send `asic_select` | [How to select an ASIC project with the vgacap firmware](how-to-select-asic-project.md) |
+
+Step is a step of `asic_select`, and Pins what it does.
 
 | Step | Pins |
 |---|---|

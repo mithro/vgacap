@@ -29,6 +29,7 @@ THEMES = {
 
 HOST_X, FW_X = 112, 432          # the two lifelines
 ROW = 30                          # one message
+DOTTED = ' stroke-dasharray="2 3"'  # the end marker's line
 W = FW_X + 70 + MARGIN
 
 # (phase, kind, label, dashed): kind is cmd (host to firmware), reply
@@ -99,11 +100,10 @@ def draw(theme: str) -> str:
     phases: dict[str, list[int]] = {}
     for (phase, *_), y in zip(SEQUENCE, rows_y):
         phases.setdefault(phase, []).append(y)
-    for i, (phase, ys) in enumerate(phases.items()):
+    for phase, ys in phases.items():
         y0, y1 = ys[0] - 19, ys[-1] + 9
-        if True:
-            add(f'<rect x="{MARGIN}" y="{y0}" width="{W - 2 * MARGIN}" height="{y1 - y0}" '
-                f'rx="6" fill="{c["band"]}"/>')
+        add(f'<rect x="{MARGIN}" y="{y0}" width="{W - 2 * MARGIN}" height="{y1 - y0}" '
+            f'rx="6" fill="{c["band"]}"/>')
         ty = (y0 + y1) / 2
         add(f'<text x="{MARGIN + 14}" y="{ty}" class="phase" text-anchor="middle" '
             f'transform="rotate(-90 {MARGIN + 14} {ty})">{phase}</text>')
@@ -122,7 +122,7 @@ def draw(theme: str) -> str:
         width = 4 if kind == "data" else 1.75
         dash = ' stroke-dasharray="6 4"' if dashed else ""
         if kind == "end":
-            dash = ' stroke-dasharray="2 3"'
+            dash = DOTTED
         add(f'<line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" stroke="{c[kind]}" '
             f'stroke-width="{width}"{dash} marker-end="url(#m-{kind})"/>')
         if kind == "data":
@@ -139,8 +139,8 @@ def draw(theme: str) -> str:
     x = MARGIN + 20
     for kind, label in items:
         add(f'<line x1="{x}" y1="{ly}" x2="{x + 32}" y2="{ly}" stroke="{c[kind]}" '
-            f'stroke-width="{4 if kind == "data" else 1.75}"'
-            f'{chr(32) + "stroke-dasharray=" + chr(34) + "2 3" + chr(34) if kind == "end" else ""} marker-end="url(#m-{kind})"/>')
+            f'stroke-width="{4 if kind == "data" else 1.75}"{DOTTED if kind == "end" else ""} '
+            f'marker-end="url(#m-{kind})"/>')
         text(x + 40, ly + 4.5, label, "legend")
         x += 40 + 7.4 * len(label) + 22
     add("</svg>")

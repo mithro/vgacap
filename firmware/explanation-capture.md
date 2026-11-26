@@ -33,7 +33,7 @@ over TinyUSB's serial port, and ttcap writes them after its own `VGCH` header.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../docs/diagrams/firmware-datapath-dark.svg">
-  <img src="../docs/diagrams/firmware-datapath.svg" alt="uo_out enters PIO block 1 of the RP2350B, its RX FIFO and two DMA channels, a 440 KB arena, then USB to ttcap and a .vgacap file." width="60%">
+  <img src="../docs/diagrams/firmware-datapath.svg" alt="uo_out enters PIO block 1 of the RP2350B, its RX FIFO and two DMA channels, a 440 KB arena, then USB to ttcap and a .vgacap file." width="100%">
 </picture>
 
 *Figure 1: the firmware's capture data path
