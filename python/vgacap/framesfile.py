@@ -299,6 +299,8 @@ def read_frames_txt(path: str | os.PathLike) -> FramesFile:
     n_distinct = ls.uint("distinct_frames")
     store = ls.value("store")
     store_length = ls.uint("store_length")
+    if (ls.peek() or "").startswith("store_sha256: "):
+        raise FormatError("pre-XXH3 frames format (store_sha256); re-derive with vgacap-sample")
     store_xxh3_128 = ls.value("store_xxh3_128")
     _check_store(store, store_length, store_xxh3_128)
     centre = None
@@ -358,6 +360,8 @@ def read_frames_txt(path: str | os.PathLike) -> FramesFile:
 def read_hash_file(path: str | os.PathLike) -> HashFile:
     ls, _ = _read(path)
     method = ls.value("hash_method")
+    if method == "sha256-rgb6":
+        raise FormatError("pre-XXH3 hash method (sha256-rgb6); re-derive with vgacap-sample")
     if method not in hashes.DEFINITIONS:
         raise FormatError(f"unknown hash method {method!r}")
     for d in hashes.DEFINITIONS[method]:

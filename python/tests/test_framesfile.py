@@ -238,3 +238,20 @@ def test_reader_refuses_bad_store(tmp_path, tb_text, key, new):
     assert key in tb_text
     with pytest.raises(ff.FormatError):
         read_text(tmp_path, tb_text.replace(key, new, 1))
+
+
+def test_reader_names_the_pre_xxh3_frames_txt(tmp_path, tb_text):
+    """A frames.txt from before vgacap #62 is refused with a message that says
+    what it is and what to do, not a generic key mismatch."""
+    old = tb_text.replace("store_xxh3_128: " + "0123456789abcdef" * 2, "store_sha256: " + "0123456789abcdef" * 4, 1)
+    with pytest.raises(ff.FormatError, match=r"pre-XXH3 frames format \(store_sha256\); re-derive with vgacap-sample"):
+        read_text(tmp_path, old)
+
+
+def test_reader_names_the_pre_xxh3_hash_file(tmp_path):
+    d = c_files(tmp_path, "tb")
+    text = hash_path(d, "xxh3-128-rgb6").read_text().replace("hash_method: xxh3-128-rgb6", "hash_method: sha256-rgb6", 1)
+    p = tmp_path / "old.txt"
+    p.write_text(text)
+    with pytest.raises(ff.FormatError, match=r"pre-XXH3 hash method \(sha256-rgb6\); re-derive with vgacap-sample"):
+        ff.read_hash_file(p)
