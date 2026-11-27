@@ -77,6 +77,10 @@ if(VGACAP_HOST_EXTRAS)
   # --- sample: the shared calibration and frame clock (src/sample), host only ---
   add_library(vgacap_sample STATIC src/sample/calib.c src/sample/frameclock.c src/sample/tbv1.c src/sample/centrev1.c src/sample/hashes.c src/sample/outputs.c)
   target_link_libraries(vgacap_sample PUBLIC vgacap_frame vgacap_trace vgacap_stream vgacap_sha256 vgacap_zstd m)
+  # centre-v1's row loops vectorise with GCC at -O3 only: -O2's very cheap
+  # cost model refuses a loop that needs a scalar epilogue or widens its sum.
+  set_source_files_properties(src/sample/centrev1.c PROPERTIES COMPILE_OPTIONS
+    "$<$<AND:$<C_COMPILER_ID:GNU,Clang,AppleClang>,$<NOT:$<CONFIG:Debug>>>:-O3>")
   # vgacap-sample: a simulation trace to its samplers' stores (centre-v1 by default,
   # tb-v1 on request), frames.txt and hash files, in one pass. It reads the reader's stats (src/trace) for
   # VGACAP_SAMPLE_DEBUG.
@@ -164,6 +168,9 @@ if(VGACAP_HOST_EXTRAS)
   # centre-v1: libvgaframe's lines and frames, its own mid-pixel pick.
   vgacap_add_test(test_centrev1 tests/synth.c)
   target_link_libraries(test_centrev1 PRIVATE vgacap_sample)
+  # Its timing (label perf, run by hand like test_trace_push_speed below).
+  add_test(NAME test_centrev1_speed COMMAND test_centrev1 --speed)
+  set_tests_properties(test_centrev1_speed PROPERTIES LABELS perf)
   # frames.txt and the hash files.
   vgacap_add_test(test_outputs)
   target_link_libraries(test_outputs PRIVATE vgacap_sample)
@@ -186,8 +193,6 @@ if(VGACAP_HOST_EXTRAS)
   add_test(NAME test_trace_push_speed COMMAND test_trace_write --speed)
   set_tests_properties(test_trace_push_speed PROPERTIES
     LABELS perf WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
-  add_test(NAME test_centrev1_speed COMMAND test_centrev1 --speed)
-  set_tests_properties(test_centrev1_speed PROPERTIES LABELS perf)
 else()
   # Without the host extras vgacap-dump cannot read a trace and must say so.
   # PASS_REGULAR_EXPRESSION replaces the exit-code check, so the wrapper

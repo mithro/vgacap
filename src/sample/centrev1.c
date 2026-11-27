@@ -290,6 +290,61 @@ static int64_t latest_end(const vgafc_t *fc, uint64_t lo, uint64_t hi) {
     return (int64_t)(a - 1);
 }
 
+// on_raw's row loops. Each takes its bounds by value and its rows as restrict
+// pointers: read through the sampler's struct, the bounds could alias the
+// uint8_t stores, and GCC then cannot count the iterations and does not
+// vectorise. Branch-free, so that they vectorise (the build gives this file
+// -O3; CMakeLists.txt).
+
+// The pick at cpp 1, the window's clocks q[0..n) being consecutive: a clock
+// is written when its bit 7 is set (then its colour is the low six bits),
+// else missing (stored as 0). Returns the written count.
+static uint32_t pick_row(uint8_t *restrict out, const uint8_t *restrict q, uint32_t n) {
+    uint32_t written = 0;
+    for (uint32_t p = 0; p < n; p++) {
+        const uint8_t b = q[p];
+        out[p] = (uint8_t)(b & 0x3F & -(b >> 7));
+        written += (uint32_t)(b >> 7);
+    }
+    return written;
+}
+
+// The pick at any other cpp: pixel p is clock xs[p], or missing when -1.
+static uint32_t pick_row_xs(uint8_t *restrict out, const uint8_t *restrict src,
+                            const int64_t *restrict xs, uint32_t n) {
+    uint32_t written = 0;
+    for (uint32_t p = 0; p < n; p++) {
+        const int64_t x = xs[p];
+        const uint8_t b = x >= 0 ? src[x] : 0;
+        out[p] = (uint8_t)(b & 0x3F & -(b >> 7));
+        written += (uint32_t)(b >> 7);
+    }
+    return written;
+}
+
+// The activity map's row: every lit clock (written, colour not 0).
+static void map_row(uint8_t *restrict m, const uint8_t *restrict src, size_t n) {
+    for (size_t x = 0; x < n; x++) {
+        const uint8_t b = src[x];
+        m[x] |= (uint8_t)((b >> 7) & ((b & 0x3F) != 0));
+    }
+}
+
+// Colour changes in clocks src[1..n]: written, as is the clock before, with
+// a different colour; *offg counts those where off[x - 1] is set.
+static uint32_t changes_row(const uint8_t *restrict src, const uint8_t *restrict off, size_t n,
+                            uint32_t *offg) {
+    uint32_t changes = 0, og = 0;
+    for (size_t x = 1; x <= n; x++) {
+        const uint8_t a = src[x - 1], b = src[x];
+        const uint8_t ch = (uint8_t)(((a & b) >> 7) & (((a ^ b) & 0x3F) != 0));
+        changes += ch;
+        og += (uint32_t)(ch & off[x - 1]);
+    }
+    *offg = og;
+    return changes;
+}
+
 static void on_raw(void *user, const vgaframe_raw_t *r) {
     centrev1_t *s = user;
     if (!s->calibrated || !s->geo.ok || !s->have_start || !s->v_found) return;
@@ -297,67 +352,37 @@ static void on_raw(void *user, const vgaframe_raw_t *r) {
     if (k < 0) return;                              // a gap
     const vgasample_geometry_t *g = &s->geo;
     const uint64_t rows = r->lines < s->lines ? r->lines : s->lines;
-    const size_t stride = r->stride;
+    const size_t stride = r->stride, L = (size_t)s->L;
+    const uint32_t width = g->width, height = g->height;
 
-    // The pick. A clock is written when its bit 7 is set (then its colour
-    // is the low six bits), else missing (stored as 0). The loops are
-    // branch-free so that they vectorise; at cpp 1 the window's clocks are
-    // consecutive (xs0).
+    // The pick; at cpp 1 the window's clocks are consecutive (xs0).
     uint32_t missing = 0;
-    for (uint32_t y = 0; y < g->height; y++) {
+    for (uint32_t y = 0; y < height; y++) {
         const int64_t row = (int64_t)s->vpl + g->vback + (int64_t)y;
-        uint8_t *out = s->frame + (size_t)y * g->width;
+        uint8_t *out = s->frame + (size_t)y * width;
         if (row < 0 || (uint64_t)row >= rows) {
-            memset(out, 0, g->width);
-            missing += g->width;
+            memset(out, 0, width);
+            missing += width;
             continue;
         }
         const uint8_t *src = r->raw + (size_t)row * stride;
-        uint32_t written = 0;
-        if (s->xs0 >= 0) {
-            const uint8_t *q = src + s->xs0;
-            for (uint32_t p = 0; p < g->width; p++) {
-                const uint8_t b = q[p];
-                out[p] = (uint8_t)(b & 0x3F & -(b >> 7));
-                written += (uint32_t)(b >> 7);
-            }
-        } else {
-            for (uint32_t p = 0; p < g->width; p++) {
-                const int64_t x = s->xs[p];
-                const uint8_t b = x >= 0 ? src[x] : 0;
-                out[p] = (uint8_t)(b & 0x3F & -(b >> 7));
-                written += (uint32_t)(b >> 7);
-            }
-        }
-        missing += g->width - written;
+        const uint32_t written = s->xs0 >= 0 ? pick_row(out, src + s->xs0, width)
+                                             : pick_row_xs(out, src, s->xs, width);
+        missing += width - written;
     }
 
-    // The activity map: every lit clock (written, colour not 0) of the line
-    // and frame.
-    for (uint64_t row = 0; row < rows; row++) {
-        const uint8_t *src = r->raw + (size_t)row * stride;
-        uint8_t *m = s->map + (size_t)(row * s->L);
-        for (uint64_t x = 0; x < s->L; x++) {
-            const uint8_t b = src[x];
-            m[x] |= (uint8_t)((b >> 7) & ((b & 0x3F) != 0));
-        }
-    }
+    // The activity map, over every clock of the line and frame.
+    for (uint64_t row = 0; row < rows; row++)
+        map_row(s->map + (size_t)row * L, r->raw + (size_t)row * stride, L);
 
-    // Colour changes inside the window: clocks x of [cc0, cc1) written, as
-    // is clock x - 1, with a different colour; and those off the pixel grid
-    // (s->off, all 0 unless cpp is whole).
-    const uint8_t *off = s->off;
-    for (uint32_t y = 0; y < g->height; y++) {
+    // Colour changes inside the window: clocks x of [cc0, cc1), and those
+    // off the pixel grid (s->off, all 0 unless cpp is whole).
+    const size_t ncc = (size_t)(s->cc1 - s->cc0);
+    for (uint32_t y = 0; y < height; y++) {
         const int64_t row = (int64_t)s->vpl + g->vback + (int64_t)y;
         if (row < 0 || (uint64_t)row >= rows) continue;
-        const uint8_t *src = r->raw + (size_t)row * stride;
-        uint32_t changes = 0, offg = 0;
-        for (int64_t x = s->cc0; x < s->cc1; x++) {
-            const uint8_t a = src[x - 1], b = src[x];
-            const uint8_t ch = (uint8_t)(((a & b) >> 7) & (((a ^ b) & 0x3F) != 0));
-            changes += ch;
-            offg += (uint32_t)(ch & off[x - s->cc0]);
-        }
+        uint32_t offg;
+        const uint32_t changes = changes_row(r->raw + (size_t)row * stride + s->cc0 - 1, s->off, ncc, &offg);
         s->colour_changes += changes;
         s->off_grid += offg;
     }
