@@ -264,3 +264,80 @@ def test_side_set_to_pindirs_is_refused():
         _sm(board, prog, sideset_base=CLK)
 
 
+# -- push iffull -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bits, pushed", [(7, False), (8, True)])
+def test_push_iffull_pushes_only_at_the_threshold(bits, pushed):
+    board = _board()
+    rp2 = board.modules()["rp2"]
+
+    @rp2.asm_pio(in_shiftdir=rp2.PIO.SHIFT_LEFT, autopush=False, push_thresh=8)
+    def p():
+        set(x, 31)  # noqa: F821
+        in_(x, bits)  # noqa: F821
+        push(iffull, block)  # noqa: F821
+        label("end")  # noqa: F821
+        jmp("end")  # noqa: F821
+
+    sm, pio_sm = _sm(board, p)
+    sm.active(1)
+    board.advance(3)
+    assert pio_sm.pc == 3  # iffull with nothing to do still takes a cycle
+    if pushed:
+        assert pio_sm.rx == [0x1F] and pio_sm.isr_count == 0
+    else:
+        assert pio_sm.rx == [] and (pio_sm.isr, pio_sm.isr_count) == (0x1F, 7)
+
+
+def test_push_iffull_counts_shifts_across_instructions_to_32():
+    board = _board()
+    rp2 = board.modules()["rp2"]
+
+    @rp2.asm_pio(in_shiftdir=rp2.PIO.SHIFT_LEFT, autopush=False, push_thresh=32)
+    def p():
+        set(x, 5)  # noqa: F821
+        label("loop")  # noqa: F821
+        in_(x, 8)  # noqa: F821
+        push(iffull, block)  # noqa: F821
+        jmp("loop")  # noqa: F821
+
+    sm, pio_sm = _sm(board, p)
+    sm.active(1)
+    board.advance(1 + 3 * 3)
+    assert pio_sm.rx == [] and pio_sm.isr_count == 24
+    board.advance(3)
+    assert pio_sm.rx == [0x05050505]
+
+
+def test_push_iffull_block_stalls_on_a_full_fifo_with_the_clock_held_low():
+    board = _board()
+    rp2 = board.modules()["rp2"]
+
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW, in_shiftdir=rp2.PIO.SHIFT_LEFT,
+                 autopush=False, push_thresh=32)
+    def p():
+        label("loop")  # noqa: F821
+        in_(x, 32).side(1)  # noqa: F821
+        push(iffull, block).side(0)[2]  # noqa: F821
+        jmp("loop").side(0)  # noqa: F821
+
+    sm, pio_sm = _sm(board, p, sideset_base=CLK)
+    start = board.now
+    sm.active(1)
+    board.advance(200)
+    # Four words fill the RX FIFO (5 cycles each); the fifth push stalls
+    # low, delay not started.
+    assert len(pio_sm.rx) == 4 and pio_sm.pc == 1
+    assert board.blocks[1].fdebug & (1 << 0)  # RXSTALL
+    assert _pins(board, CLK, start, 22) == ([1] + [0] * 4) * 4 + [1, 0]
+    assert _pins(board, CLK, start + 21, 179) == [0] * 179
+    freed = board.now
+    assert sm.get() == 0
+    board.advance(5)
+    # It pushes in the cycle the FIFO has room, waits its 2 delay cycles,
+    # jumps, and the clock rises again.
+    assert _pins(board, CLK, freed, 5) == [0, 0, 0, 0, 1]
+    assert len(pio_sm.rx) == 4
+
+

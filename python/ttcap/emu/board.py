@@ -359,9 +359,12 @@ class _SM:
                 raise BoardError("bad push/pull 0x%04x" % word)
             pull = (word >> 7) & 1
             block_ = (word >> 5) & 1
-            if (word >> 6) & 1:
-                raise BoardError("push iffull / pull ifempty not emulated")
-            return (_PULL if pull else _PUSH, block_)
+            if_ = (word >> 6) & 1
+            if pull:
+                if if_:
+                    raise BoardError("pull ifempty not emulated")
+                return (_PULL, block_)
+            return (_PUSH, block_, if_)
         if op == 5:
             dest, mov_op, src = (word >> 5) & 7, (word >> 3) & 3, word & 7
             if dest in (0, 3, 4) or src in (4, 5):
@@ -492,6 +495,11 @@ class _SM:
                 self.now += 1 + d
                 self._next_pc()
             elif kind == _PUSH:
+                if ins[2] and self.isr_count < self.push_thresh:
+                    # IfFull below the threshold: does nothing, in one cycle.
+                    self.now += 1 + d
+                    self._next_pc()
+                    continue
                 if len(self.rx) >= self.rx_depth:
                     if ins[1]:
                         self._rx_stalled()
