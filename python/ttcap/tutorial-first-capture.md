@@ -40,7 +40,7 @@ Plug the demo board in by USB. It appears as a serial device, `/dev/ttyACM0` whe
 uv run ttcap probe serial:/dev/ttyACM0
 ```
 
-It answers with two lines, its firmware's version and its pin map. The tt07 board answered like this ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
+It answers with two lines, its firmware's version and its pin map. The tt07 board answered like this in [the 2026-11-26 bench run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap):
 
 ```text
 sys.version: 3.4.0; MicroPython v1.24.0 on 2024-10-25
@@ -67,7 +67,7 @@ bytes=... samples=... chunks=... seconds=... overruns=0 dropped=0 rxstall=0 ...
 wrote capture.vgacap
 ```
 
-`overruns=0`, `dropped=0` and `rxstall=0` say no sample was lost. The same command on the same board was clean again on 2026-11-26, after a restart ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)).
+`overruns=0`, `dropped=0` and `rxstall=0` say no sample was lost. The same command on the same board was clean again in the 2026-11-26 bench run, after a restart.
 
 ## 4. Turn the capture into a PNG
 
@@ -78,7 +78,7 @@ mkdir -p out
 uv run ttcap png capture.vgacap out/frame
 ```
 
-Each frame found is listed, then the count written. On the tt07 board it printed this ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
+Each frame found is listed, then the count written. On the tt07 board it printed this in the 2026-11-26 bench run:
 
 ```text
 frame 0: 640x480 mode=640x480@60 cpl=800 lpf=525 hsync=pos vsync=pos partial=0 glitches=0
@@ -96,11 +96,11 @@ Open `out/frame-0000.png`. It is the picture your design drew, rebuilt from its 
 
 | Step | What you see | Likely cause | Fix |
 |---|---|---|---|
-| 2 | `probe failed:` | the port is wrong or busy | see [How to probe a demo board](how-to-probe-board.md) |
+| 2 | `probe failed:` | the port is wrong or busy | see How to probe a demo board, linked under step 2 |
 | 3 | `board error: MemoryError`, with `bytes=0` | the firmware's heap is too full for the capture buffers | restart the board to the stock firmware's start state, then repeat step 3 |
 | 4 | `png failed:` | the capture holds no whole frame | see [How to turn a capture into PNG images](how-to-render-png.md) |
 
-[How to restart a demo board to the stock firmware's start state](../../tools/how-to-restart-a-board.md) shows the restart, with `serial:/dev/ttyACM0` as the link. A failed capture still prints `wrote capture.vgacap`, but exits 1 and holds no samples. On the tt07 board the first capture failed this way with `mem_free=74880`, and the retry after a restart succeeded ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)).
+[How to restart a demo board to the stock firmware's start state](../../tools/how-to-restart-a-board.md) shows the restart, with `serial:/dev/ttyACM0` as the link. A failed capture still prints `wrote capture.vgacap`, but exits 1 and holds no samples. On the tt07 board the first capture failed this way with `mem_free=74880`, and the retry after a restart succeeded, in the 2026-11-26 bench run.
 
 ## Next
 
