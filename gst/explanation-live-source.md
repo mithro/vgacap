@@ -19,7 +19,7 @@ A board samples into two DMA buffers, and can stop only at a buffer's end. So a 
 
 So on stop, the element sends SIGINT to the child's process group and waits. While it waits, it reads and discards the child's output, so that a full pipe cannot block the child. If `stop-timeout` passes, it closes the pipe, which `ttcap` takes as a clean end. If the child is still alive after that, it is killed. The child is reaped only at the end, so no signal reaches a process that is no longer the element's.
 
-The stop runs these steps in order, and goes to the reaping as soon as the child has ended.
+The stop runs these steps in order, and goes straight to the reaping once the child has ended.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/stop-sequence-dark.svg">
