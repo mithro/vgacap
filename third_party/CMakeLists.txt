@@ -40,6 +40,9 @@ target_compile_definitions(vgacap_fst PRIVATE
   HAVE_LIBPTHREAD FST_WRITER_PARALLEL HAVE_FSEEKO HAVE_REALPATH)
 target_link_libraries(vgacap_fst PUBLIC vgacap_zlib Threads::Threads)
 
-# --- SHA-256 (public domain) ---
-add_library(vgacap_sha256 STATIC sha256/sha256.c)
-target_include_directories(vgacap_sha256 SYSTEM PUBLIC sha256)
+# --- xxHash (BSD-2-Clause): XXH3-128, the frames format's digests ---
+add_library(vgacap_xxhash STATIC xxhash/xxhash.c)
+target_include_directories(vgacap_xxhash SYSTEM PUBLIC xxhash)
+# -O3, as xxHash's own Makefile builds it: XXH3 at -O2 runs at about 6 GB/s on
+# big-storage (SSE2, a 640x480 frame in cache), at -O3 about 10 GB/s.
+target_compile_options(vgacap_xxhash PRIVATE -O3)

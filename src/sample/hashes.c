@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
-// The frame hash methods (see vgacap/sample.h): sha256-rgb6 and
+// The frame hash methods (see vgacap/sample.h): xxh3-128-rgb6 and
 // fnv1a64-tb2026-rgb888. python/vgacap/hashes.py is the reference.
 #include "vgacap/sample.h"
 
 #include <string.h>
 
-#include "sha256.h"
+#include <xxhash.h>
 
 #define FNV_PRIME 0x100000001b3ULL
 // tb.cpp's 1469598103934665603: the standard 0xcbf29ce484222325 with a digit lost.
 #define FNV_BASIS 0x14650fb0739d0383ULL
 
-void vgahash_sha256_rgb6(const uint8_t *rgb6, size_t n, uint8_t out[32]) {
-    SHA256_CTX ctx;
-    sha256_init(&ctx);
-    sha256_update(&ctx, rgb6, n);
-    sha256_final(&ctx, out);
+void vgahash_xxh3_128_rgb6(const uint8_t *rgb6, size_t n, uint8_t out[16]) {
+    XXH128_canonical_t c;
+    XXH128_canonicalFromHash(&c, XXH3_128bits(rgb6, n));
+    memcpy(out, c.digest, 16);
 }
 
 uint64_t vgahash_fnv1a64_tb2026_rgb888(const uint8_t *rgb6, size_t n) {
@@ -29,9 +28,9 @@ uint64_t vgahash_fnv1a64_tb2026_rgb888(const uint8_t *rgb6, size_t n) {
     return h;
 }
 
-static const char *const SHA256_DEF[] = {
-    "SHA-256 of the frame as rgb6: one byte per pixel, R<<4 | G<<2 | B,",
-    "row-major, active area only, at native resolution.",
+static const char *const XXH3_DEF[] = {
+    "XXH3-128 (xxHash, seed 0, canonical big-endian) of the frame as rgb6: one byte",
+    "per pixel, R<<4 | G<<2 | B, row-major, active area only, at native resolution.",
     NULL,
 };
 static const char *const FNV_DEF[] = {
@@ -43,7 +42,7 @@ static const char *const FNV_DEF[] = {
 };
 
 const char *const *vgahash_definition(const char *method) {
-    if (strcmp(method, "sha256-rgb6") == 0) return SHA256_DEF;
+    if (strcmp(method, "xxh3-128-rgb6") == 0) return XXH3_DEF;
     if (strcmp(method, "fnv1a64-tb2026-rgb888") == 0) return FNV_DEF;
     return NULL;
 }

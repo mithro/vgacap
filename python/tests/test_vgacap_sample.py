@@ -8,7 +8,6 @@ vgacap.synthtrace, rewritten by build/trace-recode as zstd traces with the
 writer's block boundaries."""
 from __future__ import annotations
 import gzip
-import hashlib
 import os
 import pathlib
 import struct
@@ -17,6 +16,7 @@ import threading
 
 import numpy as np
 import pytest
+import xxhash
 import zstandard
 
 from vgacap import calib, hashes, synthtrace, tbv1
@@ -121,8 +121,8 @@ def build_ff(sampler, sampler_status, mode, width, height, cpp, capture, frames,
         recs.append(ff.Frame(index[rgb6], start, missing))
     store = b"".join(distinct)
     f = ff.FramesFile(PROJECT, status, sampler, sampler_status, width, height, mode, HZ, cpp, capture,
-                      store_name(sampler), len(store), hashlib.sha256(store).hexdigest(),
-                      [hashes.sha256_rgb6(b) for b in distinct], recs, centre)
+                      store_name(sampler), len(store), xxhash.xxh3_128_hexdigest(store),
+                      [hashes.xxh3_128_rgb6(b) for b in distinct], recs, centre)
     return f, distinct
 
 
@@ -153,12 +153,13 @@ def check_outputs(out, ref, samplers=SAMPLERS):
         got = ff.read_frames_txt(d / "frames.txt")
         store = read_store(d / store_name(s))
         assert store == b"".join(distinct)
-        assert hashlib.sha256(store).hexdigest() == got.store_sha256 and len(store) == got.store_length
+        assert xxhash.xxh3_128_hexdigest(store) == got.store_xxh3_128 and len(store) == got.store_length
         size = got.width * got.height
-        assert [hashes.sha256_rgb6(store[i * size:(i + 1) * size]) for i in range(len(distinct))] == got.distinct
-        sha = [hashes.sha256_rgb6(b) for b in distinct]
-        assert (d / "frame_hashes.sha256-rgb6.txt").read_text() == \
-            ff.format_hash_file(ff.HashFile.from_frames(want, "sha256-rgb6", sha))
+        assert [hashes.xxh3_128_rgb6(store[i * size:(i + 1) * size]) for i in range(len(distinct))] == got.distinct
+        xxh = [hashes.xxh3_128_rgb6(b) for b in distinct]
+        assert (d / "frame_hashes.xxh3-128-rgb6.txt").read_text() == \
+            ff.format_hash_file(ff.HashFile.from_frames(want, "xxh3-128-rgb6", xxh))
+        assert not (d / "frame_hashes.sha256-rgb6.txt").exists()
         fnv_path = d / "frame_hashes.fnv1a64-tb2026-rgb888.txt"
         if s == "tb-v1":
             fnv = [f"{hashes.fnv1a64_tb2026_rgb888(b):016x}" for b in distinct]
@@ -339,7 +340,7 @@ def test_sample_no_sync(tmp_path):
         assert (f.status, f.mode, f.frames, f.distinct) == ("ok", "unknown", [], [])
         assert f.sampler_status == "no-sync"
         assert read_store(tmp_path / "out" / s / store_name(s)) == b""
-        h = ff.read_hash_file(tmp_path / "out" / s / "frame_hashes.sha256-rgb6.txt")
+        h = ff.read_hash_file(tmp_path / "out" / s / "frame_hashes.xxh3-128-rgb6.txt")
         assert h.hashes == [] and h.sampler_status == "no-sync"
 
 
