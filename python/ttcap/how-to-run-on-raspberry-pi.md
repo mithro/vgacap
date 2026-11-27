@@ -46,7 +46,7 @@ review: 2027-05-27
 
 The `export` in step 2 matters where the Pi already has a uv. A bench Pi also has uv 0.13.1 in `/usr/local/bin`, which a shell without `~/.local/bin` first on `PATH` will find ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). Its uvx there is 0.13.1 too, with its own cache, so step 2 copies `uvx` as well ([bench run of PR #56](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56), 2026-11-27, on fpga-1's Pi). A Pi that printed 64 in step 1 takes uv from its [installation page](https://docs.astral.sh/uv/getting-started/installation/) and skips step 2.
 
-On this checkout `ttcap png` needs Pillow, from `uv sync --extra synth`, and the C tools. On a 32-bit Pi, that sync builds numpy and Pillow from source. It took 10.5 min on fpga-1's Pi 4. On tt09's Pi 3B+, whose root filesystem is held in RAM, it ran out of room: 33 MB were free after 21 s. Both are from the [bench run of PR #56](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56), 2026-11-27, so render captures on a workstation.
+On this checkout `ttcap png` needs Pillow, from `uv sync --extra synth`, and the C tools. On a 32-bit Pi, that sync builds numpy and Pillow from source. It took 10.5 min on fpga-1's Pi. On tt09's Pi 3B+, whose root filesystem is held in RAM, it ran out of room: 33 MB were free after 21 s. Both are from the [bench run of PR #56](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56), 2026-11-27, so render captures on a workstation.
 
 ## Check
 
