@@ -947,10 +947,19 @@ class Board:
             if cycle == last_cycle:
                 # Two values in one cycle: the later one is what the pin shows.
                 trace.pop()
+                if not trace:
+                    # Over the value driven at construction, which on a
+                    # board lasts until the state machine starts,
+                    # microseconds later: an edge into or out of it is real,
+                    # so any rise into it stays and a rise out of it counts.
+                    if value and not last_value:
+                        rises.append(cycle)
+                    trace.append((cycle, value))
+                    return
                 if rises and rises[-1] == cycle:
                     rises.pop()
-                if not trace or trace[-1][1] != value:
-                    if value and trace:
+                if trace[-1][1] != value:
+                    if value:
                         rises.append(cycle)
                     trace.append((cycle, value))
                 return

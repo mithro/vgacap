@@ -667,3 +667,22 @@ def test_reading_uo_out_from_a_state_machine_the_clock_is_not_on_is_refused():
     sm2.active(1)
     with pytest.raises(BoardError, match="clocked by another state machine"):
         board.advance(4)
+
+
+def test_a_rise_driven_in_the_construction_cycle_is_an_edge():
+    # The initial low is driven at construction and the first `.side(1)` in
+    # the same emulated cycle; on a board the low lasts until active(1),
+    # microseconds later, so the design sees that edge.
+    board = _board()
+    rp2 = board.modules()["rp2"]
+
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW)
+    def p():
+        nop().side(1)[1]  # noqa: F821
+        nop().side(0)[1]  # noqa: F821
+
+    sm, _ = _sm(board, p, sideset_base=CLK)
+    start = board.now
+    sm.active(1)
+    board.advance(40)
+    assert board.pio_rises[CLK] == [start + 4 * i for i in range(10)]
