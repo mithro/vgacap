@@ -24,9 +24,9 @@ option is on [ttcap commands and options](../python/ttcap/reference-commands.md)
 - The design's name for `--project`, or nothing when it is enabled already, and its project clock in Hz.
   On the Welland bench an uploaded design is enabled through the bridge, after the restart to the stock firmware's start state, as in steps 14 to
   17 of [How to flash the module firmware and restore the board's own](how-to-flash.md): `tt.shuttle` does not know
-  uploaded designs.
-- For step 4, a machine with CMake and a C compiler. On a Welland bench Pi, which has no CMake package, run
-  CMake from PyPI through `uvx`, as in step 2 of [How to run the hardware-in-the-loop check on the board's Pi](../tools/how-to-run-hil-on-the-pi.md).
+  uploaded designs. A capture of a bench board's idle display holds no VGA frames, and `ttcap png` prints `frames=0`.
+- For step 4, a workstation with CMake, a C compiler and a vgacap checkout with `uv sync` run, for Pillow.
+  A bench Pi has no room or time for Pillow, as [How to run ttcap on a Raspberry Pi](../python/ttcap/how-to-run-on-raspberry-pi.md) says, so step 4 copies the capture there.
 
 ## Steps
 
@@ -48,11 +48,12 @@ option is on [ttcap commands and options](../python/ttcap/reference-commands.md)
    $ uv run --no-sync ttcap capture --firmware mpy-module serial:$DEV --clock-hz 500000 --seconds 4 --out stream.vgacap
    ```
 
-4. On a machine with `build/vgacap-frames` built, render a capture to PNG images, which writes `frame-0000.png` and on.
+4. In the workstation's checkout, copy the capture from the Pi and render it to PNG images, which writes `frame-0000.png` and on.
 
    ```console
+   $ scp -J tweed.welland.mithis.com pi@<pi>:vgacap/frame.vgacap .
    $ cmake -S . -B build && cmake --build build --target vgacap-frames
-   $ uv run --no-sync ttcap png frame.vgacap frame
+   $ uv run ttcap png frame.vgacap frame
    ```
 
 Add `--project <name>` to a capture to enable a design first, as with the stock firmware.

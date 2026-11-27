@@ -51,9 +51,9 @@ bytes=769803 samples=769600 chunks=4 seconds=4.039 overruns=0 dropped=0 rxstall=
 wrote frame.vgacap
 ```
 
-`ttcap png frame.vgacap frame` renders the project's picture, on a machine with `build/vgacap-frames` built
-(`cmake --build build --target vgacap-frames`). On a Welland bench Pi, build it as in step 2 of
-[How to run the hardware-in-the-loop check on the board's Pi](../tools/how-to-run-hil-on-the-pi.md). On the tt09 board that gave 2 frames with positive syncs and 0 glitches ([bench result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1)).
+`ttcap png frame.vgacap frame` renders the project's picture. On the Welland bench, copy the capture to a
+workstation and render it there, as in step 4 of [How to capture with the vgacap firmware](how-to-capture.md):
+a bench Pi has no room or time for Pillow. On the tt09 board that gave 2 frames with positive syncs and 0 glitches ([bench result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1)).
 
 ## If it fails
 
