@@ -77,7 +77,7 @@ typedef struct {
     void (*finish)(void *st);
 } fs_writer_t;
 
-extern const fs_writer_t fs_w_null, fs_w_vgch2, fs_w_planar, fs_w_events, fs_w_runs, fs_w_raw, fs_w_fst, fs_w_fst_clk,
+extern const fs_writer_t fs_w_null, fs_w_vgch2, fs_w_planar, fs_w_events, fs_w_runs, fs_w_clog, fs_w_raw, fs_w_fst, fs_w_fst_clk,
     fs_w_lxt2, fs_w_vcd;
 const fs_writer_t *fs_writer_by_name(const char *name);
 

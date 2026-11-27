@@ -15,7 +15,7 @@
 const char *const fs_comp_name[C_COUNT] = { "none", "zstd-5", "zstd-1", "zstd1", "zstd3", "zstd9", "zstd1-long27",
                                             "lz4", "lz4hc9", "deflate1", "deflate6", "zstd1-nocheck" };
 const char *const fs_transform_name[T_COUNT] = { "pack6", "xor6", "byteplanes", "xor-byteplanes", "xor-bitplanes",
-                                                 "pack6clk", "planar-runs" };
+                                                 "pack6clk", "planar-runs", "changelog-planar" };
 
 int fs_comp_by_name(const char *name) {
     for (int i = 0; i < C_COUNT; i++)
@@ -226,6 +226,40 @@ int fs_transform(int t, const uint64_t *raw, uint64_t n, uint64_t first_sample, 
     }
     default: return -1;
     }
+}
+
+int fs_clog_to_planar(const uint64_t *rec, uint64_t nrec, uint64_t n, uint64_t first_sample, uint8_t **out,
+                      size_t *lens) {
+    const int cb = fs_off[7];
+    const uint64_t noclk = ~(0xffull << (8 * cb));
+    uint8_t *p[8];
+    uint64_t start[8];
+    int map[8], np = 0;
+    for (int k = 0; k < 8; k++)
+        if (k != cb) { map[np] = k; p[np] = out[np]; start[np] = first_sample; np++; }
+    uint64_t prev = nrec ? rec[1] & noclk : 0;   // the block's first record: its state
+    for (uint64_t r = 1; r < nrec; r++) {
+        for (int h = 0; h < 2; h++) {
+            const uint64_t s = rec[3 * r] + (uint64_t)h, v = rec[3 * r + 1 + (uint64_t)h] & noclk;
+            uint64_t x = v ^ prev;
+            while (x) {   // the changed bytes only (the clk byte never is one)
+                const int k = __builtin_ctzll(x) >> 3, j = k < cb ? k : k - 1;
+                if (s != start[j]) {
+                    *p[j] = (uint8_t)(prev >> (8 * k));
+                    p[j] += 1 + vgacap_leb128_put_inline(p[j] + 1, s - start[j]);
+                    start[j] = s;
+                }
+                x &= ~(0xffull << (8 * k));
+            }
+            prev = v;
+        }
+    }
+    for (int j = 0; j < np; j++) {
+        *p[j] = (uint8_t)(prev >> (8 * map[j]));
+        p[j] += 1 + vgacap_leb128_put_inline(p[j] + 1, first_sample + n - start[j]);
+        lens[j] = (size_t)(p[j] - out[j]);
+    }
+    return np;
 }
 
 static inline uint64_t clk_of(uint64_t s) { return (s & 1) ? FS_CLK_RAW : 0; }

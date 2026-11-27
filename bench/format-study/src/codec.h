@@ -22,7 +22,8 @@ int fs_decompress(int comp, const uint8_t *src, size_t csize, uint8_t *dst, size
 // ---- transforms of the raw candidate's blocks (two raw images a clock) ---------------
 // T_PLANAR: the planar candidate's 7 streams of (u8 value, LEB128 run), made
 // from raw images on the background thread (raw capture, planar storage).
-enum { T_PACK6, T_XOR6, T_BSHUF, T_XBSHUF, T_XBITSHUF, T_PACK6CLK, T_PLANAR, T_COUNT, T_IDENTITY = 100 };
+// T_CLOG: the changelog writer's records to the same planar streams.
+enum { T_PACK6, T_XOR6, T_BSHUF, T_XBSHUF, T_XBITSHUF, T_PACK6CLK, T_PLANAR, T_CLOG, T_COUNT, T_IDENTITY = 100 };
 extern const char *const fs_transform_name[T_COUNT];
 int fs_transform_by_name(const char *name);
 // raw[0, n) -> streams. Returns the number of streams (1 or 7); lens set.
@@ -32,6 +33,10 @@ int fs_transform(int t, const uint64_t *raw, uint64_t n, uint64_t first_sample, 
                  uint64_t *clk_errors);
 // The inverse, for the streams of one port (-1: every port) into raw
 // images with clk regenerated. For one port only, the other bytes are 0.
+// The changelog's records (nrec of them: first sample, raw image, raw image)
+// to the planar streams of the block [first_sample, first_sample + n).
+int fs_clog_to_planar(const uint64_t *rec, uint64_t nrec, uint64_t n, uint64_t first_sample, uint8_t **out,
+                      size_t *lens);
 int fs_untransform(int t, uint8_t *const *in, uint64_t n, uint64_t first_sample, int port, uint64_t *raw);
 
 // ---- the container ("STDY") ---------------------------------------------------------------

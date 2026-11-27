@@ -397,6 +397,75 @@ static void runs_finish(void *st) {
 }
 const fs_writer_t fs_w_runs = { "runs", runs_create, runs_run, runs_finish };
 
+// ---- changelog: a changed clock's two raw images, unencoded --------------------------------------------
+// The simulation thread keeps tb.cpp's raw compare; a clock that changed
+// is stored as three u64 (its first sample, then both raw images), with no
+// encoding: the background thread turns the records into the planar
+// candidate's streams (codec.c, T_CLOG). A block's first record is its
+// state at its first sample (n, want, want).
+typedef struct {
+    base_t s;
+} clog_t;
+
+static inline void clog_put(clog_t *w, uint64_t n, uint64_t a, uint64_t b) {
+    uint64_t *q = (uint64_t *)(void *)w->s.p[0];
+    q[0] = n; q[1] = a; q[2] = b;
+    w->s.p[0] = (uint8_t *)(q + 3);
+}
+
+static void clog_open(clog_t *w, uint64_t n) {
+    w->s.b.first_sample = n;
+    w->s.h.limit = n + w->s.block_samples;
+    clog_put(w, n, w->s.h.want, w->s.h.want);
+}
+
+NOINLINE void fs_clog_slow(void *wv, uint64_t r0, uint64_t r1) {
+    clog_t *w = wv;
+    const uint64_t n = w->s.h.n;
+    if (!w->s.started) {
+        w->s.started = 1;
+        w->s.h.want = r0 & fs_noclk;
+        clog_open(w, n);
+    } else if (n == w->s.h.limit) {
+        base_emit(&w->s, n);
+        clog_open(w, n);
+    }
+    if (((r0 ^ w->s.h.want) | (r1 ^ w->s.h.want ^ fs_clk_raw)) != 0) {
+        clog_put(w, n, r0, r1);
+        w->s.h.want = r1 & fs_noclk;
+    }
+    w->s.h.n = n + 2;
+    if (UNLIKELY(w->s.p[0] > w->s.full_at[0])) {
+        base_emit(&w->s, n + 2);
+        clog_open(w, n + 2);
+    }
+}
+
+// 64 MiB of records a block (2.8 M changed clocks), so that a busy design's
+// blocks are not much shorter than the others' 2^24 clocks.
+#define CLOG_CAP (64u << 20)
+static void *clog_new(uint64_t bc, fs_block_fn f, void *c, int async) {
+    clog_t *w = calloc(1, sizeof *w);
+    base_init(&w->s, 1, CLOG_CAP, bc ? bc : (1ull << 24), f, c, async);
+    return w;
+}
+static void *clog_create(uint64_t bc, const char *out, fs_block_fn f, void *c) {
+    (void)out;
+    return clog_new(bc, f, c, 0);
+}
+
+static void clog_run(void *st, const uint64_t *raw, uint64_t clocks) {
+    for (uint64_t c = 0; c < clocks; c++) fs_clog_clock(st, raw[2 * c], raw[2 * c + 1], FS_CLK_RAW);
+}
+
+static void clog_finish(void *st) {
+    clog_t *w = st;
+    if (w->s.started) base_emit(&w->s, w->s.h.n);
+    base_free(&w->s);
+    free(w);
+}
+const fs_writer_t fs_w_clog = { "changelog", clog_create, clog_run, clog_finish };
+
 // ---- raw: both raw images of every clock, stored as they are ----------------------------------------
 // The simulation thread does two 8-byte stores a clock and nothing else; the
 // background part packs, checks the clock bit, transforms and compresses.
@@ -460,18 +529,19 @@ void *fs_sim_create_blocks(const char *kind, const char *path, const int off[8],
     clk_byte = off[7];
     fs_clk_raw = 1ull << (8 * clk_byte);
     fs_noclk = ~(0xffull << (8 * clk_byte));
-    const int raw = !strcmp(kind, "raw"), runs = !strcmp(kind, "runs");
-    if (!raw && !runs && strcmp(kind, "events")) return NULL;
-    void *bg = fs_bg_new(kind, raw ? "xor6" : "identity", "zstd1", path);
+    const int raw = !strcmp(kind, "raw"), runs = !strcmp(kind, "runs"), clog = !strcmp(kind, "changelog");
+    if (!raw && !runs && !clog && strcmp(kind, "events")) return NULL;
+    void *bg = fs_bg_new(kind, raw ? "xor6" : clog ? "changelog-planar" : "identity", "zstd1", path);
     void *w;
     if (raw) w = raw_new(block_clocks, fs_bg_fn(), bg, 1);
+    else if (clog) w = clog_new(block_clocks, fs_bg_fn(), bg, 1);
     else if (runs) {
         runs_t *r = calloc(1, sizeof *r);
         base_init(&r->s, 1, STREAM_CAP, block_clocks ? block_clocks : (1ull << 24), fs_bg_fn(), bg, 1);
         w = r;
     } else w = events_new(block_clocks, fs_bg_fn(), bg, 1);
     sim_t *s = calloc(1, sizeof *s);
-    s->w = w; s->bg = bg; s->raw = raw ? 1 : runs ? 2 : 0;
+    s->w = w; s->bg = bg; s->raw = raw ? 1 : runs ? 2 : clog ? 3 : 0;
     if (nsim < 64) sim_of[nsim++] = s;
     return w;
 }
@@ -481,6 +551,7 @@ void fs_sim_finish(void *w) {
         if (sim_of[i] && sim_of[i]->w == w) {
             if (sim_of[i]->raw == 1) raw_finish(w);
             else if (sim_of[i]->raw == 2) runs_finish(w);
+            else if (sim_of[i]->raw == 3) clog_finish(w);
             else events_finish(w);
             fs_bg_close(sim_of[i]->bg);
             free(sim_of[i]);

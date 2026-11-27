@@ -198,17 +198,17 @@ def paired(data, meta, p, w, nullw="null"):
 wdir = "writer2" if os.path.isdir(os.path.join(RES, "writer2")) else "writer"
 wdata, wmeta, wloads = load_writer(wdir)
 odata, ometa, oloads = load_writer("writer")   # the first pass: fst, fst_clk, lxt2, vcd
-WRITERS = ["vgch2", "runs", "planar", "events", "raw", "fst", "vcd", "lxt2", "fst_clk"]
+WRITERS = ["vgch2", "runs", "planar", "events", "changelog", "raw", "fst", "vcd", "lxt2", "fst_clk"]
 
 print("## Writer cost on the simulation thread (replay)\n")
-print(f"Source: `results/{wdir}` (vgch2, runs, planar, events, raw) and `results/writer` (fst, vcd, lxt2, fst_clk).\n")
+print(f"Source: `results/{wdir}` (vgch2, runs, planar, events, changelog, raw) and `results/writer` (fst, vcd, lxt2, fst_clk).\n")
 print("### ns per clock over the null writer: estimate [95% interval]\n")
 body = []
 est_cache = {}
 for p in projects:
     row = [p]
     for w in WRITERS:
-        src = (wdata, wmeta) if w in ("vgch2", "runs", "planar", "events", "raw") else (odata, ometa)
+        src = (wdata, wmeta) if w in ("vgch2", "runs", "planar", "events", "changelog", "raw") else (odata, ometa)
         r = paired(src[0], src[1], p, w)
         est_cache[(p, w)] = r
         row.append("-" if r is None else f"{r[0]:.2f} [{r[1]:.2f}, {r[2]:.2f}]")
@@ -249,49 +249,94 @@ table(["project", "chunks", "clocks replayed (M)", "of the trace (%)", "changed 
 
 # ---- 3. the simulation check ---------------------------------------------------------------------
 # ---- 3a. the in-process simulation check (bench_tick) -------------------------------------------
-tick = {}
-for path in glob.glob(os.path.join(RES, "sim", "tick-*.csv")):
-    p = SHORT[os.path.basename(path)[5:-4]]
+# Replicates: tick, tickB, tickC, tickD: separate processes, each with the
+# variants in a different order (so their models sit at different heap
+# addresses and run in a different turn).
+TICKV = ["vgch2", "runs", "events", "changelog", "raw", "raw_small"]
+tickrep = defaultdict(dict)   # tag -> project -> variant -> {chunk: (ns, clocks)}
+for path in glob.glob(os.path.join(RES, "sim", "tick*-*.csv")):
+    base_name = os.path.basename(path)[:-4]
+    tag, proj = base_name.split("-", 1)
+    p = SHORT[proj]
     d = defaultdict(dict)
     for c in rows(path):
         if len(c) == 5 and c[0].isdigit() and c[3].isdigit() and c[4].isdigit():
             d[c[2]][int(c[0])] = (float(c[3]), int(c[4]))
-    tick[p] = d
+    tickrep[tag][p] = d
+
+
+def tick_one(d, v):
+    """ns a clock over none, paired by chunk, with a bootstrap interval; % of none."""
+    base_c = d.get("none", {})
+    ks = sorted(set(d.get(v, {})) & set(base_c))
+    if len(ks) < 100:
+        return None
+    diff = [d[v][k][0] - base_c[k][0] for k in ks]
+    clk = [base_c[k][1] for k in ks]
+    est = sum(diff) / sum(clk)
+    boots = []
+    for _ in range(1000):
+        idx = [random.randrange(len(ks)) for _ in ks]
+        boots.append(sum(diff[i] for i in idx) / sum(clk[i] for i in idx))
+    boots.sort()
+    b0 = sum(base_c[k][0] for k in ks)
+    return est, boots[24], boots[974], sum(diff) / b0, b0 / sum(clk), len(ks)
+
+
 tick_est = {}
-TICKV = ["vgch2", "runs", "events", "raw", "raw_small"]
-if tick:
+if tickrep:
     print("## Simulation check: the Verilator loop, in one process\n")
-    print("Each variant's model in one process, stepped in turn by 65,536-clock chunks (bench_tick.cpp). "
-          "ns per clock over the untraced model, paired by chunk: estimate [95% bootstrap interval over chunks].\n")
+    tags = sorted(tickrep)
+    tp = [x for x in ORDER if any(x in tickrep[t] for t in tags)]
+    est_all = defaultdict(list)
+    for t in tags:
+        for p in tp:
+            if p not in tickrep[t]:
+                continue
+            for v in TICKV:
+                r = tick_one(tickrep[t][p], v)
+                if r:
+                    est_all[(p, v)].append((t, r))
+    print("Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks "
+          f"(262 M clocks) a process (bench_tick.cpp); {len(tags)} processes ({', '.join(tags)}), each with the "
+          "variants in another order. ns per clock over the untraced model, paired by chunk.\n")
+    print("### Across the processes: median of the processes' estimates [lowest, highest]\n")
     body, bodyp = [], []
-    for p in [x for x in ORDER if x in tick]:
-        d = tick[p]
-        base_c = d.get("none", {})
-        row, rowp = [p, len(base_c), f"{sum(v[0] for v in base_c.values()) / max(1, sum(v[1] for v in base_c.values())):.1f}"], [p]
+    for p in tp:
+        row, rowp = [p], [p]
         for v in TICKV:
-            ks = sorted(set(d.get(v, {})) & set(base_c))
-            if not ks:
+            e = [r for _, r in est_all.get((p, v), [])]
+            if not e:
                 row.append("-"); rowp.append("-")
                 continue
-            diff = [d[v][k][0] - base_c[k][0] for k in ks]
-            clk = [base_c[k][1] for k in ks]
-            est = sum(diff) / sum(clk)
-            boots = []
-            for _ in range(2000):
-                idx = [random.randrange(len(ks)) for _ in ks]
-                boots.append(sum(diff[i] for i in idx) / sum(clk[i] for i in idx))
-            boots.sort()
-            tick_est[(p, v)] = est
-            row.append(f"{est:.2f} [{boots[49]:.2f}, {boots[1949]:.2f}]")
-            b0 = sum(base_c[k][0] for k in ks)
-            rowp.append(f"{pct(sum(diff) / b0, 2)} [{pct(boots[49] * sum(clk) / b0, 2)}, {pct(boots[1949] * sum(clk) / b0, 2)}]")
+            ns = sorted(x[0] for x in e)
+            pc = sorted(x[3] for x in e)
+            tick_est[(p, v)] = statistics.median(ns)
+            row.append(f"{statistics.median(ns):.1f} [{ns[0]:.1f}, {ns[-1]:.1f}]")
+            rowp.append(f"{pct(statistics.median(pc), 1)} [{pct(pc[0], 1)}, {pct(pc[-1], 1)}]")
         body.append(row); bodyp.append(rowp)
-    table(["project", "chunks", "untraced ns per clock"] + TICKV, body)
-    print("### The same as % of the untraced model's CPU\n")
+    table(["project"] + TICKV, body)
+    print("### The same as % of the untraced model's CPU: median [lowest, highest]; the budget is 5%\n")
     table(["project"] + TICKV, bodyp)
+    print("### Each process: estimate [95% bootstrap interval over its chunks], ns per clock\n")
+    body = []
+    for p in tp:
+        for t in tags:
+            if p not in tickrep[t]:
+                continue
+            row = [p, t]
+            n0 = None
+            for v in TICKV:
+                r = next((r for tt, r in est_all.get((p, v), []) if tt == t), None)
+                row.append("-" if r is None else f"{r[0]:.1f} [{r[1]:.1f}, {r[2]:.1f}]")
+                if r:
+                    n0 = r[4]
+            row.insert(2, "-" if n0 is None else f"{n0:.1f}")
+            body.append(row)
+    table(["project", "process", "untraced ns per clock"] + TICKV, body)
     print("### Replay against the in-process check, ns per clock\n")
     body = []
-    for p in [x for x in ORDER if x in tick]:
+    for p in tp:
         row = [p]
         for w in ("vgch2", "runs", "events", "raw"):
             r = est_cache.get((p, w))
@@ -389,6 +434,12 @@ def cand_rows(p):
     ps = passes.get((p, "raw"))
     if ps and ("xor6", "zstd1") in e:
         out.append(("raw xor6 (zstd 1)", int(ps["primary_bytes"]), float(e[("xor6", "zstd1")]["est_bg_ns"]) / 1e9))
+    for job, name in (("changelog", "changelog to planar (zstd 1)"), ("rawplanar", "raw to planar (zstd 1)")):
+        e = enc.get((p, job), {})
+        ps = passes.get((p, job))
+        key = ("changelog-planar", "zstd1") if job == "changelog" else ("planar-runs", "zstd1")
+        if ps and key in e:
+            out.append((name, int(ps["primary_bytes"]), float(e[key]["est_bg_ns"]) / 1e9))
     e = enc.get((p, "sigrok"), {})
     if ("pack6clk", "deflate6") in e:
         out.append(("sigrok-like (deflate 6)", float(e[("pack6clk", "deflate6")]["est_comp_bytes"]),
@@ -410,12 +461,12 @@ def cand_rows(p):
 
 
 print("### Total bytes, MB (projected to the whole trace where sampled)\n")
-names_c = None
+names_c = ["vgch2 (zstd 1)", "runs (zstd 1)", "planar (zstd 1)", "events (zstd 1)", "changelog to planar (zstd 1)",
+           "raw xor6 (zstd 1)", "raw to planar (zstd 1)", "sigrok-like (deflate 6)", "VCD (zstd 1)", "FST (LZ4)",
+           "FST (zlib)", "FST with clk (LZ4)", "LXT2"]
 body = []
 for p in projects:
     cr = cand_rows(p)
-    if names_c is None and cr:
-        names_c = [c[0] for c in cr]
     d = {c[0]: c for c in cr}
     body.append([p] + [f(d[n][1] / 1e6, 2) if n in d else "-" for n in (names_c or [])])
 if names_c:
