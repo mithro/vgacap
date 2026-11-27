@@ -332,6 +332,28 @@ def test_timers_are_told_apart_by_identity():
     assert fired == ["tick"]
 
 
+def test_a_timer_removed_by_another_timers_callback_does_not_fire():
+    # Two timers due in one advance: the first removes the second, which
+    # must then not fire, in that pass or any later one (re-review N7).
+    board = Board(Waveform(b"\0", [], clk_gpio=CLK, period=2))
+    fired = []
+    second = None
+
+    def first_cb():
+        fired.append("first")
+        board.remove_timer(second)
+
+    def second_cb():
+        fired.append("second")
+
+    board.add_timer(1000, first_cb)
+    second = board.add_timer(1000, second_cb)
+    board.advance(1000)
+    assert fired == ["first"]
+    board.advance(1000)
+    assert fired == ["first", "first"]
+
+
 def test_tt_rst_n_reads_the_pin_and_costs_a_pin_read():
     # standard.py:124-129: StandardPin.__call__ is raw_pin.value().
     board = _design_board()
