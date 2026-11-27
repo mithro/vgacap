@@ -4,8 +4,8 @@
 #
 #   bench/format-study/run_all.sh [STAGE...]
 #
-# Stages, in order (default: all of them): build traces info writer encode
-# read robust ctr analyze. The simulation check (the Verilator loop) is
+# Stages, in order (default: all of them): build traces info writer writer2
+# encode read robust ctr analyze. The simulation check (the Verilator loop) is
 # sim/run_sim.sh, separately, because it needs the projects' sources.
 #
 # Everything goes under $OUT (default: <checkout>/tmp/format-study):
@@ -140,6 +140,20 @@ stage_writer() {
     run_pool writer "$jobs"
 }
 
+# The same replay for the writers whose code the simulation check shares
+# (w_mine.h), and vgch2 and null for the pairing: the tables take these
+# rows from writer2 and fst, vcd, lxt2 and fst_clk from writer.
+stage_writer2() {
+    local jobs=$OUT/jobs-writer2.txt; : > "$jobs"
+    local scratch=$OUT/scratch; mkdir -p "$scratch"
+    for p in $PROJECTS; do
+        local n=$(( $(clocks_of "$p") / 1048576 ))
+        local s=$(( n / 96 )); [ "$s" -ge 1 ] || s=1
+        printf '%s\t%s\n' "$p" "$FS writer $(trace_of "$p") $scratch --writers null,vgch2,planar,events,raw --chunk 1048576 --stride $s --reps 5" >> "$jobs"
+    done
+    run_pool writer2 "$jobs"
+}
+
 RUNCOMPS=zstd-5,zstd-1,zstd1,zstd3,zstd9,zstd1-long27,zstd1-nocheck,lz4,lz4hc9,deflate1,deflate6
 stage_encode() {
     local jobs=$OUT/jobs-encode.txt; : > "$jobs"
@@ -195,5 +209,5 @@ stage_analyze() {
     log "analyze: $RES/tables.md"
 }
 
-STAGES=${*:-build traces info writer encode read robust ctr analyze}
+STAGES=${*:-build traces info writer writer2 encode read robust ctr analyze}
 for s in $STAGES; do "stage_$s"; done
