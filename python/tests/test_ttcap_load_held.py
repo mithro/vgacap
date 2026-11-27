@@ -642,3 +642,69 @@ def test_a_failed_load_removes_the_empty_directory_too(tmp_path):
     with pytest.raises(CaptureError):
         rig.load()
     assert HELD_DIR not in rig.link.dirs
+
+
+# -- round 3: the cleanup when the file is already gone ----------------------------
+
+
+def _notes(exc: BaseException) -> list[str]:
+    return list(getattr(exc, "__notes__", []))
+
+
+def test_an_upload_failing_before_the_file_exists_removes_the_directory(tmp_path):
+    # The upload's first open(..., 'wb') fails (no space): no file was made,
+    # so the cleanup has no file to delete but must still remove the directory.
+    rig = Rig(tmp_path)
+    real_open = rig.link._open
+
+    def failing_open(path, mode="r"):
+        if mode == "wb":
+            raise OSError(errno.ENOSPC, "ENOSPC")
+        return real_open(path, mode)
+
+    rig.link._builtins["open"] = failing_open
+    with pytest.raises(RuntimeError, match="ENOSPC") as raised:
+        rig.load()
+    assert HELD_DIR not in rig.link.dirs
+    assert not [n for n in _notes(raised.value) if "failed too" in n]
+
+
+def test_an_rmdir_failing_after_a_good_load_notes_no_missing_file(tmp_path):
+    # The good-path delete removed the file, then the rmdir failed; putting
+    # the board back finds no file, which is fine, and tries the rmdir again.
+    rig = Rig(tmp_path)
+    rmdirs = []
+
+    def failing(path):
+        rmdirs.append(path)
+        raise OSError(errno.EIO, "EIO")
+
+    rig.link._modules["os"].rmdir = failing
+    with pytest.raises(CaptureError, match="EIO") as raised:
+        rig.load()
+    assert not [n for n in _notes(raised.value) if "ENOENT" in n]
+    assert rmdirs == [HELD_DIR, HELD_DIR]
+    _assert_put_back(rig)
+
+
+def test_a_file_gone_before_the_good_load_delete_is_an_error(tmp_path):
+    # After a good load the file must still be there: its absence is an error.
+    rig = Rig(tmp_path)
+    files = rig.link.files
+    rig.link.loader.open = lambda path, mode: io.BytesIO(files.pop(path))
+    with pytest.raises(CaptureError, match="ENOENT"):
+        rig.load()
+    assert HELD_DIR not in rig.link.dirs
+
+
+def test_a_cleanup_delete_failing_otherwise_is_noted(tmp_path):
+    rig = Rig(tmp_path)
+    rig.link.on_file_write = lambda path, n, data: (_ for _ in ()).throw(OSError(errno.EIO, "EIO"))
+
+    def failing(path):
+        raise OSError(errno.EACCES, "EACCES")
+
+    rig.link._modules["os"].remove = failing
+    with pytest.raises(RuntimeError, match="EIO") as raised:
+        rig.load()
+    assert [n for n in _notes(raised.value) if "failed too" in n and "EACCES" in n]

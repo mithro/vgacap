@@ -1078,21 +1078,33 @@ finally:
 """
 
 #: Delete `HELD_PATH`, then `HELD_DIR` if that leaves it empty (MicroPython's
-#: ENOENT is 2 and ENOTEMPTY 39), leaving no name in the REPL's globals.
-_REMOVE = """\
-def _ttcap_remove(p, d):
+#: ENOENT is 2 and ENOTEMPTY 39), leaving no name in the REPL's globals. With
+#: `missing` true, a file that is not there is fine and the directory is
+#: still tried.
+_REMOVE_TEMPLATE = """\
+def _ttcap_remove(p, d, m):
     import os
-    os.remove(p)
+    try:
+        os.remove(p)
+    except OSError as e:
+        if not (m and e.errno == 2):
+            raise
     try:
         os.rmdir(d)
     except OSError as e:
         if e.errno not in (2, 39):
             raise
 try:
-    _ttcap_remove({path!r}, {dir!r})
+    _ttcap_remove({path!r}, {dir!r}, {missing!r})
 finally:
     del _ttcap_remove
-""".format(path=HELD_PATH, dir=HELD_DIR)
+"""
+
+#: After a good load: the file must be there.
+_REMOVE = _REMOVE_TEMPLATE.format(path=HELD_PATH, dir=HELD_DIR, missing=False)
+
+#: After a failure: the file may never have been made, or already be gone.
+_REMOVE_IF_THERE = _REMOVE_TEMPLATE.format(path=HELD_PATH, dir=HELD_DIR, missing=True)
 
 #: Whether `tt.shuttle` is the FPGA breakout's mux: `FPGAMux.run` is 'FPGA'
 #: (tt-micropython-firmware v3.1.1, `fpga/fpga_mux.py:163`), and an ASIC
@@ -1166,7 +1178,7 @@ def _check_bitstream(data: bytes) -> None:
 def _delete_held(repl: RawRepl, exc: BaseException) -> None:
     """Delete `HELD_PATH` after `exc`, noting on it a delete that fails too."""
     try:
-        _exec_checked(repl, _REMOVE)
+        _exec_checked(repl, _REMOVE_IF_THERE)
     except Exception as again:  # noqa: BLE001 - reported on exc
         exc.add_note(f"deleting {HELD_PATH} failed too: {again}")
 
@@ -1184,7 +1196,7 @@ def undo_load_held(repl: RawRepl, did: dict, error: BaseException | None = None)
     `undo_selection`, and without, the first is raised.
     """
     steps = [
-        lambda: _exec_checked(repl, _REMOVE),
+        lambda: _exec_checked(repl, _REMOVE_IF_THERE),
         lambda: _exec_checked(repl, "tt.reset_project(False)"),
     ]
     first = None
