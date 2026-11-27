@@ -189,8 +189,16 @@ class _FakeFileForReading(io.BytesIO):
 
     def __init__(self, board: "FakeBinaryBoard", path: str) -> None:
         super().__init__(board.files[path])
+        self._board = board
         self._path = path
+        self._reads = 0
         board.readers.append(self)
+
+    def readinto(self, buffer) -> int:
+        if self._board.on_file_read is not None:
+            self._board.on_file_read(self._path, self._reads)
+        self._reads += 1
+        return super().readinto(buffer)
 
 
 class _FakeFileForWriting:
@@ -264,12 +272,15 @@ class FakeBinaryBoard:
     returns the bytes really stored -- corruption between the REPL and the
     flash -- or raises. `on_file_close`, if given, is called as
     ``on_file_close(path, data)`` when such a file is closed and returns what
-    is committed, or None for a file that is then gone.
+    is committed, or None for a file that is then gone; it may raise, as a
+    close that fails. `on_file_read`, if given, is called as
+    ``on_file_read(path, n)`` before the `n`-th `readinto()` of a file opened
+    for reading, and may raise, as a read error.
     """
 
     def __init__(self, chunk_size: int = 8192, corrupt=None, modules=None,
                  files: dict[str, bytes] | None = None, on_file_write=None,
-                 dirs=(), on_file_close=None) -> None:
+                 dirs=(), on_file_close=None, on_file_read=None) -> None:
         self.chunk_size = chunk_size
         self.corrupt = corrupt
         #: The board's filesystem, path -> contents.
@@ -278,6 +289,7 @@ class FakeBinaryBoard:
         self.dirs: set[str] = set(dirs)
         self.on_file_write = on_file_write
         self.on_file_close = on_file_close
+        self.on_file_read = on_file_read
         #: Every handle opened 'wb', closed or not, oldest first.
         self.writers: list[_FakeFileForWriting] = []
         #: Every handle opened 'rb', closed or not, oldest first.

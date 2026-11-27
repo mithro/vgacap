@@ -10,6 +10,7 @@ there.
 from __future__ import annotations
 
 import base64
+import errno
 import random
 import re
 import sys
@@ -18,7 +19,7 @@ import zlib
 import pytest
 
 from fake_repl import FakeBinaryBoard
-from ttcap.repl import RawRepl, UploadError
+from ttcap.repl import LinkClosed, RawRepl, UploadError
 
 HELD = "/_vgacap/held.bin"
 
@@ -371,3 +372,103 @@ def test_upload_leaves_no_names_of_its_own_in_the_repl_globals():
     with pytest.raises(RuntimeError):
         repl.upload(HELD, _payload(seed=5))
     assert set(board._globals) <= before
+
+
+# -- round 2 -------------------------------------------------------------------
+
+
+class _StallingLink:
+    """`board` behind a link on which slice `stall_at` (from 0) gets no reply.
+
+    The slice reaches the board, which is still running it: every read
+    after that raises `error`, as a timed-out read, a closed link or a
+    Ctrl-C on the host would end it. `after_stall` records whatever the
+    host writes after that, which the board would take as its next input.
+    """
+
+    def __init__(self, board: FakeBinaryBoard, stall_at: int, error: BaseException):
+        self.board = board
+        self.stall_at = stall_at
+        self.error = error
+        self.slices = 0
+        self.stalled = False
+        self.after_stall: list[bytes] = []
+
+    def write(self, data: bytes) -> None:
+        if self.stalled:
+            self.after_stall.append(bytes(data))
+            return
+        self.board.write(data)
+        if b"a2b_base64" in data:
+            if self.slices == self.stall_at:
+                self.stalled = True
+            self.slices += 1
+
+    def read(self, timeout: float) -> bytes:
+        if self.stalled:
+            raise self.error
+        return self.board.read(timeout)
+
+    def close(self) -> None:
+        self.board.close()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [TimeoutError("timed out waiting for b'OK'"), LinkClosed("bridge gone"),
+     KeyboardInterrupt()],
+    ids=["timeout", "link-closed", "ctrl-c"],
+)
+def test_a_slice_with_no_reply_ends_the_upload_with_nothing_more_sent(error):
+    # The board may still be running the slice: a close sent now would take
+    # the slice's late reply as its own and leave its own for the next
+    # command. The next upload's first close is the backstop.
+    link = _StallingLink(FakeBinaryBoard(), stall_at=5, error=error)
+    repl = RawRepl(link)
+    repl.enter()
+
+    with pytest.raises(type(error)):
+        repl.upload(HELD, _payload())
+
+    assert link.after_stall == []
+
+
+def test_a_directory_target_reports_its_oserror_not_a_nameerror():
+    board = FakeBinaryBoard(dirs={HELD})
+
+    with pytest.raises(RuntimeError) as raised:
+        _repl(board).upload(HELD, b"abc")
+
+    # The board prints "OSError: 21"; CPython, running the fake, spells
+    # the same error IsADirectoryError.
+    last = [ln for ln in str(raised.value).splitlines() if ln.strip()][-1]
+    assert re.match(r"(OSError|IsADirectoryError)\b.*\b21\b", last), last
+    assert "NameError" not in str(raised.value)
+    assert "UnboundLocalError" not in str(raised.value)
+
+
+def test_a_read_error_in_the_check_still_closes_the_read_handle():
+    def fail_second_read(path, n):
+        if n == 1:
+            raise OSError(errno.EIO, "EIO")
+
+    board = FakeBinaryBoard(files={HELD: _payload()}, on_file_read=fail_second_read)
+
+    with pytest.raises(RuntimeError, match="OSError"):
+        _repl(board).upload(HELD, _payload())
+
+    assert len(board.readers) == 1
+    assert board.unclosed_handles() == []
+
+
+def test_a_failing_close_after_a_failed_slice_does_not_hide_the_slice_error():
+    def close_fails(path, data):
+        raise OSError(errno.ENOSPC, "ENOSPC")
+
+    board = FakeBinaryBoard(on_file_write=_fail_slice(3), on_file_close=close_fails)
+
+    with pytest.raises(RuntimeError) as raised:
+        _repl(board).upload(HELD, _payload())
+
+    assert "MemoryError" in str(raised.value)
+    assert "ENOSPC" not in str(raised.value)
