@@ -432,3 +432,45 @@ def test_rst_n_falling_the_cycle_after_an_edge_does_not_reset_that_edge():
     Pin(RST, Pin.OUT, value=0)  # a Pin init costs no time: lands at edge + 1
     assert board.pad_level(RST, edge) == 1 and board.pad_level(RST, edge + 1) == 0
     assert board.wave.count_at(board.now) == 1
+
+
+def _cpu_edges(board: Board, n: int) -> None:
+    clk = board.modules()["machine"].Pin(CLK, 1, value=0)
+    for _ in range(n):
+        clk.value(1)
+        clk.value(0)
+
+
+def test_next_time_never_answers_a_cycle_in_the_past():
+    board = _board()
+    _cpu_edges(board, 5)  # the counter is 5: uo_out[0] is 1
+    now = board.now
+    found = board.wave.next_time(33, 0, now)
+    assert found is None or found >= now
+
+
+def test_a_state_machine_waits_on_a_uo_out_bit_the_cpu_clocks():
+    # wait on uo_out[0] (GPIO 33): blocks while the counter is even and
+    # goes on at the CPU edge that makes it odd.
+    board = _board()
+    mods = board.modules()
+    rp2, Pin = mods["rp2"], mods["machine"].Pin
+    rp2.PIO(1).gpio_base(16)
+    _cpu_edges(board, 4)
+
+    @rp2.asm_pio()
+    def wait_odd():
+        wait(1, gpio, 1)  # noqa: F821  (GPIO 33 in the window at 16)
+        set(x, 1)  # noqa: F821
+        mov(isr, x)  # noqa: F821
+        push(noblock)  # noqa: F821
+        label("end")  # noqa: F821
+        jmp("end")  # noqa: F821
+
+    sm = rp2.StateMachine(4, wait_odd)
+    sm.active(1)
+    board.advance(100)
+    assert sm.rx_fifo() == 0
+    _cpu_edges(board, 1)
+    board.advance(100)
+    assert sm.rx_fifo() == 1 and sm.get() == 1
