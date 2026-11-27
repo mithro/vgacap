@@ -236,6 +236,11 @@ def lossy_capture(stats: CaptureStats) -> list[str]:
     they apply to every `--mode` alike (issue #59): a capture with overruns
     or an RX stall did not do what it was asked, so it exits 1. What was
     written is still a valid stream.
+
+    When the consumer of `--out -` closes the pipe (`ConsumerClosed`),
+    these two checks are the only ones `main()` applies: that branch skips
+    the `error`, `timed_out`, RLE rx stall, board error and no-samples
+    checks, and exits 1 only when this returns a line.
     """
     lines = []
     if stats.overruns:

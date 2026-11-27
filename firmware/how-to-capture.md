@@ -82,7 +82,7 @@ A good capture reports `overruns=0` and `rxstall=0`, and its PNG shows the desig
 | 1 to 3 | `--asic-index is for --firmware picosdk ...` | `--asic-index` without `--firmware picosdk` | Add `--firmware picosdk` |
 | 1 to 3 | `--asic-index is for ...; ... is an FPGA board, where asic_select pulls GPIO 1 -- the iCE40's CRESET_B -- low and erases the FPGA` | the board is a demo board with an FPGA breakout | Drop `--asic-index`: an FPGA keeps its design |
 | 1 and 2 | `board went quiet` and a frame capture writes almost nothing | no sync on `uo_out`: an ASIC project that was not selected again, or no design | Add `--asic-index N` on an ASIC breakout; enable the design again on an FPGA breakout |
-| 3 | `overruns=` above 0 | the project clock is faster than the USB link carries | Lower `--clock-hz`, or use `--mode frame` |
+| 3 | `overruns=` above 0, exit 1 | the project clock is faster than the USB link carries | Lower `--clock-hz`, or use `--mode frame` |
 | 1 and 2 | `sysclk N is not 2..32 whole project clocks of N` | a frame clock with no whole system clock ratio | Choose a project clock from [the clock table](reference-board.md#clocks) |
 | 1 to 3 | `pio 0 would have to move its pin window to GPIO 16 ...` | `--pio 0` was given: ttcap refuses it for every firmware ([issue #44](https://github.com/mithro/vgacap/issues/44)) | Use `--pio 1` or `--pio 2` |
 | 1 to 3 | `--profile ... does not match the capture firmware` | `--profile` names another board | Drop `--profile`, or give `rp2350` |

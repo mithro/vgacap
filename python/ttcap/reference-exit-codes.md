@@ -35,7 +35,7 @@ Message is the start of what `ttcap capture` prints. Exit is the exit code. Caus
 | `no samples captured: the sampler never saw a clock edge` | 3 | no project clock reached the sampler | check the design is enabled and clocked |
 | `board has only N bytes of free heap after a collect` | 1 | the board lacks the heap for the buffers | reset the board or lower `--buf-words` |
 | `board error:` | 1 | the board raised or refused a setting | read the board's reason after the colon |
-| `rx stall: the RX FIFO overflowed` | 1 | run-length pairs came faster than the link took them | lower `--clock-hz` or add `--rle-oneshot` |
+| `rx stall: the RX FIFO overflowed and the RLE capture stopped there` | 1 | run-length pairs came faster than the link took them | lower `--clock-hz` or add `--rle-oneshot` |
 | `overruns: N buffers torn` | 1 | the board's DMA buffers filled faster than the link drained them | lower `--clock-hz` or raise `--buf-words` |
 | `rx stall: the RX FIFO overflowed and samples were lost` | 1 | the PIO's FIFO overflowed in `stream`, `frame` or `window` mode | lower `--clock-hz` |
 | `timed_out=yes` in the stats line | 1 | the board went quiet during the capture | check the project clock is running |
