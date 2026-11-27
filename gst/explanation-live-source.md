@@ -19,6 +19,13 @@ A board samples into two DMA buffers, and can stop only at a buffer's end. So a 
 
 So on stop, the element sends SIGINT to the child's process group and waits. While it waits, it reads and discards the child's output, so that a full pipe cannot block the child. If `stop-timeout` passes, it closes the pipe, which `ttcap` takes as a clean end. If the child is still alive after that, it is killed. The child is reaped only at the end, so no signal reaches a process that is no longer the element's.
 
+The stop runs these steps in order, and goes to the reaping as soon as the child has ended.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/stop-sequence-dark.svg">
+  <img src="diagrams/stop-sequence.svg" alt="SIGINT, then a wait up to stop-timeout while draining stdout, then closing the stdout pipe, then SIGKILL; the child is reaped once it has ended" width="386">
+</picture>
+
 ## A live capture cannot be paused
 
 The board samples in real time, and the element's pipe is the only buffer between it and the pipeline. In PAUSED the element stops reading, and the child has one pipe buffer of grace: 64 KiB by default on Linux. At one byte a sample, that is about 87 ms of capture at 750 kHz. After it, the board's buffers overrun and samples are lost.

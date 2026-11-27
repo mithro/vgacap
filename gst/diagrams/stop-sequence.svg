@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="386" height="520" viewBox="0 0 386 520" font-family="'DejaVu Sans', Verdana, Arial, sans-serif">
+<rect x="0" y="0" width="386" height="520" fill="#ffffff"/>
+<rect x="2" y="2" width="250" height="52" rx="7" fill="#f3f5f9" stroke="#14845a" stroke-width="2"/>
+<text x="127.0" y="24" font-size="14.5" fill="#1d2433" text-anchor="middle" font-weight="bold">SIGINT</text>
+<text x="127.0" y="43" font-size="12.5" fill="#5b6577" text-anchor="middle" font-weight="normal">to ttcap's process group</text>
+<path d="M127.0 54 L127.0 78" fill="none" stroke="#5b6577" stroke-width="2"/>
+<path d="M121.0 68 L127.0 78 L133.0 68 Z" fill="#5b6577"/>
+<rect x="2" y="80" width="250" height="52" rx="7" fill="#f3f5f9" stroke="#14845a" stroke-width="2"/>
+<text x="127.0" y="102" font-size="14.5" fill="#1d2433" text-anchor="middle" font-weight="bold">wait, draining stdout</text>
+<text x="127.0" y="121" font-size="12.5" fill="#5b6577" text-anchor="middle" font-weight="normal">up to stop-timeout</text>
+<path d="M127.0 132 L127.0 154" fill="none" stroke="#5b6577" stroke-width="2"/>
+<path d="M121.0 144 L127.0 154 L133.0 144 Z" fill="#5b6577"/>
+<path d="M127.0 154 L189.0 178 L127.0 202 L65.0 178 Z" fill="#ffffff" stroke="#9aa3b5" stroke-width="1.75"/>
+<text x="127.0" y="182.5" font-size="13" fill="#1d2433" text-anchor="middle" font-weight="bold">ended?</text>
+<path d="M189.0 178 H344" fill="none" stroke="#14845a" stroke-width="2"/>
+<text x="266.5" y="171" font-size="12.5" fill="#14845a" text-anchor="middle" font-weight="bold">yes</text>
+<text x="117.0" y="220" font-size="12.5" fill="#5b6577" text-anchor="end" font-weight="bold">no</text>
+<path d="M127.0 202 L127.0 230" fill="none" stroke="#5b6577" stroke-width="2"/>
+<path d="M121.0 220 L127.0 230 L133.0 220 Z" fill="#5b6577"/>
+<rect x="2" y="232" width="250" height="52" rx="7" fill="#f3f5f9" stroke="#c05a0c" stroke-width="2"/>
+<text x="127.0" y="254" font-size="14.5" fill="#1d2433" text-anchor="middle" font-weight="bold">close the stdout pipe</text>
+<text x="127.0" y="273" font-size="12.5" fill="#5b6577" text-anchor="middle" font-weight="normal">wait up to 2 s</text>
+<path d="M127.0 284 L127.0 306" fill="none" stroke="#5b6577" stroke-width="2"/>
+<path d="M121.0 296 L127.0 306 L133.0 296 Z" fill="#5b6577"/>
+<path d="M127.0 306 L189.0 330 L127.0 354 L65.0 330 Z" fill="#ffffff" stroke="#9aa3b5" stroke-width="1.75"/>
+<text x="127.0" y="334.5" font-size="13" fill="#1d2433" text-anchor="middle" font-weight="bold">ended?</text>
+<path d="M189.0 330 H344" fill="none" stroke="#14845a" stroke-width="2"/>
+<text x="266.5" y="323" font-size="12.5" fill="#14845a" text-anchor="middle" font-weight="bold">yes</text>
+<text x="117.0" y="372" font-size="12.5" fill="#5b6577" text-anchor="end" font-weight="bold">no</text>
+<path d="M127.0 354 L127.0 382" fill="none" stroke="#5b6577" stroke-width="2"/>
+<path d="M121.0 372 L127.0 382 L133.0 372 Z" fill="#5b6577"/>
+<rect x="2" y="384" width="250" height="52" rx="7" fill="#f3f5f9" stroke="#c62828" stroke-width="2"/>
+<text x="127.0" y="406" font-size="14.5" fill="#1d2433" text-anchor="middle" font-weight="bold">SIGKILL the group</text>
+<text x="127.0" y="425" font-size="12.5" fill="#5b6577" text-anchor="middle" font-weight="normal">wait up to 2 s</text>
+<path d="M127.0 436 L127.0 464" fill="none" stroke="#5b6577" stroke-width="2"/>
+<path d="M121.0 454 L127.0 464 L133.0 454 Z" fill="#5b6577"/>
+<path d="M344 178 L344 464" fill="none" stroke="#14845a" stroke-width="2"/>
+<path d="M338 454 L344 464 L350 454 Z" fill="#14845a"/>
+<rect x="2" y="466" width="382" height="52" rx="7" fill="#e7f6ef" stroke="#14845a" stroke-width="2"/>
+<text x="193.0" y="497" font-size="14.5" fill="#1d2433" text-anchor="middle" font-weight="bold">reap the child</text>
+</svg>
