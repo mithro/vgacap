@@ -557,8 +557,8 @@ TEST(centre_bad_window) {
 // bounce; 96 one-pixel stars drifting left at 1 to 3 pixels a frame; and a
 // bottom bar showing the frame number as blocks. Runs are 1 clock (the
 // stars, the stripes' edges) up to whole blank lines. Only the centre-v1
-// calls are timed (thread CPU time), not the generator, the calibration or
-// the frame clock.
+// calls are timed (thread CPU time), not the generator, the calibration,
+// the frame clock or the frame callback.
 
 #define SPEED_FRAMES 240u
 
@@ -604,10 +604,13 @@ static void speed_draw(uint32_t k) {
     }
 }
 
-typedef struct speed_out { uint64_t sum; uint64_t *h; size_t n, distinct; } speed_out_t;
+typedef struct speed_out { uint64_t sum; uint64_t *h; size_t n, distinct; double cb_cpu; } speed_out_t;
+
+static double cpu_s(void);
 
 static void speed_frame(void *user, const vgasample_frame_t *f) {
     speed_out_t *o = user;
+    const double t0 = cpu_s();             // the callback is not the sampler's time
     uint64_t h = 0xcbf29ce484222325ull;
     const size_t n = (size_t)f->width * f->height;
     for (size_t i = 0; i < n; i++) { h ^= f->rgb6[i]; h *= 0x100000001b3ull; }
@@ -616,6 +619,7 @@ static void speed_frame(void *user, const vgasample_frame_t *f) {
     if (o->n == 0 || o->h[o->n - 1] != h) o->distinct++;
     o->h[o->n++] = h;
     o->sum = o->sum * 0x100000001b3ull ^ h;
+    o->cb_cpu += cpu_s() - t0;
 }
 
 static double cpu_s(void) {
@@ -627,7 +631,7 @@ TEST(centre_speed) {
     const size_t fl = 800 * 525;
     uint32_t *uo = malloc(fl * sizeof *uo);
     vgasample_run_t *runs = malloc(fl * sizeof *runs);
-    speed_out_t o = { 0, calloc(SPEED_FRAMES, sizeof(uint64_t)), 0, 0 };
+    speed_out_t o = { 0, calloc(SPEED_FRAMES, sizeof(uint64_t)), 0, 0, 0 };
     ASSERT_TRUE(uo && runs && o.h);
     vgacal_t cal; vgafc_t fc;
     vgacal_init(&cal, HZ, 0.1);
@@ -669,9 +673,9 @@ TEST(centre_speed) {
             if (!started) continue;
         }
         vgafc_push_runs(&fc, runs + i0, n - i0);
-        double t0 = cpu_s();
+        double t0 = cpu_s(), cb0 = o.cb_cpu;
         centrev1_push_runs(cs, runs + i0, n - i0);
-        cpu += cpu_s() - t0;
+        cpu += cpu_s() - t0 - (o.cb_cpu - cb0);
         timed_clocks += runs[n - 1].first + runs[n - 1].clocks - runs[i0].first;
         nruns += n - i0;
     }
@@ -688,9 +692,9 @@ TEST(centre_speed) {
     // The frames and counts as centre-v1 at ebd3b18 gives them.
     ASSERT_EQ_U(o.sum, 0x63038bd2415ccdbcull);
     ASSERT_EQ_U(d.colour_changes, 912600);
-    // On big-storage: 1.8 ms a frame with on_raw's loops not vectorised,
-    // 0.8 ms with them vectorised.
-    ASSERT_TRUE(cpu * 1e3 / (double)o.n <= 1.3);
+    // On big-storage: 1.4 ms a frame with on_raw's loops not vectorised,
+    // 0.4 ms with them vectorised.
+    ASSERT_TRUE(cpu * 1e3 / (double)o.n <= 0.8);
     centrev1_free(cs);
     vgacal_free(&cal); vgafc_free(&fc);
     free(uo); free(runs); free(o.h);
