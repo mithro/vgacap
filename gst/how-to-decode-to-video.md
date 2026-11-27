@@ -21,7 +21,7 @@ This page runs `vgadecode` in a `gst-launch-1.0` pipeline. The frames are the on
 
 1. In the vgacap checkout, run `export GST_PLUGIN_PATH=$PWD/build`, so that GStreamer finds the vgacap elements in this shell.
 2. In the same shell, run [`gst-launch-1.0`](https://gstreamer.freedesktop.org/documentation/tools/gst-launch.html) `filesrc location=capture.vgacap ! vgadecode ! videoconvert ! video/x-raw,format=I420 ! x264enc ! matroskamux ! filesink location=capture.mkv`, which writes the video.
-3. For one PNG a frame instead, run `mkdir -p png && gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! pngenc ! multifilesink location=png/frame-%04d.png`.
+3. For one PNG a frame instead, run `mkdir -p png && gst-launch-1.0 filesrc location=capture.vgacap ! vgadecode ! pngenc ! multifilesink location=png/frame-%04d.png`, which writes one PNG a frame into `png/`.
 
 ## Check
 

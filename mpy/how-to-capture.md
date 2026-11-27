@@ -74,18 +74,18 @@ A good capture reports `overruns=0` and `rxstall=0`, and its PNG shows the desig
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| `this board's firmware has no vgacap module` | the board runs the stock firmware | Flash the module firmware, or capture with `--firmware micropython` |
-| `the board's vgacap module speaks API ...` | the module and ttcap are from different versions | Flash the module firmware built from your checkout |
-| `the capture firmware has no rle mode; use --firmware micropython` | `--mode rle` was given | Use `stream`, `frame` or `window` |
-| `pio 0 would have to move its pin window to GPIO 16 ...` | `--pio 0` was given | Use `--pio 1` or `--pio 2` |
-| `board has only N bytes of free heap ...` | the heap is too full for the buffers | Reset the board and try again, or lower `--buf-words` for a stream |
-| `... is not a shuttle entry on this board ... has to be enabled through the board's daemon first` | an uploaded design that `tt.shuttle` does not know | Enable it through the bridge: `curl -s -X POST localhost:8765/designs/<name>/enable` |
-| `NameError: name 'tt' isn't defined` | an `mpremote ... run` or `exec` soft-reset the board, which clears the SDK's `tt` | Restart the board to the stock firmware's start state: `uv run --no-sync python tools/board_restart.py serial:$DEV` |
-| `the vgacap module refused the capture: ...` | an argument the firmware's tables refuse | Read the message against [the protocol's arguments](../firmware/PROTOCOL.md#arguments) |
-| `--asic-index is for --firmware picosdk ...` | `--asic-index` was given | Drop it; select an ASIC project with `--project` |
-| `overruns=` above 0 in a stream | the project clock is faster than the USB link carries | Lower `--clock-hz`, or use `--mode frame` |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 1 to 3 | `this board's firmware has no vgacap module` | the board runs the stock firmware | Flash the module firmware, or capture with `--firmware micropython` |
+| 1 to 3 | `the board's vgacap module speaks API ...` | the module and ttcap are from different versions | Flash the module firmware built from your checkout |
+| 1 to 3 | `the capture firmware has no rle mode; use --firmware micropython` | `--mode rle` was given | Use `stream`, `frame` or `window` |
+| 1 to 3 | `pio 0 would have to move its pin window to GPIO 16 ...` | `--pio 0` was given | Use `--pio 1` or `--pio 2` |
+| 1 to 3 | `board has only N bytes of free heap ...` | the heap is too full for the buffers | Reset the board and try again, or lower `--buf-words` for a stream |
+| 1 to 3 | `... is not a shuttle entry on this board ... has to be enabled through the board's daemon first` | an uploaded design that `tt.shuttle` does not know | Enable it through the bridge: `curl -s -X POST localhost:8765/designs/<name>/enable` |
+| 1 to 3 | `NameError: name 'tt' isn't defined` | an `mpremote ... run` or `exec` soft-reset the board, which clears the SDK's `tt` | Restart the board to the stock firmware's start state: `uv run --no-sync python tools/board_restart.py serial:$DEV` |
+| 1 to 3 | `the vgacap module refused the capture: ...` | an argument the firmware's tables refuse | Read the message against [the protocol's arguments](../firmware/PROTOCOL.md#arguments) |
+| 1 to 3 | `--asic-index is for --firmware picosdk ...` | `--asic-index` was given | Drop it; select an ASIC project with `--project` |
+| 3 | `overruns=` above 0 | the project clock is faster than the USB link carries | Lower `--clock-hz`, or use `--mode frame` |
 
 ## Next
 

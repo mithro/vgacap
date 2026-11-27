@@ -27,7 +27,7 @@ from the stream header to the frame rebuilding.
 
 ## Where a sample goes
 
-Figure 1 is the path of a sample. The design drives `uo_out` on GPIO 33 to 40, and a PIO state machine samples
+The figure is the path of a sample. The design drives `uo_out` on GPIO 33 to 40, and a PIO state machine samples
 it. Two DMA channels move the samples from the state machine's RX FIFO into SRAM. The firmware sends full buffers
 over TinyUSB's serial port, and ttcap writes them after its own `VGCH` header.
 
@@ -36,7 +36,7 @@ over TinyUSB's serial port, and ttcap writes them after its own `VGCH` header.
   <img src="../docs/diagrams/firmware-datapath.svg" alt="uo_out enters PIO block 1 of the RP2350B, its RX FIFO and two DMA channels, a 440 KB arena, then USB to ttcap and a .vgacap file." width="100%">
 </picture>
 
-*Figure 1: the firmware's capture data path
+*The firmware's capture data path
 ([`docs/diagrams/firmware_datapath.py`](../docs/diagrams/firmware_datapath.py)).*
 
 The buffer is where the firmware differs most from the stock firmware's path. MicroPython's heap is fragmented,

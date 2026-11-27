@@ -48,7 +48,14 @@ Message is the start of what `ttcap capture` prints. Exit is the exit code. Caus
 
 ## Throughput, probe and reboot
 
-`ttcap throughput` exits 1 when its one result line says `corrupt=yes` or carries `short_by=N`. The first means a byte came back wrong, and the second that fewer bytes arrived than were sent. `ttcap probe` and `ttcap reboot` exit 1 with the `failed:` line above when the link cannot be opened or the board does not answer.
+Subcommand is the command, and Message the start of what it prints. The other columns are as above.
+
+| Subcommand | Message | Exit | Cause | Fix |
+|---|---|---|---|---|
+| `throughput` | `corrupt=yes` | 1 | a byte came back wrong | check the cable and the link |
+| `throughput` | `short_by=N` | 1 | fewer bytes arrived than were sent | read `board_error=` on the same line |
+| `probe` | `probe failed:` | 1 | the link cannot be opened or the board does not answer | check the link and that nothing else holds the port |
+| `reboot` | `reboot failed:` | 1 | the link cannot be opened or the board does not answer | check the link and that nothing else holds the port |
 
 ## PNG
 

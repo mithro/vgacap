@@ -22,9 +22,9 @@ This page uses `vgacapbin`. It builds a `vgacapttsrc` from a URI, and puts `vgad
 
 1. In the vgacap checkout, run `export GST_PLUGIN_PATH=$PWD/build`, so that GStreamer finds the vgacap elements in this shell.
 2. In the same directory, run `gst-launch-1.0 vgacapbin 'uri="tt-serial:///dev/ttyACM0?project=tt_um_x&clock-hz=500000&seconds=10"' ! videoconvert ! autovideosink`, and a window shows the picture.
-3. For a bench board, run step 2 with `tt-ws://127.0.0.1:PORT/serial` in place of `tt-serial:///dev/ttyACM0`, PORT being the bridge's tunnel port.
-4. On a demo board with an FPGA breakout, run step 2 with `design=` in place of `project=` in the URI.
-5. To record instead, run step 2 with `-e` after `gst-launch-1.0`, and `! videoconvert ! video/x-raw,format=I420 ! x264enc ! matroskamux ! filesink location=live.mkv` as its end.
+3. In the same directory, for a bench board, run step 2 with `tt-ws://127.0.0.1:PORT/serial` for the serial URI, which captures through the tunnel on PORT.
+4. In the same directory, for a demo board with an FPGA breakout, run step 2 with `design=` for `project=`, which selects the FPGA design.
+5. In the same directory, to record instead, run step 2 with `-e` after `gst-launch-1.0`, and `! videoconvert ! video/x-raw,format=I420 ! x264enc ! matroskamux ! filesink location=live.mkv` as its end, which writes `live.mkv`.
 
 Quote the URI twice, as step 2 does: the shell would otherwise stop at `&`.
 
