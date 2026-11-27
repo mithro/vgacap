@@ -271,6 +271,19 @@ def test_clocked_mode_needs_a_bitstream_and_a_clock_count(monkeypatch, capsys, d
     assert option in _refused(monkeypatch, capsys, args)
 
 
+@pytest.mark.parametrize("extra, match", [
+    (["--reset-clocks", "0"], "--reset-clocks must be at least 1"),
+    (["--reset-clocks", "64"], "--clocks must be more than --reset-clocks"),
+    (["--reset-clocks", "100"], "--clocks must be more than --reset-clocks"),
+    (["--clock-high", "16"], "--clock-high must be 0..15"),
+    (["--clock-high", "-1"], "--clock-high must be 0..15"),
+    (["--buf-words", "4", "--reset-clocks", "36"], "--reset-clocks must be at most 35"),
+])
+def test_counts_known_before_the_link_are_usage_errors(monkeypatch, capsys, extra, match):
+    # Review M4: like --clocks 6, these are exit 2, not a board failure.
+    assert match in _refused(monkeypatch, capsys, CLOCKED + extra)
+
+
 @pytest.mark.parametrize("clocks", ["6", "63", "0", "-4"])
 def test_clocks_must_be_a_positive_multiple_of_4(monkeypatch, capsys, clocks):
     args = list(CLOCKED)

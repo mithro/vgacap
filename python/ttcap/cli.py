@@ -60,6 +60,7 @@ from .capture import (
     CaptureSession,
     CaptureStats,
     ClockedSession,
+    clocked_count_problem,
     frame_note,
     frames_to_max_bytes,
     recover_clocked,
@@ -881,9 +882,10 @@ def mode_option_problem(args: argparse.Namespace, typed: set[str]) -> str | None
     for name in ("bitstream", "clocks"):
         if getattr(args, name) is None:
             return "--mode clocked needs %s" % CLOCKED_ONLY[name]
-    if args.clocks <= 0 or args.clocks % 4:
-        return "--mode clocked: --clocks must be a positive multiple of 4, got %d" % args.clocks
-    return None
+    problem = clocked_count_problem(
+        args.clocks, args.reset_clocks, args.buf_words, args.clock_high,
+        names=("--clocks", "--reset-clocks", "--buf-words", "--clock-high"))
+    return "--mode clocked: " + problem if problem else None
 
 
 def _report(stats: CaptureStats, out_path: str, stream=None) -> None:

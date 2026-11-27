@@ -219,6 +219,26 @@ def test_refused_requests(tmp_path, kwargs, match):
         Rig(tmp_path).request(**kwargs)
 
 
+def test_the_reset_clocks_limit_is_what_the_dma_and_fifo_hold_before_the_irq(tmp_path):
+    # Review M1. During the reset loop only buffer 0 is armed and the board
+    # waits for the irq, so the pushes before it, floor(R / 4), must fit in
+    # min(buf_words, clocks / 4) DMA words plus the 4-word RX FIFO: R at
+    # most 4 * (4 + 4) + 3 = 35 at buf_words 4.
+    rig = Rig(tmp_path)
+    stats, data = rig.run(clocks=40, reset_clocks=35, buf_words=4)
+    assert stats.clean, stats.format()
+    assert samples_of(data) == counter(40, 35)
+    with pytest.raises(ValueError, match="at most 35"):
+        rig.request(clocks=40, reset_clocks=36, buf_words=4)
+    # The limit is exact: one more, past the host's check, stalls the PIO
+    # before the irq and the handshake never comes.
+    req = rig.request(clocks=40, reset_clocks=35, buf_words=4)
+    req.reset_clocks = 36
+    (tmp_path / "over").mkdir()
+    stats, _ = Rig(tmp_path / "over").run(req)
+    assert "error=no reset handshake" in stats.messages
+
+
 def test_a_plain_session_refuses_a_clocked_request(tmp_path):
     rig = Rig(tmp_path)
     with pytest.raises(ValueError, match="ClockedSession"):

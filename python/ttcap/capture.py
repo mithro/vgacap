@@ -568,21 +568,10 @@ class CaptureRequest:
             raise ValueError(
                 f"a clocked capture needs the FPGA breakout's RP2350 demo board, not "
                 f"profile {self.profile.name}")
-        if self.reset_clocks < 1:
-            raise ValueError(f"reset_clocks must be at least 1, got {self.reset_clocks}")
-        if self.clocks <= 0 or self.clocks % 4:
-            raise ValueError(
-                f"clocks must be a positive multiple of 4, so that every word is full, "
-                f"got {self.clocks}")
-        if self.clocks <= self.reset_clocks:
-            raise ValueError(
-                f"clocks must be more than reset_clocks ({self.reset_clocks}), got "
-                f"{self.clocks}")
-        if self.clocks > 1 << 32:
-            raise ValueError(f"clocks must be at most 2**32, got {self.clocks}")
-        if self.clock_high is not None and not 0 <= self.clock_high <= CLOCKED_MAX_PHASE:
-            raise ValueError(
-                f"clock_high must be 0..{CLOCKED_MAX_PHASE}, got {self.clock_high}")
+        problem = clocked_count_problem(self.clocks, self.reset_clocks, self.buf_words,
+                                        self.clock_high)
+        if problem:
+            raise ValueError(problem)
 
     def cfg(self) -> dict:
         """The `CFG` dict for the board-side script. A clocked capture's
@@ -1452,6 +1441,52 @@ class ClockedTiming:
         the board checks `machine.freq()` against."""
         return {"sysclk_hz": self.sysclk_hz, "pio_div": self.pio_div,
                 "high": self.high, "low": self.low}
+
+
+#: Words the RX FIFO holds, unjoined: `clocked_rp2.py` joins neither way.
+CLOCKED_RX_FIFO_WORDS = 4
+
+
+def clocked_reset_limit(clocks: int, buf_words: int) -> int:
+    """The most reset clocks a clocked capture can make before its `irq`.
+
+    During the reset loop the board only waits for the irq, with buffer 0
+    armed for min(buf_words, clocks / 4) words, so every word pushed before
+    the irq has to fit there or in the RX FIFO: R samples push floor(R / 4)
+    words (`push iffull` at 32 bits), and the rest wait in the ISR. One
+    more push and the PIO stalls, low, before the irq: no handshake.
+    """
+    return 4 * (min(buf_words, clocks // 4) + CLOCKED_RX_FIFO_WORDS) + 3
+
+
+#: The request fields `clocked_count_problem` names; the CLI passes its
+#: options instead.
+CLOCKED_COUNT_NAMES = ("clocks", "reset_clocks", "buf_words", "clock_high")
+
+
+def clocked_count_problem(clocks: int, reset_clocks: int, buf_words: int,
+                          clock_high: int | None = None,
+                          names: tuple = CLOCKED_COUNT_NAMES) -> str | None:
+    """Why these counts make no clocked capture, or None: what needs no
+    board, so the CLI refuses it as a usage error and a request as a
+    `ValueError`. `names` are what the message calls the four."""
+    n_clocks, n_reset, n_buf, n_high = names
+    if reset_clocks < 1:
+        return f"{n_reset} must be at least 1, got {reset_clocks}"
+    if clocks <= 0 or clocks % 4:
+        return (f"{n_clocks} must be a positive multiple of 4, so that every word is "
+                f"full, got {clocks}")
+    if clocks <= reset_clocks:
+        return f"{n_clocks} must be more than {n_reset} ({reset_clocks}), got {clocks}"
+    if clocks > 1 << 32:
+        return f"{n_clocks} must be at most 2**32, got {clocks}"
+    limit = clocked_reset_limit(clocks, buf_words)
+    if reset_clocks > limit:
+        return (f"{n_reset} must be at most {limit} with {n_buf} {buf_words}: more "
+                f"fill the DMA buffer and the RX FIFO before reset is released")
+    if clock_high is not None and not 0 <= clock_high <= CLOCKED_MAX_PHASE:
+        return f"{n_high} must be 0..{CLOCKED_MAX_PHASE}, got {clock_high}"
+    return None
 
 
 def _least_high(sysclk_hz: int, pio_div: int) -> int:
