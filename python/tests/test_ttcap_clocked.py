@@ -634,3 +634,18 @@ def test_the_clocked_script_builds_under_10000_bytes():
                               script="clocked_rp2.py", bitstream="x.bin", clocks=4_000_000).cfg(),
                **clocked_timing(150_000_000, 500_000).cfg())
     assert len(mp.build(cfg, "clocked_rp2.py").encode()) < 10_000
+
+
+def test_the_stale_program_sweep_leaves_pio0_alone():
+    # PIO0 holds the stock firmware's FPGA loader. The host refuses pio 0
+    # for this profile today; the board script does not rely on that.
+    import ast
+    import pathlib
+    source = (pathlib.Path(mp.__file__).parent / "clocked_rp2.py").read_text()
+    main = next(n for n in ast.parse(source).body
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    text = ast.unparse(main)
+    sweep = text.index("rp2.PIO(PIO_NUM).remove_program()")
+    guard = text.rfind("if PIO_NUM != 0:", 0, sweep)
+    assert guard != -1 and text.index("rp2.StateMachine(") > sweep
+    assert text[guard:sweep].count("\n") <= 2  # the guard is the sweep's own

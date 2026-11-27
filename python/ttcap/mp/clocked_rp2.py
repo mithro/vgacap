@@ -185,12 +185,12 @@ def main(out):
         bufs = [bytearray(4 * BUF_WORDS), bytearray(4 * BUF_WORDS)]
         prog = make_clocked(HIGH, LOW, IN_COUNT)  # noqa: F821
         # The prelude's new_state_machine, with the side-set pin: dropping
-        # the block's stale programs first. PIO_NUM is never 0 here (the
-        # RP2350 profile refuses it), so the stock firmware's are safe.
-        try:
-            rp2.PIO(PIO_NUM).remove_program()  # noqa: F821
-        except Exception:
-            pass
+        # the block's stale programs first, never PIO0's (the FPGA loader).
+        if PIO_NUM != 0:  # noqa: F821
+            try:
+                rp2.PIO(PIO_NUM).remove_program()  # noqa: F821
+            except Exception:
+                pass
         sm = rp2.StateMachine(PIO_NUM * 4 + SM_NUM, prog,  # noqa: F821 - takes the clock pad, low
                               in_base=machine.Pin(IN_BASE),  # noqa: F821
                               sideset_base=machine.Pin(CLK_GPIO))  # noqa: F821
@@ -251,8 +251,16 @@ def main(out):
         error = "error=%s: %s" % (type(e).__name__, e)
     finally:
         if sm is not None:
+            # Disable, then exec: SM_ENABLE's "a disabled state machine will
+            # cease executing instructions, except those written directly
+            # to SMx_INSTR" (RP2040 3.7, RP2350 11.7), so the forced nop
+            # runs and drives the clock low, and the program, now frozen,
+            # cannot raise it again. The other order is wrong: an exec on a
+            # running machine replaces only its next instruction, and the
+            # program resumes at its PC (often `nop side 1`) before the
+            # disable lands. pico-sdk's pio_sm_init relies on the same rule.
             sm.active(0)
-            sm.exec("nop() .side(0)")  # after active(0): nothing can raise it again
+            sm.exec("nop() .side(0)")
         try:
             rp2.PIO(PIO_NUM).remove_program(prog)  # noqa: F821
         except Exception:  # noqa: BLE001 - never added
