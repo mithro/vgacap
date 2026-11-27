@@ -763,7 +763,7 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
 
 #: How long `reset_design` waits for `rst_n` to read 1 after the release.
 #: The release is the board's pull-up against the RP2's internal pull-down
-#: (#58); 100 ms is far longer than any RC on that line needs.
+#: (#58). On fpga-4 rst_n read 1 at the first poll (2026-11-27).
 RST_N_RELEASE_TIMEOUT_MS = 100
 
 _READ_RST_N = "print('ttcap rst_n=%d' % tt.rst_n())"
@@ -774,11 +774,13 @@ _AWAIT_RST_N = "\n".join([
     "_t = time.ticks_ms()",
     "while not tt.rst_n() and time.ticks_diff(time.ticks_ms(), _t) < %d:" % RST_N_RELEASE_TIMEOUT_MS,
     "    time.sleep_ms(1)",
+    "print('ttcap rst_n_wait_ms=%d' % time.ticks_diff(time.ticks_ms(), _t))",
     "del _t",
     _READ_RST_N,
 ])
-#: Whether the manual-clock monitor is on (1), off (0) or absent (-1): it
-#: is there from TTDBv3.3 on, and SDK 2.x and fpga-4's 3.1.1 have none. Its
+#: Whether the manual-clock monitor is on (1), off (0) or absent (-1): SDK
+#: 3.1.1 makes one on TTDBv3.3 and later (`demoboard.py:146-150`), and
+#: fpga-4's `tt.manual_project_clock` was None (2026-11-27). Its
 #: 3 Hz timer calls `clock_project_once()` after an edge on the manual-clock
 #: pin, which stops the PWM (`manual_clock.py:76-87`, `demoboard.py:317-330`).
 _READ_MONITORING = (
