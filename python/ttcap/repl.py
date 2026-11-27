@@ -531,7 +531,11 @@ class RawRepl:
         that is a directory.
 
         Every handle it opens on the board is closed before it returns or
-        raises, and before the file is reopened. It leaves no names in the
+        raises, and before the file is reopened -- with one exception. A
+        slice that times out, loses its link or is interrupted may still be
+        running on the board, so nothing more is sent: the write handle is
+        left open, the exception propagates, and the next `upload()` closes
+        the handle before its check (after the caller's `recover()`). It leaves no names in the
         REPL's globals but `ubinascii`; while a write is open the handle is
         bound as `_ttcap_up_f`, so a caller must not use that name.
         """
@@ -557,10 +561,14 @@ class RawRepl:
                 self._exec_checked(
                     f"{_UPLOAD_HANDLE}.write(ubinascii.a2b_base64(b'{encoded}'))"
                 )
-        except BaseException:
-            # Best effort: the slice's own failure is the one to report. If
-            # this close does not get through either, the next upload's
-            # first close does it.
+        except RuntimeError:
+            # The board answered, with an error, so the REPL is in step and
+            # a close can follow. Best effort: the slice's own failure is
+            # the one to report. Anything else -- a timeout, a closed link,
+            # a Ctrl-C on the host -- may leave the slice still running on
+            # the board, whose late reply a close would take as its own;
+            # then nothing more is sent, and the next upload's first close
+            # is the backstop.
             try:
                 self._exec_checked(_UPLOAD_CLOSE)
             except Exception:  # noqa: BLE001
