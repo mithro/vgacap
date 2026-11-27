@@ -1644,7 +1644,7 @@ def add_parser(subparsers) -> argparse.ArgumentParser:
     what = parser.add_mutually_exclusive_group()
     what.add_argument(
         "--project",
-        help="ASIC shuttles: tt.shuttle macro to enable, e.g. tt_um_rejunity_vga",
+        help="ASIC shuttles: tt.shuttle macro to enable, such as tt_um_rejunity_vga",
     )
     what.add_argument(
         "--design", help="FPGA boards: bitstream to enable, via the same tt.shuttle"

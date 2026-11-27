@@ -919,7 +919,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="board profile; auto asks the board for its GPIOMap (default)",
     )
     capture_parser.add_argument(
-        "--project", help="tt.shuttle macro to enable, e.g. tt_um_rejunity_vga"
+        "--project", help="tt.shuttle macro to enable, such as tt_um_rejunity_vga"
     )
     capture_parser.add_argument(
         "--design", help="FPGA boards: bitstream to enable, via the same tt.shuttle"
@@ -984,8 +984,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=sorted(CAPTURE_MODES),
         default="stream",
-        help="stream: every sample, at a clock the USB link can carry "
-        "(~750 kHz RP2350, ~60 kHz RP2040); frame: whole frames at the "
+        help="stream: every sample, at a clock the USB link can carry; "
+        "frame: whole frames at the "
         "project's real clock, sent between frames; window: the same, "
         "--window-lines lines per frame; rle: every sample, run-length "
         "encoded by the PIO, as fast as the picture's runs let the link "
@@ -1080,7 +1080,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reboot_parser.add_argument(
         "--to", choices=REBOOT_TARGETS, default="flash",
-        help="flash: the firmware in flash, i.e. the stock firmware (default); "
+        help="flash: the firmware in flash (the stock firmware, unless another was flashed; default); "
         "bootsel: the RP2350's USB bootloader, which takes a UF2",
     )
 

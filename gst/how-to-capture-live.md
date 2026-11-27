@@ -15,7 +15,7 @@ This page uses `vgacapbin`. It builds a `vgacapttsrc` from a URI, and puts `vgad
 
 - The plugin built in `build/`, as [How to build the GStreamer plugin](how-to-build-plugin.md) shows, and `uv run ttcap --help` working in the vgacap checkout.
 - A demo board with an RP2350 on this machine's `/dev/ttyACM0`, with nothing else holding the port.
-- Or a bench board, reached through the fpgas.online bridge (`fpgas-tt`) as [Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed) shows.
+- Or a bench board, reached through the fpgas.online bridge (`fpgas-tt`) as [How to capture from a Welland board through the bridge](../python/ttcap/how-to-capture-welland-bridge.md) shows.
 - The name of a VGA design on it: a `tt_um_` project on an ASIC breakout, or a bitstream on an FPGA breakout.
 
 ## Steps
@@ -43,7 +43,7 @@ A window opens after a few seconds with the design's picture, and closes when th
 | 2 | `the uri's query string sets 'link', which a uri may not set` | a key the URI may not set | set it as an element property |
 | 2 | `tt-serial takes a device path, so write tt-serial:///dev/ttyACM0 with three slashes` | two slashes after `tt-serial:` | write three |
 | 2 | the command runs in the background | the URI was not quoted for the shell | quote it twice, as step 2 does |
-| 4 | `is not a shuttle entry on this board and is not the enabled design either` | the FPGA bitstream is not enabled on the board | on the board's Pi, run `curl -s -X POST localhost:8765/designs/<name>/enable` ([the bridge](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed)), then step 4 again |
+| 4 | `is not a shuttle entry on this board and is not the enabled design either` | the FPGA bitstream is not enabled on the board | on the board's Pi, run `curl -s -X POST localhost:8765/designs/<name>/enable` ([the bridge](../python/ttcap/how-to-capture-welland-bridge.md)), then step 4 again |
 
 ## Next
 
