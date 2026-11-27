@@ -2,8 +2,16 @@
 // bench-runs: times libvgaframe (vgaframe_push) on run-length input.
 // One synthetic 640x480@60 frame (800 x 525 clocks, Tiny VGA samples) is
 // converted to (sample, run) pairs once, then replayed until N clocks have
-// been pushed. Usage: bench-runs --clocks N --profile busy|bars|static
+// been pushed. Usage: bench-runs --clocks N --profile busy|bars|static|distinct
 // [--write-trace PATH]
+//
+// busy, bars and static replay one frame, so every frame after the first is
+// the same picture. distinct makes every frame a new picture: frame k is
+// busy's pattern moved k pixels, with k in binary in the first 32 pixels of
+// line 0 (0x3F a one, 0 a zero), rebuilt before each frame. It is the profile
+// for timing vgacap-sample's per-frame work, the frame hash and the store,
+// which a repeated frame skips. Without --write-trace its timing includes
+// building each frame.
 //
 // --write-trace PATH (host extras builds only) writes that stream instead, as
 // a 43-bit tt-um-43 simulation trace through vgacap_trace_push, two samples a
@@ -30,6 +38,39 @@
 static uint8_t px_busy(void *u, uint16_t x, uint16_t y) { (void)u; return (uint8_t)((x + y) & 0x3F); }
 static uint8_t px_bars(void *u, uint16_t x, uint16_t y) { (void)u; (void)y; return (uint8_t)((x / 10) & 0x3F); }
 static uint8_t px_static(void *u, uint16_t x, uint16_t y) { (void)u; (void)x; (void)y; return 0x2A; }
+static uint8_t px_distinct(void *u, uint16_t x, uint16_t y) {
+    uint32_t k = *(const uint32_t *)u;
+    if (y == 0 && x < 32) return (k >> x) & 1u ? 0x3F : 0;
+    return (uint8_t)((x + y + k) & 0x3F);
+}
+
+typedef struct frame_src {
+    const vgaframe_mode_t *m;
+    uint8_t (*pixel)(void *, uint16_t, uint16_t);
+    int moving;          // the distinct profile: rebuild the runs for each frame
+    uint32_t k;          // the frame being built
+    uint32_t *samples, *rs, *rr;
+    size_t nsamp, nruns;
+} frame_src_t;
+
+// Frame src->k as (sample, run) pairs in rs/rr; 0, or -1 on failure.
+static int build_runs(frame_src_t *f) {
+    if (synth_frame(f->m, f->pixel, &f->k, f->samples, f->nsamp) != f->nsamp) return -1;
+    size_t n = 0;
+    for (size_t i = 0; i < f->nsamp; i++) {
+        if (n && f->rs[n - 1] == f->samples[i]) f->rr[n - 1]++;
+        else { f->rs[n] = f->samples[i]; f->rr[n] = 1; n++; }
+    }
+    f->nruns = n;
+    return 0;
+}
+
+// Before replaying a frame other than the first: the next one, if it moves.
+static int next_frame(frame_src_t *f, int first) {
+    if (first || !f->moving) return 0;
+    f->k++;
+    return build_runs(f);
+}
 
 static void on_frame(void *u, const vgaframe_output_t *o) { (void)o; (*(uint64_t *)u)++; }
 
@@ -38,8 +79,7 @@ static void on_frame(void *u, const vgaframe_output_t *o) { (void)o; (*(uint64_t
 #define CLOCK_HZ 25175000u
 
 // The runs rs/rr (one frame), replayed, as a trace of `clocks` clocks.
-static int write_trace(const char *path, const char *profile, uint64_t clocks,
-                       const uint32_t *rs, const uint32_t *rr, size_t nruns) {
+static int write_trace(const char *path, const char *profile, uint64_t clocks, frame_src_t *fs) {
     vgacap_header_t h;
     vgacap_header_init_v2(&h, 43, 2, 42, 0);
     h.mode = VGACAP_MODE_EVENT; h.clock_hz = CLOCK_HZ;
@@ -58,8 +98,10 @@ static int write_trace(const char *path, const char *profile, uint64_t clocks,
         bad |= vgacap_trace_push(t, ena);
         bad |= vgacap_trace_push(t, ena | clk);
     }
-    while (c < clocks && !bad) {
-        for (size_t i = 0; i < nruns && c < clocks; i++) {
+    for (int first = 1; c < clocks && !bad; first = 0) {
+        if (next_frame(fs, first)) { fprintf(stderr, "bench-runs: frame synthesis failed\n"); return 1; }
+        const uint32_t *rs = fs->rs, *rr = fs->rr;
+        for (size_t i = 0; i < fs->nruns && c < clocks; i++) {
             uint64_t v = ena | rst | rs[i];
             uint64_t n = rr[i] < clocks - c ? rr[i] : clocks - c;
             bad |= vgacap_trace_push(t, prev);       // clock c's clk-low sample: the last clock's outputs
@@ -98,20 +140,17 @@ int main(int argc, char **argv) {
     if (profile && !strcmp(profile, "busy")) pixel = px_busy;
     else if (profile && !strcmp(profile, "bars")) pixel = px_bars;
     else if (profile && !strcmp(profile, "static")) pixel = px_static;
-    if (!clocks || !pixel) { fprintf(stderr, "usage: bench-runs --clocks N --profile busy|bars|static\n"); return 2; }
+    else if (profile && !strcmp(profile, "distinct")) pixel = px_distinct;
+    if (!clocks || !pixel) { fprintf(stderr, "usage: bench-runs --clocks N --profile busy|bars|static|distinct\n"); return 2; }
 
     const vgaframe_mode_t *m = vgaframe_mode_match(800, 525);
     size_t nsamp = 800u * 525u;
     uint32_t *samples = malloc(nsamp * sizeof *samples);
     uint32_t *rs = malloc(nsamp * sizeof *rs), *rr = malloc(nsamp * sizeof *rr);
-    if (!m || !samples || !rs || !rr || synth_frame(m, pixel, NULL, samples, nsamp) != nsamp) { fprintf(stderr, "frame synthesis failed\n"); return 1; }
-    size_t nruns = 0;
-    for (size_t i = 0; i < nsamp; i++) {
-        if (nruns && rs[nruns - 1] == samples[i]) rr[nruns - 1]++;
-        else { rs[nruns] = samples[i]; rr[nruns] = 1; nruns++; }
-    }
+    frame_src_t fs = { m, pixel, pixel == px_distinct, 0, samples, rs, rr, nsamp, 0 };
+    if (!m || !samples || !rs || !rr || build_runs(&fs)) { fprintf(stderr, "frame synthesis failed\n"); return 1; }
 #ifdef BENCH_WRITE_TRACE
-    if (trace) return write_trace(trace, profile, clocks, rs, rr, nruns);
+    if (trace) return write_trace(trace, profile, clocks, &fs);
 #endif
 
     uint64_t frames = 0;
@@ -127,8 +166,9 @@ int main(int argc, char **argv) {
     uint64_t pushed = 0, pushed_runs = 0;
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    while (pushed < clocks) {
-        for (size_t i = 0; i < nruns && pushed < clocks; i++) {
+    for (int first = 1; pushed < clocks; first = 0) {
+        if (next_frame(&fs, first)) { fprintf(stderr, "frame synthesis failed\n"); return 1; }
+        for (size_t i = 0; i < fs.nruns && pushed < clocks; i++) {
             uint64_t left = clocks - pushed;
             uint32_t run = rr[i] > left ? (uint32_t)left : rr[i];
             vgaframe_push(f, rs[i], run);

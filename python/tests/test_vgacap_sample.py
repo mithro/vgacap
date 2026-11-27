@@ -420,3 +420,20 @@ def test_sample_rejects_bad_seconds(tmp_path, key, value):
     assert proc.stderr == (f"vgacap-sample: {trace}: META(open) {key} '{value}' "
                            "is not a finite number >= 0\n")
     assert not (tmp_path / "out").exists()
+
+
+def test_bench_distinct_profile_makes_every_frame_distinct(tmp_path):
+    """bench-runs --profile distinct is the benchmark of vgacap-sample's frame
+    hash and store: every frame must be a new distinct frame, or the
+    repeated-frame short cut skips them and the benchmark times nothing."""
+    trace = tmp_path / "distinct.trace.zst"
+    clocks = 10 + 24 * FRAME
+    subprocess.run([str(BUILD / "bench-runs"), "--clocks", str(clocks), "--profile", "distinct",
+                    "--write-trace", str(trace)], check=True, capture_output=True, text=True)
+    proc = run_sample(trace, tmp_path / "out")
+    assert proc.returncode == 0, proc.stderr
+    for s in SAMPLERS:
+        f = ff.read_frames_txt(tmp_path / "out" / s / "frames.txt")
+        shown = [fr for fr in f.frames if fr.distinct >= 0]
+        assert len(shown) >= 12, (s, len(shown))   # calibration takes the first few
+        assert len(f.distinct) == len(shown) == len(set(f.distinct)), s
