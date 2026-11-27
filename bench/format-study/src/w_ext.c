@@ -267,7 +267,7 @@ const fs_writer_t fs_w_vcd = { "vcd", vcd_create, vcd_run, vcd_finish };
 
 // ---- the list -----------------------------------------------------------------------------
 const fs_writer_t *fs_writer_by_name(const char *name) {
-    static const fs_writer_t *const all[] = { &fs_w_null, &fs_w_vgch2, &fs_w_planar, &fs_w_events, &fs_w_raw,
+    static const fs_writer_t *const all[] = { &fs_w_null, &fs_w_vgch2, &fs_w_planar, &fs_w_events, &fs_w_runs, &fs_w_raw,
                                               &fs_w_fst, &fs_w_fst_clk, &fs_w_lxt2, &fs_w_vcd };
     for (size_t i = 0; i < sizeof all / sizeof all[0]; i++)
         if (strcmp(all[i]->name, name) == 0) return all[i];

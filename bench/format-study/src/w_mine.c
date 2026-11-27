@@ -322,6 +322,81 @@ static void events_finish(void *st) {
 }
 const fs_writer_t fs_w_events = { "events", events_create, events_run, events_finish };
 
+// ---- runs: VGCH v2's RUNS pairs, written the way events is written -----------------------------------
+// The same bytes as vgch2's RUNS payload (a 6-byte tt-um-43 value with the
+// clock bit cleared, then the LEB128 run), from events' writer code: one
+// slow path a changed clock, no per-sample calls. It separates what the
+// RUNS format costs from what vgacap's writer code costs. (Its blocks carry
+// no BLKH or RUNS header: those are a few bytes a block.)
+typedef struct {
+    base_t s;
+    uint64_t run_start;
+} runs_t;
+
+static inline void runs_sample(runs_t *w, uint64_t s, uint64_t v) {
+    if (v == w->s.h.want) return;
+    uint8_t *p = w->s.p[0];
+    p += vgacap_run_pair_put_inline(p, fs_pack(w->s.h.want) & ~(1ull << 42), 6, s - w->run_start);
+    w->s.p[0] = p;
+    w->run_start = s;
+    w->s.h.want = v;
+}
+
+NOINLINE void fs_runs_slow(void *wv, uint64_t r0, uint64_t r1) {
+    runs_t *w = wv;
+    const uint64_t n = w->s.h.n;
+    if (!w->s.started) {
+        w->s.started = 1;
+        w->s.h.want = r0 & fs_noclk;
+        w->s.b.first_sample = n; w->run_start = n;
+        w->s.h.limit = n + w->s.block_samples;
+    } else if (n == w->s.h.limit) {   // a block end by clocks: split the run
+        uint8_t *p = w->s.p[0];
+        p += vgacap_run_pair_put_inline(p, fs_pack(w->s.h.want) & ~(1ull << 42), 6, n - w->run_start);
+        w->s.p[0] = p;
+        base_emit(&w->s, n);
+        w->s.b.first_sample = n; w->run_start = n;
+        w->s.h.limit = n + w->s.block_samples;
+    }
+    w->s.clk_errors += (r0 & fs_clk_raw) != 0;
+    w->s.clk_errors += (r1 & fs_clk_raw) == 0;
+    runs_sample(w, n, r0 & fs_noclk);
+    runs_sample(w, n + 1, r1 & fs_noclk);
+    w->s.h.n = n + 2;
+    if (UNLIKELY(w->s.p[0] > w->s.full_at[0])) {   // a block end by size
+        uint8_t *p = w->s.p[0];
+        p += vgacap_run_pair_put_inline(p, fs_pack(w->s.h.want) & ~(1ull << 42), 6, n + 2 - w->run_start);
+        w->s.p[0] = p;
+        base_emit(&w->s, n + 2);
+        w->s.b.first_sample = n + 2; w->run_start = n + 2;
+        w->s.h.limit = n + 2 + w->s.block_samples;
+    }
+}
+
+static void *runs_create(uint64_t bc, const char *out, fs_block_fn f, void *c) {
+    (void)out;
+    runs_t *w = calloc(1, sizeof *w);
+    base_init(&w->s, 1, STREAM_CAP, bc ? bc : (1ull << 24), f, c, 0);
+    return w;
+}
+
+static void runs_run(void *st, const uint64_t *raw, uint64_t clocks) {
+    for (uint64_t c = 0; c < clocks; c++) fs_runs_clock(st, raw[2 * c], raw[2 * c + 1], FS_CLK_RAW);
+}
+
+static void runs_finish(void *st) {
+    runs_t *w = st;
+    if (w->s.started) {
+        uint8_t *p = w->s.p[0];
+        p += vgacap_run_pair_put_inline(p, fs_pack(w->s.h.want) & ~(1ull << 42), 6, w->s.h.n - w->run_start);
+        w->s.p[0] = p;
+        base_emit(&w->s, w->s.h.n);
+    }
+    base_free(&w->s);
+    free(w);
+}
+const fs_writer_t fs_w_runs = { "runs", runs_create, runs_run, runs_finish };
+
 // ---- raw: both raw images of every clock, stored as they are ----------------------------------------
 // The simulation thread does two 8-byte stores a clock and nothing else; the
 // background part packs, checks the clock bit, transforms and compresses.
@@ -385,12 +460,18 @@ void *fs_sim_create_blocks(const char *kind, const char *path, const int off[8],
     clk_byte = off[7];
     fs_clk_raw = 1ull << (8 * clk_byte);
     fs_noclk = ~(0xffull << (8 * clk_byte));
-    const int raw = !strcmp(kind, "raw");
-    if (!raw && strcmp(kind, "events")) return NULL;
+    const int raw = !strcmp(kind, "raw"), runs = !strcmp(kind, "runs");
+    if (!raw && !runs && strcmp(kind, "events")) return NULL;
     void *bg = fs_bg_new(kind, raw ? "xor6" : "identity", "zstd1", path);
-    void *w = raw ? raw_new(block_clocks, fs_bg_fn(), bg, 1) : events_new(block_clocks, fs_bg_fn(), bg, 1);
+    void *w;
+    if (raw) w = raw_new(block_clocks, fs_bg_fn(), bg, 1);
+    else if (runs) {
+        runs_t *r = calloc(1, sizeof *r);
+        base_init(&r->s, 1, STREAM_CAP, block_clocks ? block_clocks : (1ull << 24), fs_bg_fn(), bg, 1);
+        w = r;
+    } else w = events_new(block_clocks, fs_bg_fn(), bg, 1);
     sim_t *s = calloc(1, sizeof *s);
-    s->w = w; s->bg = bg; s->raw = raw;
+    s->w = w; s->bg = bg; s->raw = raw ? 1 : runs ? 2 : 0;
     if (nsim < 64) sim_of[nsim++] = s;
     return w;
 }
@@ -398,7 +479,8 @@ void *fs_sim_create_blocks(const char *kind, const char *path, const int off[8],
 void fs_sim_finish(void *w) {
     for (int i = 0; i < nsim; i++) {
         if (sim_of[i] && sim_of[i]->w == w) {
-            if (sim_of[i]->raw) raw_finish(w);
+            if (sim_of[i]->raw == 1) raw_finish(w);
+            else if (sim_of[i]->raw == 2) runs_finish(w);
             else events_finish(w);
             fs_bg_close(sim_of[i]->bg);
             free(sim_of[i]);

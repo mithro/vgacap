@@ -149,7 +149,7 @@ stage_writer2() {
     for p in $PROJECTS; do
         local n=$(( $(clocks_of "$p") / 1048576 ))
         local s=$(( n / 96 )); [ "$s" -ge 1 ] || s=1
-        printf '%s\t%s\n' "$p" "$FS writer $(trace_of "$p") $scratch --writers null,vgch2,planar,events,raw --chunk 1048576 --stride $s --reps 5" >> "$jobs"
+        printf '%s\t%s\n' "$p" "$FS writer $(trace_of "$p") $scratch --writers null,vgch2,planar,events,runs,raw --chunk 1048576 --stride $s --reps 5" >> "$jobs"
     done
     run_pool writer2 "$jobs"
 }
@@ -165,6 +165,7 @@ stage_encode() {
         for w in planar events; do
             printf '%s\t%s\n' "$p.$w" "$FS encode $t $FILES --writer $w --transforms identity --comps $RUNCOMPS --sample-every $every --primary identity:zstd1" >> "$jobs"
         done
+        printf '%s\t%s\n' "$p.runs" "$FS encode $t $FILES --writer runs --transforms identity --comps zstd1"  >> "$jobs"
         printf '%s\t%s\n' "$p.raw" "$FS encode $t $FILES --writer raw --transforms pack6,xor6,xor-byteplanes,xor-bitplanes --comps zstd-1,zstd1,zstd3,lz4 --sample-every 16 --primary xor6:zstd1" >> "$jobs"
         printf '%s\t%s\n' "$p.sigrok" "$FS encode $t $FILES --writer raw --transforms pack6clk --comps deflate1,deflate6 --sample-every 16" >> "$jobs"
         printf '%s\t%s\n' "$p.vcd" "$FS encode $t $FILES --writer vcd --transforms identity --comps zstd1,deflate6,none --stride 8" >> "$jobs"

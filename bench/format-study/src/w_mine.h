@@ -22,6 +22,7 @@ typedef struct {
 void fs_planar_slow(void *w, uint64_t r0, uint64_t r1);
 void fs_events_slow(void *w, uint64_t r0, uint64_t r1);
 void fs_raw_full(void *w);
+void fs_runs_slow(void *w, uint64_t r0, uint64_t r1);
 
 // clk_raw: the clk byte's bit 0 in the raw image (a constant in the replay,
 // RawPorts::clk_raw in the testbench).
@@ -39,6 +40,13 @@ static inline void fs_events_clock(void *w, uint64_t r0, uint64_t r1, uint64_t c
     else
         h->n += 2;
 }
+static inline void fs_runs_clock(void *w, uint64_t r0, uint64_t r1, uint64_t clk_raw) {
+    fs_head_t *h = (fs_head_t *)w;
+    if (__builtin_expect(((r0 ^ h->want) | (r1 ^ h->want ^ clk_raw)) != 0 || h->n == h->limit, 0))
+        fs_runs_slow(w, r0, r1);
+    else
+        h->n += 2;
+}
 static inline void fs_raw_clock(void *w, uint64_t r0, uint64_t r1) {
     fs_head_t *h = (fs_head_t *)w;
     uint64_t *q = h->q;
@@ -50,7 +58,7 @@ static inline void fs_raw_clock(void *w, uint64_t r0, uint64_t r1) {
 }
 
 // ---- for the simulation check ------------------------------------------------------
-// A writer ("events" or "raw") whose blocks go, double-buffered, to a thread
+// A writer ("events", "runs" or "raw") whose blocks go, double-buffered, to a thread
 // of its own that transforms and compresses them (as vgch2's does) and writes
 // them in the study container to `path`. off: the byte of the raw image
 // holding uo_out, uio_out, uio_oe, ui_in, uio_in, rst_n, ena, clk (tb.cpp's
