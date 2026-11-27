@@ -1,0 +1,12 @@
+project,wall_without_s,wall_with_s,cpu_without_s,cpu_with_s,clocks,pilot_overhead_pct
+tt05_tt_um_tomkeddie_a,368.2,373.0,385.1,394.2,1512463066,1.31
+tt07_tt_um_tinytapeout_dvd_screensaver,342.6,355.8,356.9,374.5,1512393611,3.86
+tt08_tt_um_MichaelBell_mandelbrot,1849.8,1892.4,1886.8,1930.1,6007335947,2.30
+tt08_tt_um_a1k0n_nyancat,344.4,395.3,405.7,477.2,1512393611,14.79
+tt08_tt_um_johshoff_metaballs,633.3,667.2,672.3,707.4,3003263130,5.36
+tt08_tt_um_nyan,320.0,348.2,336.7,369.2,1502127755,8.81
+ttihp25a_tt_um_MichaelBell_rle_vga,433.2,479.1,453.0,504.5,1441605610,10.59
+ttihp25a_tt_um_a1k0n_vgadonut,706.2,740.5,759.9,800.6,2883800936,4.86
+ttihp25a_tt_um_cfib_demo,583.3,630.1,623.5,672.1,3003787210,8.02
+ttihp25a_tt_um_rebeccargb_colorbars,339.6,364.5,356.1,383.2,1512393611,7.33
+ttihp25a_tt_um_rejunity_atari2600,655.6,680.5,733.2,784.4,1512001611,3.80

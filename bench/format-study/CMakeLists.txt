@@ -39,3 +39,10 @@ add_executable(fsbench src/fsbench.c src/source.c src/w_vgch.c src/w_mine.c src/
 target_include_directories(fsbench PRIVATE src ${VGACAP_ROOT}/include ${VGACAP_ROOT}/src/trace)
 target_compile_options(fsbench PRIVATE -Wall -Wextra -Werror -Wno-sign-conversion)
 target_link_libraries(fsbench PRIVATE study_vgch_writer vgacap_fst study_lxt2 study_lz4hc vgacap_zstd vgacap_zlib m)
+
+# The simulation check (sim/run_sim.sh) links the study's writers into a
+# Verilator testbench: everything but fsbench's main, as one library.
+add_library(study_sim STATIC src/source.c src/w_vgch.c src/w_mine.c src/w_ext.c src/bg.c src/rd.c src/codec.c src/ctr.c)
+target_include_directories(study_sim PRIVATE src ${VGACAP_ROOT}/include ${VGACAP_ROOT}/src/trace)
+target_compile_options(study_sim PRIVATE -Wall -Wextra -Werror -Wno-sign-conversion)
+target_link_libraries(study_sim PRIVATE vgacap_fst study_lxt2 study_lz4hc vgacap_zstd vgacap_zlib)
