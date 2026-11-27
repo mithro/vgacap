@@ -246,7 +246,7 @@ gave the board's own hash back.
 | 15 or 22 | `no bridge after 30 s` | the bridge did not start | Read `systemctl status fpgas-tt`, start the bridge again, and repeat the step |
 | 23 | `ConnectionRefusedError: [Errno 111] Connection refused` | the bridge is not listening yet | Wait for `/health` as at the end of step 22, then repeat step 23 |
 | 24 | `not loaded after 300 s` | the restart did not reach the board | Repeat steps 23 and 24 |
-| any | Neither `$DEV` nor the `RP2350` drive appears | the board runs nothing that answers on USB | Stop; recovery needs someone at the Welland bench to hold BOOTSEL while resetting the board |
+| 9 to 21 | Neither `$DEV` nor the `RP2350` drive appears | the board runs nothing that answers on USB | Stop; recovery needs someone at the Welland bench to hold BOOTSEL while resetting the board |
 
 The fpgas-online broker's `power_cycle` switches the Pi's PoE port, so it restarts the Pi
 ([`power.py`](https://github.com/fpgas-online/fpgas.online-mcp/blob/fe16b5f/src/fpgas_online_mcp/power.py), [`power.md`](https://github.com/fpgas-online/fpgas.online-mcp/blob/fe16b5f/skills/fpgas-online/references/power.md)). A board that restarts with it boots the same flash again. So
