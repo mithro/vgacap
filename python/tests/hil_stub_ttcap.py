@@ -24,6 +24,8 @@ tested:
                   does for a board that cannot keep up
     demo-fails    `demo` exits 1 at once, before touching its outdir, as a
                   demo that dies on its arguments does
+    demo-overruns `demo` runs, but its capture reports overruns and exits 1,
+                  as `ttcap capture` does for a board that cannot keep up
 """
 from __future__ import annotations
 
@@ -131,8 +133,9 @@ def demo(argv: list[str]) -> int:
     sys.path.insert(0, str(ROOT / "python"))
     from ttcap.cli import main as ttcap_main
 
+    fake = "--fake-mode overruns " if mode() == "demo-overruns" else ""
     return ttcap_main(["demo", *argv, "--ttcap-command",
-                       "%s %s --chunk-delay 0.02" % (sys.executable, FAKE_TTCAP)])
+                       "%s %s %s--chunk-delay 0.02" % (sys.executable, FAKE_TTCAP, fake)])
 
 
 def main(argv: list[str]) -> int:

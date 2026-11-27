@@ -329,7 +329,9 @@ def resolve_link(
 #:   and one 2 s capture was clean
 #:   (`docs/results/2026-11-27-docs-bench-56`). Through the fpgas.online
 #:   bridge, the harder link, 400 kHz was clean in 4 of 4 10 s runs
-#:   (`docs/results/2026-11-27-docs-bench-hil-400k`).
+#:   (`docs/results/2026-11-27-docs-bench-hil-400k`). Over USB serial with
+#:   `tt_um_vga_pattern`, 400 kHz was clean in 5 of 5 captures, four of 4 s
+#:   and one of 10 s (`docs/results/2026-11-27-stock-400k-usb`).
 #:
 #: Keyed on the board *profile*, unlike `board_takes_a_design` above -- and
 #: for the opposite reason. What was measured is the MicroPython host loop
@@ -666,13 +668,16 @@ def check_numbers(args: argparse.Namespace) -> list[str]:
     if measured is not None and args.clock_hz > measured[0]:
         # A warning and not an error on purpose: watching the board overrun
         # is a legitimate thing to want, and it is how the ceilings were
-        # measured in the first place.
+        # measured in the first place. The run is allowed, but a capture
+        # that loses samples ends with exit 1 (issue #59); its frames and
+        # video are kept.
         ceiling, board_name = measured
         warnings.append(
             "--clock-hz %d is above the %d Hz %s has been measured to keep up "
             "with cleanly at the default buffer size; expect overruns and "
-            "dropped samples. That is allowed -- the closing TIME chunk "
-            "reports them -- and a larger --buf-words moves the ceiling."
+            "dropped samples. The run is allowed, but a capture that loses "
+            "samples ends with exit 1; its frames and video are kept. A "
+            "larger --buf-words moves the ceiling."
             % (args.clock_hz, ceiling, board_name)
         )
     return warnings
@@ -1116,6 +1121,56 @@ def line_buffered(argv: list[str]) -> list[str]:
     return [stdbuf, "-oL", *argv] if stdbuf else list(argv)
 
 
+#: How many of the pipeline's last stderr lines `StderrTail` keeps. The
+#: element's error quotes the capture's own tail (`ERR_TAIL_LINES` in
+#: `gst/gstvgacapttsrc.c`) and `gst-launch` adds a few lines after it.
+STDERR_TAIL_LINES = 64
+
+#: A line `ttcap capture` prints when the board lost samples (`lossy_capture()`
+#: in `cli.py`). It may start a line, or follow the element's
+#: "the capture failed (exit status 1): " when it is the tail's first line.
+LOSSY_LINE_RE = re.compile(
+    r"(?:^|: )(?:overruns: \d+ buffers? torn|rx stall: the RX FIFO overflowed)"
+)
+
+
+class StderrTail:
+    """The pipeline's stderr, passed through as it arrives, with its last
+    lines kept.
+
+    The lines go on to this process's stderr unchanged, so the pipeline's
+    errors still reach the terminal; the kept tail is what `run_demo` reads
+    to tell a lossy capture from a link that failed.
+    """
+
+    def __init__(self, pipe, stream=None) -> None:
+        self.pipe = pipe
+        self.stream = stream
+        self.lines: list[str] = []
+        self.thread = threading.Thread(target=self._pump, daemon=True,
+                                       name="ttcap-demo-stderr")
+        self.thread.start()
+
+    def _pump(self) -> None:
+        stream = sys.stderr if self.stream is None else self.stream
+        for line in self.pipe:
+            stream.write(line)
+            stream.flush()
+            self.lines.append(line.rstrip("\n"))
+            del self.lines[:-STDERR_TAIL_LINES]
+
+    def join(self, timeout: float = 10.0) -> None:
+        """Wait for the pipe to close. Called after `stop_child_group`, so
+        nothing is left holding it; the bound is for a grandchild that
+        escaped the group."""
+        self.thread.join(timeout)
+
+    @property
+    def lossy(self) -> bool:
+        """Did the capture end because the board lost samples?"""
+        return any(LOSSY_LINE_RE.search(line) for line in self.lines)
+
+
 #: `demo()`'s exit code for a run that finished without producing anything.
 #: The same 3 `ttcap capture` uses for "no samples at all" -- the same
 #: verdict, one layer up, and the one failure worth telling apart from a
@@ -1292,7 +1347,9 @@ def run_demo(
     child = subprocess.Popen(
         line_buffered(plan.argv),
         stdout=subprocess.PIPE,
-        stderr=None,  # the pipeline's own errors go straight to the terminal
+        # The pipeline's own errors still reach the terminal, line by line,
+        # through `StderrTail`, which keeps the tail for the verdict below.
+        stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
         env=env,
@@ -1301,6 +1358,7 @@ def run_demo(
     )
     if plan.mjpeg_fd is not None:
         os.close(plan.mjpeg_fd)  # the child holds the only writing end now
+    stderr_tail = StderrTail(child.stderr)
 
     at_exit = functools.partial(stop_child_group, child)
     atexit.register(at_exit)
@@ -1356,6 +1414,7 @@ def run_demo(
         # The child first: restoring a handler before the thing it guards is
         # gone would leave a window with neither.
         stop_child_group(child, say=progress.say)
+        stderr_tail.join()
         atexit.unregister(at_exit)
         for number, handler in previous.items():
             with contextlib.suppress(ValueError, OSError, TypeError):
@@ -1363,7 +1422,9 @@ def run_demo(
         if server is not None:
             server.close()
     outcome = _summarise(plan, progress, returncode, server)
-    if returncode != 0 and plan.link.through_bridge:
+    # A capture that lost samples reached the board: the link worked, and a
+    # hint to set up a tunnel would send the reader the wrong way.
+    if returncode != 0 and plan.link.through_bridge and not stderr_tail.lossy:
         progress.say("")
         progress.say(tunnel_hint_for(plan.link))
     if returncode == 0 and outcome.nothing_captured:
