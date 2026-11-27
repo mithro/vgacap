@@ -20,8 +20,9 @@ Exit codes: 0 success, 1 a board, link or tool error (including a capture
 that ended through `CaptureStats.error`/`timed_out`, one whose board
 raised or sent an `error=` message (`CaptureStats.board_error`, printed),
 and a capture in any `--mode` whose board reported overruns or an RX
-stall, `lossy_capture()`), 2 a usage
-error (argparse's own), 3 a capture that produced no samples at all and
+stall, `lossy_capture()`, and a `--mode clocked` run that is not clean,
+`clocked_problems()`), 2 a usage error (argparse's own, and an option
+`--mode` does not take, `mode_option_problem()`), 3 a capture that produced no samples at all and
 no board error -- the one failure worth telling apart, because it means
 the sampler never saw a clock edge.
 """
@@ -47,6 +48,8 @@ from vgacap.modes import MODES
 
 from .capture import (
     CAPTURE_MODES,
+    CLOCKED_RESET_CLOCKS,
+    CLOCKED_SCRIPT,
     DEFAULT_BUF_WORDS,
     DEFAULT_PIO,
     DEFAULT_VGA_MODE,
@@ -56,8 +59,10 @@ from .capture import (
     CaptureRequest,
     CaptureSession,
     CaptureStats,
+    ClockedSession,
     frame_note,
     frames_to_max_bytes,
+    recover_clocked,
     run_capture,
     run_session,
     select_project,
@@ -601,6 +606,10 @@ def capture(
     firmware: str = "micropython",
     asic_index: int | None = None,
     board: str | None = None,
+    bitstream: str | None = None,
+    clocks: int = 0,
+    reset_clocks: int = CLOCKED_RESET_CLOCKS,
+    clock_high: int | None = None,
 ) -> CaptureStats:
     """Run one capture to `out_path` and print what happened.
 
@@ -614,7 +623,10 @@ def capture(
     link can carry), "frame" (whole frames at the project's real clock,
     swept in as many windows as the board's heap needs) or "window" (the
     same with `window_lines` lines per frame). In the frame modes `frames`
-    counts pictures and the board stops itself after that many.
+    counts pictures and the board stops itself after that many. "clocked"
+    loads `bitstream` and makes `clocks` clocks of `clock_hz` or a little
+    slower, `reset_clocks` of them with reset held, and samples once per
+    clock (`_capture_clocked`); it takes the stock firmware only.
 
     The stream file is opened only once the board has accepted every setup
     command, and is removed again if the run fails before a single byte is
@@ -639,6 +651,8 @@ def capture(
     say = sys.stderr if to_stdout else sys.stdout
     if firmware not in FIRMWARES:
         raise ValueError(f"firmware must be one of {FIRMWARES}, got {firmware!r}")
+    if mode == "clocked" and firmware != "micropython":
+        raise ValueError("--mode clocked runs on the stock firmware (--firmware micropython)")
     if asic_index is not None and firmware != "picosdk":
         raise ValueError("--asic-index is for --firmware picosdk; the stock "
                          "firmware selects a project with --project")
@@ -652,6 +666,12 @@ def capture(
             if mode not in CAPTURE_MODES:
                 raise ValueError(f"mode must be one of {sorted(CAPTURE_MODES)}, got {mode!r}")
             script = CAPTURE_MODES[mode]
+            if script == CLOCKED_SCRIPT:
+                return _capture_clocked(
+                    driver, out_path, profile=board, project=None, design=None,
+                    clock_hz=clock_hz, seconds=0, max_bytes=0, buf_words=buf_words,
+                    desc=desc, pio=pio, script=script, ui_in=ui_in, bitstream=bitstream,
+                    clocks=clocks, reset_clocks=reset_clocks, clock_high=clock_high)
             framed = script == "frame_rp2.py"
             rle = script == "rle_rp2.py"
             if edge is None:
@@ -747,6 +767,112 @@ def capture(
         link.close()
 
     return stats
+
+
+def _capture_clocked(driver, out_path: str, **fields) -> CaptureStats:
+    """`capture()` for `--mode clocked`: the `CaptureRequest` of `fields`,
+    run by one `ClockedSession`, which loads
+    the bitstream, runs the clocks and puts the board back itself.
+
+    A failure without a reply (a timeout, a closed link) leaves the board as
+    it was, possibly still busy, so `recover_clocked` recovers the REPL and
+    puts it back here, before the failure is reported. As in the other
+    modes, a run that wrote nothing leaves no file, and `--out -` stops at
+    the first SIGINT or when the consumer closes the pipe -- which makes
+    the run not clean (`status=stopped`), as any other short run is.
+    """
+    to_stdout = out_path == STDOUT_PATH
+    say = sys.stderr if to_stdout else sys.stdout
+    flag = _StopFlag()
+    stop_ctx = _sigint_stops_the_capture(flag) if to_stdout else contextlib.nullcontext(None)
+    with stop_ctx as stop:
+        request = CaptureRequest(stop=stop, **fields)
+        session = ClockedSession(driver.repl, request)
+        with _open_output(out_path, on_consumer_close=flag.set if to_stdout else None) as fp:
+            try:
+                if to_stdout:
+                    stats = _stream_capture(session, fp, flag)
+                else:
+                    stats = run_session(session, fp)
+            except BaseException as exc:
+                recover_clocked(driver.repl, exc)
+                if not to_stdout and fp.tell() == 0:
+                    _discard_empty(out_path)
+                raise
+    timing = session.timing
+    assert timing is not None
+    print(
+        "profile=%s bitstream=%s clocks=%d reset_clocks=%d clock_hz=%d pio_div=%d "
+        "high=%d low=%d"
+        % (request.profile.name, pathlib.Path(request.bitstream or "").name, request.clocks,
+           request.reset_clocks, round(timing.clock_hz), timing.pio_div, timing.high,
+           timing.low),
+        file=say,
+    )
+    _report(stats, "stdout" if to_stdout else out_path, stream=say)
+    if to_stdout and fp.consumer_closed:
+        raise ConsumerClosed(stats)
+    return stats
+
+
+#: `ttcap capture` options `--mode clocked` does not take, by `args` name:
+#: it loads its own bitstream (no `--project`/`--design`), runs exactly
+#: `--clocks` clocks (no other limit) and samples once per clock it makes
+#: (no edge, delay or VGA sampler options).
+NOT_CLOCKED = {
+    "seconds": "--seconds",
+    "max_bytes": "--max-bytes",
+    "frames": "--frames",
+    "project": "--project",
+    "design": "--design",
+    "edge": "--edge",
+    "vga_mode": "--vga-mode",
+    "window_lines": "--window-lines",
+    "sample_delay": "--sample-delay",
+    "rle_mask": "--rle-mask",
+    "asic_index": "--asic-index",
+}
+#: The options only `--mode clocked` takes, by `args` name.
+CLOCKED_ONLY = {
+    "bitstream": "--bitstream",
+    "clocks": "--clocks",
+    "reset_clocks": "--reset-clocks",
+    "clock_high": "--clock-high",
+}
+
+
+def mode_option_problem(args: argparse.Namespace) -> str | None:
+    """Why `ttcap capture`'s options do not fit its `--mode`, or None.
+
+    Checked before the board is touched; `main` turns it into a usage error
+    (exit 2). Clocked mode refuses `NOT_CLOCKED`, `--rle-oneshot`,
+    `--no-stop-clock` (the clock is always stopped afterwards), any
+    firmware but the stock one and the RP2040 profile, and needs
+    `--bitstream` and `--clocks`, a positive multiple of 4; every other
+    mode refuses `CLOCKED_ONLY`.
+    """
+    if args.mode != "clocked":
+        given = [opt for name, opt in CLOCKED_ONLY.items() if getattr(args, name) is not None]
+        if given:
+            return "%s: only --mode clocked takes %s" % (args.mode, ", ".join(given))
+        return None
+    given = [opt for name, opt in NOT_CLOCKED.items() if getattr(args, name) is not None]
+    if args.rle_oneshot:
+        given.append("--rle-oneshot")
+    if not args.stop_clock:
+        given.append("--no-stop-clock")
+    if args.firmware != "micropython":
+        given.append("--firmware %s" % args.firmware)
+    if args.profile == "rp2040":
+        given.append("--profile rp2040 (it needs the RP2350 board)")
+    if given:
+        return "--mode clocked does not take %s" % ", ".join(given)
+    for name in ("bitstream", "clocks"):
+        if getattr(args, name) is None:
+            return "--mode clocked needs %s" % CLOCKED_ONLY[name]
+    if args.clocks <= 0 or args.clocks % 4:
+        return "--mode clocked: --clocks must be a positive multiple of 4, got %d" % args.clocks
+    return None
 
 
 def _report(stats: CaptureStats, out_path: str, stream=None) -> None:
@@ -964,7 +1090,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_parser.add_argument(
         "--seconds",
         type=float,
-        default=5.0,
+        default=None,
         help="capture duration; 0 means run until --max-bytes/--frames, or "
         "until SIGINT when --out - is streaming (default 5)",
     )
@@ -984,8 +1110,8 @@ def build_parser() -> argparse.ArgumentParser:
     capture_limit.add_argument(
         "--max-bytes",
         type=int,
-        default=0,
-        help="stop once the board has emitted this many bytes (0 = no limit)",
+        default=None,
+        help="stop once the board has emitted this many bytes (0 = no limit; default 0)",
     )
     capture_limit.add_argument(
         "--frames",
@@ -1024,12 +1150,14 @@ def build_parser() -> argparse.ArgumentParser:
         "project's real clock, sent between frames; window: the same, "
         "--window-lines lines per frame; rle: every sample, run-length "
         "encoded by the PIO, as fast as the picture's runs let the link "
-        "keep up (default stream)",
+        "keep up; clocked: load --bitstream and make exactly --clocks clocks, "
+        "one sample each, numbered from reset (how-to-capture-clocked.md) "
+        "(default stream)",
     )
     capture_parser.add_argument(
         "--vga-mode",
         choices=sorted(m.name for m in MODES.values() if not m.extended),
-        default=DEFAULT_VGA_MODE,
+        default=None,
         help=f"frame/window modes: the VGA timing to expect (default {DEFAULT_VGA_MODE})",
     )
     capture_parser.add_argument(
@@ -1062,7 +1190,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_parser.add_argument(
         "--sample-delay",
         type=int,
-        default=0,
+        default=None,
         help="frame/window/rle modes: system clocks to wait after --edge before "
         "reading uo_out, to sample where it is stable at a real VGA clock "
         "(default 0)",
@@ -1071,7 +1199,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--rle-mask",
         type=int,
         choices=[-1, 0, 1],
-        default=-1,
+        default=None,
         help="rle mode: 1 = one-instruction sample under SHIFTCTRL.IN_COUNT "
         "(RP2350), 0 = two instructions through the OSR (any RP2), -1 = the "
         "board picks (default -1)",
@@ -1086,7 +1214,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_parser.add_argument(
         "--window-lines",
         type=int,
-        default=0,
+        default=None,
         help="frame/window modes: most lines per capture; 0 = as many as the "
         f"board's heap holds (window mode default {DEFAULT_WINDOW_LINES})",
     )
@@ -1102,6 +1230,36 @@ def build_parser() -> argparse.ArgumentParser:
         dest="stop_clock",
         action="store_false",
         help="leave the project clock running after the capture",
+    )
+    capture_parser.add_argument(
+        "--bitstream",
+        default=None,
+        help="clocked mode: the iCE40 bitstream to load (required), with the "
+        "project clock and reset held until the capture clocks it",
+    )
+    capture_parser.add_argument(
+        "--clocks",
+        type=int,
+        default=None,
+        help="clocked mode: the rising edges to make, one sample each, a "
+        "positive multiple of 4 (required); --clock-hz is the fastest they "
+        "may come",
+    )
+    capture_parser.add_argument(
+        "--reset-clocks",
+        type=int,
+        default=None,
+        help="clocked mode: how many of the first --clocks come with rst_n low "
+        f"(default {CLOCKED_RESET_CLOCKS})",
+    )
+    capture_parser.add_argument(
+        "--clock-high",
+        type=int,
+        default=None,
+        help="clocked mode: H, the PIO delay of the clock's high phase, 0..15, "
+        "which sets how long after the rising edge uo_out is read (default: "
+        "the shortest wait of at least 40 ns, or the middle of the clock "
+        "when that is later)",
     )
 
     reboot_parser = subparsers.add_parser(
@@ -1152,6 +1310,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _failed("throughput", exc)
         return 1 if (result.corrupt or result.short) else 0
     if args.command == "capture":
+        problem = mode_option_problem(args)
+        if problem:
+            parser.error(problem)
         try:
             stats = capture(
                 args.link,
@@ -1160,8 +1321,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 project=args.project,
                 design=args.design,
                 clock_hz=args.clock_hz,
-                seconds=args.seconds,
-                max_bytes=args.max_bytes,
+                seconds=5.0 if args.seconds is None else args.seconds,
+                max_bytes=args.max_bytes or 0,
                 frames=args.frames,
                 buf_words=args.buf_words,
                 edge=args.edge,
@@ -1169,15 +1330,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 pio=args.pio,
                 stop_clock_after=args.stop_clock,
                 mode=args.mode,
-                vga_mode=args.vga_mode,
-                window_lines=args.window_lines,
-                sample_delay=args.sample_delay,
+                vga_mode=args.vga_mode or DEFAULT_VGA_MODE,
+                window_lines=args.window_lines or 0,
+                sample_delay=args.sample_delay or 0,
                 ui_in=args.ui_in,
-                rle_mask=args.rle_mask,
+                rle_mask=-1 if args.rle_mask is None else args.rle_mask,
                 rle_oneshot=args.rle_oneshot,
                 firmware=args.firmware,
                 asic_index=args.asic_index,
                 board=args.board,
+                bitstream=args.bitstream,
+                clocks=args.clocks or 0,
+                reset_clocks=(CLOCKED_RESET_CLOCKS if args.reset_clocks is None
+                              else args.reset_clocks),
+                clock_high=args.clock_high,
             )
         except ConsumerClosed as closed:
             # The normal end of a pull: the pipeline stopped reading. The
@@ -1192,6 +1358,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             # to lose, so the header-and-leave case above stays exit 0.
             print(CONSUMER_CLOSED_MESSAGE, file=sys.stderr)
             stats = closed.stats
+            if args.mode == "clocked" and stats is not None and stats.error:
+                # Short of --clocks: not the run that was asked for.
+                print(stats.error, file=sys.stderr)
+                return 1
             if stats is not None and stats.samples:
                 lost = lossy_capture(stats)
                 for line in lost:
@@ -1215,6 +1385,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             # left to say is why it stopped.
             return _failed("capture", exc)
         if stats.error or stats.timed_out:
+            if args.mode == "clocked" and stats.error:
+                print(stats.error, file=sys.stderr)
             return 1
         if args.mode == "rle" and stats.rxstall:
             # A lost word puts every later pair out of step, so the board
