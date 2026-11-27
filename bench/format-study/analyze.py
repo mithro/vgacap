@@ -274,11 +274,9 @@ def tick_one(d, v):
     diff = [d[v][k][0] - base_c[k][0] for k in ks]
     clk = [base_c[k][1] for k in ks]
     est = sum(diff) / sum(clk)
-    boots = []
-    for _ in range(1000):
-        idx = [random.randrange(len(ks)) for _ in ks]
-        boots.append(sum(diff[i] for i in idx) / sum(clk[i] for i in idx))
-    boots.sort()
+    # Every chunk is the same length, so a resample's estimate is its mean difference over that length.
+    m = len(diff)
+    boots = sorted(sum(random.choices(diff, k=m)) / (clk[0] * m) for _ in range(1000))
     b0 = sum(base_c[k][0] for k in ks)
     return est, boots[24], boots[974], sum(diff) / b0, b0 / sum(clk), len(ks)
 
