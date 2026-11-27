@@ -323,11 +323,18 @@ class _SM:
             # direction from sideset_init, then FUNCSEL to this PIO -- which
             # takes the clock pad from the firmware's PWM.
             self.now = self.board.now
-            self._side(init)
             wave = self.board.wave
-            if wave.clk_gpio in gpios:
+            clk = wave.clk_gpio
+            takes_clock = clk in gpios and clk not in self.board.pio_pins
+            # The firmware's clock on the pad just before PIO takes it.
+            was = wave.value(clk, self.now) if takes_clock else None
+            self._side(init)
+            if takes_clock:
                 wave.clock_stopped = True
-                wave.clock_rises = self.board.pio_rises[wave.clk_gpio]
+                rises = self.board.pio_rises[clk]
+                if was == 0 and self.board.pio_pins[clk][0][1] == 1:
+                    rises.append(self.now)  # a high sideset_init raises it
+                wave.clock_rises = rises
 
     def _sideset_config(self, prog: list, execctrl: int, sideset_base: int | None):
         """(data bits, SIDE_EN, GPIOs, initial value) as rp2_pio.c sets

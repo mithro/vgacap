@@ -741,3 +741,40 @@ def test_with_no_design_delay_an_edge_shows_in_its_own_cycle():
     board.advance(10)
     assert board.pio_rises[CLK] == [r]
     assert (board.wave.clock_index(r - 1), board.wave.clock_index(r)) == (0, 1)
+
+
+@pytest.mark.parametrize("at, rises", [(0, []), (2, [2])])
+def test_a_high_initial_value_on_the_clock_is_an_edge_only_from_low(at, rises):
+    # The waveform clock (period 4) is high at cycles 0-1 and low at 2-3.
+    # Taking the pad with sideset_init high raises it if it was low.
+    board = _board()
+    rp2 = board.modules()["rp2"]
+
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_HIGH)
+    def p():
+        label("end")  # noqa: F821
+        jmp("end").side(1)  # noqa: F821
+
+    if at:
+        board.advance(at)
+    sm, _ = _sm(board, p, sideset_base=CLK)
+    sm.active(1)
+    board.advance(10)
+    assert board.pio_rises[CLK] == rises
+
+
+def test_a_high_initial_value_driven_low_in_the_same_cycle_is_still_an_edge():
+    # The high lasts until active(1) on a board, so the design sees it.
+    board = _board()
+    rp2 = board.modules()["rp2"]
+
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_HIGH)
+    def p():
+        nop().side(0)[3]  # noqa: F821
+        nop().side(1)[3]  # noqa: F821
+
+    board.advance(2)
+    sm, _ = _sm(board, p, sideset_base=CLK)
+    sm.active(1)
+    board.advance(13)
+    assert board.pio_rises[CLK] == [2, 6, 14]
