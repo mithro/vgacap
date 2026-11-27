@@ -5,7 +5,7 @@
 #   bench/format-study/run_all.sh [STAGE...]
 #
 # Stages, in order (default: all of them): build traces info writer writer2
-# encode read robust interop ctr analyze. The simulation check (the Verilator loop) is
+# encode read validate robust interop ctr analyze. The simulation check (the Verilator loop) is
 # sim/run_sim.sh, separately, because it needs the projects' sources.
 #
 # Everything goes under $OUT (default: <checkout>/tmp/format-study):
@@ -168,6 +168,7 @@ stage_encode() {
         printf '%s\t%s\n' "$p.runs" "$FS encode $t $FILES --writer runs --transforms identity --comps zstd1"  >> "$jobs"
         printf '%s\t%s\n' "$p.raw" "$FS encode $t $FILES --writer raw --transforms pack6,xor6,xor-byteplanes,xor-bitplanes --comps zstd-1,zstd1,zstd3,lz4 --sample-every 16 --primary xor6:zstd1" >> "$jobs"
         printf '%s\t%s\n' "$p.changelog" "$FS encode $t $FILES --writer changelog --transforms changelog-planar --comps zstd1 --primary changelog-planar:zstd1" >> "$jobs"
+        printf '%s\t%s\n' "$p.evplanar" "$FS encode $t $FILES --writer events --transforms events-planar --comps zstd1 --primary events-planar:zstd1" >> "$jobs"
         printf '%s\t%s\n' "$p.rawplanar" "$FS encode $t $FILES --writer raw --transforms planar-runs --comps zstd1 --sample-every 1 --primary planar-runs:zstd1" >> "$jobs"
         printf '%s\t%s\n' "$p.sigrok" "$FS encode $t $FILES --writer raw --transforms pack6clk --comps deflate1,deflate6 --sample-every 16" >> "$jobs"
         printf '%s\t%s\n' "$p.vcd" "$FS encode $t $FILES --writer vcd --transforms identity --comps zstd1,deflate6,none --stride 8" >> "$jobs"
@@ -189,6 +190,21 @@ stage_read() {
         printf '%s\t%s\n' "$p" "$HERE/read_rounds.sh $FS $(trace_of "$p") $FILES $p $(awk -F, 'NR==2{print $NF}' "$RES/info/$p.csv")" >> "$jobs"
     done
     run_pool read "$jobs"
+}
+
+# The converted files (changelog, events and raw stored as planar): their
+# runs hash the same as vgacap's reader's (the read stage's validate rows).
+stage_validate() {
+    local jobs=$OUT/jobs-validate.txt; : > "$jobs"
+    for p in $PROJECTS; do
+        local hz; hz=$(awk -F, 'NR==2{print $NF}' "$RES/info/$p.csv")
+        local cmd="set -e"
+        for f in changelog.changelog-planar events.events-planar raw.planar-runs; do
+            cmd+="; $FS read $FILES/$p.$f.zstd1.stdy --kind stdy --project $p --patterns validate --clock-hz $hz | sed 's/^/v,/'"
+        done
+        printf '%s\t%s\n' "$p" "$cmd" >> "$jobs"
+    done
+    run_pool validate "$jobs"
 }
 
 # Truncation and a crash mid-write, on three projects.
@@ -221,5 +237,5 @@ stage_analyze() {
     log "analyze: $RES/tables.md"
 }
 
-STAGES=${*:-build traces info writer writer2 encode read robust interop ctr analyze}
+STAGES=${*:-build traces info writer writer2 encode read validate robust interop ctr analyze}
 for s in $STAGES; do "stage_$s"; done

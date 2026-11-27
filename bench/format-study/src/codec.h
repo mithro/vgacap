@@ -23,7 +23,8 @@ int fs_decompress(int comp, const uint8_t *src, size_t csize, uint8_t *dst, size
 // T_PLANAR: the planar candidate's 7 streams of (u8 value, LEB128 run), made
 // from raw images on the background thread (raw capture, planar storage).
 // T_CLOG: the changelog writer's records to the same planar streams.
-enum { T_PACK6, T_XOR6, T_BSHUF, T_XBSHUF, T_XBITSHUF, T_PACK6CLK, T_PLANAR, T_CLOG, T_COUNT, T_IDENTITY = 100 };
+// T_EV2PLANAR: the events writer's stream to the same planar streams.
+enum { T_PACK6, T_XOR6, T_BSHUF, T_XBSHUF, T_XBITSHUF, T_PACK6CLK, T_PLANAR, T_CLOG, T_EV2PLANAR, T_COUNT, T_IDENTITY = 100 };
 extern const char *const fs_transform_name[T_COUNT];
 int fs_transform_by_name(const char *name);
 // raw[0, n) -> streams. Returns the number of streams (1 or 7); lens set.
@@ -37,6 +38,9 @@ int fs_transform(int t, const uint64_t *raw, uint64_t n, uint64_t first_sample, 
 // to the planar streams of the block [first_sample, first_sample + n).
 int fs_clog_to_planar(const uint64_t *rec, uint64_t nrec, uint64_t n, uint64_t first_sample, uint8_t **out,
                       size_t *lens);
+// The events writer's block stream (len bytes) to the planar streams of the
+// block [first_sample, first_sample + n).
+int fs_events_to_planar(const uint8_t *ev, size_t len, uint64_t n, uint64_t first_sample, uint8_t **out, size_t *lens);
 int fs_untransform(int t, uint8_t *const *in, uint64_t n, uint64_t first_sample, int port, uint64_t *raw);
 
 // ---- the container ("STDY") ---------------------------------------------------------------

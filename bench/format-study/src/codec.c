@@ -15,7 +15,7 @@
 const char *const fs_comp_name[C_COUNT] = { "none", "zstd-5", "zstd-1", "zstd1", "zstd3", "zstd9", "zstd1-long27",
                                             "lz4", "lz4hc9", "deflate1", "deflate6", "zstd1-nocheck" };
 const char *const fs_transform_name[T_COUNT] = { "pack6", "xor6", "byteplanes", "xor-byteplanes", "xor-bitplanes",
-                                                 "pack6clk", "planar-runs", "changelog-planar" };
+                                                 "pack6clk", "planar-runs", "changelog-planar", "events-planar" };
 
 int fs_comp_by_name(const char *name) {
     for (int i = 0; i < C_COUNT; i++)
@@ -258,6 +258,48 @@ int fs_clog_to_planar(const uint64_t *rec, uint64_t nrec, uint64_t n, uint64_t f
         *p[j] = (uint8_t)(prev >> (8 * map[j]));
         p[j] += 1 + vgacap_leb128_put_inline(p[j] + 1, first_sample + n - start[j]);
         lens[j] = (size_t)(p[j] - out[j]);
+    }
+    return np;
+}
+
+int fs_events_to_planar(const uint8_t *ev, size_t len, uint64_t n, uint64_t first_sample, uint8_t **out, size_t *lens) {
+    const int cb = fs_off[7];
+    uint8_t *p[8];
+    uint64_t start[8];
+    int np = 0;
+    for (int k = 0; k < 8; k++)
+        if (k != cb) { p[np] = out[np]; start[np] = first_sample; np++; }
+    const uint8_t *q = ev, *e = ev + len;
+    uint64_t prev = 0;
+    for (int k = 0; k < 8; k++)   // the snapshot: every byte but the clk byte
+        if (k != cb) prev |= (uint64_t)*q++ << (8 * k);
+    uint64_t s = first_sample;
+    while (q < e) {
+        uint64_t d = 0;
+        unsigned sh = 0;
+        uint8_t b;
+        do { b = *q++; d |= (uint64_t)(b & 0x7f) << sh; sh += 7; } while (b & 0x80);
+        s += d;
+        unsigned m = *q++;
+        while (m) {
+            const int k = __builtin_ctz(m), j = k < cb ? k : k - 1;
+            const uint8_t v = *q++;
+            if (s != start[j]) {
+                *p[j] = (uint8_t)(prev >> (8 * k));
+                p[j] += 1 + vgacap_leb128_put_inline(p[j] + 1, s - start[j]);
+                start[j] = s;
+            }
+            prev = (prev & ~(0xffull << (8 * k))) | ((uint64_t)v << (8 * k));
+            m &= m - 1;
+        }
+    }
+    int j = 0;
+    for (int k = 0; k < 8; k++) {
+        if (k == cb) continue;
+        *p[j] = (uint8_t)(prev >> (8 * k));
+        p[j] += 1 + vgacap_leb128_put_inline(p[j] + 1, first_sample + n - start[j]);
+        lens[j] = (size_t)(p[j] - out[j]);
+        j++;
     }
     return np;
 }

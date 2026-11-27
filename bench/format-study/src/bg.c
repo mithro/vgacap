@@ -68,6 +68,11 @@ static void ensure(bg_t *g, size_t n) {
 
 // Streams of block b under transform t (raw) or as they are.
 static int streams_of(bg_t *g, const fs_block_t *b, int t, uint8_t **s, size_t *len) {
+    if (t == T_EV2PLANAR) {   // the events writer's stream
+        ensure(g, 4 * b->len[0] + 64 * 1024);
+        for (int i = 0; i < FS_MAX_STREAMS; i++) s[i] = g->tout[i];
+        return fs_events_to_planar(b->buf[0], b->len[0], b->nsamples, b->first_sample, s, len);
+    }
     if (t == T_CLOG) {   // the changelog writer's records
         ensure(g, 24 * (b->len[0] / 24) + 64 * 1024);
         for (int i = 0; i < FS_MAX_STREAMS; i++) s[i] = g->tout[i];
@@ -210,7 +215,7 @@ static int primary_open(bg_t *g, const char *pfile) {
     uint8_t hdr[8] = { 0, (uint8_t)g->pt, (uint8_t)g->pc, 0, 0, 0, 0, 0 };
     hdr[0] = !strcmp(g->writer, "planar") ? 1 : !strcmp(g->writer, "events") ? 2 : !strcmp(g->writer, "raw") ? 3 : 4;
     // Raw capture stored as planar runs is a planar file.
-    if (g->pt == T_PLANAR || g->pt == T_CLOG) { hdr[0] = 1; hdr[1] = T_IDENTITY; }
+    if (g->pt == T_PLANAR || g->pt == T_CLOG || g->pt == T_EV2PLANAR) { hdr[0] = 1; hdr[1] = T_IDENTITY; }
     fwrite(hdr, 1, 8, g->pf);
     g->pbytes = 16;
     return 0;

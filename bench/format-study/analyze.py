@@ -466,10 +466,11 @@ def cand_rows(p):
     ps = passes.get((p, "raw"))
     if ps and ("xor6", "zstd1") in e:
         out.append(("raw xor6 (zstd 1)", int(ps["primary_bytes"]), float(e[("xor6", "zstd1")]["est_bg_ns"]) / 1e9))
-    for job, name in (("changelog", "changelog to planar (zstd 1)"), ("rawplanar", "raw to planar (zstd 1)")):
+    for job, name in (("changelog", "changelog to planar (zstd 1)"), ("evplanar", "events to planar (zstd 1)"),
+                      ("rawplanar", "raw to planar (zstd 1)")):
         e = enc.get((p, job), {})
         ps = passes.get((p, job))
-        key = ("changelog-planar", "zstd1") if job == "changelog" else ("planar-runs", "zstd1")
+        key = {"changelog": ("changelog-planar", "zstd1"), "evplanar": ("events-planar", "zstd1")}.get(job, ("planar-runs", "zstd1"))
         if ps and key in e:
             out.append((name, int(ps["primary_bytes"]), float(e[key]["est_bg_ns"]) / 1e9))
     e = enc.get((p, "sigrok"), {})
@@ -493,7 +494,8 @@ def cand_rows(p):
 
 
 print("### Total bytes, MB (projected to the whole trace where sampled)\n")
-names_c = ["vgch2 (zstd 1)", "runs (zstd 1)", "planar (zstd 1)", "events (zstd 1)", "changelog to planar (zstd 1)",
+names_c = ["vgch2 (zstd 1)", "runs (zstd 1)", "planar (zstd 1)", "events (zstd 1)", "events to planar (zstd 1)",
+           "changelog to planar (zstd 1)",
            "raw xor6 (zstd 1)", "raw to planar (zstd 1)", "sigrok-like (deflate 6)", "VCD (zstd 1)", "FST (LZ4)",
            "FST (zlib)", "FST with clk (LZ4)", "LXT2"]
 body = []
@@ -578,9 +580,12 @@ print("## Read and decode\n")
 rd = defaultdict(lambda: defaultdict(list))   # (project, format) -> pattern -> [ns]
 rdv = {}
 fmt_of = lambda kind, file: ("vgch2" if kind == "vgch2" else "FST (LZ4)" if kind == "fst" else
+                             "changelog to planar" if ".changelog." in file else
+                             "events to planar" if ".events-planar." in file else
+                             "raw to planar" if ".planar-runs." in file else
                              "planar" if ".planar." in file else "events" if ".events." in file else
                              "raw xor6" if ".raw." in file else file)
-for path in glob.glob(os.path.join(RES, "read", "*.csv")):
+for path in glob.glob(os.path.join(RES, "read", "*.csv")) + glob.glob(os.path.join(RES, "validate", "*.csv")):
     for c in rows(path):
         if len(c) < 10 or c[1] == "project":
             continue
@@ -594,13 +599,14 @@ for path in glob.glob(os.path.join(RES, "read", "*.csv")):
         else:
             rd[(p, fm)][pat].append(float(ns))
 FMTS = ["vgch2", "planar", "events", "raw xor6", "FST (LZ4)"]
+VFMTS = ["changelog to planar", "events to planar", "raw to planar"]
 if rdv:
     print("### Validation: every reader gives the same runs (canonical hash of full runs and of uo_out runs)\n")
     body = []
     for p in projects:
         ref = (rdv.get((p, "vgch2", "validate-full")), rdv.get((p, "vgch2", "validate-port0")))
         row = [p]
-        for fm in FMTS:
+        for fm in FMTS + VFMTS:
             a, b = rdv.get((p, fm, "validate-full")), rdv.get((p, fm, "validate-port0"))
             if a is None:
                 row.append("-")
@@ -608,7 +614,7 @@ if rdv:
                 row.append("same" if ref[0] and a[0] == ref[0][0] and b and b[0] == ref[1][0] and a[1] == ref[0][1]
                            else f"DIFFERENT {a[0]}")
         body.append(row)
-    table(["project"] + FMTS, body)
+    table(["project"] + FMTS + VFMTS, body)
 for pat, title, unit in (("scan", "Full scan to a no-op consumer (the samplers' trace decode), ns per clock", "clk"),
                          ("port0", "uo_out alone (an export of one pin group), ns per clock", "clk"),
                          ("open", "Open, ms", "ms"),
@@ -630,6 +636,34 @@ for pat, title, unit in (("scan", "Full scan to a no-op consumer (the samplers' 
                 row.append(f"{statistics.median(vv):.2f} [{min(vv):.2f}, {max(vv):.2f}]")
         body.append(row)
     table(["project"] + FMTS, body)
+
+# ---- 5a. the trace's whole post-simulation cost -------------------------------------------------------
+# R2 counts the compressor thread and everything after the simulation. The
+# trace's part of "after" is one decode pass for the samplers. The samplers
+# read uo_out only, so a planar file is read by its uo_out stream (port0);
+# the other formats have to decode every run (scan).
+print("## The trace's share of R2: background CPU plus one decode pass for the samplers\n")
+print("Background CPU (File size table) plus the median read time of one pass: the full scan for vgch2, runs, events "
+      "and raw xor6, which cannot read uo_out alone any faster; uo_out alone (port0) for the planar files, which the "
+      "samplers' uo_out-only use allows. % of the untraced simulation CPU. Reads of the planar file stand for every "
+      "planar-stored candidate (the same streams).\n")
+R2C = [("vgch2 (zstd 1)", "vgch2", "scan"), ("events (zstd 1)", "events", "scan"), ("raw xor6 (zstd 1)", "raw xor6", "scan"),
+       ("planar (zstd 1)", "planar", "port0"), ("events to planar (zstd 1)", "planar", "port0"),
+       ("changelog to planar (zstd 1)", "planar", "port0"), ("raw to planar (zstd 1)", "planar", "port0")]
+body = []
+for p in projects:
+    d = {c[0]: c for c in cand_rows(p)}
+    cpu = float(base[p]["cpu_without_s"])
+    row = [p]
+    for name, fm, pat in R2C:
+        v = rd.get((p, fm), {}).get(pat)
+        if name not in d or not v:
+            row.append("-")
+            continue
+        rs = statistics.median(v) / 1e9
+        row.append(f"{pct((d[name][2] + rs) / cpu, 1)} ({d[name][2]:.1f} + {rs:.1f} s)")
+    body.append(row)
+table(["project"] + [n for n, _, _ in R2C], body)
 
 # ---- 6. robustness -------------------------------------------------------------------------------
 rob = []
