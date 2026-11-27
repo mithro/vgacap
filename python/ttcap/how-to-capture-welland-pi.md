@@ -48,7 +48,7 @@ Step 4 captures the design already enabled. On an idle board that is the idle di
 
 ## Check
 
-Step 4 prints a stats line, which shows `overruns=0 dropped=0 rxstall=0` when no sample was lost, and ends with `wrote bench.vgacap`. On fpga-1 this step ran at 500 kHz: it was clean twice with the idle display, and overran in both 4-second captures of `tt_um_vga_pattern`, while a 2-second one was clean. That is why it runs at 400 kHz, which was clean with a VGA design ([Capture sources compared](../../docs/reference-capture-sources.md#the-stock-firmware-on-an-rp2350-demo-board)). After step 6, `systemctl is-active fpgas-tt` prints `active`, and `sudo fuser /dev/ttboard` shows the bridge's process again.
+Step 4 prints a stats line, which shows `overruns=0 dropped=0 rxstall=0` when no sample was lost, and ends with `wrote bench.vgacap`. On fpga-1 this step ran at 500 kHz: it was clean twice with the idle display, and overran in both 4-second captures of `tt_um_vga_pattern`, while a 2-second one was clean. That is why it runs at 400 kHz, which was clean with `tt_um_vga_pattern` in four 4-second captures and one 10-second one ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-stock-400k-usb)). After step 6, `systemctl is-active fpgas-tt` prints `active`, and `sudo fuser /dev/ttboard` shows the bridge's process again.
 
 On fpga-1, step 7 reached `"state": "loaded"` after 72 s. At about 67 s, one poll showed `"clients": 1`, and the next showed `"clients": 0` with `loaded`, in the same bench run of PR #56. Keep polling through it.
 

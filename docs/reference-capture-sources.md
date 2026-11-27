@@ -33,6 +33,8 @@ Each row is one set of stream captures at one clock and length. Design is the de
 | 3.1.1 | bridge | `tt_um_vgacal_bars` | 400 kHz | 10 s | 4 of 4 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-hil-400k) |
 | 3.1.1 | bridge | `tt_um_vgacal_bars` | 400 kHz | 10 s | 1 of 1 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
 | 3.1.1 | bridge | `tt_um_vgacal_bars` | 500 kHz | 10 s | 0 of 3 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| 3.1.1 | USB serial | `tt_um_vga_pattern` | 400 kHz | 4 s | 4 of 4 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-stock-400k-usb) |
+| 3.1.1 | USB serial | `tt_um_vga_pattern` | 400 kHz | 10 s | 1 of 1 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-stock-400k-usb) |
 | 3.1.1 | USB serial | `tt_um_vga_pattern` | 500 kHz | 4 s | 0 of 2 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56) and [#52](https://github.com/mithro/vgacap/issues/52) |
 | 3.1.1 | USB serial | `tt_um_vga_pattern` | 500 kHz | 2 s | 1 of 1 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56) |
 | 3.1.1 | USB serial | `tt_um_vgacal_bars` | 500 kHz | 10 s | 1 of 1 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1) |
