@@ -190,15 +190,13 @@ def test_side_set_base_takes_a_pin_or_a_number_and_the_clock_pad():
     assert board.pio_pin(CLK, board.now) == 0
 
 
-def test_reading_a_side_set_pin_back_is_refused_not_guessed():
+def test_reading_a_side_set_pin_back_from_a_state_machine_is_refused_not_guessed():
+    # The CPU may read it (test_emu_pins.py); another state machine runs
+    # one after another with this one, so it could read ahead of a drive.
     board = _board()
     rp2 = board.modules()["rp2"]
     machine = board.modules()["machine"]
     _sm(board, _toggle(rp2, 0, 0), sideset_base=CLK)
-    with pytest.raises(BoardError, match="driven by PIO"):
-        machine.Pin(CLK).value()
-    with pytest.raises(BoardError, match="driven by PIO"):
-        machine.Pin(CLK, machine.Pin.IN)
 
     @rp2.asm_pio()
     def reader():
@@ -778,3 +776,20 @@ def test_a_high_initial_value_driven_low_in_the_same_cycle_is_still_an_edge():
     sm.active(1)
     board.advance(13)
     assert board.pio_rises[CLK] == [2, 6, 14]
+
+
+def test_a_rise_out_of_a_re_constructed_state_machines_initial_value_is_an_edge():
+    # Constructing the state machine again drives sideset_init again; on a
+    # board that low lasts until active(1), so the first `.side(1)`, issued
+    # in the same emulated cycle, is a rising edge, as at first construction.
+    board = _board()
+    rp2 = board.modules()["rp2"]
+    prog = _toggle(rp2, 0, 0)
+    sm, _ = _sm(board, prog, sideset_base=CLK)
+    t0 = board.now
+    sm.active(1)
+    board.advance(3)  # high at t0 and t0 + 2
+    sm, _ = _sm(board, prog, sideset_base=CLK)
+    sm.active(1)
+    board.advance(3)
+    assert board.pio_rises[CLK] == [t0, t0 + 2, t0 + 3, t0 + 5]
