@@ -604,7 +604,15 @@ class _SM:
                     block.irq |= bit
                 else:
                     # Raise the flag once, then stall until something else
-                    # clears it; the delay starts after the wait.
+                    # clears it; the delay starts after the wait (RP2350
+                    # 11.4.11.2: "halt until the raised flag is lowered
+                    # again", "Delay cycles do not begin until after the
+                    # wait period elapses"). It completes in the cycle it
+                    # sees the flag low. When that is relative to the
+                    # clearing write the datasheet does not settle: 11.1.1
+                    # says an IRQ is "observable to all state machines on
+                    # the next cycle", so silicon may be one cycle later
+                    # than this; a CPU write is not cycle-timed here anyway.
                     if not self.irq_waiting:
                         block.irq |= bit
                         self.irq_waiting = True
