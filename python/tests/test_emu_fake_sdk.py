@@ -308,3 +308,34 @@ def test_a_missing_file_leaves_the_old_design_running():
     _count_three(board)
     loader.spi_transferPIO(HELD)
     assert board.wave.count_at(board.now) == 3
+
+
+def test_clock_project_pwm_on_the_emulator_is_a_board_error():
+    tt = board_sdk(_design_board())
+    with pytest.raises(BoardError, match="Waveform is the PWM"):
+        tt.clock_project_PWM(1000)
+
+
+def test_timers_are_told_apart_by_identity():
+    # Two timers equal in due, period and callback are still two timers.
+    board = Board(Waveform(b"\0", [], clk_gpio=CLK, period=2))
+    fired = []
+
+    def shared():
+        fired.append("tick")
+
+    first = board.add_timer(1000, shared)
+    second = board.add_timer(1000, shared)
+    board.remove_timer(second)
+    assert board.timers == [first] and board.timers[0] is first
+    board.advance(1000)
+    assert fired == ["tick"]
+
+
+def test_tt_rst_n_reads_the_pin_and_costs_a_pin_read():
+    # standard.py:124-129: StandardPin.__call__ is raw_pin.value().
+    board = _design_board()
+    tt = board_sdk(board)
+    before = board.now
+    assert tt.rst_n() == 1
+    assert board.now - before == board.pin_read_cycles

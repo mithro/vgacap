@@ -62,6 +62,8 @@ from __future__ import annotations
 
 import types
 
+from ttcap.emu import BoardError
+
 SAFE, ASIC_RP_CONTROL, ASIC_MANUAL_INPUTS = 0, 1, 2
 MODE_NAMES = {SAFE: "SAFE", ASIC_RP_CONTROL: "ASIC_RP_CONTROL",
               ASIC_MANUAL_INPUTS: "ASIC_MANUAL_INPUTS"}
@@ -137,6 +139,9 @@ class RstPin:
                 self.raw_pin.value(self._out)
             self._tt.changed()
             return None
+        if self.raw_pin is not None:
+            # standard.py:124-129: raw_pin.value(), a pin read like any other.
+            return self.raw_pin.value()
         return self._tt.rst_n_level(self)
 
 
@@ -366,8 +371,8 @@ class FakeTT:
 
     def clock_project_PWM(self, freq_hz: int, *args, **kwargs):
         if self.board is not None:
-            raise NotImplementedError(
-                "clock_project_PWM on the emulator: the board's Waveform is the PWM clock")
+            raise BoardError(
+                "clock_project_PWM is not emulated: the board's Waveform is the PWM clock")
         self.clock_hz = int(freq_hz)
         log("ttboard.demoboard", f"Clocking at {freq_hz}Hz")
         self.changed()

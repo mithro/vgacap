@@ -250,9 +250,17 @@ class ClockedDesign(Waveform):
         self.configured = True
 
     def attach(self, board: "Board") -> None:
+        if self.board is not None and self.board is not board:
+            raise BoardError("this ClockedDesign already drives another Board; make one per Board")
         self.board = board
         board.pio_rises[self.clk_gpio] = self.clock_rises
         board.rst_watch = self.rst_gpio
+
+    def _board(self) -> "Board":
+        board = self.board
+        if board is None:
+            raise BoardError("this ClockedDesign has no Board: build a Board with it first")
+        return board
 
     def rst_changed(self, cycle: int) -> None:
         """The rst_n pad may read differently from `cycle` on: forget the
@@ -283,7 +291,7 @@ class ClockedDesign(Waveform):
         after = self._after
         if n - first <= len(after):
             return after[n - first - 1]
-        level, rst, rises = self.board.pad_level, self.rst_gpio, self.clock_rises
+        level, rst, rises = self._board().pad_level, self.rst_gpio, self.clock_rises
         value = after[-1] if after else self.initial
         for i in range(first + len(after), n):
             value = (value + 1) & 0xFF if level(rst, rises[i]) else 0
@@ -296,7 +304,7 @@ class ClockedDesign(Waveform):
 
     def value(self, gpio: int, cycle: int) -> int:
         if gpio == self.clk_gpio:
-            return self.board.pad_level(gpio, cycle)
+            return self._board().pad_level(gpio, cycle)
         bit = self.uo_bit.get(gpio)
         if bit is not None:
             return (self.count_at(cycle) >> bit) & 1
@@ -318,7 +326,7 @@ class ClockedDesign(Waveform):
         key = (base, count)
         table, clk_pos = self._tables[key] if key in self._tables else self._table(base, count)
         word = table[self.count_at(cycle)]
-        if clk_pos >= 0 and self.board.pad_level(self.clk_gpio, cycle):
+        if clk_pos >= 0 and self._board().pad_level(self.clk_gpio, cycle):
             word |= 1 << clk_pos
         return word
 
@@ -978,6 +986,15 @@ _CTRL_FIELDS = {
 # the board
 
 
+class _Timer:
+    """One `Board.add_timer` timer; handles compare by identity."""
+
+    __slots__ = ("due", "period", "callback")
+
+    def __init__(self, due: int, period: int, callback: Callable[[], None]) -> None:
+        self.due, self.period, self.callback = due, period, callback
+
+
 class Board:
     """One emulated demo board.
 
@@ -1067,8 +1084,8 @@ class Board:
         self.rst_watch: int | None = None
         #: Pads a Pin re-init took back from PIO, and the cycle it did.
         self.released: dict[int, int] = {}
-        #: Periodic timers (add_timer), as [due cycle, period, callback].
-        self.timers: list[list] = []
+        #: Periodic timers (add_timer), in the order they were added.
+        self.timers: list[_Timer] = []
         #: More importable modules for run_script, by dotted name (the fake
         #: SDK's `ttboard.*`); parent packages are made as needed.
         self.extra_modules: dict[str, types.ModuleType] = {}
@@ -1096,25 +1113,24 @@ class Board:
         if self.timers:
             self._fire_timers()
 
-    def add_timer(self, period: int, callback: Callable[[], None]) -> list:
+    def add_timer(self, period: int, callback: Callable[[], None]) -> "_Timer":
         """A periodic `machine.Timer`: `callback()` every `period` cycles.
         It runs at the end of the advance in which it falls due, not
         mid-instruction: timer latency is not modelled. Returns the handle
         `remove_timer` takes."""
-        timer = [self.now + period, period, callback]
+        timer = _Timer(self.now + period, period, callback)
         self.timers.append(timer)
         return timer
 
-    def remove_timer(self, timer: list) -> None:
-        if timer in self.timers:
-            self.timers.remove(timer)
+    def remove_timer(self, timer: "_Timer") -> None:
+        self.timers = [t for t in self.timers if t is not timer]
 
     def _fire_timers(self) -> None:
         for timer in list(self.timers):
             # Due first, so a callback that advances time cannot fire itself.
-            while timer in self.timers and timer[0] <= self.now:
-                timer[0] += timer[1]
-                timer[2]()
+            while timer.due <= self.now and any(t is timer for t in self.timers):
+                timer.due += timer.period
+                timer.callback()
 
     @property
     def stop_requested(self) -> bool:

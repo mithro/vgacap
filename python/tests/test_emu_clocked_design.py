@@ -280,3 +280,21 @@ def test_rst_n_driven_by_a_later_state_machine_resets_edges_already_counted():
     assert design.count_at(board.now) == 0
     assert [design.count(i + 1) for i in range(len(rises))] == [
         i + 1 if r < low_from else 0 for i, r in enumerate(rises)]
+
+
+def test_a_design_with_no_board_is_refused_not_a_none_error():
+    design = ClockedDesign(UO, clk_gpio=CLK, rst_gpio=RST)
+    with pytest.raises(BoardError, match="no Board"):
+        design.value(CLK, 0)
+    with pytest.raises(BoardError, match="no Board"):
+        design.window(CLK, 1, 0)
+    design.clock_rises.append(5)
+    with pytest.raises(BoardError, match="no Board"):
+        design.count_at(10)
+
+
+def test_one_design_cannot_drive_two_boards():
+    design = ClockedDesign(UO, clk_gpio=CLK, rst_gpio=RST)
+    Board(design)
+    with pytest.raises(BoardError, match="already drives"):
+        Board(design)
