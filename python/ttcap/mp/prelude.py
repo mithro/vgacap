@@ -341,8 +341,9 @@ def claim_pio(out):
     return True
 
 
-def new_state_machine(program):
-    """The state machine for `program`, on a block cleared of old programs.
+def new_state_machine(program, sideset=None):
+    """The state machine for `program`, on a block cleared of old programs,
+    its side-set pins from the absolute GPIO `sideset` if given.
 
     Defensively drops any MicroPython-managed programs left in this block
     by an earlier capture: a program's `finally` removes its own on a clean
@@ -359,7 +360,11 @@ def new_state_machine(program):
             rp2.PIO(PIO_NUM).remove_program()
         except Exception:
             pass
-    return rp2.StateMachine(PIO_NUM * 4 + SM_NUM, program, in_base=machine.Pin(IN_BASE))
+    num = PIO_NUM * 4 + SM_NUM
+    if sideset is None:
+        return rp2.StateMachine(num, program, in_base=machine.Pin(IN_BASE))
+    return rp2.StateMachine(num, program, in_base=machine.Pin(IN_BASE),
+                            sideset_base=machine.Pin(sideset))
 
 
 def stop_dma(dmas):

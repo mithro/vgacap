@@ -10,7 +10,9 @@ loader. The loader reads through the REPL's `open()`, so it loads exactly
 what `RawRepl.upload()` left on the filesystem.
 
 What a command prints is its reply, as on a board; unlike `Board.
-run_script`, printing costs no emulated time.
+run_script`, printing costs no emulated time. `sys.stdin` and `select` are
+the board's: a script polling for a stop byte gets one once
+`board.stop_requested` says so (`Board.stop_after_bytes`, `stop_when`).
 """
 
 from __future__ import annotations
@@ -38,7 +40,9 @@ class EmuRepl(FakeBinaryBoard):
         self.tt: FakeTT = board_sdk(board, loader=self.loader, **tt_kwargs)
         self._globals["tt"] = self.tt
         modules = dict(board.modules())
-        modules.pop("sys")  # the stub's stdout is the command's reply
+        # The stub's stdout is the command's reply; stdin is the board's,
+        # which reads a stop byte once `board.stop_requested` says so.
+        self._modules["sys"].stdin = modules.pop("sys").stdin
         for dotted, module in board.extra_modules.items():
             modules[dotted] = module
             parts = dotted.split(".")

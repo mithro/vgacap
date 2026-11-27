@@ -26,6 +26,7 @@ the host's re-serialisation.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import re
 import struct
@@ -44,15 +45,17 @@ from .repl import CHUNK_HEADER_LEN, LinkClosed, RawRepl, ReplFramingError
 
 EDGES = ("falling", "rising")
 #: Board-side program bodies a `CaptureRequest` may name (`ttcap/mp/`).
-CAPTURE_SCRIPTS = ("capture_rp2.py", "frame_rp2.py", "rle_rp2.py")
+CAPTURE_SCRIPTS = ("capture_rp2.py", "frame_rp2.py", "rle_rp2.py", "clocked_rp2.py")
 #: `ttcap capture --mode` names: continuous streaming at a reduced clock,
 #: or whole frames / windows of frames at the project's real clock, or a
-#: stream run-length encoded by the PIO (`RLE ` chunks).
+#: stream run-length encoded by the PIO (`RLE ` chunks), or one sample per
+#: clock of a bitstream the capture loads and clocks itself (`clocked`).
 CAPTURE_MODES = {
     "stream": "capture_rp2.py",
     "frame": "frame_rp2.py",
     "window": "frame_rp2.py",
     "rle": "rle_rp2.py",
+    "clocked": "clocked_rp2.py",
 }
 #: The timing `frame_rp2.py` is told to expect unless asked otherwise.
 DEFAULT_VGA_MODE = "640x480@60"
@@ -91,6 +94,27 @@ DEFAULT_PIO = 1
 #: `VGACAP_MODE_EXTCLK` from include/vgacap/stream.h: every sample is taken
 #: on an edge of the project's own clock, which is what the sampler does.
 MODE_EXTCLK = 0
+#: `VGACAP_MODE_SELFCLK`: the capture made the clock itself, as clocked mode does.
+MODE_SELFCLK = 1
+
+#: The board body of clocked capture, which makes the clock with PIO
+#: side-set and samples uo_out once per clock (`clocked_rp2.py`).
+CLOCKED_SCRIPT = "clocked_rp2.py"
+#: Clocks with rst_n low before clock `reset_clocks`, unless asked otherwise:
+#: the harness's reference holds reset for clocks 0 to 9.
+CLOCKED_RESET_CLOCKS = 10
+#: H and L, the program's two delays, are each at most 15: one side-set bit
+#: that is not optional leaves 4 of the 5 delay/side-set bits.
+CLOCKED_MAX_PHASE = 15
+#: PIO cycles of one clock that are not H or L: one each for `nop`, `in`,
+#: `push` and `jmp`.
+CLOCKED_FIXED_CYCLES = 4
+#: The `in` reads uo_out at least this long after the rising edge: about
+#: 25 ns of settling measured on fpga-4, plus the 2-cycle input synchroniser.
+CLOCKED_SAMPLE_NS = 40
+#: The largest integer SMn_CLKDIV (its INT field is 16 bits, 0 meaning
+#: 65536, which is left alone).
+CLOCKED_MAX_DIV = 65535
 
 #: Project clocks in one 640x480@60 frame: 800 x 525 including blanking.
 #: `frames_to_max_bytes()` assumes this timing, which is what every Tiny
@@ -467,6 +491,19 @@ class CaptureRequest:
     rle_mask: int = -1
     #: `rle_rp2.py` only: fill both buffers once and send them (see rle_cfg).
     rle_oneshot: bool = False
+    #: `clocked_rp2.py` only: the iCE40 bitstream on the host, which the
+    #: capture loads with `load_held`; the rising edges to make, a multiple
+    #: of 4, one sample each; how many of them come with `rst_n` low; and H,
+    #: the high phase's delay, for a sweep (None: `clocked_timing` picks it).
+    bitstream: str | None = None
+    clocks: int = 0
+    reset_clocks: int = CLOCKED_RESET_CLOCKS
+    clock_high: int | None = None
+
+    @property
+    def is_clocked(self) -> bool:
+        """One sample per clock the board makes itself (`clocked_rp2.py`)."""
+        return self.script == CLOCKED_SCRIPT
 
     @property
     def is_frame(self) -> bool:
@@ -497,7 +534,9 @@ class CaptureRequest:
             raise ValueError(f"clock_hz must be positive, got {self.clock_hz}")
         if self.seconds < 0:
             raise ValueError(f"seconds must not be negative, got {self.seconds}")
-        if self.seconds == 0 and self.max_bytes == 0 and self.stop is None and not (
+        if self.is_clocked:
+            self._check_clocked()
+        elif self.seconds == 0 and self.max_bytes == 0 and self.stop is None and not (
             (self.is_frame and self.max_frames) or (self.is_rle and self.rle_oneshot)
         ):
             raise ValueError(
@@ -513,8 +552,46 @@ class CaptureRequest:
         """The `tt.shuttle` entry to enable, whichever field named it."""
         return self.project or self.design
 
+    def _check_clocked(self) -> None:
+        """What a clocked request must be, before the board is touched."""
+        if not self.bitstream:
+            raise ValueError("a clocked capture needs the bitstream it loads (bitstream=)")
+        if self.selection:
+            raise ValueError(
+                f"a clocked capture loads its own bitstream, but the request names "
+                f"{self.selection!r}")
+        if self.seconds or self.max_bytes:
+            raise ValueError(
+                "a clocked capture runs exactly `clocks` clocks: seconds and max_bytes "
+                "must be 0")
+        if self.profile.chip != "rp2350" or self.profile.clk_gpio != FPGA_CLK_GPIO:
+            raise ValueError(
+                f"a clocked capture needs the FPGA breakout's RP2350 demo board, not "
+                f"profile {self.profile.name}")
+        if self.reset_clocks < 1:
+            raise ValueError(f"reset_clocks must be at least 1, got {self.reset_clocks}")
+        if self.clocks <= 0 or self.clocks % 4:
+            raise ValueError(
+                f"clocks must be a positive multiple of 4, so that every word is full, "
+                f"got {self.clocks}")
+        if self.clocks <= self.reset_clocks:
+            raise ValueError(
+                f"clocks must be more than reset_clocks ({self.reset_clocks}), got "
+                f"{self.clocks}")
+        if self.clocks > 1 << 32:
+            raise ValueError(f"clocks must be at most 2**32, got {self.clocks}")
+        if self.clock_high is not None and not 0 <= self.clock_high <= CLOCKED_MAX_PHASE:
+            raise ValueError(
+                f"clock_high must be 0..{CLOCKED_MAX_PHASE}, got {self.clock_high}")
+
     def cfg(self) -> dict:
-        """The `CFG` dict for the board-side script."""
+        """The `CFG` dict for the board-side script. A clocked capture's
+        lacks the clock (`ClockedTiming.cfg`), which needs the board's
+        sysclk."""
+        if self.is_clocked:
+            return clocked_cfg(self.profile, clocks=self.clocks,
+                               reset_clocks=self.reset_clocks, buf_words=self.buf_words,
+                               pio=self.pio, sm=self.sm)
         if self.is_frame:
             return frame_cfg(
                 self.profile,
@@ -595,13 +672,21 @@ class CaptureStats:
     #: so this is the total -- summing the chunks would double-count.
     dropped: int = 0
     #: A host-side failure that ended the run early (a lost framing, a link
-    #: that went quiet). Empty when the board finished on its own terms.
-    #: Whatever was written before it is still a valid stream.
+    #: that went quiet), or why a clocked run is not clean
+    #: (`clocked_problems`). Empty when the board finished on its own
+    #: terms. Whatever was written before it is still a valid stream.
     error: str = ""
     #: `gc.mem_free()` the board reported after the pre-run cleanup. Worth
     #: watching: below `min_free_bytes(buf_words)` the script may not
     #: compile at all, or its DMA buffers may not fit.
     mem_free_before: int = 0
+    #: The closing record's `status=` ("ok", "stopped", "error"), its
+    #: `samples=` (what the board says it sent) and `stalled_buffers=`
+    #: (buffers during which the PIO stalled; information only). Clocked
+    #: mode's closing record carries them; "" and 0 for a record without.
+    status: str = ""
+    board_samples: int = 0
+    stalled_buffers: int = 0
 
     @property
     def board_error(self) -> str:
@@ -645,6 +730,9 @@ class CaptureStats:
             line += " samples_per_s=%.0f" % (self.samples / self.seconds)
         if self.mem_free_before:
             line += " mem_free=%d" % self.mem_free_before
+        if self.status:
+            line += " status=%s board_samples=%d stalled_buffers=%d" % (
+                self.status, self.board_samples, self.stalled_buffers)
         if self.timed_out:
             line += " timed_out=yes"
         if self.error:
@@ -1326,6 +1414,211 @@ def load_held(repl: RawRepl, req: CaptureRequest, path_on_host) -> dict:
     return did
 
 
+# -- clocked capture ----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ClockedTiming:
+    """The clock a clocked capture makes: `clocked_rp2.py`'s H and L, and
+    the state machine's integer divider, at the board's `sysclk_hz`.
+
+    One clock is `cycles_per_clock` = H + L + 4 PIO cycles of `pio_div`
+    system clocks each, and the `in` reads uo_out H + 1 PIO cycles after
+    the rising edge.
+    """
+
+    sysclk_hz: int
+    pio_div: int
+    high: int
+    low: int
+
+    @property
+    def cycles_per_clock(self) -> int:
+        """PIO cycles in one project clock."""
+        return self.high + self.low + CLOCKED_FIXED_CYCLES
+
+    @property
+    def clock_hz(self) -> float:
+        """The real project clock: sysclk / (pio_div x cycles_per_clock)."""
+        return self.sysclk_hz / (self.pio_div * self.cycles_per_clock)
+
+    @property
+    def sample_ns(self) -> float:
+        """Nanoseconds from the rising edge to the `in` that reads uo_out."""
+        return (self.high + 1) * self.pio_div * 1e9 / self.sysclk_hz
+
+    def cfg(self) -> dict:
+        """The keys `clocked_rp2.py` takes from this, `sysclk_hz` the value
+        the board checks `machine.freq()` against."""
+        return {"sysclk_hz": self.sysclk_hz, "pio_div": self.pio_div,
+                "high": self.high, "low": self.low}
+
+
+def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> ClockedTiming:
+    """The clock nearest `clock_hz` that is not faster, at `sysclk_hz`.
+
+    The smallest `pio_div` that fits a clock in at most 34 PIO cycles (H
+    and L 15 each), then the fewest cycles that are not faster than asked.
+    H is half the variable cycles, rounded up, so the read is late in the
+    high phase, and never less than puts the read `CLOCKED_SAMPLE_NS` after
+    the edge. 500 kHz at 150 MHz is pio_div 9, H = L = 15: 490,196 Hz.
+
+    `high` sets H instead, for a sweep of the sample point: the period is
+    the same, and L takes the rest. Refused (`ValueError`): a clock faster
+    than the fastest one that reads 40 ns late, a clock slower than the
+    largest divider makes, and an H that leaves L outside 0..15.
+    """
+    if sysclk_hz <= 0 or clock_hz <= 0:
+        raise ValueError(f"sysclk_hz and clock_hz must be positive, got {sysclk_hz}, {clock_hz}")
+    most = CLOCKED_FIXED_CYCLES + 2 * CLOCKED_MAX_PHASE
+    pio_div = max(1, -(-sysclk_hz // (clock_hz * most)))
+    if pio_div > CLOCKED_MAX_DIV:
+        raise ValueError(
+            "%d Hz is below the slowest clocked rate at sysclk %d Hz, %.1f Hz"
+            % (clock_hz, sysclk_hz, sysclk_hz / (CLOCKED_MAX_DIV * most)))
+    cycles = -(-sysclk_hz // (clock_hz * pio_div))
+    least_high = max(0, -(-CLOCKED_SAMPLE_NS * sysclk_hz // (1_000_000_000 * pio_div)) - 1)
+    if high is None:
+        if cycles < CLOCKED_FIXED_CYCLES + least_high:
+            raise ValueError(
+                "%d Hz is above the fastest clocked rate at sysclk %d Hz, %d Hz, the "
+                "fastest that reads uo_out %d ns after the rising edge"
+                % (clock_hz, sysclk_hz, sysclk_hz // (CLOCKED_FIXED_CYCLES + least_high),
+                   CLOCKED_SAMPLE_NS))
+        high = max(least_high, (cycles - CLOCKED_FIXED_CYCLES + 1) // 2)
+    elif not 0 <= high <= CLOCKED_MAX_PHASE:
+        raise ValueError(f"clock_high must be 0..{CLOCKED_MAX_PHASE}, got {high}")
+    if high > CLOCKED_MAX_PHASE:
+        raise ValueError(
+            f"reading uo_out {CLOCKED_SAMPLE_NS} ns late needs H = {high} at sysclk "
+            f"{sysclk_hz} Hz, more than {CLOCKED_MAX_PHASE}")
+    low = cycles - CLOCKED_FIXED_CYCLES - high
+    if not 0 <= low <= CLOCKED_MAX_PHASE:
+        raise ValueError(
+            f"with H = {high}, {clock_hz} Hz would need the low phase's L = {low}, "
+            f"outside 0..{CLOCKED_MAX_PHASE}")
+    return ClockedTiming(sysclk_hz=sysclk_hz, pio_div=pio_div, high=high, low=low)
+
+
+def clocked_cfg(profile: BoardProfile, clocks: int, reset_clocks: int = CLOCKED_RESET_CLOCKS,
+                buf_words: int = DEFAULT_BUF_WORDS, pio: int = DEFAULT_PIO,
+                sm: int = 0) -> dict:
+    """The `CFG` dict for `clocked_rp2.py`, but for the clock, which
+    `ClockedTiming.cfg()` adds once the board's sysclk is known."""
+    cfg = capture_cfg(profile, buf_words=buf_words, pio=pio, sm=sm)
+    del cfg["max_bytes"]  # the run is `clocks` long
+    cfg.update(clocks=clocks, reset_clocks=reset_clocks)
+    return cfg
+
+
+#: The opening record `clocked_rp2.py` writes, its run parameters.
+_CLOCKED_OPENING = "clocked clocks=%d reset_clocks=%d pio_div=%d cycles_per_clock=%d"
+
+_READ_SYSCLK = "import machine\nprint('ttcap sysclk=%d' % machine.freq())"
+
+
+def clocked_problems(req: CaptureRequest, timing: ClockedTiming,
+                     stats: CaptureStats) -> list[str]:
+    """Why a clocked run is not clean; empty when it is.
+
+    Clean means: the `RAW ` sample counts add up to `clocks` and to the
+    closing record's `samples=`; `status=ok`; the opening record matches
+    the request; `overruns=0`; and a closing record is there.
+    """
+    problems = []
+    want = _CLOCKED_OPENING % (req.clocks, req.reset_clocks, timing.pio_div,
+                               timing.cycles_per_clock)
+    opening = next((m for m in stats.messages if m.startswith("clocked ")), None)
+    if opening != want:
+        problems.append(f"the opening record is {opening!r}, not {want!r}")
+    if not any(_keyed_str(m, "status") is not None for m in stats.messages):
+        problems.append("no closing record")
+    elif stats.status != "ok":
+        problems.append(f"status={stats.status}")
+    if stats.samples != req.clocks:
+        problems.append(f"the RAW chunks hold {stats.samples} samples, not clocks={req.clocks}")
+    if stats.board_samples != stats.samples:
+        problems.append(
+            f"the closing record says samples={stats.board_samples}, the RAW chunks "
+            f"hold {stats.samples}")
+    if stats.overruns:
+        problems.append(f"overruns={stats.overruns}")
+    return problems
+
+
+def undo_clocked(repl: RawRepl, did: dict, error: BaseException | None = None) -> None:
+    """Put the board back after a clocked capture, whether it ran or not:
+    stop the clock, release reset, and put back the mode and monitor `did`
+    records (what `load_held` returned).
+
+    Each SDK call is its own command, after the stream, so nothing the SDK
+    prints can land in the chunk stream. `tt.clock_project_stop()` makes
+    the clock pad the SDK's input with its pull-down, low; the mode write
+    rebuilds the pins, so the board ends in the SDK's default pin states.
+    Every step is tried even if one fails; with `error`, failures become
+    notes on it, and without, the first is raised.
+    """
+    steps = [lambda: stop_clock(repl), lambda: _exec_checked(repl, "tt.reset_project(False)")]
+    if "mode_before" in did or "monitoring_before" in did:
+        steps.append(lambda: restore_mode(repl, did))
+    first = None
+    for step in steps:
+        try:
+            step()
+        except Exception as exc:  # noqa: BLE001 - reported below
+            if error is not None:
+                error.add_note(f"putting the board back failed too: {exc}")
+            elif first is None:
+                first = exc
+    if first is not None:
+        raise first
+
+
+def recover_clocked(repl: RawRepl, exc: BaseException) -> bool:
+    """After a clocked capture that failed without a reply, `recover()` the
+    REPL and put the board back; True if `exc` was such a failure.
+
+    Such an exception carries `selection`: from `load_held`, without
+    `bytes`, it is put back by `undo_load_held`, and after it by
+    `undo_clocked`. A failure here becomes a note on `exc`.
+    """
+    did = getattr(exc, "selection", None)
+    if did is None or not isinstance(exc, _NO_REPLY):
+        return False
+    try:
+        repl.recover()
+        if "bytes" in did:
+            undo_clocked(repl, did, error=exc)
+        else:
+            undo_load_held(repl, did, error=exc)
+    except Exception as again:  # noqa: BLE001 - reported on exc
+        exc.add_note(f"recovering the board failed too: {again}")
+    return True
+
+
+def clocked_header_bytes(req: CaptureRequest, timing: ClockedTiming) -> bytes:
+    """The `VGCH` header of a clocked capture: version 1, mode `SELFCLK`,
+    and `clock_hz` the real clock, rounded to the hertz. `desc` names the
+    bitstream (its sha256) and the run's parameters."""
+    data = Path(req.bitstream).read_bytes()
+    parts = [req.desc] if req.desc else []
+    if req.ui_in is not None:
+        parts.append("ui_in=%d" % req.ui_in)
+    parts.append(
+        "capture=clocked mode=selfclk profile=%s bitstream=%s bitstream_sha256=%s "
+        "clocks=%d reset_clocks=%d sysclk=%d pio_div=%d high=%d low=%d"
+        % (req.profile.name, Path(req.bitstream).name, hashlib.sha256(data).hexdigest(),
+           req.clocks, req.reset_clocks, timing.sysclk_hz, timing.pio_div, timing.high,
+           timing.low))
+    profile = req.profile
+    buf = io.BytesIO()
+    Writer(buf, Header(version=1, sample_bits=profile.sample_bits, mode=MODE_SELFCLK,
+                       clock_hz=round(timing.clock_hz), signal_map=profile.signal_map,
+                       samples_per_word=profile.samples_per_word, flags=profile.flags,
+                       desc=" ".join(parts)))
+    return buf.getvalue()
+
+
 def _describe(req: CaptureRequest) -> str:
     """The header `desc` line: what the host knows and the board does not.
 
@@ -1363,6 +1656,15 @@ def _time_fields(payload: bytes) -> tuple[int, str]:
     _host_ns, _clock_hz, dropped, msg_len = _TIME_HEAD.unpack_from(payload, 0)
     msg = payload[_TIME_HEAD.size : _TIME_HEAD.size + msg_len]
     return dropped, msg.decode("utf-8", "replace")
+
+
+def _keyed_str(msg: str, key: str) -> str | None:
+    """Pull `key=<word>` out of a board summary message, or None."""
+    prefix = key + "="
+    for token in msg.split():
+        if token.startswith(prefix):
+            return token[len(prefix):]
+    return None
 
 
 def _keyed_int(msg: str, key: str) -> int | None:
@@ -1495,6 +1797,8 @@ class CaptureSession:
         req: CaptureRequest,
         chunk_timeout: float = DEFAULT_CHUNK_TIMEOUT,
     ) -> None:
+        if req.is_clocked and not isinstance(self, ClockedSession):
+            raise ValueError("a clocked request runs in a ClockedSession, which loads its bitstream")
         self._repl = repl
         self._req = req
         self._chunk_timeout = chunk_timeout
@@ -1523,6 +1827,9 @@ class CaptureSession:
         self._timed_out = False
         self._error = ""
         self._mem_free = 0
+        self._status = ""
+        self._board_samples = 0
+        self._stalled = 0
         #: The built board script (`_prepare()`), sent by `_start_stream()`.
         self._script = ""
 
@@ -1672,6 +1979,12 @@ class CaptureSession:
             value = _keyed_int(msg, "rxstall")
             if value is not None:
                 self._rxstall = value
+            status = _keyed_str(msg, "status")
+            if status is not None:
+                # The closing record: its counts belong to it alone.
+                self._status = status
+                self._board_samples = _keyed_int(msg, "samples") or 0
+                self._stalled = _keyed_int(msg, "stalled_buffers") or 0
 
     def _snapshot(self) -> CaptureStats:
         if self._finished:
@@ -1700,6 +2013,9 @@ class CaptureSession:
             dropped=self._dropped,
             error=self._error,
             mem_free_before=self._mem_free,
+            status=self._status,
+            board_samples=self._board_samples,
+            stalled_buffers=self._stalled,
         )
 
     def _board_stderr(self) -> str:
@@ -1770,8 +2086,14 @@ class CaptureSession:
         the capture stops it again here.
         """
 
+    def _wind_up(self, error: BaseException | None) -> None:
+        """Called once the stream is over, before the stats freeze, with the
+        exception the stream is ending with, if any. Nothing to do here; a
+        protocol that set the board up in `_prepare()` puts it back here."""
+
     def _iter(self) -> Iterator[bytes]:
         """The stream itself. See `run_capture` for what the protocol is."""
+        error: BaseException | None = None
         try:
             req, repl = self._req, self._repl
             self._prepare()
@@ -1780,7 +2102,7 @@ class CaptureSession:
             # up and has the heap to compile the script, so a refused run
             # leaves no header-only file (and no header-only pipe) behind.
             try:
-                yield stream_header_bytes(req)
+                yield self.header_bytes
             except BaseException:
                 self._abandon_prepared()
                 raise
@@ -1844,8 +2166,116 @@ class CaptureSession:
                 raise
             finally:
                 self._end_streaming()
+        except BaseException as exc:
+            error = exc
+            raise
         finally:
-            self._finalise()
+            try:
+                self._wind_up(error)
+            finally:
+                self._finalise()
+
+
+class ClockedSession(CaptureSession):
+    """A clocked capture: `load_held`, then `clocked_rp2.py`, in one REPL
+    session, then the board put back.
+
+    `_prepare()`, before a byte of the stream:
+
+    1. read `machine.freq()` and work out the clock (`clocked_timing`),
+       which refuses a clock it cannot make before the board is touched;
+    2. clear the REPL's names and refuse a heap too small for the buffers;
+    3. `load_held` the request's bitstream: reset held, the clock pad
+       driven low, the mode, monitor and `ui_in` set;
+    4. clear the names again (`load_held`'s), and check the heap again.
+
+    Nothing else runs between the load and the body, which takes the clock
+    pad over. The stream is the header (`clocked_header_bytes`), then the
+    body's chunks verbatim. Afterwards, however it ended, `undo_clocked`
+    stops the clock, releases reset and puts the mode and monitor back --
+    unless the failure was one without a reply (a timeout, a closed link,
+    an interrupt): then nothing more is sent, the exception gets
+    `selection` and a note, and the caller runs `recover_clocked`.
+
+    A run that ended without a host failure but is not clean
+    (`clocked_problems`) says why in `CaptureStats.error`.
+
+    `timing` and `selection` (what `load_held` returned) are there once
+    `_prepare()` has set them.
+    """
+
+    def __init__(self, repl: RawRepl, req: CaptureRequest,
+                 chunk_timeout: float = DEFAULT_CHUNK_TIMEOUT) -> None:
+        if not req.is_clocked:
+            raise ValueError(f"ClockedSession runs {CLOCKED_SCRIPT}, not {req.script}")
+        super().__init__(repl, req, chunk_timeout=chunk_timeout)
+        self.timing: ClockedTiming | None = None
+        self.selection: dict | None = None
+
+    @property
+    def header_bytes(self) -> bytes:
+        if self.timing is None:
+            raise CaptureError(
+                "a clocked capture's header has the real clock, which needs the "
+                "board's sysclk: run the session first")
+        return clocked_header_bytes(self._req, self.timing)
+
+    def _check_heap(self, free: int) -> None:
+        self._mem_free = free
+        needed = self._req.min_free()
+        if free < needed:
+            raise CaptureError(
+                "board has only %d bytes of free heap after a collect, need %d (2 x %d "
+                "bytes of buffer for --buf-words %d, plus %d to compile the script)"
+                % (free, needed, 4 * self._req.buf_words, self._req.buf_words,
+                   COMPILE_HEADROOM_BYTES))
+
+    def _prepare(self) -> None:
+        req, repl = self._req, self._repl
+        sysclk = _board_value(_exec_checked(repl, _READ_SYSCLK), "sysclk")
+        self.timing = clocked_timing(sysclk, req.clock_hz, req.clock_high)
+        cfg = dict(req.cfg(), **self.timing.cfg())
+        self._script = mp.build(cfg, CLOCKED_SCRIPT)
+        names = cleanup_names(cfg)
+        self._check_heap(prepare_board(repl, names))
+        self.selection = load_held(repl, req, req.bitstream)
+        self._check_heap(prepare_board(repl, names))
+
+    def _start_stream(self) -> Iterator[tuple[bytes, bytes]]:
+        # The longest gap between chunks: the reset clocks and one buffer.
+        timing, req = self.timing, self._req
+        assert timing is not None
+        gap = (4 * req.buf_words + req.reset_clocks) / timing.clock_hz
+        return self._repl.exec_chunks(self._script, timeout=self._chunk_timeout + 2 * gap)
+
+    def _wind_up(self, error: BaseException | None) -> None:
+        did = self.selection
+        if did is None:
+            return  # load_held never returned: it put the board back, or says how
+        if isinstance(error, _NO_REPLY):
+            error.selection = did  # pyright: ignore[reportAttributeAccessIssue]
+            error.add_note(
+                "the board did not reply and may still be running a command: call "
+                "recover_clocked(repl, exc), which recover()s the REPL and puts the "
+                "board back")
+            return
+        try:
+            undo_clocked(self._repl, did, error=error)
+        except Exception as exc:  # noqa: BLE001 - the run's outcome
+            self._error = self._error or "putting the board back failed: %s" % exc
+            return
+        if error is None and not self._error and self.timing is not None:
+            problems = clocked_problems(self._req, self.timing, self._snapshot())
+            if problems:
+                self._error = "not clean: " + "; ".join(problems)
+
+
+def session_for(repl: RawRepl, req: CaptureRequest,
+                chunk_timeout: float = DEFAULT_CHUNK_TIMEOUT) -> CaptureSession:
+    """The MicroPython session that runs `req`: a `ClockedSession` for a
+    clocked request, else a `CaptureSession`."""
+    cls = ClockedSession if req.is_clocked else CaptureSession
+    return cls(repl, req, chunk_timeout=chunk_timeout)
 
 
 def iter_capture(
@@ -1863,7 +2293,7 @@ def iter_capture(
     pipeline ends a capture: the board is stopped cooperatively and drained
     to its prompt before `close()` returns.
     """
-    return CaptureSession(repl, req, chunk_timeout=chunk_timeout).chunks()
+    return session_for(repl, req, chunk_timeout=chunk_timeout).chunks()
 
 
 def run_capture(
@@ -1908,7 +2338,7 @@ def run_capture(
     `session.close()` stops the board before it is re-raised, exactly as a
     failure inside the loop would.
     """
-    return run_session(CaptureSession(repl, req, chunk_timeout=chunk_timeout), out)
+    return run_session(session_for(repl, req, chunk_timeout=chunk_timeout), out)
 
 
 def run_session(session: CaptureSession, out) -> CaptureStats:
