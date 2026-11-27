@@ -432,10 +432,16 @@ class FakeLoader:
     A fake, not vendored code: the firmware is LGPL-2.1 and vgacap is
     Apache-2.0. It reads the file from `files` (path -> bytes, the board's
     filesystem), records what it fed the FPGA in `loads`, and prints the
-    SDK's own lines (`fabricfoxv2.py:97,106,133,167,170,181`). An
+    SDK's own lines (`fabricfoxv2.py:97,106,133,164,167,170,181`). An
     `OSError` -- a missing file, or `fail`, raised once the first
-    `fail_after` bytes have gone -- prints "Error accessing file: ..." and is swallowed, as
-    the real one swallows it (`fabricfoxv2.py:169-170`).
+    `fail_after` bytes have gone -- prints "Error accessing file: ..." and
+    is swallowed, as the real one swallows it (`fabricfoxv2.py:169-170`).
+
+    `drain_lines` is how many "Waiting for FIFO to drain, free slots: 1"
+    lines it prints before "Transmission complete" (`fabricfoxv2.py:163-
+    165`; `tx_fifo()` is the FIFO's level, `rp2_pio.c:891-893` in
+    MicroPython v1.24.0). On hardware that is 0 or more, as the last word
+    is still shifting out; the default is 0.
 
     On an emulator board it drives the loader's SIO pins as the real one
     does around the transfer (`fabricfoxv2.py:19-40,67-73,92,112-130,174`;
@@ -449,8 +455,10 @@ class FakeLoader:
     SCK, MOSI, SS, RESET = 6, 3, 5, 1
 
     def __init__(self, board=None, files: dict[str, bytes] | None = None, *,
-                 fail: OSError | None = None, fail_after: int = 0) -> None:
+                 fail: OSError | None = None, fail_after: int = 0,
+                 drain_lines: int = 0) -> None:
         self.board = board
+        self.drain_lines = drain_lines
         self.files = dict(files or {})
         self.fail = fail
         self.fail_after = fail_after
@@ -494,6 +502,8 @@ class FakeLoader:
             if board is not None:
                 # 8 bits a byte, the file and the 6 termination bytes.
                 board.advance(board.sysclk_hz * 8 * (len(fed) + 6) // freq)
+            for _ in range(self.drain_lines):
+                print("Waiting for FIFO to drain, free slots: 1")
             print(f"Transmission complete, total bytes: {len(fed)}")
             if board is not None and hasattr(board.wave, "configure"):
                 board.wave.configure()
