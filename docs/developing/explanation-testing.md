@@ -28,7 +28,9 @@ The C tests in [`tests/`](../../tests) run under `ctest`. They check the stream 
 
 Its pins follow MicroPython v1.24.0. `Pin(n, Pin.OUT, value=v)` drives a pad, any mode takes the pad from PIO, and `Pin(n).value()` reads the pad whatever drives it. `Board(pulls=...)` sets external pulls, which beat the RP2's own. `ClockedDesign` is an exact counter. It is clocked only by the rising edges really driven on its clock pad, resets synchronously while `rst_n` is low, and shows its value on `uo_out` `settle` cycles after each edge. Because the input synchroniser is not modelled, where a clocked capture samples relative to the edge is checked on hardware only. `ClockedDesign.configure()`, a bitstream load, forgets the design before it: `count_at` for a cycle before the load returns `initial`, not what the old design held then. The tests' fake SDK and FPGA loader ([`fake_tt.py`](../../python/tests/fake_tt.py)) run on these pins. They do not model:
 
-- `uo_out`, `ui_in` outside `ASIC_RP_CONTROL`, and the pins the SDK always makes outputs (GPIO 0-3, 5, 6, 11, 12, the loader's 3 and 6 among them) in a mode write's pin rebuild;
+- `uo_out`, `ui_in` and the pins the SDK always makes outputs (GPIO 0-3, 5, 6, 11, 12, the loader's 3 and 6 among them) in a mode write's pin rebuild;
+- `ui_in` on the emulator's pads: `tt.ui_in` is the fake's own model, and touches no pad;
+- the real loader's PIO0 state machine 0, which takes GPIO 3 and 6 for PIO0 and leaves its program loaded;
 - the real loader's transfer time: the fake takes about the time the bits take at `freq`, while the real loop's pace is set by its `sleep_us(1)` polls.
 
 ## The simulated board
