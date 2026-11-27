@@ -141,8 +141,9 @@ static inline uint64_t pack_id(uint64_t r) {
 int fs_transform(int t, const uint64_t *raw, uint64_t n, uint64_t first_sample, uint8_t **out, size_t *lens,
                  uint64_t *clk_errors) {
     uint64_t bad = 0;
-    const uint64_t ph = (first_sample & 1) ? FS_CLK_RAW : 0;
-    for (uint64_t i = 0; i < n; i++) bad += ((raw[i] ^ ph ^ ((i & 1) ? FS_CLK_RAW : 0)) >> (8 * FS_CLK)) & 1;
+    const int cb = fs_off[7];   // the clk byte (FS_CLK in the replay; Verilator's in the simulation check)
+    const uint64_t clk = 1ull << (8 * cb), ph = (first_sample & 1) ? clk : 0;
+    for (uint64_t i = 0; i < n; i++) bad += ((raw[i] ^ ph ^ ((i & 1) ? clk : 0)) >> (8 * cb)) & 1;
     *clk_errors += bad;
     const int id = identity_layout();
     switch (t) {

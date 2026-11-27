@@ -194,6 +194,57 @@ static uint64_t file_size(const char *p) {
     return stat(p, &st) == 0 ? (uint64_t)st.st_size : 0;
 }
 
+// The primary file: its header, and at the end its index and footer.
+static int primary_open(bg_t *g, const char *pfile) {
+    g->pf = fopen(pfile, "wb");
+    if (!g->pf) { perror(pfile); return -1; }
+    static char fbuf[1 << 20];
+    setvbuf(g->pf, fbuf, _IOFBF, sizeof fbuf);
+    fwrite(FS_FILE_MAGIC, 1, 8, g->pf);
+    uint8_t hdr[8] = { 0, (uint8_t)g->pt, (uint8_t)g->pc, 0, 0, 0, 0, 0 };
+    hdr[0] = !strcmp(g->writer, "planar") ? 1 : !strcmp(g->writer, "events") ? 2 : !strcmp(g->writer, "raw") ? 3 : 4;
+    fwrite(hdr, 1, 8, g->pf);
+    g->pbytes = 16;
+    return 0;
+}
+
+static void primary_close(bg_t *g) {
+    if (!g->pf) return;
+    const uint64_t ioff = (uint64_t)ftello(g->pf);
+    for (uint64_t i = 0; i < g->nindex; i++) { put64(g->pf, g->index[2 * i]); put64(g->pf, g->index[2 * i + 1]); }
+    put64(g->pf, ioff);
+    put32(g->pf, (uint32_t)g->nindex);
+    put32(g->pf, FS_INDEX_MAGIC);
+    fclose(g->pf);
+    g->pf = NULL;
+}
+
+// For the simulation check (w_mine.c fs_sim_create): a background part with
+// the primary transform and compressor only, writing `pfile`.
+void *fs_bg_new(const char *writer, const char *transform, const char *comp, const char *pfile);
+fs_block_fn fs_bg_fn(void);
+void fs_bg_close(void *bg);
+void *fs_bg_new(const char *writer, const char *transform, const char *comp, const char *pfile) {
+    bg_t *g = calloc(1, sizeof *g);
+    g->project = "sim"; g->writer = writer;
+    g->every = UINT64_MAX;
+    g->is_raw = !strcmp(writer, "raw");
+    g->pt = fs_transform_by_name(transform);
+    g->pc = fs_comp_by_name(comp);
+    if (g->pt < 0 || g->pc < 0) { fprintf(stderr, "fs: bad transform or compressor\n"); exit(2); }
+    g->tlist[g->nt++] = g->pt;
+    if (primary_open(g, pfile)) exit(2);
+    return g;
+}
+fs_block_fn fs_bg_fn(void) { return on_block; }
+void fs_bg_close(void *bg) {
+    bg_t *g = bg;
+    primary_close(g);
+    fprintf(stderr, "fs-sim: background %s: %llu blocks, %.3f s CPU, %llu bytes, %llu clock errors\n", g->writer,
+            (unsigned long long)g->blocks, g->bg_ns_total / 1e9, (unsigned long long)g->pbytes,
+            (unsigned long long)g->clk_errors);
+}
+
 int fs_mode_encode(int argc, char **argv);
 int fs_mode_encode(int argc, char **argv) {
     if (argc < 2) { fprintf(stderr, "usage: fsbench encode TRACE OUTDIR --writer W ...\n"); return 2; }
@@ -249,15 +300,7 @@ int fs_mode_encode(int argc, char **argv) {
         for (int i = 0; i < g->nt; i++) found |= g->tlist[i] == g->pt;
         if (!found) g->tlist[g->nt++] = g->pt;
         snprintf(pfile, sizeof pfile, "%s/%s.%s.%s.%s.stdy", outdir, project, w->name, tbuf, cbuf);
-        g->pf = fopen(pfile, "wb");
-        if (!g->pf) { perror(pfile); return 1; }
-        static char fbuf[1 << 20];
-        setvbuf(g->pf, fbuf, _IOFBF, sizeof fbuf);
-        fwrite(FS_FILE_MAGIC, 1, 8, g->pf);
-        uint8_t hdr[8] = { 0, (uint8_t)g->pt, (uint8_t)g->pc, 0, 0, 0, 0, 0 };
-        hdr[0] = !strcmp(w->name, "planar") ? 1 : !strcmp(w->name, "events") ? 2 : !strcmp(w->name, "raw") ? 3 : 4;
-        fwrite(hdr, 1, 8, g->pf);
-        g->pbytes = 16;
+        if (primary_open(g, pfile)) return 1;
     }
     const double cpu0 = process_cpu_ns(), th0 = fs_thread_ns(), wall0 = fs_wall_ns();
     void *st = w->create(block_clocks, out[0] ? out : NULL, native ? NULL : on_block, g);
@@ -281,14 +324,7 @@ int fs_mode_encode(int argc, char **argv) {
     if (!strcmp(w->name, "vgch2")) { g->samples = 2 * clocks; g->samples_measured = g->blocks_measured ? 0 : 0; }
     // vgch2: samples per measured block are not known to the tap; extrapolate by blocks.
     const int by_blocks = !strcmp(w->name, "vgch2");
-    if (g->pf) {
-        const uint64_t ioff = (uint64_t)ftello(g->pf);
-        for (uint64_t i = 0; i < g->nindex; i++) { put64(g->pf, g->index[2 * i]); put64(g->pf, g->index[2 * i + 1]); }
-        put64(g->pf, ioff);
-        put32(g->pf, (uint32_t)g->nindex);
-        put32(g->pf, FS_INDEX_MAGIC);
-        fclose(g->pf);
-    }
+    primary_close(g);
     // Rows: one per (transform, compressor) of the matrix, then the totals.
     printf("project,writer,transform,comp,blocks,blocks_measured,samples,samples_measured,raw_bytes_measured,"
            "comp_bytes_measured,transform_ns_measured,comp_ns_measured,est_comp_bytes,est_bg_ns,clk_errors\n");
