@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import errno
 import io
+import types
 
 import pytest
 from emu_repl import EmuRepl
@@ -541,7 +542,7 @@ def test_a_lost_link_in_the_body_carries_the_selection_and_sends_nothing_more(
 # -- round 2 -----------------------------------------------------------------------
 
 
-def test_an_asic_carrier_is_refused_before_the_upload(tmp_path):
+def test_an_asic_carrier_is_refused_before_the_mkdir(tmp_path):
     # RP2350_DBV3 is told by the GPIO layout, which an ASIC carrier shares;
     # there spi_transferPIO pulses GPIO 1, the TT mux's reset, and still
     # prints the right count. Only the FPGA mux's `run` is 'FPGA'
@@ -550,10 +551,49 @@ def test_an_asic_carrier_is_refused_before_the_upload(tmp_path):
     with pytest.raises(CaptureError, match="load_held needs the FPGA breakout: "
                        "tt.shuttle is not the FPGA mux"):
         rig.load()
+    assert not rig.sent("_ttcap_mkdir")
+    assert HELD_DIR not in rig.link.dirs
     assert rig.link.writers == []
     assert not rig.sent("spi_transferPIO")
     assert not rig.sent("tt.reset_project(True)")
     assert rig.link.loader.loads == []
+
+
+def test_a_shuttle_with_no_run_is_refused(tmp_path):
+    rig = Rig(tmp_path, shuttle=types.SimpleNamespace(enabled=None))
+    with pytest.raises(CaptureError, match="tt.shuttle is not the FPGA mux"):
+        rig.load()
+    assert not rig.sent("_ttcap_mkdir")
+
+
+@pytest.mark.parametrize("error", [TimeoutError("timed out waiting for b'OK'"),
+                                   LinkClosed("the link closed")])
+def test_an_upload_with_no_reply_sends_nothing_more(tmp_path, monkeypatch, error):
+    # The board may still be writing; the caller recovers, then deletes.
+    rig = Rig(tmp_path)
+
+    def no_reply(name, data):
+        raise error
+
+    monkeypatch.setattr(rig.repl, "upload", no_reply)
+    sent = len(rig.link.commands)
+    with pytest.raises(type(error)):
+        rig.load()
+    assert len(rig.link.commands) == sent + 2  # the FPGA check and the mkdir
+    assert not rig.sent("_ttcap_remove")
+    assert HELD_DIR in rig.link.dirs
+
+
+def test_an_rmdir_failing_otherwise_fails_the_load(tmp_path):
+    rig = Rig(tmp_path)
+
+    def failing(path):
+        raise OSError(errno.EIO, "EIO")
+
+    rig.link._modules["os"].rmdir = failing
+    with pytest.raises(CaptureError, match="EIO"):
+        rig.load()
+    _assert_put_back(rig)
 
 
 def test_an_upload_that_fails_mid_write_deletes_the_file(tmp_path):
