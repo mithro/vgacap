@@ -14,7 +14,7 @@ review: 2027-05-27
 ## What you need
 
 - A capture that works to a file, as in [How to capture a stream from a demo board](how-to-capture-stream.md).
-- The vgacap GStreamer plugin built into `build/`, as in [Developing vgacap](../../docs/development.md).
+- The vgacap GStreamer plugin built into `build/`, as in [How to build the GStreamer plugin](../../gst/how-to-build-plugin.md).
 
 ## Steps
 
@@ -22,7 +22,7 @@ review: 2027-05-27
 2. In the checkout, pipe the capture into `vgadecode`, which writes a PNG for each frame as it closes:
 
    ```sh
-   uv run ttcap capture serial:/dev/ttyACM0 --clock-hz 500000 --seconds 0 --out - |
+   uv run ttcap capture serial:/dev/ttyACM0 --clock-hz 400000 --seconds 0 --out - |
        gst-launch-1.0 -e fdsrc fd=0 ! application/x-vgacap ! vgadecode ! \
        videoconvert ! pngenc ! multifilesink location=frame-%04d.png
    ```

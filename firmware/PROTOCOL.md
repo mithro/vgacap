@@ -13,14 +13,14 @@ protocol version 1. It is for someone writing a host, or reading the host side i
 [`firmware/core/fw.c`](core/fw.c). How the firmware captures is on
 [Capture inside the vgacap firmware](explanation-capture.md).
 
-Figure 1 is the exchange of one frame capture as `ttcap capture --firmware picosdk` runs it.
+The figure is the exchange of one frame capture as `ttcap capture --firmware picosdk` runs it.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../docs/diagrams/firmware-protocol-dark.svg">
   <img src="../docs/diagrams/firmware-protocol.svg" alt="ttcap and the vgacap firmware exchange sync and setup lines, the frame command and its ok, TIME and FRAM chunks, the DONE marker, then a clock stop." width="100%">
 </picture>
 
-*Figure 1: a frame capture of two pictures
+*A frame capture of two pictures
 ([`docs/diagrams/firmware_protocol.py`](../docs/diagrams/firmware_protocol.py)).*
 
 ## The link

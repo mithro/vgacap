@@ -27,11 +27,11 @@ The checks' captures take this path from fpga-1 to your workstation, where `tool
 
 ## Steps
 
-1. In a browser, open `https://tinytapeout.fpgas.online/board/fpga-1/status.json` and go on only if it shows `"clients": 0` and `"usb_serial": "4df39a7a6856f86f"`.
-2. On your workstation, run `ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com & echo $!` to tunnel local port 18034 to the bridge, and note the PID it prints.
+1. In a browser, do steps 1 and 2 of [How to capture from a Welland board through the bridge](../python/ttcap/how-to-capture-welland-bridge.md) for fpga-1.
+2. On your workstation, open that page's step 3 tunnel in the background with `ssh -N -L 18034:10.21.2.34:8765 tweed.welland.mithis.com & echo $!`, and note the PID it prints.
 3. In the tt-vga-testpatterns checkout, run `uv run --no-project python tools/upload.py http://127.0.0.1:18034 bitstreams/tt_um_vgacal_bars.bin --enable --clock-hz 400000` to load the calibration design.
 4. In the vgacap checkout, run `tools/hil.sh --board fpga-1 --link ws://127.0.0.1:18034/serial --design tt_um_vgacal_bars --clock-hz 400000 --testpatterns <tt-vga-testpatterns checkout> tmp/hil/` to run the checks.
-5. In the vgacap checkout, run `uv run python tools/board_restart.py ws://127.0.0.1:18034/serial` to put the stock firmware back to its start state.
+5. In the vgacap checkout, run `uv run python tools/board_restart.py ws://127.0.0.1:18034/serial` to restart the board to the stock firmware's start state.
 6. On your workstation, run `kill <pid>` with the PID from step 2 to close the tunnel.
 
 ## Check
@@ -43,16 +43,7 @@ Step 4 prints one `PASS` line for each of the ten checks, then these lines, and 
 report: tmp/hil/<date>-hil-fpga-1.md
 ```
 
-Step 5 prints the end of the board's boot, finishing with these lines, where `<n>` varies from boot to boot. Then `status.json` shows `"state": "loaded"` under `idle_display` again, about a minute later.
-
-```text
-boot done: <n>
-tt.sdk_revision=d485c7a9986336024e35d790568fca33be1c5665
-tt.sdk_version=3.1.1
-MicroPython 970468103d on 2026-09-08; TinyTapeout RP2350B Core with RP2350
-Type "help()" for more information.
->>>
-```
+Step 5 prints and shows what the Check of [How to restart a demo board to the stock firmware's start state](how-to-restart-a-board.md#check) describes.
 
 ## If it fails
 

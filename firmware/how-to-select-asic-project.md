@@ -40,7 +40,7 @@ where [GPIO 1](reference-board.md#gpios) going low erases the FPGA.
 
 ## Check
 
-The capture's board report shows a full window and sync levels, as on tt09 with `tt_um_rejunity_vga_logo`
+The capture's board report shows a full window and sync levels, as on the tt09 board with `tt_um_rejunity_vga_logo`
 ([dated result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-picosdk-firmware-fpga4)):
 
 ```text
@@ -51,20 +51,20 @@ bytes=769803 samples=769600 chunks=4 seconds=4.039 overruns=0 dropped=0 rxstall=
 wrote frame.vgacap
 ```
 
-`ttcap png frame.vgacap frame` renders the project's picture, on a machine with `build/vgacap-frames` built
-(`cmake --build build --target vgacap-frames`). The Welland bench's Pis have no CMake, so copy the file to a
-workstation checkout. On tt09 that gave 2 frames with positive syncs and 0 glitches ([bench result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1)).
+`ttcap png frame.vgacap frame` renders the project's picture. On the Welland bench, copy the capture to a
+workstation and render it there, as in step 4 of [How to capture with the vgacap firmware](how-to-capture.md):
+a bench Pi has no room or time for Pillow. On the tt09 board that gave 2 frames with positive syncs and 0 glitches ([bench result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1)).
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| Step 1 prints nothing | the macro name or shuttle is wrong | Check both on the project's page at [tinytapeout.com](https://tinytapeout.com) |
-| `--asic-index is for ...; ... is an FPGA board, where asic_select pulls GPIO 1 -- the iCE40's CRESET_B -- low and erases the FPGA` at step 2 | `--board`, the link or this Pi names a demo board with an FPGA breakout | Drop `--asic-index`: an FPGA keeps its design across the switch |
-| `--asic-index needs to know which board it is for, and ... disagree` | `--board`, the link and this Pi name different boards | Give the `--board` that the link reaches |
-| `--asic-index needs to know which board ws://... is, and '...' does not resolve (...)` | the host in a `ws://` link has no address | Check the link's host name |
-| `board went quiet` and almost nothing written | the wrong index, or no `--asic-index` | Repeat step 1, and give its number |
-| `--asic-index is for --firmware picosdk` | `--firmware picosdk` missing | Add it; the stock firmware selects a project with `--project` |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 1 | It prints nothing | the macro name or shuttle is wrong | Check both on the project's page at [tinytapeout.com](https://tinytapeout.com) |
+| 2 | `--asic-index is for ...; ... is an FPGA board, where asic_select pulls GPIO 1 -- the iCE40's CRESET_B -- low and erases the FPGA` | `--board`, the link or this Pi names a demo board with an FPGA breakout | Drop `--asic-index`: an FPGA keeps its design across the switch |
+| 2 | `--asic-index needs to know which board it is for, and ... disagree` | `--board`, the link and this Pi name different boards | Give the `--board` that the link reaches |
+| 2 | `--asic-index needs to know which board ws://... is, and '...' does not resolve (...)` | the host in a `ws://` link has no address | Check the link's host name |
+| 2 | `board went quiet` and almost nothing written | the wrong index, or no `--asic-index` | Repeat step 1, and give its number |
+| 2 | `--asic-index is for --firmware picosdk` | `--firmware picosdk` missing | Add it; the stock firmware selects a project with `--project` |
 
 ttcap refuses `--asic-index` only for a board it can name. With a `serial:` link on a machine that is no
 Welland bench Pi, nothing names the board, so check the breakout yourself first.

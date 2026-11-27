@@ -21,7 +21,7 @@ This page runs a file with [`tools/board_exec.py`](board_exec.py), over the same
 
 1. In the vgacap checkout, write the MicroPython code into a file such as `probe.py`, printing what you want to see.
 2. In the vgacap checkout, run `uv run python tools/board_exec.py ws://127.0.0.1:18034/serial probe.py` to run the file, which prints the board's output.
-3. In the vgacap checkout, run `uv run python tools/board_restart.py ws://127.0.0.1:18034/serial` to put the stock firmware back to its start state.
+3. In the vgacap checkout, run `uv run python tools/board_restart.py ws://127.0.0.1:18034/serial` to restart the board to the stock firmware's start state.
 
 ## Check
 

@@ -9,7 +9,7 @@ review: 2027-05-27
 
 **You want every argument, output and exit code of `vgacap-dump`, `vgacap-frames`, `vgacap-sample`, `vgacap-export` and `vgacap-bin2stream`.**
 
-[CMake](https://cmake.org) builds the four C tools into `build/`, as [Developing vgacap](../../docs/development.md) shows. `vgacap-bin2stream` is a Python command, run with `uv run`. In each argument table, Argument is what you type, Value what follows it, Default what holds without it, and What it sets the effect. In each exit code table, a code has one row for each cause.
+[CMake](https://cmake.org) builds the four C tools into `build/`, as [How to build vgacap and run its tests](../../docs/development.md) shows. `vgacap-bin2stream` is a Python command, run with `uv run`. In each argument table, Argument is what you type, Value what follows it, Default what holds without it, and What it sets the effect. In each exit code table, a code has one row for each cause.
 
 ## vgacap-dump
 

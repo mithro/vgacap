@@ -14,7 +14,7 @@ This page builds the host side with CMake and runs its C and Python tests, as th
 ## What you need
 
 - CMake 3.16 or later, a C99 compiler and `make`, and [uv](https://docs.astral.sh/uv/) for the Python side.
-- For the [GStreamer plugin](../gst/README.md) and its tests, the GStreamer development files and tools that the `gstreamer` job of [`ci.yml`](../.github/workflows/ci.yml) installs. Without them the plugin is skipped, not failed.
+- For the [GStreamer plugin](../gst/README.md) and its tests, the GStreamer development files and tools, installed as in step 1 of [How to build the GStreamer plugin](../gst/how-to-build-plugin.md). Without them the plugin is skipped, not failed.
 - For the RTL framer's test, Icarus Verilog (`iverilog`).
 - For the RP1 sampler's test, network access, to fetch [piolib](https://github.com/raspberrypi/utils/tree/master/piolib) in step 4.
 
@@ -52,7 +52,7 @@ Step 5 ends with a summary of passed and skipped tests and no failures. Without 
 
 | Step | What you see | Likely cause | Fix |
 |---|---|---|---|
-| 1 | `vgacap: GStreamer development files not found, skipping the plugin` | no GStreamer development files | Install them as the `gstreamer` job does, or go on without the plugin |
+| 1 | `vgacap: GStreamer development files not found, skipping the plugin` | no GStreamer development files | Install them as in step 1 of [How to build the GStreamer plugin](../gst/how-to-build-plugin.md), or go on without the plugin |
 | 1 | `vgacap: pkg-config not found, skipping the GStreamer plugin` | no `pkg-config` | Install `pkg-config`, then run step 1 again |
 | 1 | `vgacap: VGACAP_JCC_PAD: ... is not supported here` | a compiler or a machine other than GCC or Clang on x86-64 | Nothing: the build goes on without the padding |
 | 2 | an `error:` from a warning | the build turns warnings into errors (`-Werror`) | Fix the warning in the code |

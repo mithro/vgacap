@@ -20,10 +20,10 @@ The build compiles [piolib](https://github.com/raspberrypi/utils/tree/master/pio
 ## Steps
 
 1. In the checkout, run `git init -q utils` to make an empty repository for piolib.
-2. Run `git -C utils remote add origin https://github.com/raspberrypi/utils.git` to point it at raspberrypi/utils.
-3. Run `git -C utils fetch -q --depth 1 origin 05e8808e84ed99b168b14a4025dddb9118fa1c17` to fetch the commit the tool was proven with.
-4. Run `git -C utils checkout -q FETCH_HEAD` to check that commit out.
-5. Run `make -C capture-rp1 PIOLIB=$PWD/utils/piolib` to build `capture-rp1/vgacap-rp1` and `capture-rp1/vgacap-rp1-programs`.
+2. In the checkout, run `git -C utils remote add origin https://github.com/raspberrypi/utils.git` to point it at raspberrypi/utils.
+3. In the checkout, run `git -C utils fetch -q --depth 1 origin 05e8808e84ed99b168b14a4025dddb9118fa1c17` to fetch the commit the tool was proven with.
+4. In the checkout, run `git -C utils checkout -q FETCH_HEAD` to check that commit out.
+5. In the checkout, run `make -C capture-rp1 PIOLIB=$PWD/utils/piolib` to build `capture-rp1/vgacap-rp1` and `capture-rp1/vgacap-rp1-programs`.
 
 ## Check
 
@@ -38,10 +38,10 @@ usage: vgacap-rp1 --out F --samples N [--data-base 4] [--clk 12] [--edge rising|
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| `hardware/pio.h: No such file or directory` | `PIOLIB` does not name the `piolib` directory | Give the absolute path, as in step 5 |
-| `fatal: couldn't find remote ref` at step 3 | The commit was mistyped | Copy the commit from step 3 again |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 5 | `hardware/pio.h: No such file or directory` | `PIOLIB` does not name the `piolib` directory | Give the absolute path, as in step 5 |
+| 3 | `fatal: couldn't find remote ref` | The commit was mistyped | Copy the commit from step 3 again |
 
 ## Next
 

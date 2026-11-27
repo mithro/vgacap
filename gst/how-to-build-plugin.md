@@ -9,7 +9,7 @@ review: 2027-05-27
 
 **You have a vgacap checkout and want `libgstvgacap.so`, the plugin with `vgadecode`, `vgacapttsrc` and `vgacapbin`.**
 
-The plugin is built by the same CMake run as the rest of vgacap, and only when GStreamer's development files are installed. This page installs them on Debian or Ubuntu, builds, and checks the elements load. The rest of the build is on [Developing vgacap](../docs/development.md).
+The plugin is built by the same CMake run as the rest of vgacap, and only when GStreamer's development files are installed. This page installs them on Debian or Ubuntu, builds, and checks the elements load. The rest of the build is on [How to build vgacap and run its tests](../docs/development.md).
 
 ## What you need
 

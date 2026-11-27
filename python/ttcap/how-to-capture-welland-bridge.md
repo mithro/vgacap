@@ -28,7 +28,7 @@ The capture takes this path from the board to your machine, here for fpga-1.
 ## Steps
 
 1. In a browser, open `https://tinytapeout.fpgas.online/board/fpga-1/status.json`, and go on only if it shows `"clients": 0` and `"reachable": true`.
-2. In the same `status.json`, check that `usb_serial` is the board you expect, since boards move between Pis.
+2. In the same `status.json`, check that `usb_serial` is the board's serial in [Welland bench boards in ttcap](reference-welland-boards.md#usb-serials), since boards move between Pis.
 3. In a second terminal, open the tunnel to the board's bridge, which stays open until you press Ctrl-C there:
 
    ```sh
@@ -48,7 +48,7 @@ The capture takes this path from the board to your machine, here for fpga-1.
        --clock-hz 400000 --seconds 10 --out bench.vgacap
    ```
 
-6. In the vgacap checkout, put the board back to the stock firmware's start state, which restarts its SDK:
+6. In the vgacap checkout, restart the board to the stock firmware's start state:
 
    ```sh
    uv run python tools/board_restart.py ws://127.0.0.1:18034/serial
@@ -57,7 +57,7 @@ The capture takes this path from the board to your machine, here for fpga-1.
 7. In the browser, reload `status.json` until `idle_display` shows `"state": "loaded"`, which takes about 75 seconds.
 8. In the second terminal, press Ctrl-C, which closes the tunnel.
 
-A bitstream uploaded this way is loaded on the FPGA but is not one of the stock firmware's named designs, so `ttcap` reports `enable=already enabled`. The bridge is not stopped on this path, so nothing has to be started again. `--board` lets `ttcap` refuse an option the board cannot take. `ttcap demo` takes the same `--link`, and on a failure through a bench address it prints the tunnel command for that board. [`tools/board_restart.py`](../../tools/board_restart.py) sends Ctrl-C, Ctrl-B and Ctrl-D, so the stock firmware starts again from its own start-up.
+A bitstream uploaded this way is loaded on the FPGA but is not one of the stock firmware's named designs, so `ttcap` reports `enable=already enabled`. The bridge is not stopped on this path, so nothing has to be started again. Step 6 is [How to restart a demo board to the stock firmware's start state](../../tools/how-to-restart-a-board.md). `--board` lets `ttcap` refuse an option the board cannot take. `ttcap demo` takes the same `--link`, and on a failure through a bench address it prints the tunnel command for that board.
 
 ## Check
 
@@ -73,7 +73,7 @@ Step 5 ends with a stats line showing `overruns=0 dropped=0 rxstall=0` and `wrot
 | 3 | `Privileged ports can only be forwarded by root` | the local port is below 1024 | use the tunnel port from the table |
 | 4 | `Connection refused` | the tunnel is not open | repeat step 3 |
 | 5 | `is not a shuttle entry on this board and is not the enabled design either` | the design was not uploaded and enabled | repeat step 4 |
-| 7 | `idle_display` `state` stays other than `loaded` | the SDK did not restart | run step 6 again |
+| 7 | `idle_display` `state` stays other than `loaded` | the board did not restart | run step 6 again |
 | 7 | `safe_start` `state` starts with `left:` on an ASIC breakout | the bridge found a design still enabled | run step 6 again |
 
 ## Next

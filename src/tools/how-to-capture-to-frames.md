@@ -13,7 +13,7 @@ This page runs `vgacap-frames`, which writes one PPM image a frame. It works on 
 
 ## What you need
 
-- A vgacap checkout built with [CMake](https://cmake.org), so that `build/vgacap-frames` exists ([Developing vgacap](../../docs/development.md)).
+- A vgacap checkout built with [CMake](https://cmake.org), so that `build/vgacap-frames` exists ([How to build vgacap and run its tests](../../docs/development.md)).
 - A capture of at least three frame periods: 1,260,000 clocks of a 640x480@60 design. Why it takes that many is on [How libvgaframe rebuilds frames](../frame/explanation-rebuilding-frames.md#when-the-first-frame-appears).
 
 ## Steps

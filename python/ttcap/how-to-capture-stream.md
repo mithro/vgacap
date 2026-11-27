@@ -15,7 +15,7 @@ A stream holds one sample per project clock, so the design runs at a clock the U
 
 - A vgacap checkout with `uv sync` run in it, as in [Your first capture from a demo board](tutorial-first-capture.md).
 - The demo board on USB, here `/dev/ttyACM0`, with no other program holding the port.
-- A project clock the board keeps up with: 60 kHz on an RP2040 demo board ([measured](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-ttcap-capture-serial-tt07)), 500 kHz on an RP2350 one, clean in a 4-second run ([measured](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). How long it stays clean is open ([#52](https://github.com/mithro/vgacap/issues/52)).
+- A project clock the board keeps up with: 60 kHz on an RP2040 demo board ([measured](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-ttcap-capture-serial-tt07)), 400 kHz on an RP2350 one. With a VGA design, 400 kHz was clean over USB serial ([measured](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-stock-400k-usb)) and 500 kHz overran in some captures, as [Capture sources compared](../../docs/reference-capture-sources.md#the-stock-firmware-on-an-rp2350-demo-board) shows.
 
 ## Steps
 
@@ -23,12 +23,12 @@ A stream holds one sample per project clock, so the design runs at a clock the U
 2. In the checkout, run the capture with the clock and limit you chose, which starts the clock and writes the file:
 
    ```sh
-   uv run ttcap capture serial:/dev/ttyACM0 --clock-hz 500000 --seconds 4 --out capture.vgacap
+   uv run ttcap capture serial:/dev/ttyACM0 --clock-hz 400000 --seconds 4 --out capture.vgacap
    ```
 
 3. In the terminal, read the stats line, which ends the run with `overruns=0 dropped=0 rxstall=0` when no sample was lost.
 
-This command captures the design already enabled, for 4 seconds at 500 kHz, which was clean on an RP2350 demo board's USB serial. On an RP2040 demo board use `--clock-hz 60000`. Add `--project NAME` to enable a project on an ASIC breakout, or `--design NAME` for a bitstream on an FPGA breakout.
+This command captures the design already enabled, for 4 seconds at 400 kHz. On an RP2040 demo board use `--clock-hz 60000`. Add `--project NAME` to enable a project on an ASIC breakout, or `--design NAME` for a bitstream on an FPGA breakout.
 
 `--frames N` asks for N + 2 frame periods of 640x480 timing, because a capture starts part way through a frame. A design with other timing needs `--max-bytes` worked out by hand. `--seconds` is 5 unless given, and `--seconds 0` leaves only the other limit.
 
@@ -38,12 +38,12 @@ The run prints the profile it chose, the stats and the file name:
 
 ```text
 profile=rp2350-dbv3 project=None enable=None
-bytes=1902002 samples=1900544 chunks=117 seconds=4.035 overruns=0 dropped=0 rxstall=0 samples_per_s=471046 mem_free=421040
-  board: overruns=0 rxstall=0 sysclk_hz=133000000
+bytes=1524894 samples=1523712 chunks=94 seconds=4.039 overruns=0 dropped=0 rxstall=0 samples_per_s=377250 mem_free=421504
+  board: overruns=0 rxstall=0 sysclk_hz=132000000
 wrote capture.vgacap
 ```
 
-That is the command in step 2 on fpga-1, an RP2350 demo board with an FPGA breakout, from [this run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap). On the same board 750 kHz overran 6 or 7 times in 4 seconds. An earlier [750 kHz run on fpga-4](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4) was clean, before its firmware was TT SDK 3.1.1. `ttcap png capture.vgacap out/frame` turns the file into pictures ([How to turn a capture into PNG images](how-to-render-png.md)).
+That is the command in step 2 on fpga-1, an RP2350 demo board with an FPGA breakout, with `tt_um_vga_pattern` enabled, from [this run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-stock-400k-usb). On the same board 750 kHz overran 6 or 7 times in 4 seconds ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). An earlier [750 kHz run on fpga-4](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4) was clean, before its firmware was the stock firmware 3.1.1. `ttcap png capture.vgacap out/frame` turns the file into pictures ([How to turn a capture into PNG images](how-to-render-png.md)).
 
 ## If it fails
 
