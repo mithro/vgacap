@@ -178,3 +178,20 @@ def test_a_settle_longer_than_the_high_phase_shows_the_clock_before(high, settle
     clocks, reset_clocks = 12, 3
     samples = _run_clocked(board, high, high, clocks, reset_clocks)
     assert samples == [max(0, k - reset_clocks) for k in range(clocks)]
+
+
+def test_rst_n_written_in_the_cycle_of_an_edge_counts_for_that_edge():
+    # A Pin init costs no time, so it can land in the cycle of the edge
+    # just driven; the design reads rst_n as the pad reads in that cycle,
+    # even when that edge's value was already looked at.
+    board = _board()
+    Pin = board.modules()["machine"].Pin
+    clk = Pin(CLK, Pin.OUT, value=0)
+    clk.value(1)
+    clk.value(0)
+    clk.value(1)
+    edge = board.now
+    assert board.wave.count_at(edge) == 2
+    Pin(RST, Pin.OUT, value=0)
+    assert board.now == edge
+    assert board.wave.count_at(edge) == 0

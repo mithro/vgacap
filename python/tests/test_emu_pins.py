@@ -222,3 +222,18 @@ def test_side_set_onto_a_pad_taken_back_from_pio_is_refused():
     with pytest.raises(BoardError, match="taken back"):
         rp2.StateMachine(4, _toggle(rp2), sideset_base=CLK)
 
+
+
+def test_writing_the_latch_of_a_pad_pio_drives_changes_nothing():
+    # gpio_put reaches the pad only through SIO; PIO keeps it, and no edge.
+    board = _board()
+    Pin = _pin(board)
+    sm, _ = _clock_sm(board)
+    sm.active(1)
+    board.advance(3)  # high, high, low: PIO holds it low from here
+    sm.active(0)
+    rises = list(board.pio_rises[CLK])
+    Pin(CLK).value(1)
+    assert board.pio_rises[CLK] == rises
+    assert Pin(CLK).value() == 0
+    assert board.latch[CLK] == 1
