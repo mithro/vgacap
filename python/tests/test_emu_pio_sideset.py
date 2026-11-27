@@ -190,15 +190,13 @@ def test_side_set_base_takes_a_pin_or_a_number_and_the_clock_pad():
     assert board.pio_pin(CLK, board.now) == 0
 
 
-def test_reading_a_side_set_pin_back_is_refused_not_guessed():
+def test_reading_a_side_set_pin_back_from_a_state_machine_is_refused_not_guessed():
+    # The CPU may read it (test_emu_pins.py); another state machine runs
+    # one after another with this one, so it could read ahead of a drive.
     board = _board()
     rp2 = board.modules()["rp2"]
     machine = board.modules()["machine"]
     _sm(board, _toggle(rp2, 0, 0), sideset_base=CLK)
-    with pytest.raises(BoardError, match="driven by PIO"):
-        machine.Pin(CLK).value()
-    with pytest.raises(BoardError, match="driven by PIO"):
-        machine.Pin(CLK, machine.Pin.IN)
 
     @rp2.asm_pio()
     def reader():
