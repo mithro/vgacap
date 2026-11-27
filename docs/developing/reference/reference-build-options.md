@@ -22,6 +22,7 @@ The table is made from the `option()` lines of every `CMakeLists.txt` when this 
 
 | Label | Tests | Run |
 |---|---|---|
+| `perf` | `test_centrev1_speed` | by hand: `ctest --test-dir build -L perf` |
 | `perf` | `test_trace_push_speed` | by hand: `ctest --test-dir build -L perf` |
 
 Every `ctest` command on these pages and in CI leaves the `perf` label out with `-LE perf`. A timing means something only on a known machine.
