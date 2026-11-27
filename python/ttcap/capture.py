@@ -855,7 +855,10 @@ def reset_design(repl: RawRepl, clock: str, clock_hz: float) -> int:
             raise CaptureError(
                 "rst_n reads 1 while reset is held: tt.reset_project(True) did not drive it low")
         _exec_checked(repl, clock)
-        out = _exec_checked(repl, release_command(clock_hz))
+        # The board sleeps reset_hold_ms first (16 s at 1 Hz), and the
+        # exec timeout is one deadline for the whole command.
+        out = _exec_checked(repl, release_command(clock_hz),
+                            timeout=10.0 + reset_hold_ms(clock_hz) / 1000)
         waited = _board_value(out, "rst_n_wait_ms")
         if _board_value(out, "rst_n") != 1:
             raise CaptureError(
