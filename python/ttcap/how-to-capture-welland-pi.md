@@ -43,11 +43,11 @@ The fpgas.online bridge (`fpgas-tt`) holds the board's serial port, `/dev/ttboar
 7. On the Pi, run `sudo systemctl start fpgas-tt`, whether or not steps 5 and 6 succeeded, which starts the bridge again.
 8. In the browser, reload `status.json` until it shows `"reachable": true` and `idle_display` shows `"state": "loaded"`.
 
-Step 6 comes before step 7 because the bridge checks the board's state when it starts. On an ASIC board, starting the bridge with the capture's project still enabled left `safe_start.state` in `status.json` reporting `left:` and that project. `safe_start.state` is the field that holds that report ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)) ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). `ttcap demo --board fpga-4` run on this Pi picks `serial:/dev/ttboard` itself, and says to stop the bridge first.
+Step 6 comes before step 7 because the bridge checks the board's state when it starts. On an ASIC board, starting the bridge with the capture's project still enabled left it reporting `left:` and that project ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). That report is in `safe_start.state` in `status.json` ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). `ttcap demo --board fpga-4` run on this Pi picks `serial:/dev/ttboard` itself, and says to stop the bridge first.
 
 ## Check
 
-Step 5 ends with `wrote bench.vgacap` and a stats line. It shows `overruns=0 dropped=0 rxstall=0` when no sample was lost. 500 kHz was clean on an RP2350 demo board, and 750 kHz overran on fpga-4 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). After step 7, `systemctl is-active fpgas-tt` prints `active`, and `sudo fuser /dev/ttboard` shows the bridge's process again.
+Step 5 ends with `wrote bench.vgacap` and a stats line. It shows `overruns=0 dropped=0 rxstall=0` when no sample was lost. 500 kHz was clean in one 4-second run on fpga-1's USB serial, and 750 kHz overran on fpga-4 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). How long 500 kHz stays clean is open ([#52](https://github.com/mithro/vgacap/issues/52)). After step 7, `systemctl is-active fpgas-tt` prints `active`, and `sudo fuser /dev/ttboard` shows the bridge's process again.
 
 ## If it fails
 

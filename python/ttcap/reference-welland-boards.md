@@ -9,7 +9,9 @@ review: 2027-05-27
 
 **The Welland bench boards that `ttcap` knows by name, with the Pi and the bridge address of each.**
 
-The table is built from `WELLAND` in [`boards.py`](boards.py) each time the site is built, and is what `ttcap demo --board` and `ttcap capture --board` accept. The RP2040 rows, tt03p5 to tt08, date from 2026-09-15. The site now names chip boards by USB serial. Of these rows only tt07 has been checked against one, `tt-de641070db746f27` ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap), [#39](https://github.com/mithro/vgacap/issues/39)). Boards move between Pis, so confirm a board by its USB serial on its `status.json` first. [How to capture from a Welland board through the bridge](how-to-capture-welland-bridge.md) shows that check.
+The table is built from `WELLAND` in [`boards.py`](boards.py) each time the site is built, and is what `ttcap demo --board` and `ttcap capture --board` accept. The RP2040 rows, tt03p5 to tt08, date from 2026-09-15. The site now names chip boards by USB serial. Of these rows only tt07 has been checked against one, `tt-de641070db746f27` ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap), [#39](https://github.com/mithro/vgacap/issues/39)).
+
+Boards move between Pis, so confirm a board by its USB serial on its `status.json` first. [How to capture from a Welland board through the bridge](how-to-capture-welland-bridge.md) shows that check.
 
 Slug is the board's name on [tinytapeout.fpgas.online](https://tinytapeout.fpgas.online), and Pi the host name of the Raspberry Pi it is plugged into. Bridge is the address of that Pi's fpgas.online bridge (`fpgas-tt`), on the bench network. Tunnel port is the local port `ttcap` suggests for an SSH tunnel to that bridge.
 
