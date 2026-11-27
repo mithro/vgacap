@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import bisect
 import builtins
+import contextlib
+import io
 import pathlib
 import sys
 import types
@@ -1049,6 +1051,11 @@ class Board:
         self.pad_trace: dict[int, list[tuple[int, int]]] = {}
         #: Pads a Pin re-init took back from PIO, and the cycle it did.
         self.released: dict[int, int] = {}
+        #: Periodic timers (add_timer), as [due cycle, period, callback].
+        self.timers: list[list] = []
+        #: More importable modules for run_script, by dotted name (the fake
+        #: SDK's `ttboard.*`); parent packages are made as needed.
+        self.extra_modules: dict[str, types.ModuleType] = {}
         gpio = wave.clk_gpio
         slice_num = (gpio >> 1) & 7 if gpio < 32 else 8 + ((gpio >> 1) & 3)
         self.pwm_base = PWM_BASE[chip] + PWM_SLICE_STRIDE * slice_num
@@ -1070,6 +1077,28 @@ class Board:
                         sm.now = self.now
                     sm.run(until)
         self.now = until
+        if self.timers:
+            self._fire_timers()
+
+    def add_timer(self, period: int, callback: Callable[[], None]) -> list:
+        """A periodic `machine.Timer`: `callback()` every `period` cycles.
+        It runs at the end of the advance in which it falls due, not
+        mid-instruction: timer latency is not modelled. Returns the handle
+        `remove_timer` takes."""
+        timer = [self.now + period, period, callback]
+        self.timers.append(timer)
+        return timer
+
+    def remove_timer(self, timer: list) -> None:
+        if timer in self.timers:
+            self.timers.remove(timer)
+
+    def _fire_timers(self) -> None:
+        for timer in list(self.timers):
+            # Due first, so a callback that advances time cannot fire itself.
+            while timer in self.timers and timer[0] <= self.now:
+                timer[0] += timer[1]
+                timer[2]()
 
     @property
     def stop_requested(self) -> bool:
@@ -1450,13 +1479,28 @@ class Board:
     def modules(self) -> dict[str, types.ModuleType]:
         return _make_modules(self)
 
-    def run_script(self, script: str, name: str = "<stdin>") -> bytes:
-        """Run a built board script to completion; return what it wrote."""
+    def run_script(self, script: str, name: str = "<stdin>",
+                   globals: dict | None = None) -> bytes:
+        """Run a built board script to completion; return what it wrote.
+
+        `globals` are names the REPL already holds (the SDK's `tt`). What
+        anything prints, the fake SDK included, goes out over USB as the
+        script's own writes do."""
         modules = self.modules()
+        for dotted, module in self.extra_modules.items():
+            modules[dotted] = module
+            parts = dotted.split(".")
+            for i in range(len(parts) - 1, 0, -1):
+                parent = ".".join(parts[:i])
+                if parent not in modules:
+                    modules[parent] = types.ModuleType(parent)
+                setattr(modules[parent], parts[i], modules[".".join(parts[: i + 1])])
         real_import = builtins.__import__
 
         def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
             if name in modules:
+                if not fromlist and "." in name:
+                    return modules[name.split(".")[0]]  # `import a.b` binds `a`
                 return modules[name]
             return real_import(name, globals, locals, fromlist, level)
 
@@ -1465,7 +1509,11 @@ class Board:
         fake_builtins["bytearray"] = modules["_heap"].bytearray
         fake_builtins["ptr32"] = Ptr32
         namespace = {"__builtins__": fake_builtins, "__name__": "__main__"}
-        exec(compile(script, name, "exec"), namespace)  # noqa: S102 - the board script
+        namespace.update(globals or {})
+        text = io.TextIOWrapper(_UsbRaw(modules["sys"].stdout.buffer), write_through=True,
+                                newline="\r\n")
+        with contextlib.redirect_stdout(text):
+            exec(compile(script, name, "exec"), namespace)  # noqa: S102 - the board script
         return bytes(self.output)
 
 
@@ -1651,6 +1699,19 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
             return []
 
     select.poll = Poll
+
+    # -- time ---------------------------------------------------------------
+
+    time_mod = types.ModuleType("time")
+    hz = board.sysclk_hz
+    time_mod.ticks_ms = lambda: board.now * 1000 // hz
+    time_mod.ticks_us = lambda: board.now * 1_000_000 // hz
+    time_mod.ticks_cpu = lambda: board.now
+    time_mod.ticks_diff = lambda a, b: a - b
+    time_mod.ticks_add = lambda a, b: a + b
+    time_mod.sleep_ms = lambda ms: board.advance(ms * hz // 1000)
+    time_mod.sleep_us = lambda us: board.advance(us * hz // 1_000_000)
+    time_mod.sleep = lambda s: board.advance(s * hz)
 
     # -- _rp2 ---------------------------------------------------------------
 
@@ -1853,10 +1914,25 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
         "uctypes": uctypes,
         "sys": sys_mod,
         "select": select,
+        "time": time_mod,
+        "utime": time_mod,
         "rp2": rp2,
         "_rp2": _rp2,
         "_heap": heap_mod,
     }
+
+
+class _UsbRaw(io.RawIOBase):
+    """`print()`'s text, as bytes into the board's USB stdout."""
+
+    def __init__(self, stdout_buffer) -> None:
+        self._out = stdout_buffer
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data) -> int:
+        return self._out.write(data)
 
 
 class Ptr32:
