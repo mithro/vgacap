@@ -246,6 +246,8 @@ class ClockedDesign(Waveform):
         #: The value after edge `_first + i`; rst_changed() drops the values
         #: a later change to the rst_n pad makes stale.
         self._after: list[int] = []
+        #: False after unconfigure(), until configure().
+        self.configured = True
 
     def attach(self, board: "Board") -> None:
         self.board = board
@@ -263,9 +265,18 @@ class ClockedDesign(Waveform):
         """A bitstream load: the registers start again from `initial`."""
         self._first = len(self.clock_rises)
         self._after = []
+        self.configured = True
+
+    def unconfigure(self) -> None:
+        """A load that failed after the FPGA's reset: there is no design,
+        so reading `uo_out` is refused until the next `configure()`."""
+        self.configured = False
 
     def count(self, n: int) -> int:
         """The counter after the first `n` rising edges."""
+        if not self.configured:
+            raise BoardError(
+                "no design: the last FPGA load failed after its reset cleared the FPGA")
         first = self._first
         if n <= first:
             return self.initial

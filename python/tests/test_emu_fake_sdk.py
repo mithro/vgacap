@@ -18,7 +18,7 @@ from fake_tt import (
     board_sdk,
 )
 
-from ttcap.emu import Board, ClockedDesign, Waveform
+from ttcap.emu import Board, BoardError, ClockedDesign, Waveform
 
 CLK, RST = 16, 14
 UO = list(range(33, 41))
@@ -260,3 +260,51 @@ def test_the_loader_leaves_ss_high():
     loader.spi_transferPIO(HELD)
     Pin = board.modules()["machine"].Pin
     assert Pin(FakeLoader.SS).value() == 1
+
+
+def test_the_loader_can_print_the_fifo_drain_lines_before_the_count():
+    # fabricfoxv2.py:163-165: while the last word is still in the TX FIFO
+    # the loader prints its level; on hardware that is 0 or more lines.
+    board = _design_board()
+    loader = FakeLoader(board, {HELD: b"\x01" * 10}, drain_lines=2)
+    tt = board_sdk(board, loader=loader)
+    board.run_script(LOAD_BODY, globals={"tt": tt})
+    assert _text(board)[2:6] == [
+        "SS low, starting transmission",
+        "Waiting for FIFO to drain, free slots: 1",
+        "Waiting for FIFO to drain, free slots: 1",
+        "Transmission complete, total bytes: 10",
+    ]
+
+
+def _count_three(board: Board) -> None:
+    clk = board.modules()["machine"].Pin(CLK, 1, value=0)
+    for _ in range(3):
+        clk.value(1)
+        clk.value(0)
+
+
+def test_a_load_that_fails_after_the_fpga_reset_leaves_no_design():
+    # fabricfoxv2.py:110-112: the file opens, then fpga_reset() pulses
+    # CRESET (:67-73), clearing the FPGA; an OSError mid-transfer is
+    # swallowed (:169-170) and nothing loads it again (:171-181). Reading
+    # uo_out is then refused until a load succeeds.
+    board = _design_board()
+    loader = FakeLoader(board, {HELD: b"\x01" * 100}, fail=OSError(5, "EIO"), fail_after=10)
+    _count_three(board)
+    loader.spi_transferPIO(HELD)
+    Pin = board.modules()["machine"].Pin
+    with pytest.raises(BoardError, match="no design"):
+        Pin(33).value()
+    loader.fail = None
+    loader.spi_transferPIO(HELD)
+    assert Pin(33).value() == 0
+
+
+def test_a_missing_file_leaves_the_old_design_running():
+    # open() fails before fpga_reset (fabricfoxv2.py:110-112).
+    board = _design_board()
+    loader = FakeLoader(board, {})
+    _count_three(board)
+    loader.spi_transferPIO(HELD)
+    assert board.wave.count_at(board.now) == 3

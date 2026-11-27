@@ -446,8 +446,13 @@ class FakeLoader:
     On an emulator board it drives the loader's SIO pins as the real one
     does around the transfer (`fabricfoxv2.py:19-40,67-73,92,112-130,174`;
     `gpio_map_dbv3.py`: sck GPIO 6, mosi 3, ss 5, the FPGA's reset 1) and
-    takes the time a transfer at `freq` takes, then calls the design's
-    `configure()`, if it has one. Not modelled: the real loader's PIO0
+    takes about the time a transfer at `freq` takes (an approximation: the
+    real loop's pace is set by its `sleep_us(1)` polls, `fabricfoxv2.py:
+    152-158`), then calls the design's `configure()`, if it has one. A
+    failure after `fpga_reset()` has pulsed CRESET (`fabricfoxv2.py:67-73,
+    110-112`) calls its `unconfigure()` instead: nothing loads the FPGA
+    again (`fabricfoxv2.py:171-181`), so there is no design. A missing file
+    fails before the reset and leaves the old design running. Not modelled: the real loader's PIO0
     state machine 0, which takes GPIO 6 and 3 for PIO0 and leaves its
     program loaded.
     """
@@ -480,10 +485,12 @@ class FakeLoader:
         print(f"Configuring PIO with frequency: {freq * 2 * 8} Hz")
         print("State machine activated")
         fed = bytearray()
+        reset = False
         try:
             if filepath not in self.files:
                 raise OSError(2, "ENOENT")
             data = self.files[filepath]
+            reset = True  # fpga_reset() comes after the open (fabricfoxv2.py:110-112)
             if pins:  # fpga_reset, then the dummy byte with SS high
                 pins["RESET"].low()
                 pins["SS"].low()
@@ -509,6 +516,8 @@ class FakeLoader:
                 board.wave.configure()
         except OSError as e:
             print(f"Error accessing file: {e}")
+            if reset and board is not None and hasattr(board.wave, "unconfigure"):
+                board.wave.unconfigure()
         finally:
             self.loads.append(bytes(fed))
             if pins:
