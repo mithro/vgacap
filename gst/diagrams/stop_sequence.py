@@ -47,13 +47,13 @@ def draw(p):
     out = []
     add = out.append
 
-    def text(x, y, s, size=13, fill=None, anchor="middle", weight="normal"):
+    def text(x, y, s, size: float = 13, fill=None, anchor="middle", weight="normal"):
         add(f'<text x="{x}" y="{y}" font-size="{size}" fill="{fill or p["ink"]}" '
             f'text-anchor="{anchor}" font-weight="{weight}">{escape(s)}</text>')
 
     def arrow(points, colour, width=2):
         d = "M" + " L".join(f"{x} {y}" for x, y in points)
-        (x1, y1), (x2, y2) = points[-2], points[-1]
+        (x1, _), (x2, y2) = points[-2], points[-1]
         add(f'<path d="{d}" fill="none" stroke="{colour}" stroke-width="{width}"/>')
         if x1 == x2:      # down
             head = f"M{x2 - 6} {y2 - 10} L{x2} {y2} L{x2 + 6} {y2 - 10} Z"

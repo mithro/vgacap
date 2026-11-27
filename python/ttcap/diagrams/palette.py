@@ -44,7 +44,8 @@ class Svg:
         self.add(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" '
                  f'fill="{fill}" stroke="{edge}" stroke-width="{sw}"/>')
 
-    def label(self, x, y, s, size=14, fill=None, anchor="middle", weight="normal"):
+    def label(self, x, y, s, size: float = 14, fill=None, anchor="middle",
+              weight="normal"):
         fill = fill or self.c["ink"]
         self.add(f'<text x="{x}" y="{y}" font-size="{size}" fill="{fill}" '
                  f'text-anchor="{anchor}" font-weight="{weight}" style="{FONT}">'

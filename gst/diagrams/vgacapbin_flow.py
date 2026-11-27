@@ -57,12 +57,13 @@ def draw(theme):
         add(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" fill="{fill}" '
             f'stroke="{edge}" stroke-width="1.5"{d}/>')
 
-    def text(x, y, s, size=14, fill=None, anchor="middle", weight="normal", mono=False):
+    def text(x, y, s, size: float = 14, fill=None, anchor="middle", weight="normal",
+             mono=False):
         family = ' font-family="ui-monospace, Menlo, Consolas, monospace"' if mono else ""
         add(f'<text x="{x}" y="{y}" font-size="{size}" fill="{fill or c["ink"]}" '
             f'text-anchor="{anchor}" font-weight="{weight}"{family}>{escape(s)}</text>')
 
-    def down(y1, y2, colour, label=None, width=3):
+    def down(y1, y2, colour, label=None, width: float = 3):
         add(f'<path d="M{CX} {y1} V{y2}" stroke="{colour}" stroke-width="{width}" fill="none"/>')
         s = 5 + 2 * width
         a = 0.45
