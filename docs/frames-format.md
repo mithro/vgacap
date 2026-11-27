@@ -87,8 +87,9 @@ Item is a property of the hash, and Value its setting. The library is [xxHash](h
 | Hash | XXH3-128 |
 | Seed | `0` |
 | Secret | default |
-| Digest bytes 0 to 7 | the high 64 bits, big-endian |
-| Digest bytes 8 to 15 | the low 64 bits, big-endian |
+| Byte order | big-endian |
+| Digest bytes 0 to 7 | the high 64 bits |
+| Digest bytes 8 to 15 | the low 64 bits |
 | Digits | 32 lowercase hex |
 | Digest of the empty input | `99aa06d3014798d86001c324468d497f` |
 | Command line | `xxhsum -H2` |
@@ -96,7 +97,7 @@ Item is a property of the hash, and Value its setting. The library is [xxHash](h
 
 The digests are for identity and integrity, not security. They tell distinct frames apart and check that a store reads back whole. They do not resist a deliberate collision, so nothing may trust them against an attacker.
 
-Files written before [vgacap #62](https://github.com/mithro/vgacap/pull/62) have the key `store_sha256`, 64-digit SHA-256 `distinct` lines and the method `sha256-rgb6`. The readers refuse them, and the message says to re-derive the files with `vgacap-sample`.
+Files written before [vgacap #62](https://github.com/mithro/vgacap/pull/62) have the key `store_sha256`, 64-digit SHA-256 `distinct` lines and the method `sha256-rgb6`. [`vgacap.framesfile`](../python/vgacap/framesfile.py) refuses them, and its message says to re-derive the files with `vgacap-sample`.
 
 ## frames.txt
 
