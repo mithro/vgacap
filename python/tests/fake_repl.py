@@ -343,6 +343,8 @@ class FakeChunkBoard:
         self.stop_at_read = stop_at_read
         #: what any command printing `gc.mem_free()` reports back
         self.mem_free = mem_free
+        #: whether the last reset_project held the design in reset
+        self.rst_held = False
         self.commands: list[str] = []
         self.interrupts = 0
         self.closed = False
@@ -441,8 +443,22 @@ class FakeChunkBoard:
             self._open = True
             self._terminate = self.terminate
             return
+        if "tt.reset_project(True)" in code:
+            self.rst_held = True
+        elif "tt.reset_project(False)" in code:
+            self.rst_held = False
         if code in self.replies:
             reply = self.replies[code]
+        elif "print('ttcap rst_n=%d' % tt.rst_n())" in code:
+            # select_project's read-backs, answered as a sound board would:
+            # rst_n follows the last reset_project, ui_in what was written.
+            reply = "ttcap rst_n=%d\r\n" % (0 if self.rst_held else 1)
+            if "ttcap rst_n_wait_ms=" in code:
+                reply = "ttcap rst_n_wait_ms=0\r\n" + reply
+        elif "print('ttcap monitoring=" in code:
+            reply = "ttcap monitoring=-1\r\n"
+        elif code.startswith("tt.ui_in.value = "):
+            reply = "ttcap ui_in=%s\r\n" % code.split("\n", 1)[0].split("= ", 1)[1]
         elif "gc.mem_free()" in code:
             # The host's pre-run cleanup, which reads the free heap back.
             reply = "%d\r\n" % self.mem_free

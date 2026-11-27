@@ -661,12 +661,30 @@ def _exec_checked(repl: RawRepl, code: str, timeout: float = 10.0) -> str:
 
 
 def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
-    """Enable the requested design and start its clock, in a safe order.
+    """Enable the requested design, set its inputs, and reset it with its
+    clock running.
 
-    The clock is stopped and the project held in reset *before* the new
-    frequency is programmed, so the design never sees a half-reprogrammed
-    clock, and reset is released last -- the capture then starts from the
-    design's own frame 0 rather than part way through one.
+    In order:
+
+    1. enable the design, if the request names one;
+    2. stop the clock;
+    3. with `ui_in`, switch to ASIC_RP_CONTROL. Every `tt.mode` write
+       rebuilds every pin and so releases reset (#57), which is why it
+       comes before the reset;
+    4. turn off the manual-clock monitor, where the board has one, whose
+       timer would otherwise stop the clock mid-run;
+    5. with `ui_in`, write it and read it back, and fail if the board does
+       not drive the value asked for;
+    6. `reset_design`: hold reset and read `rst_n` back as 0, program and
+       start the clock, wait on the board for at least `RESET_CLOCKS` clock
+       periods and 1 ms, release reset and wait for `rst_n` to read 1 (#58).
+
+    So reset is held, with the inputs already set and the clock running,
+    for at least 16 periods of the requested clock, which a synchronous
+    reset needs. What steps 3 and 4
+    changed is put back by `restore_mode`. A failure after step 2 releases
+    reset, stops the clock and puts the mode and monitor back before the
+    error is raised.
 
     Returns what it actually did, which is what the CLI prints: which
     `tt.shuttle` accessor worked also tells you which SDK generation the
@@ -707,37 +725,152 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
                         "bitstream has to be enabled through the board's daemon "
                         "first") from None
     _exec_checked(repl, "tt.clock_project_stop()")
-    _exec_checked(repl, "tt.reset_project(True)")
+    # Read before the mode write below, which turns the monitor on.
+    monitoring = _board_value(_exec_checked(repl, _READ_MONITORING), "monitoring")
     if req.ui_in is not None:
-        # The design's inputs, set while it is held in reset so it starts in
-        # the mode they select. The RP2 only drives ui_in in ASIC_RP_CONTROL;
-        # the fpgas.online boards sit in ASIC_MANUAL_INPUTS (2), where
-        # writing tt.ui_in changes nothing -- measured on fpga-4. The mode it
-        # was in is returned so the caller can put it back (`restore_mode`).
-        out = _exec_checked(repl, "print(int(tt.mode))")
-        did["mode_before"] = int(out.strip().splitlines()[-1])
+        # The RP2 only drives ui_in in ASIC_RP_CONTROL; the fpgas.online
+        # boards sit in ASIC_MANUAL_INPUTS (2), where writing tt.ui_in changes
+        # nothing -- measured on fpga-4. The mode it was in is returned so the
+        # caller can put it back (`restore_mode`).
+        out = _exec_checked(repl, _READ_MODE)
+        did["mode_before"] = _board_value(out, "mode")
     try:
         if req.ui_in is not None:
-            _exec_checked(
-                repl,
-                "from ttboard.mode import RPMode\n"
-                "tt.mode = RPMode.ASIC_RP_CONTROL\n"
-                "tt.ui_in.value = %d" % req.ui_in,
-            )
+            # Before the reset: every tt.mode write rebuilds every pin, and
+            # the rebuild makes rst_n an input, which releases reset (#57).
+            _exec_checked(repl, "from ttboard.mode import RPMode\n"
+                                "tt.mode = RPMode.ASIC_RP_CONTROL")
+        if monitoring >= 0:
+            # After the mode write, which turns it on in ASIC_RP_CONTROL.
+            did["monitoring_before"] = bool(monitoring)
+            _exec_checked(repl, "tt.manual_project_clock.monitoring = False")
+        if req.ui_in is not None:
+            out = _exec_checked(repl, "tt.ui_in.value = %d\n%s" % (req.ui_in, _READ_UI_IN))
+            got = _board_value(out, "ui_in")
+            if got != req.ui_in:
+                raise CaptureError(
+                    "ui_in reads 0x%02x after writing 0x%02x: entering "
+                    "ASIC_RP_CONTROL, the stock firmware leaves undriven any "
+                    "input that reads high, for fear of contention" % (got, req.ui_in))
             did["ui_in"] = req.ui_in
-        # `clock_project_PWM(freqHz, duty_u16=0xffff/2, quiet=False,
-        # max_rp2040_freq=...)` in both SDK 2.x and 3.x; only the
-        # `max_rp2040_freq` default differs between them, and this passes
-        # neither it nor any other optional argument.
-        _exec_checked(repl, clock_command(req))
-        _exec_checked(repl, "tt.reset_project(False)")
+        did["rst_n_wait_ms"] = reset_design(repl, clock_command(req), req.clock_hz)
     except BaseException as exc:
-        # The caller never sees `did`, so it cannot put the mode back: a
-        # shared board must not be left in ASIC_RP_CONTROL by a failed setup.
-        if "mode_before" in did:
-            undo_selection(repl, did, stop=True, error=exc)
+        # The caller never sees `did`, and its teardown does not cover a
+        # setup that raised, so the board is put back here: the clock
+        # stopped, and the mode and monitor as they were. A shared board is
+        # not left clocked, in ASIC_RP_CONTROL or without its monitor.
+        undo_selection(repl, did, stop=True, error=exc)
         raise
     return did
+
+
+#: How long `reset_design` waits for `rst_n` to read 1 after the release.
+#: The release is the board's pull-up against the RP2's internal pull-down
+#: (#58). On fpga-4 rst_n read 1 at the first poll (2026-11-27).
+RST_N_RELEASE_TIMEOUT_MS = 100
+
+#: Fewest periods of the requested clock `reset_design` holds reset for. The wait is
+#: on the board, between the clock starting and the release, so it does
+#: not depend on the link's latency.
+RESET_CLOCKS = 16
+
+_READ_MODE = "print('ttcap mode=%d' % int(tt.mode))"
+_READ_RST_N = "print('ttcap rst_n=%d' % tt.rst_n())"
+_READ_UI_IN = "print('ttcap ui_in=%d' % int(tt.ui_in.value))"
+
+
+def reset_hold_ms(clock_hz: float) -> int:
+    """Milliseconds that hold `RESET_CLOCKS` edges at `clock_hz`, at least 1."""
+    hz = max(1, int(clock_hz))
+    return max(1, -(-RESET_CLOCKS * 1000 // hz))
+
+
+def release_command(clock_hz: float) -> str:
+    """The board command that ends the reset: wait `reset_hold_ms` with the
+    clock running, release, then wait up to `RST_N_RELEASE_TIMEOUT_MS` for
+    `rst_n` to read 1, timed on the board, and print the time and the level."""
+    return "\n".join([
+        "import time",
+        "time.sleep_ms(%d)" % reset_hold_ms(clock_hz),
+        "tt.reset_project(False)",
+        "_t = time.ticks_ms()",
+        "while not tt.rst_n() and time.ticks_diff(time.ticks_ms(), _t) < %d:"
+        % RST_N_RELEASE_TIMEOUT_MS,
+        "    time.sleep_ms(1)",
+        "print('ttcap rst_n_wait_ms=%d' % time.ticks_diff(time.ticks_ms(), _t))",
+        "del _t",
+        _READ_RST_N,
+    ])
+
+
+#: Whether the manual-clock monitor is on (1), off (0) or absent (-1): SDK
+#: 3.1.1 makes one on TTDBv3.3 and later (`demoboard.py:146-150`), and
+#: fpga-4's `tt.manual_project_clock` was None (2026-11-27). Its
+#: 3 Hz timer calls `clock_project_once()` after an edge on the manual-clock
+#: pin, which stops the PWM (`manual_clock.py:76-87`, `demoboard.py:317-330`).
+_READ_MONITORING = (
+    "_m = getattr(tt, 'manual_project_clock', None)\n"
+    "print('ttcap monitoring=%d' % (-1 if _m is None else int(bool(_m.monitoring))))\n"
+    "del _m"
+)
+
+
+def _board_value(stdout: str, key: str) -> int:
+    """The integer in a command's `ttcap <key>=N` line.
+
+    The SDK logs at INFO on stdout ("Setting mode to ...", "Changing reset
+    to output mode"), so the line is looked for rather than assumed last.
+    """
+    prefix = "ttcap %s=" % key
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if line.startswith(prefix):
+            try:
+                return int(line[len(prefix):])
+            except ValueError:
+                break
+    raise CaptureError(f"board did not report {key}, said {stdout.strip()!r}")
+
+
+def reset_design(repl: RawRepl, clock: str, clock_hz: float) -> int:
+    """Reset the design with its clock running: the one reset sequence.
+
+    1. `tt.reset_project(True)`, and `rst_n` must read 0;
+    2. start the clock with `clock` (a `clock_command()` for `clock_hz`);
+    3. in one board command (`release_command`): wait `reset_hold_ms`, so
+       reset is held for at least `RESET_CLOCKS` periods of `clock_hz` and 1 ms,
+       release, and wait up to `RST_N_RELEASE_TIMEOUT_MS` for `rst_n` to
+       read 1.
+
+    Returns the milliseconds `rst_n` took to read 1, as the board timed it.
+    A release the pull-up does not win is an error, not a capture of the
+    reset state. If any step after the first fails, reset is released
+    before the error is raised, so a failed setup does not leave the design
+    held in reset with `rst_n` driven low. Nothing may write `tt.mode`
+    after this: the write rebuilds the pins and releases reset.
+    """
+    _exec_checked(repl, "tt.reset_project(True)")
+    try:
+        if _board_value(_exec_checked(repl, _READ_RST_N), "rst_n") != 0:
+            raise CaptureError(
+                "rst_n reads 1 while reset is held: tt.reset_project(True) did not drive it low")
+        _exec_checked(repl, clock)
+        # The board sleeps reset_hold_ms first (16 s at 1 Hz), and the
+        # exec timeout is one deadline for the whole command.
+        out = _exec_checked(repl, release_command(clock_hz),
+                            timeout=10.0 + reset_hold_ms(clock_hz) / 1000)
+        waited = _board_value(out, "rst_n_wait_ms")
+        if _board_value(out, "rst_n") != 1:
+            raise CaptureError(
+                "rst_n stuck low after release: it read 0 for %d ms after "
+                "tt.reset_project(False)" % waited)
+    except BaseException as exc:
+        try:
+            _exec_checked(repl, "tt.reset_project(False)")
+        except Exception as again:  # noqa: BLE001 - reported on exc
+            exc.add_note(f"releasing reset failed too: {again}")
+        raise
+    return waited
 
 
 def cleanup_names(cfg: dict) -> list[str]:
@@ -799,16 +932,25 @@ def stop_clock(repl: RawRepl) -> None:
     _exec_checked(repl, "tt.clock_project_stop()")
 
 
-def restore_mode(repl: RawRepl, mode: int) -> None:
-    """Put the SDK's RPMode back to what `select_project` found (`--ui-in`)."""
-    _exec_checked(repl, "tt.mode = %d" % int(mode))
+def restore_mode(repl: RawRepl, did: dict) -> None:
+    """Put back the RPMode and the manual-clock monitor `select_project`
+    changed, as recorded in `did`.
+
+    The mode goes first: its write turns the monitor on in ASIC_RP_CONTROL
+    and off in every other mode, whatever it was before.
+    """
+    if "mode_before" in did:
+        _exec_checked(repl, "tt.mode = %d" % int(did["mode_before"]))
+    if "monitoring_before" in did:
+        _exec_checked(repl, "tt.manual_project_clock.monitoring = %s"
+                      % bool(did["monitoring_before"]))
 
 
 def undo_selection(
     repl: RawRepl, did: dict, stop: bool, error: BaseException | None = None
 ) -> None:
     """Undo what `select_project` returned in `did`: stop the clock when
-    `stop`, and put back the RPMode it changed.
+    `stop`, and put back the RPMode and the manual-clock monitor it changed.
 
     Both steps are tried even if one fails. With `error` -- the exception
     a failed capture is already raising -- a failure here becomes a note on
@@ -817,8 +959,8 @@ def undo_selection(
     steps = []
     if stop:
         steps.append(lambda: stop_clock(repl))
-    if "mode_before" in did:
-        steps.append(lambda: restore_mode(repl, did["mode_before"]))
+    if "mode_before" in did or "monitoring_before" in did:
+        steps.append(lambda: restore_mode(repl, did))
     first = None
     for step in steps:
         try:
