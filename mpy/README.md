@@ -74,7 +74,7 @@ blocks, with 4 KB held back while planning. The capture's DMA walks the
 blocks in order through control blocks (as [`frame_rp2.py`](../python/ttcap/mp/frame_rp2.py) does; see
 [`firmware/pico/hal_rp2.c`](../firmware/pico/hal_rp2.c)), so even a fragmented heap gives one captured
 frame the whole region. On `fpga-1`, a demo board with an FPGA breakout
-on the [Welland bench](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed) whose largest free block held 188 lines, all 481
+on the [Welland bench](../python/ttcap/how-to-capture-welland-bridge.md) whose largest free block held 188 lines, all 481
 lines of 640x480 fitted in 46 blocks. Only a heap with less free memory in total
 than the region sweeps a picture in several windows.
 
