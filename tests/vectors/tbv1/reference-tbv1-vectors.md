@@ -9,7 +9,9 @@ review: 2027-05-27
 
 **The six traces in this directory, the designs they come from, and what the tb-v1 sampler must find in each.**
 
-Each case directory holds `trace.vgch`, the trace decompressed, and the `frames.txt` and `frame_hashes.fnv1a64-tb2026-rgb888.txt` the testbench pipeline wrote for it. When the frames format's digests changed from SHA-256 to XXH3-128, [`refresh_frames.py`](refresh_frames.py) rewrote each `frames.txt` with vgacap's own `vgacap-sample --sampler tb-v1` on the same trace. It writes nothing unless the FNV file comes out byte for byte as committed and `frames.txt` differs only in the digest lines. [`test_tbv1_vectors.py`](../../../python/tests/test_tbv1_vectors.py) runs `vgacap-sample --sampler tb-v1` on each trace, and both files must come out byte for byte. A difference is fixed in the sampler, never in the vectors. What the trace holds is on [What a simulation trace records](../../../src/trace/explanation-traces.md).
+Each case directory holds `trace.vgch`, the trace decompressed, and `frame_hashes.fnv1a64-tb2026-rgb888.txt`, both from the testbench pipeline. Its `frames.txt` was written by [`refresh_frames.py`](refresh_frames.py) at the `vgacap:` commit in [`MANIFEST.txt`](MANIFEST.txt). [`test_tbv1_vectors.py`](../../../python/tests/test_tbv1_vectors.py) runs `vgacap-sample --sampler tb-v1` on each trace, and both files must come out byte for byte. A difference is fixed in the sampler, never in the vectors. What the trace holds is on [What a simulation trace records](../../../src/trace/explanation-traces.md).
+
+`refresh_frames.py` reruns `vgacap-sample --sampler tb-v1` on each committed trace after a change to the frames format's digests. It writes nothing unless the FNV file comes out byte for byte as committed and `frames.txt` differs only in the digest lines.
 
 ## Designs
 

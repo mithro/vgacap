@@ -80,17 +80,23 @@ A value can have more than one row, one for each cause.
 
 The store digest, the `distinct` lines and the `xxh3-128-rgb6` hash file all use one hash:
 
+Item is a property of the hash, and Value its setting. The library is [xxHash](https://github.com/Cyan4973/xxHash), and [`vgacap.hashes`](../python/vgacap/hashes.py) is the Python reference.
+
 | Item | Value |
 |---|---|
-| Hash | XXH3-128 of [xxHash](https://github.com/Cyan4973/xxHash), seed 0, no secret |
-| Hex | the canonical 16 bytes, high 64 bits first, each byte big-endian, as 32 lowercase hex digits |
-| Check value | the empty input gives `99aa06d3014798d86001c324468d497f` |
-| Command line | `xxhsum -H2` prints the same digest of a file |
-| Python | `xxhash.xxh3_128_hexdigest`, as [`vgacap.hashes`](../python/vgacap/hashes.py) uses it |
+| Hash | XXH3-128 |
+| Seed | `0` |
+| Secret | default |
+| Digest bytes 0 to 7 | the high 64 bits, big-endian |
+| Digest bytes 8 to 15 | the low 64 bits, big-endian |
+| Digits | 32 lowercase hex |
+| Digest of the empty input | `99aa06d3014798d86001c324468d497f` |
+| Command line | `xxhsum -H2` |
+| Python | `xxhash.xxh3_128_hexdigest` |
 
 The digests are for identity and integrity, not security. They tell distinct frames apart and check that a store reads back whole. They do not resist a deliberate collision, so nothing may trust them against an attacker.
 
-Files written before XXH3-128 had the keys `store_sha256`, 64-digit SHA-256 `distinct` lines and the method `sha256-rgb6`. The readers refuse them.
+Files written before [vgacap #62](https://github.com/mithro/vgacap/pull/62) have the key `store_sha256`, 64-digit SHA-256 `distinct` lines and the method `sha256-rgb6`. The readers refuse them, and the message says to re-derive the files with `vgacap-sample`.
 
 ## frames.txt
 

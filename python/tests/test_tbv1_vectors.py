@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """tb-v1 against tests/vectors/tbv1: traces of small synthetic designs that
 tinytapeout-vga-videos simulated with tb.cpp, with tb.cpp's own frame hashes
-and the frames.txt its pipeline wrote (see MANIFEST.txt there for the
-generator and vgacap commits). vgacap-sample --sampler tb-v1 on each
+from its pipeline, and the frames.txt that tests/vectors/tbv1/refresh_frames.py
+wrote at the vgacap: commit in MANIFEST.txt (which also names the generator
+commit). vgacap-sample --sampler tb-v1 on each
 trace.vgch must reproduce the hash lines and frames.txt exactly. A difference
 is a tb-v1 port bug, to be fixed in src/sample/tbv1.c and python/vgacap/tbv1.py,
 never in the vectors.
