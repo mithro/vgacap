@@ -27,7 +27,8 @@ give byte-identical images, whose region hashes to `5dc230b2…`, the hash fpga-
   <img src="../docs/diagrams/images/tt-etr-dbv3p2.jpg" alt="The Tiny Tapeout demo board v3, with a breakout plugged into its centre socket." width="240">
 
 - On that machine: `sudo`, Python 3, `curl`, `timeout` and [mpremote](https://docs.micropython.org/en/latest/reference/mpremote.html).
-- On that machine, a vgacap checkout set up to run `ttcap`, as on [How to run ttcap on a Raspberry Pi](../python/ttcap/how-to-run-on-raspberry-pi.md), for steps 14 and 20.
+- On that machine, a vgacap checkout set up to run `ttcap`, as on [How to run ttcap on a Raspberry Pi](../python/ttcap/how-to-run-on-raspberry-pi.md), for steps 14 and 23.
+- On the Welland bench, `<name>`: the uploaded design to capture, enabled at step 16.
 - `DEV`, the stock firmware's serial port, set in the shell. On the Welland bench it is `/dev/ttboard` on the board's own Pi.
 - `IMAGE`, the module firmware's UF2, set in the shell. It is the `tt-demo-rp2350-vgacap-module-*.uf2` asset of the
   [`dev-vgacap-module` pre-release](https://github.com/mithro/tt-micropython-firmware/releases/tag/dev-vgacap-module),
@@ -139,47 +140,63 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
     $ uv run --no-sync python tools/board_restart.py serial:$DEV
     ```
 
-    The flash leaves the SDK's `main.py` unrun, and a capture then fails with `NameError: name 'tt' isn't defined`.
+    Every `mpremote ... run` or `exec` soft-resets the board, which clears the SDK's `tt`. Without this step a
+    capture fails with `NameError: name 'tt' isn't defined`, which `manifest_before.txt` shows already at step 4.
 
-15. Capture with the module, as on [How to capture with the vgacap MicroPython module](how-to-capture.md), for as long as you need it.
+15. On the Welland bench, start the bridge, which the enable in step 16 goes through.
 
-16. In the working directory, bring the board to its bootloader for the restore, which skips the reboot when the `RP2350` drive is already there.
+    ```console
+    $ sudo systemctl start fpgas-tt
+    ```
+
+16. On the Welland bench, enable the design to capture, because step 14's restart put the FPGA back to `tt_um_factory_test`.
+
+    ```console
+    $ curl -s -X POST localhost:8765/designs/<name>/enable
+    ```
+
+17. On the Welland bench, stop the bridge again, which frees `/dev/ttboard` for the capture.
+
+    ```console
+    $ sudo systemctl stop fpgas-tt
+    ```
+
+18. Capture with the module, as on [How to capture with the vgacap MicroPython module](how-to-capture.md), for as long as you need it.
+
+19. In the working directory, bring the board to its bootloader for the restore, which skips the reboot when the `RP2350` drive is already there.
 
     ```console
     $ [ -e /dev/disk/by-label/RP2350 ] || mpremote connect $DEV bootloader
     $ timeout 60 sh -c "until [ -e /dev/disk/by-label/RP2350 ]; do sleep 1; done" || echo "no RP2350 drive after 60 s"
     ```
 
-    To take the drive-only path on purpose, as the bench did, run `mpremote connect $DEV bootloader` first; this
-    step then finds the drive and skips the reboot.
-
-17. In the working directory, copy the restore image to the drive, whether or not the steps before succeeded.
+20. In the working directory, copy the restore image to the drive, whether or not the steps before succeeded.
 
     ```console
     $ sudo mount /dev/disk/by-label/RP2350 /mnt/rp2350 && sudo cp restore.uf2 /mnt/rp2350/ && sync; sudo umount /mnt/rp2350
     $ timeout 60 sh -c "until [ -e $DEV ]; do sleep 1; done" || echo "no $DEV after 60 s"; sleep 3
     ```
 
-18. In the working directory, probe the board and list its files again, which writes `probe_after.txt` and `manifest_after.txt`.
+21. In the working directory, probe the board and list its files again, which writes `probe_after.txt` and `manifest_after.txt`.
 
     ```console
     $ mpremote connect $DEV run fw_probe.py > probe_after.txt
     $ mpremote connect $DEV run manifest.py > manifest_after.txt
     ```
 
-19. On the Welland bench, start the bridge again.
+22. On the Welland bench, start the bridge again.
 
     ```console
     $ sudo systemctl start fpgas-tt
     ```
 
-20. On the Welland bench, restart the SDK through the bridge, which brings the idle display back from `left: the SDK is not running`.
+23. On the Welland bench, restart the SDK through the bridge, which brings the idle display back from `left: the SDK is not running`.
 
     ```console
     $ uv run --no-sync python tools/board_restart.py ws://127.0.0.1:8765/serial
     ```
 
-21. On the Welland bench, wait for the idle display, which reads `loaded` about 70 seconds later.
+24. On the Welland bench, wait for the idle display, which reads `loaded` about 70 seconds later.
 
     ```console
     $ timeout 300 sh -c "until curl -s localhost:8765/health | grep -q '\"state\": \"loaded\"'; do sleep 5; done" || echo "not loaded after 300 s"
@@ -199,6 +216,10 @@ The two `fw_sha256` lines show the same hash, `diff` prints `files identical`, a
 `ImportError`, as on the stock firmware. On fpga-1 on 2026-11-27 the hashes were `b57a7ffc…` before and
 after, with all 46 files identical ([dated result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1)).
 
+Step 19 restores through the module firmware's REPL, or through the `RP2350` drive alone when it is already up.
+The bench took both paths, forcing the drive-only one with `mpremote connect $DEV bootloader` before step 19. Both
+gave the board's own hash back.
+
 ## If it fails
 
 | What you see | Likely cause | Fix |
@@ -206,18 +227,18 @@ after, with all 46 files identical ([dated result](https://github.com/mithro/tt-
 | `"clients":` above 0 at step 2 | someone is using the board through the bridge | Wait until the count is 0 |
 | `MISMATCH` or `1 do not` at step 5 | a dump was cut short | Repeat step 4; never go on with a backup that does not match |
 | Two different hashes at step 7 | the restore image is wrong | Repeat step 7; write nothing until they match |
-| Step 8 shows no `0x100c8008` for a release UF2 | that image mounts its filesystem elsewhere | Nothing is written yet: run step 19 and stop |
-| `no RP2350 drive after 60 s` at step 9 | the board did not reach its bootloader | If `$DEV` is still there, nothing is written: run step 19 and stop; otherwise see the last row |
-| `no $DEV after 60 s`, with your port for `$DEV`, at step 10 | the module firmware did not start | If `/dev/disk/by-label/RP2350` exists, the bootrom fell back to it: go to step 17; otherwise see the last row |
-| `fw_sha256` at step 11 differs from `module.bin` | the copy was cut short | Go to step 16 and restore |
-| Step 12 prints a difference | the module firmware mounted its filesystem elsewhere | Restore with steps 16 to 18, then the files as below |
-| `ImportError` at step 13 | `IMAGE` has no module | Restore with steps 16 to 18, and start again with the right image |
-| A capture fails for want of `ttboard` | `IMAGE` is CI's rp2 compile check, which has no SDK | Restore with steps 16 to 18, and use the module firmware |
-| `no RP2350 drive after 60 s` at step 16 while `$DEV` is there | the module firmware is busy in a capture | Send the stop byte with `printf q > $DEV`, then repeat step 17 |
-| `no $DEV after 60 s`, with your port for `$DEV`, at step 17 | the restore image did not start | If the `RP2350` drive is still there, repeat step 17; otherwise see the last row |
-| The `fw_sha256` lines differ in Check | the restore copy was cut short | Repeat steps 16 to 18, then Check; if they still differ, stop and keep the backup |
+| Step 8 shows no `0x100c8008` for a release UF2 | that image mounts its filesystem elsewhere | Nothing is written yet: run steps 22 to 24 and stop |
+| `no RP2350 drive after 60 s` at step 9 | the board did not reach its bootloader | If `$DEV` is still there, nothing is written: run steps 22 to 24 and stop; otherwise see the last row |
+| `no $DEV after 60 s`, with your port for `$DEV`, at step 10 | the module firmware did not start | If `/dev/disk/by-label/RP2350` exists, the bootrom fell back to it: go to step 20; otherwise see the last row |
+| `fw_sha256` at step 11 differs from `module.bin` | the copy was cut short | Go to step 19 and restore |
+| Step 12 prints a difference | the module firmware mounted its filesystem elsewhere | Restore with steps 19 to 21, then the files as below |
+| `ImportError` at step 13 | `IMAGE` has no module | Restore with steps 19 to 21, and start again with the right image |
+| A capture fails for want of `ttboard` | `IMAGE` is CI's rp2 compile check, which has no SDK | Restore with steps 19 to 21, and use the module firmware |
+| `no RP2350 drive after 60 s` at step 19 while `$DEV` is there | the module firmware is busy in a capture | Send the stop byte with `printf q > $DEV`, then repeat step 19 |
+| `no $DEV after 60 s`, with your port for `$DEV`, at step 20 | the restore image did not start | If the `RP2350` drive is still there, repeat step 20; otherwise see the last row |
+| The `fw_sha256` lines differ in Check | the restore copy was cut short | Repeat steps 19 to 21, then Check; if they still differ, stop and keep the backup |
 | The files differ in Check | the filesystem changed while the module firmware ran | Restore the files as below; if they still differ, stop and keep the backup |
-| `not loaded after 300 s` at step 21 | the SDK restart did not reach the board | Repeat steps 20 and 21 |
+| `not loaded after 300 s` at step 24 | the SDK restart did not reach the board | Repeat steps 23 and 24 |
 | Neither `$DEV` nor the `RP2350` drive appears | the board runs nothing that answers on USB | Stop; recovery needs someone at the Welland bench to hold BOOTSEL while resetting the board |
 
 The fpgas-online broker's `power_cycle` switches the Pi's PoE port, so it restarts the Pi
