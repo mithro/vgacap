@@ -57,7 +57,7 @@ capture finished after 12.7s (gst-launch exit 0)
 | 2 | `warning: --clock-hz N is above` | the clock is above the measured ceiling | lower `--clock-hz`, or accept overruns |
 | 3 | `nothing was captured`, exit 3 | no frame closed before the end | raise `--seconds` to three frame periods or more |
 
-`--force` deletes only the earlier run's `frame-*.png` files and `capture.mkv`, and names them. The clock warning appears only with `--board`, where the demo knows the board. Its ceilings are 60 kHz on an RP2040 demo board and 750 kHz on an RP2350 one, which overran on TT SDK 3.1.1 ([#52](https://github.com/mithro/vgacap/issues/52)). Every message is on [ttcap exit codes and messages](reference-exit-codes.md#demo).
+`--force` deletes only the earlier run's `frame-*.png` files and `capture.mkv`, and names them. The clock warning appears only with `--board`, where the demo knows the board. Its ceilings are 60 kHz on an RP2040 demo board and 400 kHz on an RP2350 one. On TT SDK 3.1.1, 500 kHz overran over USB serial ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56)) and through the fpgas.online bridge ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)), and 400 kHz was clean through the bridge ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-hil-400k)). Every message is on [ttcap exit codes and messages](reference-exit-codes.md#demo).
 
 ## Next
 

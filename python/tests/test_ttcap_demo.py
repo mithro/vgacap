@@ -275,10 +275,19 @@ def test_a_clock_above_the_boards_measured_ceiling_warns_but_is_allowed():
 
 def test_each_board_family_is_warned_at_its_own_ceiling():
     assert demo_mod.clock_ceiling("tt07")[0] == 60_000      # RP2040 demo board
-    assert demo_mod.clock_ceiling("fpga-1")[0] == 750_000   # RP2350
-    # 700 kHz is over one ceiling and under the other.
-    assert demo_mod.check_numbers(numbers(board="tt07", clock_hz=700_000))
-    assert demo_mod.check_numbers(numbers(board="fpga-1", clock_hz=700_000)) == []
+    assert demo_mod.clock_ceiling("fpga-1")[0] == 400_000   # RP2350
+    # 300 kHz is over one ceiling and under the other.
+    assert demo_mod.check_numbers(numbers(board="tt07", clock_hz=300_000))
+    assert demo_mod.check_numbers(numbers(board="fpga-1", clock_hz=300_000)) == []
+
+
+@pytest.mark.parametrize("clock_hz", [500_000, 700_000])
+def test_an_rp2350_demo_above_400_khz_warns(clock_hz):
+    # Issue #60: on the stock firmware 3.1.1, 500 kHz overran over USB
+    # serial and through the bridge; 400 kHz was clean through the bridge.
+    warnings = demo_mod.check_numbers(numbers(board="fpga-1", clock_hz=clock_hz))
+    assert len(warnings) == 1 and "400000" in warnings[0]
+    assert demo_mod.check_numbers(numbers(board="fpga-1", clock_hz=400_000)) == []
 
 
 @pytest.mark.parametrize("slug", sorted(WELLAND))

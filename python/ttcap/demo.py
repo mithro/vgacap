@@ -315,12 +315,21 @@ def resolve_link(
 
 
 #: The project-clock rate each demo board has been measured to keep up with
-#: cleanly, and what to call that board in a sentence:
-#: `docs/research/2026-09-15-micropython-capture-rate.md`, the same two
-#: numbers the stop-latency notes quote throughout. The sweep measured tt07
-#: and fpga-1; every other slug inherits its number by sharing a profile,
-#: which is why the warning names the *demo board* and not the slug -- only
-#: one slug per family was actually on the bench.
+#: cleanly, and what to call that board in a sentence. Only one slug per
+#: family was on the bench; every other slug inherits its number by sharing
+#: a profile, which is why the warning names the *demo board* and not the
+#: slug. The sources are in tt-vga-capture:
+#:
+#: * `rp2040-tt06map`: tt07 over USB serial
+#:   (`docs/research/2026-09-15-micropython-capture-rate.md`).
+#: * `rp2350-dbv3`: fpga-1 on the stock firmware 3.1.1, one number for both
+#:   links. Over USB serial 600 and 750 kHz overran and one 4 s capture at
+#:   500 kHz was clean (`docs/results/2026-11-26-docs-bench-ttcap`), but
+#:   with `tt_um_vga_pattern` enabled at 500 kHz both 4 s captures overran
+#:   and one 2 s capture was clean
+#:   (`docs/results/2026-11-27-docs-bench-56`). Through the fpgas.online
+#:   bridge, the harder link, 400 kHz was clean in 4 of 4 10 s runs
+#:   (`docs/results/2026-11-27-docs-bench-hil-400k`).
 #:
 #: Keyed on the board *profile*, unlike `board_takes_a_design` above -- and
 #: for the opposite reason. What was measured is the MicroPython host loop
@@ -329,7 +338,7 @@ def resolve_link(
 #: it, which the profile only appears to know.
 CLOCK_CEILINGS = {
     "rp2040-tt06map": (60_000, "an RP2040 demo board"),
-    "rp2350-dbv3": (750_000, "an RP2350 demo board"),
+    "rp2350-dbv3": (400_000, "an RP2350 demo board"),
 }
 
 
