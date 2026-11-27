@@ -54,7 +54,12 @@ Message is the start of what `ttcap capture` prints. Exit is the exit code. Caus
 | `only --mode clocked takes` | 2 | `--bitstream`, `--clocks`, `--reset-clocks` or `--clock-high` in another mode | add `--mode clocked` or leave the option out |
 | `--mode clocked needs` | 2 | `--bitstream` or `--clocks` is missing | give both |
 | `--clocks must be a positive multiple of 4` | 2 | the board packs four samples to a word | round `--clocks` to a multiple of 4 |
+| `--reset-clocks must be at least 1` | 2 | `--reset-clocks 0` | give at least 1 |
+| `--clocks must be more than --reset-clocks` | 2 | no clock would come after reset | raise `--clocks` |
+| `--reset-clocks must be at most` | 2 | the reset clocks would fill the buffer and the PIO's FIFO before reset is released | raise `--buf-words` or lower `--reset-clocks` |
+| `--clock-high must be 0..15` | 2 | H is outside the PIO's delay field | give 0 to 15 |
 | `not clean:` | 1 | a clocked capture did not make and send every clock with `status=ok` | read the reasons after the colon |
+| `CLKDIV reads pio_div=` | 1 | the PIO divider a clocked capture's board read back is not the one worked out | capture again with nothing else using the board |
 | `is above the fastest clocked rate` | 1 | `--clock-hz` would read `uo_out` under 40 ns after the edge | lower `--clock-hz` |
 | `is below the slowest clocked rate` | 1 | `--clock-hz` needs a larger PIO divider than there is | raise `--clock-hz` |
 
