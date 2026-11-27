@@ -94,6 +94,7 @@ def test_the_bitstream_loads_with_the_clock_low_and_reset_held(tmp_path):
     assert rig.level(RST) == 0
     assert rig.level(CLK) == 0
     assert rig.board.pads[CLK] == (rig.Pin.OUT, None)
+    assert rig.link.tt.uio_safe  # safe_bidir() ran after the last pin rebuild
 
 
 def test_the_file_is_uploaded_to_its_directory_and_deleted_after(tmp_path):
@@ -220,7 +221,8 @@ def test_a_short_count_is_an_error(tmp_path):
 
 def test_a_loader_oserror_is_an_error_though_the_loader_swallows_it(tmp_path):
     rig = Rig(tmp_path, loader={"fail": OSError(errno.EIO, "EIO"), "fail_after": 40})
-    with pytest.raises(CaptureError, match=r"Error accessing file: \[Errno 5\] EIO"):
+    with pytest.raises(CaptureError, match=r"^the loader failed and carried on: "
+                       r"'Error accessing file: \[Errno 5\] EIO'$"):
         rig.load()
     _assert_put_back(rig)
 
