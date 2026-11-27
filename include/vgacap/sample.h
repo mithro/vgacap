@@ -237,8 +237,10 @@ void centrev1_free(centrev1_t *s);
 // ---- frame hash methods ----------------------------------------------------
 
 // Over a frame as rgb6 (R<<4 | G<<2 | B), n pixels, row-major, one byte each.
-// sha256-rgb6: SHA-256 of the bytes.
-void vgahash_sha256_rgb6(const uint8_t *rgb6, size_t n, uint8_t out[32]);
+// xxh3-128-rgb6: XXH3-128 of the bytes (xxHash, seed 0), as its canonical
+// 16 bytes (high 64 bits first, big-endian). An identity and integrity
+// check, not a secure hash.
+void vgahash_xxh3_128_rgb6(const uint8_t *rgb6, size_t n, uint8_t out[16]);
 // fnv1a64-tb2026-rgb888: FNV-1a 64 (prime 0x100000001b3, offset basis
 // 0x14650fb0739d0383, tb.cpp's constant) over the RGB888 bytes, each rgb6
 // channel times 85; hashed per pixel, no RGB888 buffer.

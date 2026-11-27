@@ -50,12 +50,12 @@ Step 3 ends without an error, and `build/micropython/ports/rp2/build-tt_rp2350_b
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| `No such file or directory` for `build/micropython` at step 1 | the unix build has not run | Run `mpy/build-unix.sh` first |
-| `cp` makes `tt_rp2350_board/tt_rp2350_board` | step 1 ran twice | Remove `build/micropython/ports/rp2/boards/tt_rp2350_board` and copy again |
-| A warning in a vgacap source stops step 3 | the module's sources build with `-Wall -Wextra -Werror` | Fix the warning |
-| `arm-none-eabi-gcc: not found` at step 3 | no ARM toolchain | Install it, as under What you need |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 1 | `No such file or directory` for `build/micropython` | the unix build has not run | Run `mpy/build-unix.sh` first |
+| 1 | `cp` makes `tt_rp2350_board/tt_rp2350_board` | step 1 ran twice | Remove `build/micropython/ports/rp2/boards/tt_rp2350_board` and copy again |
+| 3 | A warning in a vgacap source stops it | the module's sources build with `-Wall -Wextra -Werror` | Fix the warning |
+| 3 | `arm-none-eabi-gcc: not found` | no ARM toolchain | Install it, as under What you need |
 
 ## Next
 

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600" viewBox="0 0 400 600">
+<rect width="400" height="600" fill="#ffffff"/>
+<rect x="2" y="2" width="396" height="396" rx="10" fill="none" stroke="#7d8799" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="16" y="24" font-size="13" fill="#5b6577" text-anchor="start" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">Welland bench</text>
+<rect x="55.0" y="36" width="290" height="56" rx="8" fill="#eaf1fd" stroke="#9dbcef" stroke-width="1.5"/>
+<text x="200.0" y="60" font-size="15" fill="#1d2433" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">Tiny Tapeout demo board</text>
+<text x="200.0" y="80" font-size="13" fill="#5b6577" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">fpga-1</text>
+<path d="M200.0 92 L200.0 134" fill="none" stroke="#e0580a" stroke-width="3"/>
+<path d="M200.0 134 L195.2 124.1 L204.8 124.1 Z" fill="#e0580a"/>
+<text x="212.0" y="118.0" font-size="13" fill="#e0580a" text-anchor="start" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">USB</text>
+<rect x="55.0" y="136" width="290" height="148" rx="8" fill="#2b3445" stroke="#2b3445" stroke-width="1.5"/>
+<text x="69.0" y="158" font-size="14" fill="#ffffff" text-anchor="start" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">Raspberry Pi</text>
+<text x="331.0" y="158" font-size="13" fill="#ffffff" text-anchor="end" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">10.21.2.34</text>
+<rect x="95.0" y="172" width="210" height="32" rx="6" fill="#ffffff" stroke="#7d8799" stroke-width="1.5"/>
+<text x="200.0" y="193" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">/dev/ttboard</text>
+<path d="M200.0 204 L200.0 236" fill="none" stroke="#e0580a" stroke-width="2.5"/>
+<path d="M200.0 236 L195.7 227.0 L204.3 227.0 Z" fill="#e0580a"/>
+<rect x="95.0" y="238" width="210" height="32" rx="6" fill="#ffffff" stroke="#7d8799" stroke-width="1.5"/>
+<text x="200.0" y="259" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">fpgas-tt  :8765</text>
+<path d="M200.0 284 L200.0 326" fill="none" stroke="#e0580a" stroke-width="3"/>
+<path d="M200.0 326 L195.2 316.1 L204.8 316.1 Z" fill="#e0580a"/>
+<text x="212.0" y="310.0" font-size="13" fill="#e0580a" text-anchor="start" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">WebSocket</text>
+<rect x="55.0" y="328" width="290" height="56" rx="8" fill="#ffffff" stroke="#7d8799" stroke-width="1.5"/>
+<text x="200.0" y="352" font-size="15" fill="#1d2433" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">tweed.welland.mithis.com</text>
+<text x="200.0" y="372" font-size="13" fill="#5b6577" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">bench gateway</text>
+<path d="M200.0 384 L200.0 448" fill="none" stroke="#e0580a" stroke-width="3"/>
+<path d="M200.0 448 L195.2 438.1 L204.8 438.1 Z" fill="#e0580a"/>
+<text x="212.0" y="421.0" font-size="13" fill="#e0580a" text-anchor="start" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">SSH tunnel</text>
+<rect x="55.0" y="450" width="290" height="148" rx="8" fill="#f1ecfd" stroke="#c2b1f1" stroke-width="1.5"/>
+<text x="69.0" y="472" font-size="14" fill="#6b46d6" text-anchor="start" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">your workstation</text>
+<rect x="95.0" y="486" width="210" height="32" rx="6" fill="#ffffff" stroke="#7d8799" stroke-width="1.5"/>
+<text x="200.0" y="507" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">127.0.0.1:18034</text>
+<path d="M200.0 518 L200.0 550" fill="none" stroke="#e0580a" stroke-width="2.5"/>
+<path d="M200.0 550 L195.7 541.0 L204.3 541.0 Z" fill="#e0580a"/>
+<rect x="95.0" y="552" width="210" height="32" rx="6" fill="#ffffff" stroke="#7d8799" stroke-width="1.5"/>
+<text x="200.0" y="573" font-size="14" fill="#1d2433" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">ttcap</text>
+</svg>

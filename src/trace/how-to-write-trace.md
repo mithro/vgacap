@@ -89,16 +89,16 @@ trace blocks=… samples=… table_rebuilt=0 closed=1
 VGCH v2 bits=43 spc=2 clock_bit=42 clock_first=0 spw=0 flags=0 clock=25175000 map=7,3,0,4,1,5,2,6 desc=""
 ```
 
-The [C tools](../tools/README.md) turn the trace into frames and waveforms.
+[The vgacap command-line tools](../tools/README.md) turn the trace into frames and waveforms.
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| `vgacap_trace_create` returns NULL at step 2 | The header or `META` is invalid or the file cannot be created | Read `err` and compare the `META` with step 2 |
-| `vgacap_trace_push2` returns -1 at step 3 | A clock bit out of turn or a bit above bit 42 | Push the clock-low sample first with only bits 0 to 42 set |
-| `undefined reference to pthread_create` at step 5 | POSIX threads are not linked | Add `-pthread`, as in step 5 |
-| `closed=0` in the check | The testbench stopped before step 4 | Call `vgacap_trace_finish` on every way out of the testbench |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 5 | `undefined reference to pthread_create` | POSIX threads are not linked | Add `-pthread`, as in step 5 |
+| 6 | `vgacap_trace_create` returns NULL | The header or `META` is invalid or the file cannot be created | Read `err` and compare the `META` with step 2 |
+| 6 | `vgacap_trace_push2` returns -1 | A clock bit out of turn or a bit above bit 42 | Push the clock-low sample first with only bits 0 to 42 set |
+| Check | `closed=0` | The testbench stopped before step 4 | Call `vgacap_trace_finish` on every way out of the testbench |
 
 ## Next
 

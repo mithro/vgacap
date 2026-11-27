@@ -101,7 +101,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     # How this fake behaves. These come before the subcommand, so they sit in
     # the `ttcap-command` property and the capture arguments follow.
     # Not --mode: that is ttcap capture's own option (stream/frame/window).
-    parser.add_argument("--fake-mode", choices=["normal", "fail", "garbage"], default="normal")
+    parser.add_argument("--fake-mode", choices=["normal", "fail", "garbage", "overruns"],
+                        default="normal")
     parser.add_argument("--frames", type=int, default=0,
                         help="frames to emit; 0 runs until stopped")
     parser.add_argument("--chunk-delay", type=float, default=0.0,
@@ -259,7 +260,15 @@ def main(argv: list[str]) -> int:
     try:
         if args.fake_mode == "garbage":
             return emit_garbage(sink, args)
-        return emit_stream(sink, args)
+        status = emit_stream(sink, args)
+        if args.fake_mode == "overruns" and status == 0:
+            # The whole stream, then the line and the exit 1 `ttcap capture`
+            # gives a capture whose board reported overruns (issue #59) --
+            # timed or stopped alike.
+            print("fake ttcap: overruns=3", file=sys.stderr)
+            print("overruns: 3 buffers torn", file=sys.stderr)
+            return 1
+        return status
     except BrokenPipeError:
         _silence_stdout()
         print("fake ttcap: capture ended: the consumer closed the stream", file=sys.stderr)

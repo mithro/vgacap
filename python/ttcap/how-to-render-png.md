@@ -13,7 +13,7 @@ review: 2027-05-27
 
 ## What you need
 
-- The C tools built into `build/`, as in [Developing vgacap](../../docs/development.md), or `vgacap-frames` somewhere else.
+- The C tools built into `build/`, as in [How to build vgacap and run its tests](../../docs/development.md), or `vgacap-frames` somewhere else.
 - Pillow, which `uv sync` installs; on a checkout synced with `UV_NO_DEV=1`, run `uv sync --extra synth` first.
 
 ## Steps
@@ -29,7 +29,7 @@ review: 2027-05-27
 
 ## Check
 
-Step 2 lists each frame with its mode and sync polarities, then the count written. For a capture of `tt_um_rejunity_vga` on the tt07 chip it printed this:
+Step 2 lists each frame with its mode and sync polarities, then the count written. For a capture of `tt_um_rejunity_vga` on the TT07 chip it printed this:
 
 ```text
 frame 0: 640x480 mode=640x480@60 cpl=800 lpf=525 hsync=pos vsync=pos partial=0 glitches=0
@@ -51,4 +51,4 @@ After `exited 2:` comes what `vgacap-frames` printed on its error output, or `no
 ## Next
 
 - [How to make a video of a design with ttcap demo](how-to-make-video.md)
-- [The C tools](../../src/tools/README.md)
+- [The vgacap command-line tools](../../src/tools/README.md)

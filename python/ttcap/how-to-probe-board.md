@@ -28,7 +28,7 @@ review: 2027-05-27
 
 ## Check
 
-The probe prints two lines and exits 0. From an RP2350 demo board running TT SDK 3.1.1 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
+The probe prints two lines and exits 0. From an RP2350 demo board running the stock firmware 3.1.1 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
 
 ```text
 sys.version: 3.4.0; MicroPython 970468103d on 2026-09-08
