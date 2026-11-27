@@ -26,8 +26,12 @@
 // only the run's first clock can see an edge (and so emit a frame or move
 // y). The rest of the run is skipped where nothing can change: !in_frame,
 // y < 0, h_pulse, or a row outside the picture (which only leaves last_px
-// stale, and every line start resets it before it is read again). Everything
-// else is evaluated per clock, as tb.cpp does.
+// stale, and every line start resets it before it is read again). Else, at
+// cpp >= 1, the pixel index rises by 0 or 1 a clock (see tb_push), so the
+// run's clocks after its first store every pixel after the first clock's up
+// to the last clock's, each once, in the run's colour: the last one as
+// pixel_at would, the ones between with one memset. Below cpp 1 the index can skip
+// pixels, and those runs are evaluated per clock, as tb.cpp does.
 #include "vgacap/sample.h"
 #include <limits.h>
 #include <math.h>
@@ -185,19 +189,29 @@ static void emit_frame(tbv1_t *s) {   // tb.cpp:485-505, the frame part
 }
 
 
-// tb.cpp:541-553 at clock c, with in_frame && y >= 0 && !h_pulse.
-static inline void pixel_at(tbv1_t *s, uint64_t c, uint8_t colour) {
+// The pixel index of clock c, as tb.cpp:541-553 computes it.
+static inline int pixel_index(const tbv1_t *s, uint64_t c) {
     const double x_clock = (double)(c - s->line_start);
     const double q = (x_clock + s->half) / s->cpp;
     // (int) of a double beyond INT_MAX is undefined; x86, which tb.cpp runs
     // on, gives INT_MIN, and INT_MIN - hback is never in the picture.
-    const int pixel = q < 2147483648.0 ? (int)q : INT_MIN;
+    return q < 2147483648.0 ? (int)q : INT_MIN;
+}
+
+// tb.cpp:541-553 for a clock whose pixel index is `pixel`, with in_frame &&
+// y >= 0 && !h_pulse.
+static inline void pixel_store(tbv1_t *s, int pixel, uint8_t colour) {
     if (pixel == s->last_px) return;          // not the first clock of a new pixel period
     s->last_px = pixel;
     if (pixel == INT_MIN) return;
     const int px = pixel - s->hback, py = s->y - s->vback;
     if (px >= 0 && px < s->width && py >= 0 && py < s->height)
         s->frame[(size_t)py * (size_t)s->width + (size_t)px] = colour;
+}
+
+// tb.cpp:541-553 at clock c, with in_frame && y >= 0 && !h_pulse.
+static inline void pixel_at(tbv1_t *s, uint64_t c, uint8_t colour) {
+    pixel_store(s, pixel_index(s, c), colour);
 }
 
 static inline void tb_push(tbv1_t *s, uint8_t uo_out, uint64_t first, uint64_t clocks) {
@@ -231,7 +245,26 @@ static inline void tb_push(tbv1_t *s, uint8_t uo_out, uint64_t first, uint64_t c
     if (!s->in_frame || s->y < 0 || h_pulse) return;
     const int py = s->y - s->vback;
     if (py < 0 || py >= s->height) return;
-    for (uint64_t c = first + 1; c < stop; c++) pixel_at(s, c, colour);
+    if (s->cpp < 1.0) {
+        for (uint64_t c = first + 1; c < stop; c++) pixel_at(s, c, colour);
+    } else if (stop - first >= 2) {
+        // Clock to clock the index (x_clock + half) / cpp rises by 1 / cpp,
+        // at most 1: by exactly 1 at cpp 1, where every value is exact, and
+        // by at most 1 / 1.01 at a fractional cpp (decide rounds any cpp
+        // within 0.01 of a whole number), far more than the rounding. So the
+        // clocks after the first store every pixel from last_px + 1 (the
+        // first clock's, set by pixel_at above) to the last clock's, once
+        // each; past INT_MAX the index is INT_MIN, which stores nothing.
+        const int last = pixel_index(s, stop - 1);
+        if (s->last_px != INT_MIN) {
+            int64_t lo = (int64_t)s->last_px + 1 - s->hback;
+            int64_t hi = (last == INT_MIN ? (int64_t)INT_MAX + 1 : (int64_t)last) - s->hback;
+            if (lo < 0) lo = 0;
+            if (hi > s->width) hi = s->width;
+            if (lo < hi) memset(s->frame + (size_t)py * (size_t)s->width + (size_t)lo, colour, (size_t)(hi - lo));
+        }
+        pixel_store(s, last, colour);            // the last, and last_px
+    }
     if (stop < end) s->stopped = 1;
 }
 

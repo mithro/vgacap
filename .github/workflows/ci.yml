@@ -67,6 +67,21 @@ jobs:
           git -C utils checkout -q FETCH_HEAD
           make -C capture-rp1 PIOLIB="$PWD/utils/piolib" CFLAGS="-O2 -Wall -Wextra -Werror"
 
+  # The samplers' C tests under AddressSanitizer and UndefinedBehaviorSanitizer:
+  # their run fills and row loops write by computed bounds, and a bound one
+  # past the end of a frame buffer changes no output a plain test can see.
+  # Only these two tests are built this way, to keep the job short.
+  sanitizers:
+    name: Sampler tests under ASan and UBSan
+    runs-on: ubuntu-24.04
+    env:
+      PKG_CONFIG_LIBDIR: /var/empty
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -S . -B build-san -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+      - run: cmake --build build-san -j --target test_tbv1 test_centrev1
+      - run: ctest --test-dir build-san --output-on-failure -R '^test_(tbv1|centrev1)$'
+
   # The capture firmware (firmware/), cross-compiled for the RP2350 against
   # the pico-sdk it is pinned to. Its own job: the other jobs never need
   # the ARM toolchain, and the host-side firmware core and simulator are

@@ -11,6 +11,7 @@ __pycache__/
 .worktrees/
 capture-rp1/vgacap-rp1
 build-off/
+build-san/
 build-rel/
 build-pg/
 logs/

@@ -16,6 +16,18 @@ The tables are made from `ci.yml` when this site is built. A job's table gives i
 ```{vgacap-ci-jobs}
 ```
 
+## Running the sanitizers job locally
+
+The `sanitizers` job builds only `test_tbv1` and `test_centrev1`, with `-fsanitize=address,undefined -fno-sanitize-recover=all`, into its own build directory. In a checkout, these commands do the same:
+
+```sh
+cmake -S . -B build-san -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+cmake --build build-san -j --target test_tbv1 test_centrev1
+ctest --test-dir build-san --output-on-failure -R '^test_(tbv1|centrev1)$'
+```
+
+A sanitizer report stops the test, and the report names the file and line of the bad access.
+
 ## Pinned versions and settings
 
 Variable is the environment variable, Value what the workflow sets it to, and Set for the jobs or step that see it.
