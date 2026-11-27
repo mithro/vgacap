@@ -236,19 +236,21 @@ for p in projects:
 table(["project", "untraced ns per clock"] + WRITERS, body)
 
 if os.path.isdir(os.path.join(RES, "writer2-run1")):
-    print("### The replay run twice: ns per clock over null, first run (`writer2-run1`) and second (`writer2`)\n")
+    print("### The replay run twice: ns per clock over null, first run (`writer2-run1`) and last (`writer2`)\n")
     r1data, r1meta, _ = load_writer("writer2-run1")
     body = []
     for p in projects:
         row = [p]
         for w in ("vgch2", "planar", "events", "raw"):
             a, b = paired(r1data, r1meta, p, w), est_cache.get((p, w))
-            row.append("-" if not (a and b) else f"{a[0]:.2f} / {b[0]:.2f}")
+            row += ["-", "-"] if not (a and b) else [f"{a[0]:.2f}", f"{b[0]:.2f}"]
         a, b = paired(r1data, r1meta, p, "vgch2"), paired(r1data, r1meta, p, "events")
         c, d = est_cache.get((p, "vgch2")), est_cache.get((p, "events"))
-        row.append("-" if not (a and b and c and d) or b[0] <= 0 or d[0] <= 0 else f"{a[0] / b[0]:.2f} / {c[0] / d[0]:.2f}")
+        ok = a and b and c and d and b[0] > 0 and d[0] > 0
+        row += [f"{a[0] / b[0]:.2f}", f"{c[0] / d[0]:.2f}"] if ok else ["-", "-"]
         body.append(row)
-    table(["project", "vgch2", "planar", "events", "raw", "vgch2 over events"], body)
+    table(["project"] + [f"{w}, {r}" for w in ("vgch2", "planar", "events", "raw", "vgch2 over events")
+                         for r in ("first", "last")], body)
 
 print("### The replayed chunks against the whole trace\n")
 body = []
@@ -466,8 +468,8 @@ if fx_main:
     print("### Stalls: wall time the simulation thread spent not running, over the untraced model's\n")
     print("Per process, the sum over chunks of (wall - thread CPU) for the variant minus the same for the untraced "
           "model, ns per clock: median of the processes [lowest, highest]. A stall (the simulation thread waiting "
-          "for its writer's thread) shows here and nowhere in the CPU figures. The study writers also count their "
-          "waits: hand-overs that waited, summed over the processes, and the wall time they waited.\n")
+          "for its writer's thread) shows here and nowhere in the CPU figures. The next table counts the waits "
+          "themselves.\n")
     body = []
     for p in tp:
         row = [p]
@@ -482,13 +484,23 @@ if fx_main:
                     continue
                 gap = sum((w[v][k] - d[v][k][0]) - (w["none"][k] - d["none"][k][0]) for k in ks)
                 ds.append(gap / sum(d["none"][k][1] for k in ks))
-            st = [sim_stderr(t, p).get(v, {}) for t in fx_main]
-            n_st = sum(x.get("stalls", 0) for x in st)
-            s_st = sum(x.get("stall_s", 0) for x in st)
-            cnt = f"{n_st} waits, {s_st:.3f} s" if any("stalls" in x for x in st) else "not counted"
-            row.append("-" if not ds else f"{statistics.median(ds):.2f} [{min(ds):.2f}, {max(ds):.2f}]; {cnt}")
+            row.append("-" if not ds else f"{statistics.median(ds):.2f} [{min(ds):.2f}, {max(ds):.2f}]")
         body.append(row)
     table(["project"] + FX1V, body)
+    SV = [v for v in FX1V if v not in ("vgch2", "lean")]
+    print("### Hand-overs that waited: the study writers' own count, summed over the processes\n")
+    print("A hand-over waits when the writer's thread still holds the other buffer. vgacap's writer (vgch2, lean) "
+          "keeps no such count; the table above covers it. The wait's wall time, summed, is in the last column.\n")
+    body = []
+    for p in tp:
+        row, secs = [p], 0.0
+        for v in SV:
+            st = [sim_stderr(t, p).get(v, {}) for t in fx_main]
+            row.append(str(sum(x["stalls"] for x in st if "stalls" in x)) if any("stalls" in x for x in st) else "-")
+            secs += sum(x.get("stall_s", 0.0) for x in st)
+        row.append(f"{secs:.3f}")
+        body.append(row)
+    table(["project"] + SV + ["wall s waited, all"], body)
     print("### Each writer's finish (last block, its thread joined), s wall: median of the processes\n")
     body = []
     for p in tp:
@@ -521,7 +533,7 @@ if fx_main:
             continue
         loop_bpc = statistics.median(b) / (4000 * 65536)
         whole = int(ps["primary_bytes"]) / clocks(p)
-        body.append([p, f"{loop_bpc:.3f}", f"{whole:.3f}", f"{loop_bpc / whole:.2f}"])
+        body.append([p, f"{loop_bpc:.3g}", f"{whole:.3g}", f"{loop_bpc / whole:.2f}"])
     table(["project", "loop window (B a clock)", "whole trace (B a clock)", "ratio"], body)
 
 simcsv = os.path.join(RES, "sim", "sim.csv")
@@ -661,20 +673,21 @@ for p in projects:
 if names_c:
     table(["project"] + names_c, body)
 
-print("### Background CPU, s for the whole trace, and as % of the untraced simulation's CPU\n")
-body = []
-for p in projects:
-    d = {c[0]: c for c in cand_rows(p)}
-    cpu = float(base[p]["cpu_without_s"])
-    row = [p, f(cpu, 0)]
-    for n in (names_c or []):
-        if n in d and d[n][2] == d[n][2]:
-            row.append(f"{d[n][2]:.2f} ({pct(d[n][2] / cpu, 2)}%)")
-        else:
-            row.append("-")
-    body.append(row)
-if names_c:
-    table(["project", "untraced CPU (s)"] + names_c, body)
+for as_pct in (False, True):
+    print("### Background CPU, " + ("as % of the untraced simulation's CPU\n" if as_pct else "s for the whole trace\n"))
+    body = []
+    for p in projects:
+        d = {c[0]: c for c in cand_rows(p)}
+        cpu = float(base[p]["cpu_without_s"])
+        row = [p, f(cpu, 0)]
+        for n in (names_c or []):
+            if n in d and d[n][2] == d[n][2]:
+                row.append(pct(d[n][2] / cpu, 2) if as_pct else f"{d[n][2]:.2f}")
+            else:
+                row.append("-")
+        body.append(row)
+    if names_c:
+        table(["project", "untraced CPU (s)"] + names_c, body)
 
 # ---- background CPU, three more times (encode2) -----------------------------------------------------
 enc2 = defaultdict(list)   # (project, candidate) -> [est_bg_ns s]
@@ -693,66 +706,130 @@ for path in glob.glob(os.path.join(RES, "encode2", "*.csv")):
             enc2[(SHORT[proj_long], cand)].append(float(c[13]) / 1e9)
 
 
-def bg_of(p, name):
-    """Background CPU s for a candidate: the median of encode2's three runs, else the first round's."""
+def bg_all(p, name):
+    """Every whole-trace measurement of a candidate's background CPU, s: the first round's and encode2's."""
+    d = {c[0]: c for c in cand_rows(p)}
+    v = [d[name][2]] if name in d and d[name][2] == d[name][2] else []
+    for k, n in E2NAME.items():
+        if n == name:
+            v += enc2.get((p, k), [])
+    return v
+
+
+def bg_of(p, name, how="median"):
+    """Background CPU s for a candidate: encode2's median (else the first round's), or the lowest of all."""
+    v = bg_all(p, name)
+    if how == "lowest":
+        return min(v) if v else None
     for k, n in E2NAME.items():
         if n == name and enc2.get((p, k)):
             return statistics.median(enc2[(p, k)])
-    d = {c[0]: c for c in cand_rows(p)}
-    return d[name][2] if name in d else None
+    return v[0] if v else None
 
 
 if enc2:
-    print("### Background CPU, measured again: three runs, s for the whole trace, median [lowest, highest]; and the first round's\n")
+    print("### Background CPU, measured again: three runs, s for the whole trace, median [lowest, highest]\n")
     print("`results/encode2`: each candidate's configuration alone (zstd 1, every block, no compressor matrix "
-          "beside it), three times, the runs apart in time. The first round's single figure (with the matrix in the "
-          "same pass) follows each.\n")
+          "beside it), three times, the runs apart in time. The R2 tables use these medians.\n")
     body = []
     for p in projects:
-        d = {c[0]: c for c in cand_rows(p)}
         row = [p]
         for k in E2KEY:
             v = sorted(enc2.get((p, k), []))
-            first = d.get(E2NAME[k])
-            if not v:
-                row.append("-")
-                continue
-            row.append(f"{statistics.median(v):.2f} [{v[0]:.2f}, {v[-1]:.2f}]; {first[2]:.2f}" if first else
-                       f"{statistics.median(v):.2f} [{v[0]:.2f}, {v[-1]:.2f}]")
+            row.append("-" if not v else f"{statistics.median(v):.2f} [{v[0]:.2f}, {v[-1]:.2f}]")
         body.append(row)
+    table(["project"] + [E2NAME[k] for k in E2KEY], body)
+    warm = {}
+    for path in sorted(glob.glob(os.path.join(RES, "warm", "*.csv"))):
+        name = os.path.basename(path)[:-4]
+        proj_long, w, how = name.rsplit(".", 2)
+        for line in open(path):
+            c = line.rstrip("\n").split(",")
+            if len(c) == 15 and c[0] != "project" and (c[2], c[3]) == ("identity", "zstd1"):
+                warm[(SHORT[proj_long], w, how)] = float(c[13]) / 1e9
+    if warm:
+        print("### zstd1's CPU with the block cold and warm in cache, s for the whole trace\n")
+        print("`warm_cache.sh`: zstd1 alone on each block (cold, as encode2), and zstd1 after zstd-5 and zstd-1 have "
+              "read the same block (warm, as the first round's matrix ran it). Run at once, each on its own CPU.\n")
+        body = []
+        for (p, w) in sorted({(k[0], k[1]) for k in warm}, key=lambda x: (ORDER.index(x[0]), x[1])):
+            c, h = warm.get((p, w, "cold")), warm.get((p, w, "warm"))
+            body.append([p, w, "-" if c is None else f"{c:.2f}", "-" if h is None else f"{h:.2f}",
+                         "-" if not (c and h) else f"{c / h:.2f}"])
+        table(["project", "writer", "cold", "warm", "cold over warm"], body)
+    if fx_main:
+        LOOP_CLOCKS = 4000 * 65536
+        print("### Background CPU three ways, s for the whole trace: the loop's, scaled, against the whole-trace runs\n")
+        print("The loop's figure is its background thread's CPU over its 262 M clocks, beside a running simulation, "
+              "scaled to the trace's clocks (median of the processes); the window is representative (the loop's "
+              "window table). The first round's and encode2's are the whole trace, in fsbench.\n")
+        body = []
+        for p in [x for x in ORDER if any(x in tickrep[t] for t in fx_main)]:
+            for v in ("events", "evplanar", "planar", "changelog"):
+                b = [sim_stderr(t, p).get(v, {}).get("bg_s") for t in fx_main]
+                b = [x for x in b if x is not None]
+                d = {c[0]: c for c in cand_rows(p)}
+                e2 = sorted(enc2.get((p, v), []))
+                fr = d.get(E2NAME[v])
+                body.append([p, v, "-" if not b else f"{statistics.median(b) * clocks(p) / LOOP_CLOCKS:.2f}",
+                             "-" if not fr else f"{fr[2]:.2f}",
+                             "-" if not e2 else f"{e2[0]:.2f}", "-" if not e2 else f"{statistics.median(e2):.2f}",
+                             "-" if not e2 else f"{e2[-1]:.2f}"])
+        table(["project", "candidate", "loop, scaled", "first round", "encode2 lowest", "encode2 median",
+               "encode2 highest"], body)
+    print("### Re-encoding a published trace to planar: encode2's planar pass, wall s, median of 3\n")
+    print("The pass reads the published trace with vgacap's reader, expands it to the testbench's raw images and "
+          "writes planar: a migration's re-encode, one CPU a trace.\n")
+    body = []
+    for p in projects:
+        w = []
+        for path in glob.glob(os.path.join(RES, "encode2", f"{LONG[p]}.planar.r*.csv")):
+            for line in open(path):
+                if line.startswith("#pass,"):
+                    kv = dict(x.split("=", 1) for x in line.strip().split(",")[4:] if "=" in x)
+                    w.append(int(kv["wall_ns"]) / 1e9)
+        body.append([p, "-" if not w else f"{statistics.median(w):.0f}"])
+    table(["project", "wall s"], body)
+    print("### The first round's single measurement of the same, s (the compressor matrix in the same pass)\n")
+    body = []
+    for p in projects:
+        d = {c[0]: c for c in cand_rows(p)}
+        body.append([p] + [f"{d[E2NAME[k]][2]:.2f}" if E2NAME[k] in d else "-" for k in E2KEY])
     table(["project"] + [E2NAME[k] for k in E2KEY], body)
 
 # The compressor matrix.
 COMPS = ["none", "zstd-5", "zstd-1", "zstd1", "zstd1-nocheck", "zstd3", "zstd9", "zstd1-long27", "lz4", "lz4hc9",
          "deflate1", "deflate6"]
 for w in ("vgch2", "events", "planar"):
-    print(f"### Compressors on {w}'s blocks: MB, and background CPU s\n")
-    body = []
-    for p in projects:
-        e = enc.get((p, w), {})
-        row = [p]
-        for c in COMPS[1:]:
-            r = e.get(("identity", c))
-            row.append("-" if r is None else f"{float(r['est_comp_bytes']) / 1e6:.2f} / {float(r['est_bg_ns']) / 1e9:.2f}")
-        body.append(row)
-    table(["project"] + COMPS[1:], body)
+    for what, key, scale in (("MB", "est_comp_bytes", 1e6), ("background CPU s", "est_bg_ns", 1e9)):
+        print(f"### Compressors on {w}'s blocks: {what}\n")
+        body = []
+        for p in projects:
+            e = enc.get((p, w), {})
+            row = [p]
+            for c in COMPS[1:]:
+                r = e.get(("identity", c))
+                row.append("-" if r is None else f"{float(r[key]) / scale:.2f}")
+            body.append(row)
+        table(["project"] + COMPS[1:], body)
     print("Uncompressed, MB: " + ", ".join(
         f"{p} {sum(int(r['raw_bytes_measured']) for r in [enc[(p, w)][('identity', 'zstd1')]]) / 1e6 * (int(enc[(p, w)][('identity', 'zstd1')]['blocks']) / max(1, int(enc[(p, w)][('identity', 'zstd1')]['blocks_measured']))):,.1f}"
         for p in projects if (p, w) in enc and ("identity", "zstd1") in enc[(p, w)]) + ".\n")
 
-print("### Raw candidate: transforms x compressors, MB / background CPU s (projected)\n")
 TR = ["pack6", "xor6", "xor-byteplanes", "xor-bitplanes"]
 RC = ["zstd-1", "zstd1", "zstd3", "lz4"]
-body = []
-for p in projects:
-    e = enc.get((p, "raw"), {})
-    row = [p]
-    for t in TR:
-        for c in RC:
-            r = e.get((t, c))
-            row.append("-" if r is None else f"{float(r['est_comp_bytes']) / 1e6:,.1f} / {float(r['est_bg_ns']) / 1e9:.1f}")
-    body.append(row)
-table(["project"] + [f"{t} {c}" for t in TR for c in RC], body)
+for what, key, scale in (("MB", "est_comp_bytes", 1e6), ("background CPU s", "est_bg_ns", 1e9)):
+    print(f"### Raw candidate: transforms x compressors, {what} (projected)\n")
+    body = []
+    for p in projects:
+        e = enc.get((p, "raw"), {})
+        row = [p]
+        for t in TR:
+            for c in RC:
+                r = e.get((t, c))
+                row.append("-" if r is None else f"{float(r[key]) / scale:,.1f}")
+        body.append(row)
+    table(["project"] + [f"{t} {c}" for t in TR for c in RC], body)
 print("### Raw candidate: the transform's share of that CPU, s (projected)\n")
 body = []
 for p in projects:
@@ -902,11 +979,11 @@ if rd2:
 R2PLANS = [("vgch2 (zstd 1)", "vgch2"), ("events (zstd 1)", "events"), ("raw xor6 (zstd 1)", "raw xor6"),
            ("planar (zstd 1)", "planar"), ("events to planar (zstd 1)", "events to planar"),
            ("changelog to planar (zstd 1)", "changelog to planar"), ("raw to planar (zstd 1)", "raw to planar")]
-r2 = {}   # (project, candidate, info variant) -> (% , bg s, reads s)
+r2 = {}   # (project, candidate, info variant, "median" or "lowest") -> (% , bg s, reads s)
 
 
-def r2_of(p, name, fm, info_pat):
-    bg = bg_of(p, name)
+def r2_of(p, name, fm, info_pat, how="median"):
+    bg = bg_of(p, name, how)
     d = rd2.get((p, fm), {})
     if bg is None or not all(d.get(k) for k in (info_pat, "sample", "uohash", "open")):
         return None
@@ -918,21 +995,33 @@ def r2_of(p, name, fm, info_pat):
 
 if rd2:
     print("## The trace's share of R2: background CPU and every read of a job\n")
-    print("Background CPU (the median of encode2's three runs) plus `tracetool info`, `vgacap-sample`'s pass and "
-          "`tracetool uohash`, and two more opens (each of the three opens the file; uohash's time includes its own). "
-          "% of the pilot's untraced simulation CPU; the trace's own share, which leaves the rest of the 5% to the "
-          "samplers, hashes and PNGs. Each cell: % (background s + reads s).\n")
+    print("Background CPU plus `tracetool info`, `vgacap-sample`'s pass and `tracetool uohash`, and two more opens "
+          "(each of the three opens the file; uohash's time includes its own). % of the pilot's untraced simulation "
+          "CPU: the trace's own share, which leaves the rest of the 5% to the samplers, hashes and PNGs. The same "
+          "compression work measured 2-3 times apart from one run to another (the encode2 tables), so the share is "
+          "given at encode2's median and at the lowest background figure measured (the first round's and encode2's "
+          "three). The reads' part follows, in s.\n")
     for info_pat, title in (("info", "tracetool info counting each planar stream on its own"),
                             ("infoscan", "tracetool info as it is: a merged full scan")):
-        print(f"### With {title}\n")
+        for how in ("median", "lowest"):
+            print(f"### With {title}, background at its {how}: the trace's share of R2, %\n")
+            body = []
+            for p in projects:
+                row = [p]
+                for name, fm in R2PLANS:
+                    ip = "info" if fm in ("vgch2", "events", "raw xor6") else info_pat
+                    r = r2_of(p, name, fm, ip, how)
+                    r2[(p, name, info_pat, how)] = r
+                    row.append("-" if r is None else pct(r[0], 1))
+                body.append(row)
+            table(["project"] + [n for n, _ in R2PLANS], body)
+        print(f"### With {title}: the reads alone, s for the whole trace\n")
         body = []
         for p in projects:
             row = [p]
             for name, fm in R2PLANS:
-                ip = "info" if fm in ("vgch2", "events", "raw xor6") else info_pat
-                r = r2_of(p, name, fm, ip)
-                r2[(p, name, info_pat)] = r
-                row.append("-" if r is None else f"{pct(r[0], 1)} ({r[1]:.1f} + {r[2]:.1f} s)")
+                r = r2.get((p, name, info_pat, "median"))
+                row.append("-" if r is None else f"{r[2]:.1f}")
             body.append(row)
         table(["project"] + [n for n, _ in R2PLANS], body)
 
@@ -941,8 +1030,8 @@ if rd2 and fx_pct:
     print("## Every plan against R1 and R2 together\n")
     print("R1: the simulation thread's cost in the loop (fix round 1, median of the processes), % of the untraced "
           "model; the budget is 5%. R2: the trace's share, with tracetool info counting planar streams on their own "
-          "(the lower figure); this study's bar for the trace is 1%, the whole post-simulation budget 5%. "
-          "Lean writes vgch2's file, so its R2 is vgch2's; raw is from its own processes.\n")
+          "(the lower figure), background at encode2's median; this study's bar for the trace is 1%, the whole "
+          "post-simulation budget 5%. Lean writes vgch2's file, so its R2 is vgch2's; raw is from its own processes.\n")
     PLANS = [("vgch2 (current)", "vgch2", "vgch2 (zstd 1)"), ("lean (vgch2's file)", "lean", "vgch2 (zstd 1)"),
              ("events, stored as events", "events", "events (zstd 1)"),
              ("events, stored as planar", "evplanar", "events to planar (zstd 1)"),
@@ -953,21 +1042,32 @@ if rd2 and fx_pct:
     body = []
     for name, v, r2n in PLANS:
         row = [name]
-        ok1 = ok2 = okb = True
         for p in lp:
             a = fx_pct.get((p, v))
-            b = r2.get((p, r2n, "info"))
-            row.append(("-" if a is None else pct(a[0], 1)) + " / " + ("-" if b is None else pct(b[0], 1)))
-            if a is None or a[0] > 0.05:
-                ok1 = False
-            if b is None or b[0] > 0.01:
-                ok2 = False
-            if b is None or b[0] > 0.05:
-                okb = False
-        row += ["yes" if ok1 else "no", "yes" if ok2 else "no", "yes" if okb else "no"]
+            b = r2.get((p, r2n, "info", "median"))
+            row += ["-" if a is None else pct(a[0], 1), "-" if b is None else pct(b[0], 1)]
         body.append(row)
-    table(["plan"] + [f"{p}: R1 / R2 (%)" for p in lp] +
-          ["R1 at most 5% on all", "R2 at most 1% on all", "R2 under the whole 5% on all"], body)
+    table(["plan"] + [f"{p} {r} (%)" for p in lp for r in ("R1", "R2")], body)
+    BUSY = [x for x in ("nyancat", "rle_vga", "atari2600") if x in lp]
+    QUIET = [x for x in lp if x not in BUSY]
+    print("### Pass or fail, per plan\n")
+    print(f"Busy: {', '.join(BUSY)}. Quiet: {', '.join(QUIET)}. R2 is checked at the background figure most in its "
+          "favour (the lowest measured) and at encode2's median; tracetool info counts planar streams on their own.\n")
+
+    def ok(vals, lim):
+        return "yes" if vals and all(x is not None and x <= lim for x in vals) else "no"
+
+    body = []
+    for name, v, r2n in PLANS:
+        r1b = [fx_pct[(p, v)][0] if (p, v) in fx_pct else None for p in BUSY]
+        r1q = [fx_pct[(p, v)][0] if (p, v) in fx_pct else None for p in QUIET]
+        lo = [r2[(p, r2n, "info", "lowest")][0] if r2.get((p, r2n, "info", "lowest")) else None for p in BUSY]
+        md = [r2[(p, r2n, "info", "median")][0] if r2.get((p, r2n, "info", "median")) else None for p in BUSY]
+        both = "yes" if ok(r1b, 0.05) == "yes" and ok(lo, 0.01) == "yes" else "no"
+        body.append([name, ok(r1b, 0.05), ok(r1q, 0.05), ok(lo, 0.01), ok(md, 0.01), ok(lo, 0.05), ok(md, 0.05), both])
+    table(["plan", "R1 at most 5%, busy", "R1 at most 5%, quiet", "R2 at most 1%, busy, lowest",
+           "R2 at most 1%, busy, median", "R2 at most 5%, busy, lowest", "R2 at most 5%, busy, median",
+           "R1 and R2 (1%, lowest), busy"], body)
 
 # ---- 6. robustness -------------------------------------------------------------------------------
 rob = []
@@ -1105,9 +1205,11 @@ print("## Implementation size\n")
 def loc(paths):
     n = 0
     for p in paths:
+        py = p.endswith(".py")
         for line in open(p):
             s = line.strip()
-            if s and not s.startswith("//") and not s.startswith("*") and not s.startswith("/*"):
+            if s and not (py and s.startswith("#")) and not (not py and (s.startswith("//") or s.startswith("*") or
+                                                                         s.startswith("/*"))):
                 n += 1
     return n
 
@@ -1128,6 +1230,26 @@ body = [
     ["the study readers: planar, events, raw, and vgch2 and FST drivers (study src/rd.c)", loc([f"{S}/rd.c"])],
 ]
 table(["code", "non-comment lines"], body)
+# R9's cost of change: what reads or writes the simulation trace's RUNS payload
+# today, and so changes with a planar payload (the format owner's list, and
+# the tests that hold RUNS bytes). tinytapeout-vga-videos from TTVGA.
+TTVGA = os.environ.get("TTVGA", os.path.expanduser("~/github/TinyTapeout/tinytapeout-vga-videos"))
+CHANGE = [("vgacap", ROOT, ["src/trace/trace_write.c", "src/trace/trace_read.c", "src/trace/blocks.c",
+                            "src/stream/reader.c", "src/stream/writer.c", "src/tools/vgacap_dump.c",
+                            "python/vgacap/stream.py", "python/vgacap/synthtrace.py", "tests/test_trace_read.c",
+                            "tests/test_trace_write.c", "tests/test_stream_v2.c", "python/tests/test_stream_v2.py",
+                            "python/tests/test_roundtrip_c.py"]),
+          ("tinytapeout-vga-videos", TTVGA, ["ttvga/harness/tb.cpp", "ttvga/harness/tracetool.c",
+                                             "tests/sim/vgch.py", "scripts/export_tbv1_vectors.py"])]
+body = []
+for repo, base_dir, files in CHANGE:
+    for fn in files:
+        fp = os.path.join(base_dir, fn)
+        body.append([repo, f"`{fn}`", str(loc([fp])) if os.path.exists(fp) else "not found"])
+print("### What a planar payload changes (R9): the code that reads or writes RUNS today\n")
+print("Each file's non-comment lines, whole: the code to review, not the lines that change. The published "
+      "traces are re-encoded as well (the re-encode table, under the encode2 tables).\n")
+table(["repository", "file", "non-comment lines"], body)
 print("Spec text, words: VGCH v2 trace " + str(words([f"{ROOT}/docs/trace-format.md",
                                                       f"{ROOT}/src/stream/reference-stream-format.md"])) +
       " (docs/trace-format.md + src/stream/reference-stream-format.md).\n")
