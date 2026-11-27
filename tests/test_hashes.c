@@ -67,38 +67,69 @@ TEST(test_definitions) {
 }
 
 // vgacap-sample hashes every frame that differs from the one before it. The
-// SHA-256 this method replaced ran at about 136 MB/s on big-storage and took
-// 72% of a run on a design whose frames all differ; this fails anything
-// under 1000 MB/s. The sampler hashes a frame it has just written, so the
-// frame is in cache: 4 frames of 640x480 (1.2 MB), 64 MiB in all, best of 5
-// passes, so a busy host has to slow every pass to fail it.
-TEST(test_xxh3_speed) {
-    enum { FRAME = 640 * 480, KEEP = 4, FRAMES = 218 };   // 218 frames: 64 MiB
-    uint8_t *px = malloc((size_t)FRAME * KEEP);
-    ASSERT_TRUE(px);
-    for (size_t i = 0; i < (size_t)FRAME * KEEP; i++) px[i] = (uint8_t)((i * 7 + (i >> 11)) & 63);
-    double best = 1e9;
-    uint8_t d[16], acc = 0;
-    for (int pass = 0; pass < 5; pass++) {
-        struct timespec t0, t1;
-        clock_gettime(CLOCK_MONOTONIC, &t0);
-        for (int f = 0; f < FRAMES; f++) {
-            vgahash_xxh3_128_rgb6(px + (size_t)(f % KEEP) * FRAME, FRAME, d);
-            acc ^= d[0];
-        }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        double sec = (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) * 1e-9;
-        if (sec < best) best = sec;
+// SHA-256 this method replaced took 72% of a run on a design whose frames all
+// differ. The sampler hashes a frame it has just written, so the frame is in
+// cache: 4 frames of 640x480 (1.2 MB) are hashed in turn.
+enum { FRAME = 640 * 480, KEEP = 4, FRAMES = 16 };
+
+static double now(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec + (double)t.tv_nsec * 1e-9;
+}
+// Seconds for FRAMES frames: method 0 XXH3-128, 1 FNV-1a 64.
+static double time_frames(const uint8_t *px, int method, unsigned *acc) {
+    double t0 = now();
+    for (int f = 0; f < FRAMES; f++) {
+        const uint8_t *p = px + (size_t)(f % KEEP) * FRAME;
+        if (method == 0) { uint8_t d[16]; vgahash_xxh3_128_rgb6(p, FRAME, d); *acc += d[0]; }
+        else *acc += (unsigned)vgahash_fnv1a64_tb2026_rgb888(p, FRAME);
     }
-    double mbs = (double)FRAME * FRAMES / best / 1e6;
-    fprintf(stderr, "  xxh3-128-rgb6: %.0f MB/s, %.1f us a 640x480 frame (check byte %u)\n", mbs,
-            best / FRAMES * 1e6, acc);
+    return now() - t0;
+}
+// Best of 5 interleaved passes of each method, so a busy host slows both.
+static void best_times(double *xxh, double *fnv, unsigned *acc) {
+    uint8_t *px = malloc((size_t)FRAME * KEEP);
+    *xxh = *fnv = 1e9;
+    if (!px) return;
+    for (size_t i = 0; i < (size_t)FRAME * KEEP; i++) px[i] = (uint8_t)((i * 7 + (i >> 11)) & 63);
+    for (int pass = 0; pass < 5; pass++) {
+        double a = time_frames(px, 0, acc), b = time_frames(px, 1, acc);
+        if (a < *xxh) *xxh = a;
+        if (b < *fnv) *fnv = b;
+    }
     free(px);
+}
+
+// Relative, so it holds on any machine and build: XXH3-128 at least 5x the
+// FNV-1a 64 loop on the same frames. On big-storage it is about 50x; the
+// SHA-256 it replaced ran at about half the speed of FNV, so it would fail.
+TEST(test_xxh3_faster_than_fnv) {
+    double xxh, fnv; unsigned acc = 0;
+    best_times(&xxh, &fnv, &acc);
+    fprintf(stderr, "  xxh3-128-rgb6 %.1f us, fnv1a64 %.1f us a 640x480 frame: %.1fx (check %u)\n",
+            xxh / FRAMES * 1e6, fnv / FRAMES * 1e6, fnv / xxh, acc & 0xff);
+    ASSERT_TRUE(xxh * 5.0 <= fnv);
+}
+
+// test_hashes --speed (the perf-labelled test_hash_speed, run by hand on
+// big-storage): an absolute floor of 1000 MB/s, where the old SHA-256 ran at
+// about 136 MB/s.
+TEST(test_xxh3_speed) {
+    double xxh, fnv; unsigned acc = 0;
+    best_times(&xxh, &fnv, &acc);
+    double mbs = (double)FRAME * FRAMES / xxh / 1e6;
+    fprintf(stderr, "  xxh3-128-rgb6: %.0f MB/s, %.1f us a 640x480 frame (check %u)\n", mbs,
+            xxh / FRAMES * 1e6, acc & 0xff);
     ASSERT_TRUE(mbs >= 1000.0);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--speed") == 0) {
+        RUN(test_xxh3_speed);
+        RUN_TESTS_END();
+    }
     RUN(test_bytes_0_7); RUN(test_zero_frame); RUN(test_mod64_frame);
-    RUN(test_empty); RUN(test_definitions); RUN(test_xxh3_speed);
+    RUN(test_empty); RUN(test_definitions); RUN(test_xxh3_faster_than_fnv);
     RUN_TESTS_END();
 }
