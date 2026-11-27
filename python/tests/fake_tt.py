@@ -473,6 +473,14 @@ class FakeLoader:
     modelled: the real loader's PIO0 state machine 0, which takes GPIO 6
     and 3 for PIO0 and leaves its program loaded, and the real transfer's
     exact duration.
+
+    An empty file loads nothing after `fpga_reset()` has cleared the FPGA:
+    the real loader sends only its 6 termination bytes and still prints
+    "Transmission complete, total bytes: 0" (`fabricfoxv2.py:139-167`), so
+    the fake calls `unconfigure()`, not `configure()`. A non-empty file is
+    taken as a valid bitstream: the fake does not look for the iCE40 sync
+    word or check the configuration, which the FPGA does and the RP2 cannot
+    read back (there is no CDONE pin in `gpio_map_dbv3.py`).
     """
 
     SCK, MOSI, SS, RESET = 6, 3, 5, 1
@@ -538,7 +546,10 @@ class FakeLoader:
                 print("Waiting for FIFO to drain, free slots: 1")
             print(f"Transmission complete, total bytes: {len(fed)}")
             if board is not None and hasattr(board.wave, "configure"):
-                board.wave.configure()
+                if fed:
+                    board.wave.configure()
+                else:
+                    board.wave.unconfigure()  # reset, then no configuration
         except OSError as e:
             print(f"Error accessing file: {e}")
             if reset and board is not None and hasattr(board.wave, "unconfigure"):

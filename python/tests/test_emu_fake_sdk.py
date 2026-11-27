@@ -451,3 +451,15 @@ def test_construction_leaves_the_clock_pad_to_the_boards_pwm():
     board = Board(Waveform(b"\0", [], clk_gpio=CLK, period=2))
     board_sdk(board)
     assert not board.wave.clock_stopped and CLK not in board.pads
+
+
+def test_an_empty_file_leaves_no_design():
+    # fpga_reset() clears the FPGA after the open (fabricfoxv2.py:110-112);
+    # an empty file then sends only the 6 termination bytes, no sync word,
+    # so the FPGA stays unconfigured though the count line still prints.
+    board = _design_board()
+    loader = FakeLoader(board, {HELD: b""})
+    tt = board_sdk(board, loader=loader)
+    board.run_script(LOAD_BODY, globals={"tt": tt})
+    assert "Transmission complete, total bytes: 0" in _text(board)
+    assert not board.wave.configured
