@@ -183,7 +183,16 @@ def main(out):
         bufs = [bytearray(4 * BUF_WORDS), bytearray(4 * BUF_WORDS)]
         full = [False, False]
         prog = make_clocked(HIGH, LOW, IN_COUNT)  # noqa: F821
-        sm = new_state_machine(prog, CLK_GPIO)  # noqa: F821 - takes the clock pad, low
+        # The prelude's new_state_machine, with the side-set pin: dropping
+        # the block's stale programs first. PIO_NUM is never 0 here (the
+        # RP2350 profile refuses it), so the stock firmware's are safe.
+        try:
+            rp2.PIO(PIO_NUM).remove_program()  # noqa: F821
+        except Exception:
+            pass
+        sm = rp2.StateMachine(PIO_NUM * 4 + SM_NUM, prog,  # noqa: F821 - takes the clock pad, low
+                              in_base=machine.Pin(IN_BASE),  # noqa: F821
+                              sideset_base=machine.Pin(CLK_GPIO))  # noqa: F821
         machine.mem32[CLKDIV_ADDR] = PIO_DIV << 16  # noqa: F821
         machine.mem32[FDEBUG_ADDR] = RXSTALL_BIT  # noqa: F821 - a stale stall
         machine.mem32[IRQ_ADDR] = 1  # noqa: F821 - a stale flag 0 would release reset early
