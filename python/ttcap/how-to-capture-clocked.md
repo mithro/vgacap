@@ -11,7 +11,9 @@ review: 2027-05-28
 
 `ttcap capture --mode clocked` loads the bitstream with the clock and reset held ([The held-clock bitstream load](reference-load-held.md)). The board's PIO then makes the project clock itself, `--clocks` rising edges in all. The first `--reset-clocks` of them, 10 unless given, come with `rst_n` low. After each edge the PIO reads `uo_out` once, so sample k is the design's output after rising edge k. The PIO stops the clock, low, whenever the link falls behind, so no sample is lost however slow the link is.
 
-The real clock is the one nearest `--clock-hz` that is not faster. A clock is H + L + 4 PIO cycles, and `ttcap` picks the PIO divider and that cycle count together, so a rate the two can make is made exactly: 500 kHz at a 150 MHz system clock is divider 10 and 30 cycles. `uo_out` is read H + 1 PIO cycles after the rising edge, at least 40 ns after it.
+The real clock is the one nearest `--clock-hz` that is not faster. A clock is H + L + 4 PIO cycles, and `ttcap` picks the PIO divider and that cycle count together, so a rate the two can make is made exactly: 500 kHz at a 150 MHz system clock is divider 10 and 30 cycles. `uo_out` is read H + 1 PIO cycles after the rising edge, at least 80 ns after it, so at a 133 MHz system clock the fastest clock is about 9.5 MHz, with H 10 and L 0.
+
+The 80 ns floor was measured on one design and one board: `tt_um_vga_ca` on fpga-4, on 2026-11-28. Reads up to 53 ns after the edge got wrong values there, and every read from 60 ns on matched the reference; 80 ns is a third more than 60. A design whose outputs settle more slowly needs a later read, so give it a larger `--clock-high`.
 
 ## What you need
 
@@ -32,7 +34,7 @@ The real clock is the one nearest `--clock-hz` that is not faster. A clock is H 
 3. In the terminal, read the stats line, which shows `status=ok` and `board_samples=` equal to `--clocks` for a clean run.
 4. In the checkout, run `./build/vgacap-dump bars-clocked.vgacap`, which prints the header, both board records, a line for each chunk of samples, and the total.
 
-`--clocks` must be a multiple of 4, because the board packs four samples to a word. To set `ui_in` for the run, add `--ui-in`, as in [How to set a design's inputs during a capture](how-to-set-ui-in.md). To move the read point within the clock, give H with `--clock-high`, 0 to 15. The clock is then the nearest not faster than `--clock-hz` in which that H fits, and L takes up the rest. An H that reads `uo_out` under 40 ns after the edge still runs, with a warning, and the header and the board's first record say `below_floor=1`: such a run is a sweep point, not a reference capture. Clocked mode refuses `--seconds`, `--max-bytes`, `--frames`, `--project`, `--design`, `--edge`, `--vga-mode`, `--window-lines`, `--sample-delay`, the `--rle-` options and `--no-stop-clock`. It also refuses `--firmware picosdk`, `--firmware mpy-module` and `--profile rp2040`, all before the board is touched.
+`--clocks` must be a multiple of 4, because the board packs four samples to a word. To set `ui_in` for the run, add `--ui-in`, as in [How to set a design's inputs during a capture](how-to-set-ui-in.md). To move the read point within the clock, give H with `--clock-high`, 0 to 15. The clock is then the nearest not faster than `--clock-hz` in which that H fits, and L takes up the rest. An H that reads `uo_out` under 80 ns after the edge still runs, with a warning printed before the board is loaded, and the header and the board's first record say `below_floor=1`: such a run is a sweep point, not a reference capture. Clocked mode refuses `--seconds`, `--max-bytes`, `--frames`, `--project`, `--design`, `--edge`, `--vga-mode`, `--window-lines`, `--sample-delay`, the `--rle-` options and `--no-stop-clock`. It also refuses `--firmware picosdk`, `--firmware mpy-module` and `--profile rp2040`, all before the board is touched.
 
 After the run, however it ended, the board has the clock stopped, reset released, and its input mode and manual-clock monitor as they were. The load leaves no file behind: it deletes `/_vgacap/held.bin`, then removes `/_vgacap` if it is empty, even an empty `/_vgacap` that was there before the run. The header records the bitstream's name, length and crc32, and the run's clocks, reset clocks, system clock and PIO timing. Its mode is `SELFCLK`, and its `clock_hz` is the real clock.
 
@@ -59,8 +61,8 @@ Clean means all of these: the samples in the file add up to `--clocks` and to th
 | 1 | `--clocks must be more than --reset-clocks`, exit 2 | no clock would come after reset | raise `--clocks` |
 | 1 | `--reset-clocks must be at most`, exit 2 | the reset clocks would fill the buffer and the PIO's FIFO before reset is released | raise `--buf-words` or lower `--reset-clocks` |
 | 1 | `--clock-high must be 0..15`, exit 2 | H is outside the PIO's delay field | give 0 to 15 |
-| 1 | `warning: --clock-high H reads uo_out N ns after the rising edge` | the H given reads under 40 ns after the edge | none for a sweep; leave `--clock-high` out for a reference |
-| 1 | `is above the fastest clocked rate` | a clock that short would read `uo_out` under 40 ns after the edge | lower `--clock-hz` |
+| 1 | `warning: --clock-high H reads uo_out N ns after the rising edge` | the H given reads under 80 ns after the edge | none for a sweep; leave `--clock-high` out for a reference |
+| 1 | `is above the fastest clocked rate` | a clock that short would read `uo_out` under 80 ns after the edge | lower `--clock-hz` |
 | 1 | `is below the slowest clocked rate` | the clock needs a larger PIO divider than there is | raise `--clock-hz` |
 | 1 | `needs the FPGA breakout's RP2350 demo board` | `--profile auto` found an RP2040 | use the FPGA breakout's board |
 | 3 | `not clean: status=error`, exit 1 | the board stopped the run with an `error=` record | read the `error=` line among the board lines |
