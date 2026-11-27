@@ -19,17 +19,28 @@ This page restarts the board with [`tools/board_restart.py`](board_restart.py). 
 ## Steps
 
 1. In the vgacap checkout, run `uv run python tools/board_restart.py ws://127.0.0.1:18034/serial` to restart the board, which prints what the board printed last.
-2. For a bench board, read its `status.json` again and again until the idle display is back at `"state": "loaded"`.
+2. For a bench board, read its `status.json` again until the idle display is back at `"state": "loaded"`, which took 66 to 73 s on fpga-1.
 
 ## Check
 
-Step 1 prints the board's `soft reboot` and the start of its default project, ending in a `>>>` prompt, and exits with status 0. Step 2 shows `"state": "loaded"` under `idle_display`.
+Step 1 prints the end of the board's boot, from partway through, and exits with status 0. On fpga-1 in [the 2026-11-27 bench run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1) it ended with these lines:
+
+```text
+boot done: 2036
+tt.sdk_revision=d485c7a9986336024e35d790568fca33be1c5665
+tt.sdk_version=3.1.1
+MicroPython 970468103d on 2026-09-08; TinyTapeout RP2350B Core with RP2350
+Type "help()" for more information.
+>>>
+```
+
+Step 2 shows `"state": "loaded"` under `idle_display`.
 
 ## If it fails
 
 | Step | What you see | Likely cause | Fix |
 |---|---|---|---|
-| 1 | exit status 1 after 15 s | no soft reboot came back | Run step 1 again |
+| 1 | exit status 1 after 15 s | the board did not reboot to a `>>>` prompt within 15 s | Run step 1 again |
 | 1 | a connection error | the tunnel is down or the link is wrong | Open the tunnel again, and check the link |
 | 2 | a state other than `loaded` that does not change | the board did not restart cleanly | Run step 1 again |
 

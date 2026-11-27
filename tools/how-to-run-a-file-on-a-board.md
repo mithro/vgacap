@@ -25,7 +25,7 @@ This page runs a file with [`tools/board_exec.py`](board_exec.py), over the same
 
 ## Check
 
-Step 2 prints what the file printed and exits with status 0. A file that raises an error prints `--- board stderr ---` and the traceback, and exits with status 1. Step 3 prints the board's soft reboot ending in a `>>>` prompt.
+Step 2 prints what the file printed and exits with status 0. A file that raises an error prints `--- board stderr ---` and the traceback, and exits with status 1. Step 3 prints the end of the board's boot, ending in a `>>>` prompt, as [How to restart a demo board](how-to-restart-a-board.md#check) quotes.
 
 ## If it fails
 
