@@ -952,23 +952,18 @@ class Board:
             if cycle < last_cycle:
                 raise BoardError("GPIO %d driven back in time (%d < %d)" % (gpio, cycle, last_cycle))
             if cycle == last_cycle:
-                # Two values in one cycle: the later one is what the pin shows.
-                trace.pop()
-                if not trace:
-                    # Over the value driven at construction, which on a
-                    # board lasts until the state machine starts,
-                    # microseconds later: an edge into or out of it is real,
-                    # so any rise into it stays and a rise out of it counts.
-                    if value and not last_value:
-                        rises.append(cycle)
-                    trace.append((cycle, value))
-                    return
-                if rises and rises[-1] == cycle:
-                    rises.pop()
-                if trace[-1][1] != value:
-                    if value:
-                        rises.append(cycle)
-                    trace.append((cycle, value))
+                # Two values in one cycle happen only when a construction's
+                # sideset_init is followed by the first instruction, which
+                # issues in the cycle active(1) is called. On a board the
+                # init value lasts until then, microseconds later, so an
+                # edge into or out of it is real: any rise into it stays and
+                # a rise out of it counts. The pin shows the later value, so
+                # for an OUT_HIGH init driven low in the construction cycle
+                # pio_pin() never shows the high pulse, but pio_rises holds
+                # the rise.
+                trace[-1] = (cycle, value)
+                if value and not last_value:
+                    rises.append(cycle)
                 return
             if last_value == value:
                 return
