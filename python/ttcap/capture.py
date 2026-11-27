@@ -713,7 +713,10 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
                 # entries, so neither spelling finds it. Seen on fpga-4,
                 # 2026-11-23: `tt.shuttle.enabled` was
                 # `<FPGA BitStream tt_um_vgacal_bars>` while `has()` said
-                # False. Already enabled is what was asked for.
+                # False. Already enabled is what was asked for. The name
+                # can be stale: `load_held` loads the FPGA behind the SDK's
+                # back, so after it this trusts a design the FPGA no longer
+                # holds. `restart_sdk` clears that.
                 out = _exec_checked(
                     repl,
                     "print(getattr(getattr(tt.shuttle, 'enabled', None), "
@@ -1037,8 +1040,8 @@ FPGA_CLK_GPIO = 16
 SYNC_WORD = b"\x7e\xaa\x99\x7e"
 
 #: How far into the file the sync word may start. The tt-vga-testpatterns
-#: bitstreams have it at byte 4 (no comment lines). iCEcube2 writes a few
-#: comment lines, about 100 bytes. 1024 bytes leaves ten times that, and
+#: bitstreams have it at byte 4 (no comment lines). 1024 bytes leaves room
+#: for the comment lines other tools write between `FF 00` and `00 FF`, and
 #: still rejects a file that holds the word only by chance, deep inside.
 SYNC_WINDOW = 1024
 

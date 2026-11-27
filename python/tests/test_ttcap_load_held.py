@@ -393,7 +393,7 @@ def test_data_that_cannot_configure_an_ice40_is_refused_before_any_command(
 
 
 def test_a_sync_word_after_a_comment_block_is_accepted(tmp_path):
-    # Lattice's iCEcube2 writes comment lines between FF 00 and 00 FF.
+    # Comment lines between FF 00 and 00 FF, as some tools write them.
     comment = b"Lattice\x00iCEcube2 2020.12.27940\x00Part: iCE40UP5K-SG48\x00" * 3
     data = b"\xff\x00" + comment + b"\x00\xff\x7e\xaa\x99\x7e" + b"\x01" * 1000
     rig = Rig(tmp_path, bitstream=data)

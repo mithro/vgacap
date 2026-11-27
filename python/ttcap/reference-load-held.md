@@ -9,7 +9,21 @@ review: 2027-05-28
 
 **What `load_held(repl, req, path_on_host)` sends to a demo board, what it returns, the errors it raises, and how `RawRepl.upload()` behaves under it.**
 
-`load_held` is in [`capture.py`](capture.py), and its board script is [`mp/load_held_rp2.py`](mp/load_held_rp2.py). It loads the bitstream with the project clock held low and the design held in reset. It has no `ttcap` subcommand.
+`load_held` is in [`capture.py`](capture.py), and its board script is [`mp/load_held_rp2.py`](mp/load_held_rp2.py). It loads the bitstream with the project clock held low and `rst_n` held low. It has no `ttcap` subcommand.
+
+## What it refuses
+
+Check is what `load_held` looks at before any board command, and Refused when the case it raises `ValueError` for.
+
+| Check | Refused when |
+|---|---|
+| The request | it names a design |
+| The board profile | its chip is not the RP2350 |
+| The board profile's clock pin | it is not GPIO 16 |
+| The file | it is empty |
+| The file's first 1024 bytes | they hold no iCE40 sync word `7E AA 99 7E` |
+
+The loader clears the FPGA before it sends a byte, and its count matches an empty or wrong file all the same. The window is `SYNC_WINDOW`. The [tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns) bitstreams have the sync word at byte 4, and 1024 bytes leaves room for a comment block before it.
 
 ## What it sends
 
@@ -54,8 +68,9 @@ Item is a part of the board's state, and State what `load_held` leaves it in.
 
 | Item | State |
 |---|---|
+| The design | at its power-up value |
 | `rst_n` | held at 0 |
-| Project clock pad | driven at 0 |
+| Project clock pad | driven at 0 by a `machine.Pin` |
 | Input mode | as stage 4 left it |
 | Manual-clock monitor | off |
 | `/_vgacap` | kept |
@@ -63,7 +78,17 @@ Item is a part of the board's state, and State what `load_held` leaves it in.
 | `tt.shuttle.enabled` | the design enabled before the load |
 | fpgas.online daemon's design | the design enabled before the load |
 
-`restore_mode` or `undo_selection` on the returned dict puts the input mode and the monitor back. Recording the load against the board's claim belongs to the caller, not to `load_held`.
+The design has seen no clock edge since the load, so a design with a synchronous reset has not been reset. The clocked capture that follows must clock it with `rst_n` still low for its reset cycles, then release reset before clock 0.
+
+Until that capture drives the clock pin, nothing may do any of these:
+
+- call `tt.clock_project_stop()` or `stop_clock`;
+- call `undo_selection` or `restore_mode`;
+- write `tt.mode`.
+
+Each one un-drives GPIO 16 and leaves it to the RP2's pull-down, and a mode write releases reset too. `mode_before` and `monitoring_before` are for putting the board back after the capture.
+
+`tt.shuttle.enabled` still names the design enabled before the load. A later `select_project` naming that design takes it as already enabled, and captures whatever the FPGA holds. [`restart_sdk`](repl.py) clears the stale name: the soft reset makes the SDK load its default project again. Recording the load against the board's claim belongs to the caller, not to `load_held`.
 
 ## Errors
 
@@ -72,7 +97,12 @@ Message is the start of the error. Raised as is its type. Cause is what made it,
 | Message | Raised as | Cause | Board |
 |---|---|---|---|
 | `load_held loads its own bitstream` | `ValueError` | the request names a design | untouched |
+| `load_held needs the FPGA breakout's demo board` | `ValueError` | the profile is not the RP2350 board with the clock on GPIO 16 | untouched |
+| `the bitstream is empty` | `ValueError` | the file has no bytes | untouched |
+| `no iCE40 sync word 7E AA 99 7E` | `ValueError` | the file is not an iCE40 bitstream | untouched |
 | `board rejected def _ttcap_mkdir` | `CaptureError` | stage 1 failed | untouched |
+| `remote error executing` | `RuntimeError` | the board refused a stage 2 write | file as far as written |
+| `timed out waiting for` | `TimeoutError` | stage 2 got no reply | file as far as written |
 | `upload of '/_vgacap/held.bin' did not verify` | `UploadError` | the file's length or crc32 differs | file kept |
 | `rst_n reads 1 while reset is held` | `CaptureError` | stage 7 failed | put back |
 | `the loader failed and carried on` | `CaptureError` | the loader printed `Error accessing file` | put back |
@@ -82,9 +112,24 @@ Message is the start of the error. Raised as is its type. Cause is what made it,
 | `the clock pad reads 1 after the load` | `CaptureError` | the clock pad rose during the load | put back |
 | `the held load said nothing` | `CaptureError` | the board script printed nothing | put back |
 | `the held load failed on the board` | `CaptureError` | the board script raised | put back |
-| `timed out waiting for` | `TimeoutError` | the board script ran past `LOAD_HELD_TIMEOUT` | as it was |
+| `timed out waiting for` | `LoadHeldTimeout` | the board script ran past `LOAD_HELD_TIMEOUT` | mid-load |
 
-Put back means the file deleted, reset released, the clock stopped, and the mode and monitor restored. After a timeout `load_held` sends nothing more, because the loader may still be running. The caller then calls `repl.recover()` before anything else.
+Put back means the file deleted, reset released, the clock stopped, and the mode and monitor restored. A stage 3 to 7 failure that is a timeout leaves the file on the board.
+
+## After a body timeout
+
+Item is a part of the board's state, and State what a `LoadHeldTimeout` leaves it in. `load_held` sends nothing more, because the loader may still be running.
+
+| Item | State |
+|---|---|
+| Input mode | as stage 4 left it |
+| Manual-clock monitor | off |
+| `rst_n` | held at 0 |
+| Project clock pad | driven at 0 once stage 10 ran |
+| FPGA | blank or partly configured |
+| `/_vgacap/held.bin` | kept |
+
+The exception's `selection` holds what `load_held` would have returned, without `bytes`. The caller calls `repl.recover()`, then `undo_load_held(repl, exc.selection)`, which puts the board back as above.
 
 ## `RawRepl.upload()`
 
