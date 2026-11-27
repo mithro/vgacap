@@ -267,7 +267,8 @@ def test_without_a_sideset_base_the_side_set_bits_are_delay():
 
 
 def test_side_set_to_pindirs_is_refused():
-    # MicroPython's asm_pio never sets EXECCTRL.SIDE_PINDIR (bit 29).
+    # MicroPython v1.24.0's asm_pio, the vendored one the boards run, never
+    # sets EXECCTRL.SIDE_PINDIR (bit 29); current MicroPython has side_pindir=.
     board = _board()
     rp2 = board.modules()["rp2"]
     prog = _toggle(rp2, 0, 0)
