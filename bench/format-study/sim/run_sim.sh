@@ -59,9 +59,10 @@ build() {
         local top; top=$(echo "$cmd" | grep -o -- '--top-module [^ ]*' | cut -d' ' -f2)
         # The project's sources: the .v/.sv files after tb.cpp, now from the copy.
         local srcs; srcs=$(echo "$cmd" | sed 's/.*tb\.cpp //' | tr ' ' '\n' | sed "s|.*/repo/src/|$d/repo/src/|" | tr '\n' ' ')
-        for v in prod study; do
+        for v in ${VARIANTS_BUILD:-prod study tick}; do
             local tb=$S/harness/tb.cpp libs=$prodlibs
             [ "$v" = study ] && tb=$S/harness/tb_study.cpp && libs=$studylibs
+            [ "$v" = tick ] && tb=$HERE/bench_tick.cpp && libs=$studylibs
             local m=$S/$p/$v
             rm -rf "${m:?}"; mkdir -p "$m"
             cp "$tb" "$m/tb.cpp"; cp "$S/harness/qspi.h" "$m/qspi.h"
@@ -88,7 +89,7 @@ run() {
                 local bin=${v%%:*} var=${v##*:}
                 local o=$S/run/$p/r$r-$bin-$var; rm -rf "${o:?}"; mkdir -p "$o"
                 local tr=(); [ "$var" = none ] || tr=(--trace "$o/trace")
-                ( cd "$o" && FS_TB_VARIANT=$var LD_PRELOAD=$S/cpu_report.so taskset -c "$cpu" "$S/$p/$bin/Vtop" $args \
+                ( cd "$SIMSRC/$p/repo/src" && FS_TB_VARIANT=$var LD_PRELOAD=$S/cpu_report.so taskset -c "$cpu" "$S/$p/$bin/Vtop" $args \
                     --seconds "$SECONDS_SIM" --out "$o" --ffmpeg true --quiet --meta "project=$p" "${tr[@]}" > "$o/stdout.log" 2> "$o/stderr.log";
                   echo $? > "$o/exit" ) &
                 pids+=($!)
@@ -110,4 +111,25 @@ run() {
     done
 }
 
-for s in ${*:-build run}; do "$s"; done
+# The in-process check (bench_tick.cpp): every variant's model in one
+# process, interleaved by chunk; one process a project, pinned, at once.
+tick() {
+    local pids=() i=0
+    read -r -a TCPUS <<< "${TICK_CPUS:-41 42 43}"
+    mkdir -p "$RES"
+    for p in $PROJECTS; do
+        local o=$S/tick/$p; rm -rf "${o:?}"; mkdir -p "$o"
+        local q; q=$(grep -m1 -o -- '--qspi [^ ]*' "$SIMSRC/$p/sim.log" | cut -d' ' -f2 || true)
+        local hz; hz=$(grep -m1 -o -- '--clock-hz [^ ]*' "$SIMSRC/$p/sim.log" | cut -d' ' -f2)
+        local qa=(); [ -n "$q" ] && qa=(--qspi "$q")
+        ( cd "$SIMSRC/$p/repo/src" && taskset -c "${TCPUS[$i]}" "$S/$p/tick/Vtop" --out "$o" --clock-hz "$hz" --chunk 65536 \
+            --chunks "${TICK_CHUNKS:-4000}" "${qa[@]}" > "$RES/tick-$p.csv" 2> "$o/stderr.log"; echo $? > "$o/exit" ) &
+        pids+=($!)
+        i=$((i + 1))
+    done
+    log "sim tick: ${#pids[@]} projects on CPUs ${TCPUS[*]}"
+    wait "${pids[@]}" || true
+    log "sim tick: done"
+}
+
+for s in ${*:-build run tick}; do "$s"; done
