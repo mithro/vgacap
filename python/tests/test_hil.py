@@ -409,6 +409,25 @@ def test_frames_left_by_an_earlier_run_do_not_count(workspace):
     assert result["video"] == "FAIL", second.stdout
 
 
+@needs_gstreamer
+@needs_frames_tool
+def test_a_demo_whose_capture_overran_says_so(workspace):
+    """Issue #59: the demo's own capture exits 1 when it loses samples, and
+    the demo with it. The verdict names the overrun, not only the exit."""
+    proc = run_hil(*workspace["common"], str(workspace["report"]),
+                   stub="demo-overruns", timeout=TIMEOUT)
+    result = statuses(proc.stdout)
+    assert result["demo-frames"] == "FAIL", proc.stdout
+    assert result["video"] == "FAIL", proc.stdout
+    lines = {line.split(None, 2)[1]: line for line in proc.stdout.splitlines()
+             if line.startswith("FAIL ")}
+    for name in ("demo-frames", "video"):
+        assert "the demo's capture overran: overruns: 3 buffers torn" in lines[name], \
+            lines[name]
+    # The capture and stop verdicts do not change.
+    assert result["capture"] == "PASS" and result["stop"] == "PASS", proc.stdout
+
+
 # ------------------------------------------------------- the MJPEG reader
 
 

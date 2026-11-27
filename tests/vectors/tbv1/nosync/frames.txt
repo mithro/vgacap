@@ -14,6 +14,6 @@ frames: 0
 distinct_frames: 0
 store: nosync_tb-v1_frames.rgb6.zst
 store_length: 0
-store_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+store_xxh3_128: 99aa06d3014798d86001c324468d497f
 distinct:
 runs:

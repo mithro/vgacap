@@ -9,6 +9,9 @@ dependencies = ["pyserial>=3.5", "websockets>=13"]
 # Synthetic generators, PPM/PNG handling and the end-to-end tests need these;
 # the stream mirror and the ttcap board tools do not (keeps Pi installs light).
 synth = ["numpy>=1.26", "pillow>=10"]
+# vgacap.hashes.xxh3_128_rgb6, the reference for the frames format's digests;
+# vgacap.framesfile reads and writes the files without it.
+hashes = ["xxhash>=3.4"]
 
 [project.scripts]
 vgacap-bin2stream = "vgacap.bin2stream:main"
@@ -18,7 +21,7 @@ ttcap = "ttcap.cli:main"
 # migen: rtl/ (the Migen source of the generated Verilog, and its tests).
 # 0.9.2 from PyPI: the git revision e19524c simulates no SyncFIFO at all
 # ("'NoneType' object has no attribute 'eq'" in memory lowering).
-dev = ["pytest>=8", "numpy>=1.26", "pillow>=10", "migen==0.9.2", "zstandard>=0.23"]
+dev = ["pytest>=8", "numpy>=1.26", "pillow>=10", "migen==0.9.2", "zstandard>=0.23", "xxhash>=3.4"]
 # docs: the documentation site (docs/conf.py, .readthedocs.yaml).
 docs = [
     "furo>=2024.8",

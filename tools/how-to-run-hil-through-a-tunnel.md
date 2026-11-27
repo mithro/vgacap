@@ -11,6 +11,13 @@ review: 2027-05-27
 
 This page runs [`tools/hil.sh`](hil.sh) against fpga-1, a demo board with an FPGA breakout on the Welland bench, through the fpgas.online bridge (`fpgas-tt`). It does not stop the bridge; running on the board's own Pi is [How to run the hardware-in-the-loop check on the board's Pi](how-to-run-hil-on-the-pi.md). The checks and every option are on [Hardware-in-the-loop checks](reference-hil-checks.md).
 
+The checks' captures take this path from fpga-1 to your workstation, where `tools/hil.sh` runs `ttcap`.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../python/ttcap/diagrams/welland-bridge-dark.svg">
+  <img src="../python/ttcap/diagrams/welland-bridge.svg" alt="Captured data goes from fpga-1 by USB to its Pi's fpgas-tt bridge, through tweed and an SSH tunnel to ttcap on your workstation" width="400">
+</picture>
+
 ## What you need
 
 - vgacap built with its GStreamer plugin, as in [How to build vgacap and run its tests](../docs/development.md) steps 1 and 2.

@@ -76,6 +76,29 @@ A value can have more than one row, one for each cause.
 | `bad-timing` | centre-v1 only: the window the timing gives, with no override, does not fit in the line or frame |
 | `bad-window` | centre-v1 only: the timing's own window fits, but `window_offset` moves it outside the line or frame |
 
+## Digests
+
+The store digest, the `distinct` lines and the `xxh3-128-rgb6` hash file all use one hash:
+
+Item is a property of the hash, and Value its setting. The library is [xxHash](https://github.com/Cyan4973/xxHash), and [`vgacap.hashes`](../python/vgacap/hashes.py) is the Python reference.
+
+| Item | Value |
+|---|---|
+| Hash | XXH3-128 |
+| Seed | `0` |
+| Secret | default |
+| Byte order | big-endian |
+| Digest bytes 0 to 7 | the high 64 bits |
+| Digest bytes 8 to 15 | the low 64 bits |
+| Digits | 32 lowercase hex |
+| Digest of the empty input | `99aa06d3014798d86001c324468d497f` |
+| Command line | `xxhsum -H2` |
+| Python | `xxhash.xxh3_128_hexdigest` |
+
+The digests are for identity and integrity, not security. They tell distinct frames apart and check that a store reads back whole. They do not resist a deliberate collision, so nothing may trust them against an attacker.
+
+Files written before [vgacap #62](https://github.com/mithro/vgacap/pull/62) have the key `store_sha256`, 64-digit SHA-256 `distinct` lines and the method `sha256-rgb6`. [`vgacap.framesfile`](../python/vgacap/framesfile.py) refuses them, and its message says to re-derive the files with `vgacap-sample`.
+
 ## frames.txt
 
 ### Header keys, in order
@@ -83,7 +106,7 @@ A value can have more than one row, one for each cause.
 ```text
 id, status, sampler, sampler_status, pixel_format, width, height, mode,
 clock_hz, clocks_per_pixel, capture_after_clock, frame_clocks, frames,
-distinct_frames, store, store_length, store_sha256
+distinct_frames, store, store_length, store_xxh3_128
 ```
 
 The keys not described above:
@@ -96,7 +119,7 @@ The keys not described above:
 | `distinct_frames` | the distinct frames in the store |
 | `store` | the store's file name, in the same directory; no whitespace, `/` or `\` |
 | `store_length` | the store's uncompressed length: `distinct_frames` × `width` × `height` |
-| `store_sha256` | the SHA-256 of the uncompressed store, 64 lowercase hex digits |
+| `store_xxh3_128` | the XXH3-128 of the uncompressed store, 32 lowercase hex digits |
 
 - The store is the distinct frames' rgb6 bytes, distinct frame n at offset n × `width` × `height`, all zstd-compressed.
 - Frame numbers count the end of each vsync pulse from `capture_after_clock`; frame starts never go backwards.
@@ -114,7 +137,7 @@ The keys not described above:
 
 ### centre-v1 keys
 
-For `centre-v1` only, after `store_sha256`, zeros when `sampler_status` is not `ok`:
+For `centre-v1` only, after `store_xxh3_128`, zeros when `sampler_status` is not `ok`:
 
 | Key | Value |
 |---|---|
@@ -129,14 +152,14 @@ For `centre-v1` only, after `store_sha256`, zeros when `sampler_status` is not `
 
 ```text
 distinct:
-<64 lowercase hex digits>     one line a distinct frame, in store order
+<32 lowercase hex digits>     one line a distinct frame, in store order
 runs:
 <run line>...
 ```
 
 | Line | Form | Meaning |
 |---|---|---|
-| distinct | 64 hex digits | the SHA-256 of distinct frame n's rgb6 bytes, the n-th line from 0 |
+| distinct | 32 hex digits | the XXH3-128 of distinct frame n's rgb6 bytes, the n-th line from 0 |
 | frame run | `<first> <count> <distinct> <start clock> <missing>` | frames `first` to `first + count - 1` show distinct frame `distinct`, and frame `first + i` starts at `start clock + i × frame_clocks` |
 | gap run | `<first> <count> - - -` | frames with no picture; they read back with start clock and `missing` 0 |
 
@@ -161,7 +184,7 @@ One file a hash method:
 
 | Method | Hash of a frame | Digits |
 |---|---|---|
-| `sha256-rgb6` | SHA-256 of the frame as one rgb6 byte a pixel, row-major | 64 |
+| `xxh3-128-rgb6` | XXH3-128 of the frame as one rgb6 byte a pixel, row-major | 32 |
 | `fnv1a64-tb2026-rgb888` | FNV-1a 64, prime 0x100000001b3, offset basis 0x14650fb0739d0383, over RGB888 with each 2-bit channel × 85 | 16 |
 
 | Line | Holds |

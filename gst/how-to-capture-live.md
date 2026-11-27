@@ -11,6 +11,13 @@ review: 2027-05-27
 
 This page uses `vgacapbin`. It builds a `vgacapttsrc` from a URI, and puts `vgadecode` behind it. The capture runs at a clock the USB link can carry, so the design runs slower than real time. How the element runs and stops `ttcap` is on [How vgacapttsrc runs and stops a capture](explanation-live-source.md).
 
+The data goes through `vgacapbin` like this.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/vgacapbin-flow-dark.svg">
+  <img src="diagrams/vgacapbin-flow.svg" alt="Inside vgacapbin, vgacapttsrc runs ttcap capture --out - as a child, reads its stdout pipe as 64 KiB buffers, and vgadecode turns them into RGB video" width="400">
+</picture>
+
 ## What you need
 
 - The plugin built in `build/`, as [How to build the GStreamer plugin](how-to-build-plugin.md) shows, and `uv run ttcap --help` working in the vgacap checkout.

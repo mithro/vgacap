@@ -51,7 +51,7 @@ PANELS = [
     ("simulated board", "CI", [
         ("stand", "synthetic"), ("stand", "simulated"), ("real", "firmware"),
         ("stand", "pipe")]),
-    ("HIL check", "bench board", [
+    ("hardware-in-\nthe-loop check", "bench board", [
         ("real", "real design"), ("real", "RP2 PIO + DMA"), ("real", "board code"),
         ("real", "USB + bridge")]),
 ]
@@ -59,7 +59,8 @@ PANELS = [
 M = 2                   # margin: the drawing reaches the edges
 LABEL_W = 92            # row labels, with the arrow
 COL_W, COL_GAP = 140, 8
-HEAD_H = 40             # a panel's title and where it runs
+HEAD_H = 40             # a panel's one-line title and where it runs
+LINE_H = 16             # each further line of a title
 CELL_H, ROW_GAP = 30, 6
 BAND_GAP = 18
 LEGEND_H = 24
@@ -71,11 +72,13 @@ def draw(p):
     add = out.append
     width = M + LABEL_W + 2 * COL_W + COL_GAP + M
     grid_h = len(ROWS) * CELL_H + (len(ROWS) - 1) * ROW_GAP
-    band_h = HEAD_H + grid_h
-    legend_y = M + 2 * band_h + BAND_GAP + 14
+    # A band's head is as tall as its longest title.
+    heads = [HEAD_H + LINE_H * max(PANELS[b * 2 + c][0].count("\n") for c in range(2))
+             for b in range(2)]
+    legend_y = M + sum(heads) + 2 * grid_h + BAND_GAP + 14
     height = legend_y + LEGEND_H + M
 
-    def text(x, y, s, size=12, fill=None, anchor="middle", weight="normal"):
+    def text(x, y, s, size: float = 12, fill=None, anchor="middle", weight="normal"):
         add(f'<text x="{x}" y="{y}" font-size="{size}" fill="{fill or p["ink"]}" '
             f'text-anchor="{anchor}" font-weight="{weight}">{escape(s)}</text>')
 
@@ -89,8 +92,8 @@ def draw(p):
     add(f'<rect x="0" y="0" width="{width}" height="{height}" fill="{p["paper"]}"/>')
 
     for band in range(2):
-        top = M + band * (band_h + BAND_GAP)
-        grid_top = top + HEAD_H
+        top = M + band * (heads[0] + grid_h + BAND_GAP)
+        grid_top = top + heads[band]
         if band:
             add(f'<line x1="{M}" y1="{top - BAND_GAP / 2}" x2="{width - M}" '
                 f'y2="{top - BAND_GAP / 2}" stroke="{p["rule"]}" stroke-width="1"/>')
@@ -107,8 +110,11 @@ def draw(p):
         for c in range(2):
             title, where, cells = PANELS[band * 2 + c]
             x = M + LABEL_W + c * (COL_W + COL_GAP)
-            text(x + COL_W / 2, top + 14, title, 13, weight="bold")
-            text(x + COL_W / 2, top + 30, where, 11.5, p["muted"])
+            lines = title.split("\n")
+            for i, line in enumerate(lines):
+                text(x + COL_W / 2, grid_top - 26 - LINE_H * (len(lines) - 1 - i), line, 13,
+                     weight="bold")
+            text(x + COL_W / 2, grid_top - 10, where, 11.5, p["muted"])
             for r, (kind, label) in enumerate(cells):
                 y = grid_top + r * (CELL_H + ROW_GAP)
                 box(x, y, COL_W, CELL_H, kind)
