@@ -100,7 +100,7 @@ The source is [`vgacap_sample.c`](vgacap_sample.c). It reads a simulation trace 
 |---|---|
 | `PREFIX_<sampler>_frames.rgb6.zst` | the distinct frames, one rgb6 byte a pixel, zstd |
 | `frames.txt` | the frame list ([format](../../docs/frames-format.md)) |
-| `frame_hashes.sha256-rgb6.txt` | each frame's SHA-256 |
+| `frame_hashes.xxh3-128-rgb6.txt` | each frame's XXH3-128 |
 | `frame_hashes.fnv1a64-tb2026-rgb888.txt` | tb-v1 only: each frame's FNV-1a 64 |
 
 On `--png-fd`, each new distinct frame is the line `<sampler> <distinct> <width> <height>`, then width × height rgb6 bytes. `VGACAP_SAMPLE_DEBUG=1` in the environment prints `trace_passes=1 blocks_decoded=N` to stderr.

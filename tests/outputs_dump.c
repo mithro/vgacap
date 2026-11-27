@@ -12,11 +12,11 @@ enum { NF = 11, ND = 3 };
 int main(int argc, char **argv) {
     if (argc != 3) { fprintf(stderr, "usage: outputs_dump VARIANT DIR\n"); return 2; }
     const char *v = argv[1];
-    uint8_t sha[ND][32]; uint64_t fnv[ND];
+    uint8_t xxh[ND][16]; uint64_t fnv[ND];
     for (int d = 0; d < ND; d++) {
         uint8_t px[64 * 3];
         for (int i = 0; i < 64 * 3; i++) px[i] = (uint8_t)((i * (d + 3) + d) & 63);
-        vgahash_sha256_rgb6(px, sizeof px, sha[d]);
+        vgahash_xxh3_128_rgb6(px, sizeof px, xxh[d]);
         fnv[d] = vgahash_fnv1a64_tb2026_rgb888(px, sizeof px);
     }
     // distinct: 0 0 0 1 1 gap gap 0, then a late 2, a repeat with a missing change, a last 2.
@@ -36,8 +36,8 @@ int main(int argc, char **argv) {
     o.mode = "640x480@60"; o.width = 640; o.height = 480; o.clock_hz = 25175000;
     o.clocks_per_pixel = 1.0; o.capture_after_clock = 4096;
     o.store = "frames.bin"; o.store_length = 1234567;
-    o.store_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    o.n_distinct = ND; o.sha256 = (const uint8_t (*)[32])sha; o.fnv = fnv;
+    o.store_xxh3_128 = "0123456789abcdef0123456789abcdef";
+    o.n_distinct = ND; o.xxh3_128 = (const uint8_t (*)[16])xxh; o.fnv = fnv;
     o.n_frames = NF; o.frames = fr;
     if (strcmp(v, "centre") == 0 || strcmp(v, "centre-fraction") == 0) {
         o.sampler = "centre-v1";
@@ -57,13 +57,13 @@ int main(int argc, char **argv) {
         o.n_distinct = 0; o.store_length = 0;
     } else if (strcmp(v, "tb") != 0) return 2;
 
-    const char *names[3] = {"frames.txt", "frame_hashes.sha256-rgb6.txt", "frame_hashes.fnv1a64-tb2026-rgb888.txt"};
+    const char *names[3] = {"frames.txt", "frame_hashes.xxh3-128-rgb6.txt", "frame_hashes.fnv1a64-tb2026-rgb888.txt"};
     for (int k = 0; k < 3; k++) {
         char path[4096];
         snprintf(path, sizeof path, "%s/%s", argv[2], names[k]);
         FILE *f = fopen(path, "wb");
         if (!f) { perror(path); return 1; }
-        int r = k == 0 ? vgaout_frames_txt(f, &o) : vgaout_hash_file(f, k == 1 ? "sha256-rgb6" : "fnv1a64-tb2026-rgb888", &o);
+        int r = k == 0 ? vgaout_frames_txt(f, &o) : vgaout_hash_file(f, k == 1 ? "xxh3-128-rgb6" : "fnv1a64-tb2026-rgb888", &o);
         if (fclose(f) != 0 || r != 0) { fprintf(stderr, "write failed: %s\n", path); return 1; }
     }
     return 0;

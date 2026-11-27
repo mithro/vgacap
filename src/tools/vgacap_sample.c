@@ -17,7 +17,7 @@
 //   PREFIX_<sampler>_frames.rgb6.zst   the distinct frames, first-appearance
 //                                      order, one zstd stream (long-distance
 //                                      matching, window log 27)
-//   frames.txt, frame_hashes.sha256-rgb6.txt, and for tb-v1
+//   frames.txt, frame_hashes.xxh3-128-rgb6.txt, and for tb-v1
 //   frame_hashes.fnv1a64-tb2026-rgb888.txt   (docs/frames-format.md)
 // --png-fd FD: each new distinct frame is also written to FD as the line
 // "<sampler> <distinct> <width> <height>\n" and width * height rgb6 bytes,
@@ -52,7 +52,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <sha256.h>
+#include <xxhash.h>
 #include <zstd.h>
 
 #define PROG "vgacap-sample"
@@ -70,14 +70,17 @@ typedef struct samp {
     char dir[PATH_LEN], store_file[PATH_LEN], store_path[PATH_LEN];
     // the store
     FILE *store; ZSTD_CCtx *cctx; uint8_t *zout; size_t zout_cap;
-    SHA256_CTX store_sha; uint64_t store_len;
-    // distinct frames: SHA-256 (and FNV for tb-v1) of each, in store order
-    uint8_t (*sha)[32]; uint64_t *fnv; size_t nd, capd;
+    // The store's digest: one streaming XXH3-128 over its uncompressed bytes.
+    XXH3_state_t *store_xxh; uint64_t store_len;
+    // distinct frames: XXH3-128 (and FNV for tb-v1) of each, in store order.
+    // A frame is hashed once, for the lookup; a new distinct frame's bytes
+    // then also go through the store's streaming hash.
+    uint8_t (*xxh)[16]; uint64_t *fnv; size_t nd, capd;
     uint32_t *ht; size_t ht_cap;        // open addressing: distinct index + 1, 0 empty
     vgaout_frame_t *frames; size_t nf, capf;
     uint16_t w, h;
     // The last frame's pixels and distinct index: a frame with the same
-    // pixels has the same SHA-256, so it is that distinct frame again
+    // pixels has the same XXH3-128, so it is that distinct frame again
     // without hashing (still and repeating pictures are the common case).
     uint8_t *last; int64_t last_d;
 } samp_t;
@@ -136,7 +139,8 @@ static int store_open(samp_t *s, int level) {
         ZSTD_isError(ZSTD_CCtx_setParameter(s->cctx, ZSTD_c_enableLongDistanceMatching, 1)) ||
         ZSTD_isError(ZSTD_CCtx_setParameter(s->cctx, ZSTD_c_windowLog, 27)))
         return -1;
-    sha256_init(&s->store_sha);
+    s->store_xxh = XXH3_createState();
+    if (!s->store_xxh || XXH3_128bits_reset(s->store_xxh) != XXH_OK) return -1;
     return 0;
 }
 
@@ -160,18 +164,18 @@ static int store_feed(samp_t *s, const uint8_t *p, size_t len, ZSTD_EndDirective
 
 // ---- frames ------------------------------------------------------------------
 
-static uint64_t key64(const uint8_t sha[32]) {
-    uint64_t k; memcpy(&k, sha, 8); return k;
+static uint64_t key64(const uint8_t h[16]) {
+    uint64_t k; memcpy(&k, h, 8); return k;
 }
 
-// The distinct index of `sha`, or -1 (inserting nothing).
-static int64_t lookup(const samp_t *s, const uint8_t sha[32]) {
+// The distinct index of digest `h`, or -1 (inserting nothing).
+static int64_t lookup(const samp_t *s, const uint8_t h[16]) {
     if (!s->ht_cap) return -1;
     size_t mask = s->ht_cap - 1;
-    for (size_t i = (size_t)key64(sha) & mask;; i = (i + 1) & mask) {
+    for (size_t i = (size_t)key64(h) & mask;; i = (i + 1) & mask) {
         uint32_t v = s->ht[i];
         if (!v) return -1;
-        if (!memcmp(s->sha[v - 1], sha, 32)) return (int64_t)v - 1;
+        if (!memcmp(s->xxh[v - 1], h, 16)) return (int64_t)v - 1;
     }
 }
 
@@ -183,13 +187,13 @@ static void ht_put(samp_t *s, size_t idx) {
         for (size_t j = 0; j < s->ht_cap; j++) {
             uint32_t v = s->ht[j];
             if (!v) continue;
-            size_t i = (size_t)key64(s->sha[v - 1]) & (cap - 1);
+            size_t i = (size_t)key64(s->xxh[v - 1]) & (cap - 1);
             while (ht[i]) i = (i + 1) & (cap - 1);
             ht[i] = v;
         }
         free(s->ht); s->ht = ht; s->ht_cap = cap;
     }
-    size_t mask = s->ht_cap - 1, i = (size_t)key64(s->sha[idx]) & mask;
+    size_t mask = s->ht_cap - 1, i = (size_t)key64(s->xxh[idx]) & mask;
     while (s->ht[i]) i = (i + 1) & mask;
     s->ht[i] = (uint32_t)(idx + 1);
 }
@@ -224,20 +228,20 @@ static void on_frame(void *user, const vgasample_frame_t *f) {
         frame_record(s, f, s->last_d);
         return;
     }
-    uint8_t sha[32];
-    vgahash_sha256_rgb6(f->rgb6, n, sha);
-    int64_t d = lookup(s, sha);
+    uint8_t h[16];
+    vgahash_xxh3_128_rgb6(f->rgb6, n, h);
+    int64_t d = lookup(s, h);
     if (d < 0) {
         d = (int64_t)s->nd;
         if (s->nd >= UINT32_MAX - 1) { fail(t, "%s: too many distinct frames", SAMPLER_NAMES[s->kind]); return; }
-        s->sha = grow(s->sha, &s->capd, s->nd + 1, sizeof *s->sha);
+        s->xxh = grow(s->xxh, &s->capd, s->nd + 1, sizeof *s->xxh);
         if (s->kind == S_TB) {
-            size_t cap = s->capd;             // fnv tracks sha's capacity
+            size_t cap = s->capd;             // fnv tracks xxh's capacity
             s->fnv = realloc(s->fnv, cap * sizeof *s->fnv);
             if (!s->fnv) { fprintf(stderr, PROG ": out of memory\n"); exit(1); }
             s->fnv[s->nd] = vgahash_fnv1a64_tb2026_rgb888(f->rgb6, n);
         }
-        memcpy(s->sha[s->nd], sha, 32);
+        memcpy(s->xxh[s->nd], h, 16);
         ht_put(s, s->nd);
         s->nd++;
         if (t->png_fd >= 0) {
@@ -250,7 +254,10 @@ static void on_frame(void *user, const vgasample_frame_t *f) {
             }
         }
         if (store_feed(s, f->rgb6, n, ZSTD_e_continue)) return;
-        sha256_update(&s->store_sha, f->rgb6, n);
+        if (XXH3_128bits_update(s->store_xxh, f->rgb6, n) != XXH_OK) {
+            fail(t, "%s: store digest failed", SAMPLER_NAMES[s->kind]);
+            return;
+        }
         s->store_len += n;
     }
     if (!s->last && !(s->last = malloc(n))) { fprintf(stderr, PROG ": out of memory\n"); exit(1); }
@@ -418,10 +425,10 @@ static int finish_sampler(tool_t *t, samp_t *s, const char *id, const char *stat
     if (store_feed(s, NULL, 0, ZSTD_e_end)) return -1;
     if (fclose(s->store)) { s->store = NULL; fail(t, "write error on %s: %s", s->store_path, strerror(errno)); return -1; }
     s->store = NULL;
-    uint8_t digest[32];
-    sha256_final(&s->store_sha, digest);
-    char hex[65];
-    for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", digest[i]);
+    XXH128_canonical_t digest;
+    XXH128_canonicalFromHash(&digest, XXH3_128bits_digest(s->store_xxh));
+    char hex[33];
+    for (int i = 0; i < 16; i++) snprintf(hex + 2 * i, 3, "%02x", digest.digest[i]);
     vgaout_t o;
     memset(&o, 0, sizeof o);
     o.id = id; o.status = status; o.sampler = SAMPLER_NAMES[s->kind];
@@ -429,12 +436,12 @@ static int finish_sampler(tool_t *t, samp_t *s, const char *id, const char *stat
     o.width = g->ok ? g->width : 0; o.height = g->ok ? g->height : 0;
     o.clock_hz = (uint32_t)t->clock_hz; o.clocks_per_pixel = g->cpp;
     o.capture_after_clock = t->cal.capture_after_clock;
-    o.store = s->store_file; o.store_length = s->store_len; o.store_sha256 = hex;
+    o.store = s->store_file; o.store_length = s->store_len; o.store_xxh3_128 = hex;
     if (d) vgaout_set_centre(&o, g, d);
-    o.n_distinct = s->nd; o.sha256 = (const uint8_t (*)[32])s->sha; o.fnv = s->fnv;
+    o.n_distinct = s->nd; o.xxh3_128 = (const uint8_t (*)[16])s->xxh; o.fnv = s->fnv;
     o.n_frames = s->nf; o.frames = s->frames;
     if (write_text(t, s, "frames.txt", NULL, &o) ||
-        write_text(t, s, "frame_hashes.sha256-rgb6.txt", "sha256-rgb6", &o))
+        write_text(t, s, "frame_hashes.xxh3-128-rgb6.txt", "xxh3-128-rgb6", &o))
         return -1;
     if (s->kind == S_TB &&
         write_text(t, s, "frame_hashes.fnv1a64-tb2026-rgb888.txt", "fnv1a64-tb2026-rgb888", &o))
@@ -616,7 +623,7 @@ int main(int argc, char **argv) {
     }
     for (int k = 0; k < S_N; k++) {
         samp_t *s = &t->s[k];
-        ZSTD_freeCCtx(s->cctx); free(s->zout); free(s->sha); free(s->fnv); free(s->ht); free(s->frames); free(s->last);
+        ZSTD_freeCCtx(s->cctx); XXH3_freeState(s->store_xxh); free(s->zout); free(s->xxh); free(s->fnv); free(s->ht); free(s->frames); free(s->last);
     }
     if (t->tb) tbv1_free(t->tb);
     if (t->cs) centrev1_free(t->cs);

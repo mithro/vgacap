@@ -48,7 +48,7 @@ target_link_libraries(vgacap-frames PRIVATE vgacap_stream vgacap_frame)
 # --- gst: GStreamer plugin (gst/), built only when GStreamer is installed ---
 add_subdirectory(gst)
 
-# --- third_party: vendored zstd, zlib, libfst and SHA-256 for the host-only
+# --- third_party: vendored zstd, zlib, libfst and xxHash for the host-only
 # tools (simulation traces). Not used by the board builds. OFF skips them
 # and test_third_party.
 option(VGACAP_HOST_EXTRAS "Build the vendored host-only libraries" ON)
@@ -76,7 +76,7 @@ if(VGACAP_HOST_EXTRAS)
   target_link_libraries(trace-make PRIVATE vgacap_trace)
   # --- sample: the shared calibration and frame clock (src/sample), host only ---
   add_library(vgacap_sample STATIC src/sample/calib.c src/sample/frameclock.c src/sample/tbv1.c src/sample/centrev1.c src/sample/hashes.c src/sample/outputs.c)
-  target_link_libraries(vgacap_sample PUBLIC vgacap_frame vgacap_trace vgacap_stream vgacap_sha256 vgacap_zstd m)
+  target_link_libraries(vgacap_sample PUBLIC vgacap_frame vgacap_trace vgacap_stream vgacap_xxhash vgacap_zstd m)
   # vgacap-sample: a simulation trace to its samplers' stores (centre-v1 by default,
   # tb-v1 on request), frames.txt and hash files, in one pass. It reads the reader's stats (src/trace) for
   # VGACAP_SAMPLE_DEBUG.
@@ -134,7 +134,7 @@ vgacap_add_test(test_stream_chunks)
 vgacap_add_test(test_stream_v2)
 if(VGACAP_HOST_EXTRAS)
   vgacap_add_test(test_third_party)
-  target_link_libraries(test_third_party PRIVATE vgacap_zstd vgacap_zlib vgacap_fst vgacap_sha256)
+  target_link_libraries(test_third_party PRIVATE vgacap_zstd vgacap_zlib vgacap_fst vgacap_xxhash)
   # The trace writer: a zstd seekable file of VGCH v2 blocks (src/trace).
   vgacap_add_test(test_trace_write)
   target_link_libraries(test_trace_write PRIVATE vgacap_trace)
@@ -186,6 +186,8 @@ if(VGACAP_HOST_EXTRAS)
   add_test(NAME test_trace_push_speed COMMAND test_trace_write --speed)
   set_tests_properties(test_trace_push_speed PROPERTIES
     LABELS perf WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+  add_test(NAME test_hash_speed COMMAND test_hashes --speed)
+  set_tests_properties(test_hash_speed PROPERTIES LABELS perf)
 else()
   # Without the host extras vgacap-dump cannot read a trace and must say so.
   # PASS_REGULAR_EXPRESSION replaces the exit-code check, so the wrapper

@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <zstd.h>
 #include <zstd_seekable.h>
-#include <sha256.h>
+#include <xxhash.h>
 #include <fstapi.h>
 
 TEST(zstd_round_trip) {
@@ -50,16 +50,25 @@ TEST(seekable_two_frames) {
     ZSTD_seekable_free(zs);
 }
 
-TEST(sha256_abc) {
-    static const unsigned char want[32] = {
-        0xba,0x78,0x16,0xbf,0x8f,0x01,0xcf,0xea,0x41,0x41,0x40,0xde,0x5d,0xae,0x22,0x23,
-        0xb0,0x03,0x61,0xa3,0x96,0x17,0x7a,0x9c,0xb4,0x10,0xff,0x61,0xf2,0x00,0x15,0xad };
-    SHA256_CTX ctx;
-    BYTE h[SHA256_BLOCK_SIZE];
-    sha256_init(&ctx);
-    sha256_update(&ctx, (const BYTE *)"abc", 3);
-    sha256_final(&ctx, h);
-    ASSERT_EQ_MEM(h, want, 32);
+TEST(xxh3_128_streaming) {
+    // XXH3-128 of nothing, as upstream's tests give it, and a streamed hash in
+    // uneven pieces equal to the one-shot hash of the same bytes.
+    XXH128_hash_t e = XXH3_128bits("", 0);
+    ASSERT_EQ_U(e.high64, 0x99aa06d3014798d8ULL);
+    ASSERT_EQ_U(e.low64, 0x6001c324468d497fULL);
+    size_t n = 1000003;
+    unsigned char *buf = malloc(n);
+    ASSERT_TRUE(buf);
+    for (size_t i = 0; i < n; i++) buf[i] = (unsigned char)((i * 31u + (i >> 9)) & 0x3f);
+    XXH3_state_t *st = XXH3_createState();
+    ASSERT_TRUE(st && XXH3_128bits_reset(st) == XXH_OK);
+    for (size_t off = 0, step = 1; off < n; off += step, step = step * 3 + 1) {
+        size_t len = step < n - off ? step : n - off;
+        ASSERT_TRUE(XXH3_128bits_update(st, buf + off, len) == XXH_OK);
+    }
+    ASSERT_TRUE(XXH128_isEqual(XXH3_128bits_digest(st), XXH3_128bits(buf, n)));
+    XXH3_freeState(st);
+    free(buf);
 }
 
 struct change { uint64_t t; unsigned h; char v[16]; };
@@ -114,7 +123,7 @@ TEST(fst_write_read) {
 int main(void) {
     RUN(zstd_round_trip);
     RUN(seekable_two_frames);
-    RUN(sha256_abc);
+    RUN(xxh3_128_streaming);
     RUN(fst_write_read);
     RUN_TESTS_END();
 }

@@ -9,7 +9,7 @@ review: 2027-05-27
 
 This page lists the libraries whose source vgacap carries in [`third_party/`](README.md), with their versions, licenses and local changes. It is for someone checking a license or updating a library. The libraries serve the host-only simulation trace tools, and no board build uses them: not the vgacap firmware, `vgacap-rp1` or the MicroPython module.
 
-[`third_party/CMakeLists.txt`](CMakeLists.txt) builds them when `VGACAP_HOST_EXTRAS` is `ON`, the default. It builds them with `-O2 -w` and without vgacap's `-Werror` warning flags, since the code is not vgacap's. [`tests/test_third_party.c`](../tests/test_third_party.c) checks that each one does its job.
+[`third_party/CMakeLists.txt`](CMakeLists.txt) builds them when `VGACAP_HOST_EXTRAS` is `ON`, the default. It builds them with `-O2 -w`, xxHash with `-O3` as its own build does, and without vgacap's `-Werror` warning flags, since the code is not vgacap's. [`tests/test_third_party.c`](../tests/test_third_party.c) checks that each one does its job.
 
 ## Versions and licenses
 
@@ -21,7 +21,7 @@ Library is the directory under `third_party/`, and Upstream the repository it co
 | `zlib/` | [madler/zlib](https://github.com/madler/zlib) | `v1.3.1` | `51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf` | Zlib | `zlib/LICENSE` |
 | `libfst/` | [gtkwave/libfst](https://github.com/gtkwave/libfst) | none | `b2681f927a092a21b42ba1f3b2a9af831deaf58d` | MIT | `libfst/LICENSE` |
 | `libfst/lz4.c` and `libfst/lz4.h` | bundled in libfst | none | as libfst | BSD-2-Clause | `libfst/LICENSE.lz4` |
-| `sha256/` | [B-Con/crypto-algorithms](https://github.com/B-Con/crypto-algorithms) | none | `cfbde48414baacf51fc7c74f275190881f037d32` | public domain | `sha256/LICENSE` |
+| `xxhash/` | [Cyan4973/xxHash](https://github.com/Cyan4973/xxHash) | `v0.8.4` | `c87183a77d67f7d37e3d2d1b7eaac5e7c695e4f0` | BSD-2-Clause | `xxhash/LICENSE` |
 
 ## Files copied
 
@@ -72,8 +72,9 @@ Library is as above, and Upstream path each path copied, from the upstream root.
 | `libfst/` | `src/fastlz.h` |
 | `libfst/` | `src/lz4.c` |
 | `libfst/` | `src/lz4.h` |
-| `sha256/` | `sha256.c` |
-| `sha256/` | `sha256.h` |
+| `xxhash/` | `LICENSE` |
+| `xxhash/` | `xxhash.c` |
+| `xxhash/` | `xxhash.h` |
 
 ## Files left out
 
@@ -103,9 +104,4 @@ Library is as above, and Macro each macro [`CMakeLists.txt`](CMakeLists.txt) def
 
 ## Local changes
 
-Library is as above, Change the edit to the upstream code, and Why the reason for it. The other libraries are as upstream ships them.
-
-| Library | Change | Why |
-|---|---|---|
-| `sha256/` | `sha256_transform` casts `data[j]` to `uint32_t` before `<< 24` | UBSan in `test_hashes` found the upstream shift of a promoted `int` undefined for bytes from 0x80 |
-| `sha256/` | `sha256.c` includes `<stdint.h>` | the cast needs `uint32_t` |
+None: every library is as upstream ships it.
