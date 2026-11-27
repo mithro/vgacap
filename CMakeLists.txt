@@ -161,6 +161,9 @@ if(VGACAP_HOST_EXTRAS)
   # tb-v1, the port of tb.cpp's frame decoding.
   vgacap_add_test(test_tbv1 tests/synth.c)
   target_link_libraries(test_tbv1 PRIVATE vgacap_sample)
+  # Its timing (label perf, run by hand like test_trace_push_speed below).
+  add_test(NAME test_tbv1_speed COMMAND test_tbv1 --speed)
+  set_tests_properties(test_tbv1_speed PROPERTIES LABELS perf)
   # centre-v1: libvgaframe's lines and frames, its own mid-pixel pick.
   vgacap_add_test(test_centrev1 tests/synth.c)
   target_link_libraries(test_centrev1 PRIVATE vgacap_sample)
@@ -186,8 +189,6 @@ if(VGACAP_HOST_EXTRAS)
   add_test(NAME test_trace_push_speed COMMAND test_trace_write --speed)
   set_tests_properties(test_trace_push_speed PROPERTIES
     LABELS perf WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
-  add_test(NAME test_tbv1_speed COMMAND test_tbv1 --speed)
-  set_tests_properties(test_tbv1_speed PROPERTIES LABELS perf)
 else()
   # Without the host extras vgacap-dump cannot read a trace and must say so.
   # PASS_REGULAR_EXPRESSION replaces the exit-code check, so the wrapper
