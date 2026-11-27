@@ -676,12 +676,15 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
     5. with `ui_in`, write it and read it back, and fail if the board does
        not drive the value asked for;
     6. `reset_design`: hold reset and read `rst_n` back as 0, program and
-       start the clock, release reset and wait for `rst_n` to read 1 (#58).
+       start the clock, wait on the board for at least `RESET_CLOCKS` clock
+       periods and 1 ms, release reset and wait for `rst_n` to read 1 (#58).
 
-    A design with a synchronous reset so sees its clock while reset is held,
-    with its inputs already set, and the capture starts from the design's
-    own frame 0. What step 3 and 4 changed is put back by `restore_mode`;
-    on a failure here that is done before the error is raised.
+    So reset is held, with the inputs already set and the clock running,
+    for at least 16 periods of the requested clock, which a synchronous
+    reset needs. What steps 3 and 4
+    changed is put back by `restore_mode`. A failure after step 2 releases
+    reset, stops the clock and puts the mode and monitor back before the
+    error is raised.
 
     Returns what it actually did, which is what the CLI prints: which
     `tt.shuttle` accessor worked also tells you which SDK generation the
@@ -766,7 +769,7 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
 #: (#58). On fpga-4 rst_n read 1 at the first poll (2026-11-27).
 RST_N_RELEASE_TIMEOUT_MS = 100
 
-#: Fewest project clock edges `reset_design` holds reset for. The wait is
+#: Fewest periods of the requested clock `reset_design` holds reset for. The wait is
 #: on the board, between the clock starting and the release, so it does
 #: not depend on the link's latency.
 RESET_CLOCKS = 16
@@ -835,7 +838,7 @@ def reset_design(repl: RawRepl, clock: str, clock_hz: float) -> int:
     1. `tt.reset_project(True)`, and `rst_n` must read 0;
     2. start the clock with `clock` (a `clock_command()` for `clock_hz`);
     3. in one board command (`release_command`): wait `reset_hold_ms`, so
-       reset is held for at least `RESET_CLOCKS` clock edges and 1 ms,
+       reset is held for at least `RESET_CLOCKS` periods of `clock_hz` and 1 ms,
        release, and wait up to `RST_N_RELEASE_TIMEOUT_MS` for `rst_n` to
        read 1.
 

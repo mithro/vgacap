@@ -22,6 +22,8 @@ It is for someone who has run `ttcap capture` and wants to know what the board a
 
 The stock firmware runs MicroPython, and `ttcap` drives it through its raw REPL. For each capture, `ttcap` sends a short program from [`mp/`](mp/), with its settings prepended, and the board runs it. So the board needs no capture firmware, and a capture leaves nothing behind but the design it enabled. The program for a stream is [`mp/capture_rp2.py`](mp/capture_rp2.py), joined to the shared [`mp/prelude.py`](mp/prelude.py).
 
+Before every capture through MicroPython, with or without `--ui-in`, `ttcap` turns off the stock firmware's manual-clock monitor, where the board has one, and puts it back afterwards. It also reads `rst_n` back: 0 while it holds reset, then 1 after the release, or the capture fails ([ttcap exit codes and messages](reference-exit-codes.md)).
+
 ## The pins and the clock
 
 The design's eight `uo_out` pins reach the demo board's microcontroller, which also makes the project clock with one of its PWM outputs. The sampler is a slave to that clock: it waits for an edge, then reads the pins. A stream samples on the falling edge, by which time the outputs have settled. The pins differ between the two chips, as [Demo board GPIO maps for capture](reference-gpio-maps.md) lists.

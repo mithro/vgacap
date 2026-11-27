@@ -9,7 +9,7 @@ review: 2027-05-27
 
 **You want your design to start one capture with a chosen value on its `ui_in` pins, such as the setting that picks its VGA mode.**
 
-`ttcap capture --ui-in VALUE` sets the inputs and reads them back before it resets the design. The design then sees its clock while held in reset, so it starts in the state the inputs select. The board's input mode is put back however the capture ends. Without `--ui-in`, the board's inputs are left as they are.
+`ttcap capture --ui-in VALUE` sets the inputs and reads them back before it resets the design. It then holds reset with the clock running for at least 16 clock periods and at least 1 ms, so the design starts in the state the inputs select. The board's input mode is put back however the capture ends. Without `--ui-in`, the board's inputs are left as they are.
 
 ## What you need
 
@@ -35,7 +35,7 @@ The switch comes before the reset, because every mode change rebuilds the firmwa
 1. switch the input mode;
 2. turn off the manual-clock monitor, where the board has one, which could otherwise stop the clock during the run;
 3. set `ui_in` and read it back;
-4. hold reset, start the clock, then release reset and check that `rst_n` reads 1 ([#58](https://github.com/mithro/vgacap/issues/58)).
+4. hold reset and check that `rst_n` reads 0, start the clock, wait at least 16 clock periods and 1 ms, then release reset and check that `rst_n` reads 1 ([#58](https://github.com/mithro/vgacap/issues/58)).
 
 The input mode and the monitor are put back after the capture.
 
@@ -49,8 +49,9 @@ Step 2 shows the picture for that input value. On an FPGA breakout, `tt_um_vgaca
 |---|---|---|---|
 | 1 | `ui_in must be 0..255` | the value is outside a byte | give a value from 0 to 255 |
 | 1 | `argument --ui-in: invalid` | the value is not a number | write it as `5`, `0x05` or `0b101` |
-| 1 | `ui_in reads 0xNN after writing 0xMM` | the firmware left an input undriven because it read high | check the board's input switches are off |
-| 1 | `rst_n stuck low after release` | the board's reset line did not go high | see [ttcap exit codes and messages](reference-exit-codes.md) |
+| 1 | `ui_in reads 0xNN after writing 0xMM` | the stock firmware left an input undriven because it read high | turn the board's input switches off |
+| 1 | `rst_n reads 1 while reset is held` | `tt.reset_project(True)` did not pull the reset line low | check nothing else drives the board's reset line |
+| 1 | `rst_n stuck low after release` | the reset line stayed low for 100 ms after the release | check the reset button and the board's pull-up |
 
 ## Next
 
