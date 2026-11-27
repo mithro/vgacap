@@ -143,17 +143,20 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
     Every `mpremote ... run` or `exec` soft-resets the board, which clears the SDK's `tt`. Without this step a
     capture fails with `NameError: name 'tt' isn't defined`, which `manifest_before.txt` shows already at step 4.
 
-15. On the Welland bench, start the bridge, which the enable in step 16 goes through.
+15. On the Welland bench, start the bridge and wait until it answers, which takes about a second.
 
     ```console
     $ sudo systemctl start fpgas-tt
+    $ timeout 30 sh -c 'until curl -s localhost:8765/health > /dev/null; do sleep 1; done' || echo "no bridge after 30 s"
     ```
 
-16. On the Welland bench, enable the design to capture, because step 14's restart put the FPGA back to `tt_um_factory_test`.
+16. On the Welland bench, enable the design, which prints `{"enabled": "<name>", ...}` after about 3 seconds.
 
     ```console
     $ curl -s -X POST localhost:8765/designs/<name>/enable
     ```
+
+    Step 14's restart put the FPGA back to `tt_um_factory_test`, so the design is enabled here.
 
 17. On the Welland bench, stop the bridge again, which frees `/dev/ttboard` for the capture.
 
@@ -184,10 +187,11 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
     $ mpremote connect $DEV run manifest.py > manifest_after.txt
     ```
 
-22. On the Welland bench, start the bridge again.
+22. On the Welland bench, start the bridge again and wait until it answers.
 
     ```console
     $ sudo systemctl start fpgas-tt
+    $ timeout 30 sh -c 'until curl -s localhost:8765/health > /dev/null; do sleep 1; done' || echo "no bridge after 30 s"
     ```
 
 23. On the Welland bench, restart the SDK through the bridge, which brings the idle display back from `left: the SDK is not running`.
@@ -196,7 +200,7 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
     $ uv run --no-sync python tools/board_restart.py ws://127.0.0.1:8765/serial
     ```
 
-24. On the Welland bench, wait for the idle display, which reads `loaded` about 70 seconds later.
+24. On the Welland bench, wait for the idle display, which read `loaded` after 67 seconds on fpga-1 on 2026-11-27.
 
     ```console
     $ timeout 300 sh -c "until curl -s localhost:8765/health | grep -q '\"state\": \"loaded\"'; do sleep 5; done" || echo "not loaded after 300 s"
@@ -238,6 +242,9 @@ gave the board's own hash back.
 | `no $DEV after 60 s`, with your port for `$DEV`, at step 20 | the restore image did not start | If the `RP2350` drive is still there, repeat step 20; otherwise see the last row |
 | The `fw_sha256` lines differ in Check | the restore copy was cut short | Repeat steps 19 to 21, then Check; if they still differ, stop and keep the backup |
 | The files differ in Check | the filesystem changed while the module firmware ran | Restore the files as below; if they still differ, stop and keep the backup |
+| Step 16 prints nothing | the bridge is not listening yet | Wait for `/health` as at the end of step 15, then repeat step 16 |
+| `no bridge after 30 s` at step 15 or 22 | the bridge did not start | Read `systemctl status fpgas-tt`, start the bridge again, and repeat the step |
+| `ConnectionRefusedError: [Errno 111] Connection refused` at step 23 | the bridge is not listening yet | Wait for `/health` as at the end of step 22, then repeat step 23 |
 | `not loaded after 300 s` at step 24 | the SDK restart did not reach the board | Repeat steps 23 and 24 |
 | Neither `$DEV` nor the `RP2350` drive appears | the board runs nothing that answers on USB | Stop; recovery needs someone at the Welland bench to hold BOOTSEL while resetting the board |
 

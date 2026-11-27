@@ -35,7 +35,7 @@ never written. A reboot, a reset or a power cycle brings the stock firmware back
    $ curl -s localhost:8765/health
    ```
 
-2. On the Welland bench, enable the design through the bridge, because `tt.shuttle` does not know uploaded designs.
+2. On the Welland bench, enable the design through the bridge, which prints `{"enabled": "<name>", ...}` after about 3 seconds.
 
    ```console
    $ curl -s -X POST localhost:8765/designs/<name>/enable
@@ -102,6 +102,7 @@ ID 2e8a:0005 MicroPython Board in FS mode
 | What you see | Likely cause | Fix |
 |---|---|---|
 | `"clients":` above 0 at step 1 | someone is using the board through the bridge | Wait until the count is 0; do not stop the bridge under a client |
+| Step 2 prints nothing | the bridge is not listening | Wait until `curl -s localhost:8765/health` answers, then repeat step 2 |
 | Step 4 cannot open `<dev>` | something else holds the port | Close it, or stop the bridge as in step 3 |
 | No `RP2350` drive after step 4 | the board did not reach its bootloader | At the bench, hold BOOTSEL while resetting the board |
 | `umount` reports the drive already gone | the board rebooted when the copy ended | Nothing: the copy is complete |
