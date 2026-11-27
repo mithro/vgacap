@@ -27,7 +27,7 @@ In the loopback fixture, one RP1 PIO state machine drives a descending count ont
 
 1. On the Pi, run `./capture-rp1/vgacap-rp1 --out counter.vgacap --samples 4194304 --gen-counter --gen-div 50 --clock-hz 500000`, which writes `counter.vgacap` and prints one line.
 2. On the Pi, run `python3 capture-rp1/check_counter.py counter.vgacap`, which checks that every sample is one less than the sample before it.
-3. On the Pi, run `for n in 4 5 6 7 8 9 10 11 12; do sudo pinctrl set $n no; done`, which takes GPIO 4 to GPIO 12 back from the PIO.
+3. On the Pi, run `for n in 4 5 6 7 8 9 10 11 12; do sudo pinctrl set $n no; done`, which takes GPIO 4 to GPIO 12 back from the PIO ([#54](https://github.com/mithro/vgacap/issues/54)).
 
 ## Check
 
@@ -45,7 +45,7 @@ ok: 4194304 samples, every step -1
 
 The count is 8 bits wide, so a loss of a whole multiple of 256 samples leaves it unbroken. Step 2 cannot see such a loss.
 
-After step 3, `pinctrl get 4-12` shows each of GPIO 4 to GPIO 12 with the function `no`. The header is then safe to fit.
+After step 3, `pinctrl get 4-12` shows each of GPIO 4 to GPIO 12 with the function `no`: the PIO no longer drives them.
 
 ## If it fails
 
