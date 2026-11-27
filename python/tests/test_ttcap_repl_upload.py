@@ -193,3 +193,55 @@ def test_a_board_without_crc32_fails_loudly(monkeypatch):
 
     with pytest.raises(RuntimeError, match="crc32"):
         _repl(board).upload(HELD, b"abc")
+
+
+def test_a_garbled_check_reply_is_refused_not_read_as_absent():
+    # A corrupted reply must not pass for "absent" (which would quietly
+    # rewrite the file) or for a length and crc32 the board never sent.
+    def garble(sink):
+        sink[:] = sink.replace(b"len=", b"len=?")
+
+    board = FakeBinaryBoard(files={HELD: b"abc"}, corrupt=garble)
+
+    with pytest.raises(RuntimeError, match="unexpected reply to the upload check"):
+        _repl(board).upload(HELD, b"abc")
+    assert not any("open(%r,'wb')" % HELD in c for c in board.commands)
+
+
+def _four_bytes_giving_crc32(prefix: bytes, target: int) -> bytes:
+    """The 4 bytes that, appended to `prefix`, make its crc32 `target`.
+
+    With the prefix fixed, the crc32 is affine over GF(2) in the 32 bits
+    appended, so its 32 columns are measured and the system solved.
+    """
+    base = zlib.crc32(prefix)
+
+    def crc(bits: int) -> int:
+        return zlib.crc32(bits.to_bytes(4, "little"), base)
+
+    zero = crc(0)
+    # (column of the linear map, the unknown bits it stands for)
+    rows = [(crc(1 << i) ^ zero, 1 << i) for i in range(32)]
+    want = target ^ zero
+    x = 0
+    for bit in range(32):
+        pivot = next(i for i, (col, _) in enumerate(rows) if col >> bit & 1)
+        pcol, pvar = rows.pop(pivot)
+        rows = [(c ^ pcol, v ^ pvar) if c >> bit & 1 else (c, v) for c, v in rows]
+        if want >> bit & 1:
+            want ^= pcol
+            x ^= pvar
+    forged = x.to_bytes(4, "little")
+    assert zlib.crc32(prefix + forged) == target
+    return forged
+
+
+def test_a_longer_file_with_the_same_crc32_is_replaced():
+    # Not a realistic failure, but it is what makes the check length AND
+    # crc32 rather than crc32 alone.
+    payload = _payload()
+    stale = payload + _four_bytes_giving_crc32(payload, zlib.crc32(payload))
+    board = FakeBinaryBoard(files={HELD: stale})
+
+    assert _repl(board).upload(HELD, payload) is True
+    assert board.files[HELD] == payload
