@@ -346,6 +346,30 @@ def test_rst_n_from_a_second_state_machine_after_the_cpu_took_the_clock_back():
     assert design.count(len(design.clock_rises) - 1) == counted
 
 
+def test_a_state_machines_sideset_init_on_rst_n_resets_a_cpu_edge_in_its_cycle():
+    # The CPU clocks the design, a read caches the edge's value, then a state
+    # machine built in the edge's own cycle drives rst_n low through its
+    # sideset_init: rst_n is read in the edge's cycle, so that edge resets
+    # and the cached value must go (the round 2 re-review's n2_probe.py).
+    design = ClockedDesign(UO, clk_gpio=CLK, rst_gpio=17)
+    board = Board(design)
+    mods = board.modules()
+    rp2, Pin = mods["rp2"], mods["machine"].Pin
+    rp2.PIO(1).gpio_base(16)
+    Pin(17, Pin.OUT, value=1)
+    clk = Pin(CLK, Pin.OUT, value=0)
+    for _ in range(3):
+        clk.value(1)
+        clk.value(0)
+    clk.value(1)
+    t = board.now
+    assert design.clock_rises[-1] == t
+    assert design.count_at(t) == 4
+    rp2.StateMachine(5, _hold(rp2, 0), sideset_base=Pin(17))
+    assert board.now == t and board.pad_level(17, t) == 0
+    assert design.count_at(t) == 0
+
+
 def test_rst_n_from_the_clock_state_machine_resets_its_own_samples():
     # One state machine side-sets both the clock (bit 0, GPIO16) and rst_n
     # (bit 1, GPIO17): 11 edges with rst_n high, then rst_n falls in the
