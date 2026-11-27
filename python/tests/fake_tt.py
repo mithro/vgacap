@@ -47,10 +47,11 @@ Construction stands for a boot that is already over: it sets `rst_n` and
 `uio` as `begin_inputs_all` left them and leaves the clock pad to the
 board's waveform, the PWM that started after boot. `clock_project_PWM` is
 refused there with `BoardError` (the waveform is the PWM). A mode write
-there rebuilds only `rst_n`, the clock and `uio` (and drives `ui_in` in
-`ASIC_RP_CONTROL`); it does not rebuild `uo_out`, `ui_in` in the other
-modes, or the pins the SDK always makes outputs (GPIO 0-3, 5, 6, 11, 12,
-the loader's 3 and 6 among them).
+there rebuilds only `rst_n`, the clock and `uio`; it does not rebuild
+`uo_out`, `ui_in`, or the pins the SDK always makes outputs (GPIO 0-3, 5,
+6, 11, 12, the loader's 3 and 6 among them). `tt.ui_in` is the fake's own
+model there too (`ui_in_level()`, from the writes, the mode and
+`switches`): it touches no pad of the board.
 
 The design behind the pins is modelled only as far as reset goes: `design`
 counts the clock edges it saw while `rst_n` was low (a synchronous reset
