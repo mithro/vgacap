@@ -35,6 +35,19 @@ from sphinx.util import logging
 
 logger = logging.getLogger(__name__)
 
+#: Every check this module makes: the start of the message it prints (…
+#: for a part that varies), and what it catches. Each fails the build.
+#: docs/developing/site/reference-page-rules.md is made from this table, and
+#: docs/tests/test_vgacap_developing.py holds it to the messages in the code.
+CHECKS = (
+    ("landing line …: … leaves the repository", "a landing line whose link leaves the repository"),
+    ("landing line …: … is not a page", "a landing line to a Markdown file or directory that is not a page"),
+    ("landing line …: … already has its line on …: …", "a second line to a page, on another landing page or the same one"),
+    ("a page writes no toctree: …", "a page that writes a toctree, in MyST or in an eval-rst block"),
+    ("landing page has no line linking to a page", "a landing page with no line"),
+    ("the page ends inside a code block that is not closed, …", "a landing page that ends in an open code block"),
+)
+
 FRONT_MATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.S)
 LANDING = re.compile(r"^type:\s*landing\s*$", re.M)
 SCHEME = re.compile(r"[a-z][a-z0-9+.-]*:", re.I)

@@ -1,53 +1,69 @@
-# Building, testing and continuous integration
+---
+type: how-to
+owner: vgacap maintainers
+reader: someone with a vgacap checkout who wants to build it and run its tests
+review: 2027-05-27
+---
 
-How to build and test vgacap, and what CI checks.
+# How to build vgacap and run its tests
 
-## Building and testing
+**You have a vgacap checkout, and you want the C libraries, the tools and the GStreamer plugin built, and every test run.**
 
-The core libraries are C99 with no dependencies beyond libc. The
-[GStreamer plugin](../gst/README.md) is optional: CMake builds it only when
-the GStreamer development files are present. The Python side runs under
-[uv](https://docs.astral.sh/uv/).
+This page builds the host side with CMake and runs its C and Python tests, as the CI jobs do. It does not build [the vgacap firmware](../firmware/README.md) for the RP2350, which its own pages cover. What each test layer covers is on [The test layers of vgacap](developing/explanation-testing.md), and every option is on [Build options and test settings](developing/reference/reference-build-options.md).
 
-```sh
-cmake -S . -B build && cmake --build build
-ctest --test-dir build --output-on-failure
-uv run pytest -q
+## What you need
+
+- CMake 3.16 or later, a C99 compiler and `make`, and [uv](https://docs.astral.sh/uv/) for the Python side.
+- For the [GStreamer plugin](../gst/README.md) and its tests, the GStreamer development files and tools that the `gstreamer` job of [`ci.yml`](../.github/workflows/ci.yml) installs. Without them the plugin is skipped, not failed.
+- For the RTL framer's test, Icarus Verilog (`iverilog`).
+- For the RP1 sampler's test, network access, to fetch [piolib](https://github.com/raspberrypi/utils/tree/master/piolib) in step 4.
+
+## Steps
+
+1. In the checkout, run `cmake -S . -B build` to configure the build, which prints a `vgacap:` line saying whether it builds the GStreamer plugin.
+2. In the checkout, run `cmake --build build -j` to build the libraries, the C tools and the C tests into `build/`.
+3. In the checkout, run `ctest --test-dir build --output-on-failure -LE perf` to run the C tests without the timing test labelled `perf`.
+4. In the checkout, fetch piolib at CI's commit into `build/utils` with these commands, so that the RP1 sampler's test runs instead of skipping:
+
+   ```sh
+   PIOLIB_COMMIT=$(sed -n 's/^  PIOLIB_COMMIT: //p' .github/workflows/ci.yml)
+   git init -q build/utils
+   git -C build/utils remote add origin https://github.com/raspberrypi/utils.git
+   git -C build/utils fetch -q --depth 1 origin "$PIOLIB_COMMIT"
+   git -C build/utils checkout -q FETCH_HEAD
+   export VGACAP_PIOLIB=$PWD/build/utils/piolib
+   ```
+
+5. In the same shell, run `uv run pytest -q -rs` to run the Python and GStreamer suites, which takes about 30 minutes and lists every skip with its reason.
+6. To check the build without the vendored libraries, repeat steps 1 to 3 with `-B build-off -DVGACAP_HOST_EXTRAS=OFF` and `--test-dir build-off`.
+7. To test the vgacap MicroPython module, run `mpy/build-unix.sh`, then `uv run pytest -q python/tests/test_mpy_module.py`.
+
+## Check
+
+Step 3 ends with this line, where `N` is the count of tests in your configuration:
+
+```text
+100% tests passed, 0 tests failed out of N
 ```
 
-`VGACAP_JCC_PAD` (default `ON`) assembles every C file, `third_party/`
-included, with `-Wa,-mbranches-within-32B-boundaries` (GCC or Clang on x86-64,
-when the assembler takes it; CMake checks and otherwise builds without). The
-Skylake-family JCC-erratum microcode slows loops whose jumps touch a 32-byte
-boundary; the flag adds NOP padding only, so outputs are unchanged.
+Step 5 ends with a summary of passed and skipped tests and no failures. Without GStreamer, the plugin's tests are among the skips, each with its reason. Step 7 builds `build/mpy-unix/micropython`, and its tests pass instead of skipping.
 
-## Documentation site
+## If it fails
 
-The [Read the Docs](https://about.readthedocs.com) site is built from the
-Markdown files where they are, by Sphinx with
-[MyST](https://myst-parser.readthedocs.io). [`docs/conf.py`](conf.py) lists
-the pages, in navigation order; a new page goes there. Warnings are errors:
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 1 | `vgacap: GStreamer development files not found, skipping the plugin` | no GStreamer development files | Install them as the `gstreamer` job does, or go on without the plugin |
+| 1 | `vgacap: pkg-config not found, skipping the GStreamer plugin` | no `pkg-config` | Install `pkg-config`, then run step 1 again |
+| 1 | `vgacap: VGACAP_JCC_PAD: ... is not supported here` | a compiler or a machine other than GCC or Clang on x86-64 | Nothing: the build goes on without the padding |
+| 2 | an `error:` from a warning | the build turns warnings into errors (`-Werror`) | Fix the warning in the code |
+| 5 | skips that say `needs build/vgacap-frames` | step 2 has not run | Run steps 1 and 2 |
+| 5 | a skip that says `VGACAP_PIOLIB (raspberrypi/utils' piolib) is not set` | step 4 has not run in this shell | Run step 4, or accept the skip |
+| 5 | `test_mpy_module.py` skipped | no `build/mpy-unix/micropython` | Run step 7 |
+| 7 | `test_stream_stops_between_chunks_on_request` fails with `assert stats.chunks >= 4` | a busy machine: [vgacap #31](https://github.com/mithro/vgacap/issues/31) | Run step 7 again on a quieter machine |
 
-```sh
-uv run --locked --python 3.13 --only-group docs sphinx-build -W --keep-going -c docs . build/docs
-```
+## Next
 
-## Continuous integration
-
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs these jobs on
-every push and pull request, on a pinned `ubuntu-24.04` image:
-
-| step | `c` | `firmware` | `mpy-module` | `docs` | `python` | `gstreamer` |
-|---|---|---|---|---|---|---|
-| host CMake build | yes | no | yes | no | yes | yes |
-| [`vgacap-rp1`](../capture-rp1/README.md) against [piolib](https://github.com/raspberrypi/utils/tree/master/piolib) | yes | no | no | no | no | no |
-| piolib for the RP1 sampler test | no | no | no | no | yes | yes |
-| [`vgacap_fw.uf2`](../firmware/README.md) for the RP2350 | no | yes | no | no | no | no |
-| MicroPython unix port with the module | no | no | yes | no | no | no |
-| MicroPython rp2 port with the module | no | no | yes | no | no | no |
-| [documentation site](#documentation-site) | no | no | no | yes | no | no |
-| GStreamer installed | no | no | no | no | no | yes |
-| plugin built | no | no | no | no | no | yes |
-| Icarus (`iverilog`) for the RTL test | no | no | no | no | no | yes |
-| `ctest` | yes | no | no | no | no | yes |
-| `pytest` | no | no | [`test_mpy_module.py`](../python/tests/test_mpy_module.py) | no | all | all |
+- [The test layers of vgacap](developing/explanation-testing.md)
+- [Build options and test settings](developing/reference/reference-build-options.md)
+- [Continuous integration jobs](developing/reference/reference-ci-jobs.md)
+- [How to run the hardware-in-the-loop check through a tunnel](../tools/how-to-run-hil-through-a-tunnel.md)
