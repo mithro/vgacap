@@ -162,8 +162,9 @@ def wait_ms(done, ms):
 def main(out):
     """Clock and sample the design `CLOCKS` times; see the docstring."""
     write_time_chunk(out, 0, (  # noqa: F821 - the prelude's
-        "clocked clocks=%d reset_clocks=%d pio_div=%d cycles_per_clock=%d"
-        % (CLOCKS, RESET_CLOCKS, PIO_DIV, CYCLES)).encode())
+        "clocked clocks=%d reset_clocks=%d pio_div=%d cycles_per_clock=%d%s"
+        % (CLOCKS, RESET_CLOCKS, PIO_DIV, CYCLES,
+           " below_floor=1" if CFG["below_floor"] else "")).encode())  # noqa: F821
     status = "error"
     samples = stalled = 0
     sm = prog = dma = bufs = poller = stdin = logs = None

@@ -1436,11 +1436,19 @@ class ClockedTiming:
         """Nanoseconds from the rising edge to the `in` that reads uo_out."""
         return (self.high + 1) * self.pio_div * 1e9 / self.sysclk_hz
 
+    @property
+    def below_floor(self) -> bool:
+        """The read is under `CLOCKED_SAMPLE_NS` after the edge: only an
+        explicit H for a sweep does that, and the run is a sweep point,
+        not a reference."""
+        return self.high < _least_high(self.sysclk_hz, self.pio_div)
+
     def cfg(self) -> dict:
         """The keys `clocked_rp2.py` takes from this, `sysclk_hz` the value
-        the board checks `machine.freq()` against."""
+        the board checks `machine.freq()` against, `below_floor` what its
+        opening record repeats."""
         return {"sysclk_hz": self.sysclk_hz, "pio_div": self.pio_div,
-                "high": self.high, "low": self.low}
+                "high": self.high, "low": self.low, "below_floor": int(self.below_floor)}
 
 
 #: Words the RX FIFO holds, unjoined: `clocked_rp2.py` joins neither way.
@@ -1578,6 +1586,13 @@ def clocked_cfg(profile: BoardProfile, clocks: int, reset_clocks: int = CLOCKED_
 #: The opening record `clocked_rp2.py` writes, its run parameters.
 _CLOCKED_OPENING = "clocked clocks=%d reset_clocks=%d pio_div=%d cycles_per_clock=%d"
 
+def clocked_opening(req: CaptureRequest, timing: ClockedTiming) -> str:
+    """The opening record a clocked run of `req` at `timing` must write."""
+    want = _CLOCKED_OPENING % (req.clocks, req.reset_clocks, timing.pio_div,
+                               timing.cycles_per_clock)
+    return want + " below_floor=1" if timing.below_floor else want
+
+
 _READ_SYSCLK = "import machine\nprint('ttcap sysclk=%d' % machine.freq())"
 
 
@@ -1590,8 +1605,7 @@ def clocked_problems(req: CaptureRequest, timing: ClockedTiming,
     the request; `overruns=0`; and a closing record is there.
     """
     problems = []
-    want = _CLOCKED_OPENING % (req.clocks, req.reset_clocks, timing.pio_div,
-                               timing.cycles_per_clock)
+    want = clocked_opening(req, timing)
     opening = next((m for m in stats.messages if m.startswith("clocked ")), None)
     if opening != want:
         problems.append(f"the opening record is {opening!r}, not {want!r}")
@@ -1676,6 +1690,8 @@ def clocked_header_bytes(req: CaptureRequest, timing: ClockedTiming) -> bytes:
         % (req.profile.name, Path(req.bitstream).name, len(data), zlib.crc32(data),
            req.clocks, req.reset_clocks, timing.sysclk_hz, timing.pio_div, timing.high,
            timing.low))
+    if timing.below_floor:
+        parts.append("below_floor=1")
     profile = req.profile
     buf = io.BytesIO()
     Writer(buf, Header(version=1, sample_bits=profile.sample_bits, mode=MODE_SELFCLK,

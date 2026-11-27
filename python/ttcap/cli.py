@@ -49,6 +49,7 @@ from vgacap.modes import MODES
 from .capture import (
     CAPTURE_MODES,
     CLOCKED_RESET_CLOCKS,
+    CLOCKED_SAMPLE_NS,
     CLOCKED_SCRIPT,
     DEFAULT_BUF_WORDS,
     DEFAULT_PIO,
@@ -810,6 +811,13 @@ def _capture_clocked(driver, out_path: str, **fields) -> CaptureStats:
            timing.low),
         file=say,
     )
+    if timing.below_floor:
+        print(
+            "warning: --clock-high %d reads uo_out %d ns after the rising edge, under "
+            "the %d ns floor: this run is a sweep point, not a reference"
+            % (timing.high, round(timing.sample_ns), CLOCKED_SAMPLE_NS),
+            file=sys.stderr,
+        )
     _report(stats, "stdout" if to_stdout else out_path, stream=say)
     if to_stdout and fp.consumer_closed:
         raise ConsumerClosed(stats)

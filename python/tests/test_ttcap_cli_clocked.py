@@ -99,6 +99,18 @@ def test_reset_clocks_clock_high_ui_in_and_pio_reach_the_run(monkeypatch, capsys
     assert bench.link.tt.mode == ASIC_MANUAL_INPUTS  # put back
 
 
+def test_a_clock_high_under_the_floor_warns_and_still_runs(monkeypatch, capsys, tmp_path):
+    bench = Bench(monkeypatch, tmp_path)
+    args = bench.args("--clock-high", "0", clocks=16)
+    args[args.index("--clock-hz") + 1] = "7000000"
+
+    assert cli.main(args) == 0
+
+    err = capsys.readouterr().err
+    assert "warning: --clock-high 0 reads uo_out 8 ns after the rising edge" in err
+    assert "a sweep point, not a reference" in err
+
+
 class _BinaryStdout:
     """`sys.stdout` with a `.buffer` that keeps the bytes."""
 

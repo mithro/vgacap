@@ -182,9 +182,27 @@ def test_a_chosen_h_moves_the_read_within_the_nearest_clock_it_fits():
         clocked_timing(SYSCLK, 5_000_000, high=16)
 
 
+def test_an_h_under_the_40_ns_floor_is_a_marked_sweep_point(tmp_path):
+    # Review M2: allowed, for the H sweep, but said so in the opening
+    # record and the desc; still clean, since the run did what was asked.
+    assert not clocked_timing(SYSCLK, 7_000_000).below_floor
+    assert clocked_timing(SYSCLK, 7_000_000, high=0).below_floor  # 7.5 ns
+    assert not clocked_timing(SYSCLK, 7_000_000, high=5).below_floor  # 45 ns
+    rig = Rig(tmp_path)
+    stats, data = rig.run(clock_hz=7_000_000, clock_high=0, clocks=16, reset_clocks=2)
+    assert stats.clean, stats.format()
+    opening = next(m for m in stats.messages if m.startswith("clocked "))
+    assert opening.endswith(" below_floor=1")
+    assert " below_floor=1" in read_stream(data)[0].desc
+    (tmp_path / "default").mkdir()
+    stats, data = Rig(tmp_path / "default").run(clock_hz=7_000_000, clocks=16, reset_clocks=2)
+    assert "below_floor" not in " ".join(stats.messages) + read_stream(data)[0].desc
+
+
 def test_the_timing_goes_to_the_board_as_cfg():
     t = ClockedTiming(sysclk_hz=SYSCLK, pio_div=3, high=7, low=2)
-    assert t.cfg() == {"sysclk_hz": SYSCLK, "pio_div": 3, "high": 7, "low": 2}
+    assert t.cfg() == {"sysclk_hz": SYSCLK, "pio_div": 3, "high": 7, "low": 2,
+                       "below_floor": 0}
 
 
 # -- the request ----------------------------------------------------------------------
