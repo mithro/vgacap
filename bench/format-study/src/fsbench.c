@@ -18,6 +18,7 @@
 
 int fs_mode_encode(int argc, char **argv);
 int fs_mode_read(int argc, char **argv);
+int fs_mode_ctr(int argc, char **argv);
 
 static const char *project_of(const char *path) {
     static char buf[512];
@@ -78,11 +79,12 @@ static int mode_info(int argc, char **argv) {
     if (fs_source_runs(src, 0, UINT64_MAX, on_info, &s)) return 1;
     printf("project,clocks,samples,runs,changed_samples,changed_clocks,multi_port_samples");
     for (int k = 0; k < FS_GROUPS; k++) printf(",changes_port%d", k);
+    printf(",clock_hz");
     printf("\n%s,%llu,%llu,%llu,%llu,%llu,%llu", project_of(argv[0]), (unsigned long long)fs_source_clocks(src),
            (unsigned long long)s.samples, (unsigned long long)s.runs, (unsigned long long)s.changed_samples,
            (unsigned long long)s.changed_clocks, (unsigned long long)s.multi_port_samples);
     for (int k = 0; k < FS_GROUPS; k++) printf(",%llu", (unsigned long long)s.port_changes[k]);
-    printf("\n");
+    printf(",%u\n", fs_clock_hz);
     fs_source_close(src);
     return 0;
 }
@@ -185,6 +187,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "writer")) return mode_writer(argc - 2, argv + 2);
     if (!strcmp(argv[1], "encode")) return fs_mode_encode(argc - 2, argv + 2);
     if (!strcmp(argv[1], "read")) return fs_mode_read(argc - 2, argv + 2);
+    if (!strcmp(argv[1], "ctr")) return fs_mode_ctr(argc - 2, argv + 2);
     fprintf(stderr, "fsbench: unknown mode %s\n", argv[1]);
     return 2;
 }

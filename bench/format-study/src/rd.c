@@ -259,14 +259,19 @@ static int st_decode(st_rd_t *s, uint64_t i, unsigned mask, size_t *lens) {
     const int ns = nstreams_of(s);
     const uint8_t *p = s->map + s->b[i].off;
     const uint8_t *z = p + 20 + 8 * (uint64_t)ns;
+    size_t maxrl = 0;
+    for (int k = 0; k < ns; k++) {
+        const size_t rl = rd32(p + 20 + 8 * (uint64_t)k);
+        if (rl > maxrl) maxrl = rl;
+    }
+    if (s->deccap < maxrl + 64) {
+        for (int j = 0; j < FS_MAX_STREAMS; j++) { free(s->dec[j]); s->dec[j] = malloc(maxrl + 64); }
+        s->deccap = maxrl + 64;
+    }
     for (int k = 0; k < ns; k++) {
         const size_t rl = rd32(p + 20 + 8 * (uint64_t)k), cl = rd32(p + 24 + 8 * (uint64_t)k);
         lens[k] = rl;
         if (mask & (1u << k)) {
-            if (s->deccap < rl + 64) {
-                for (int j = 0; j < FS_MAX_STREAMS; j++) { free(s->dec[j]); s->dec[j] = malloc(rl + 64); }
-                s->deccap = rl + 64;
-            }
             if (rl && fs_decompress(s->c, z, cl, s->dec[k], rl)) {
                 fprintf(stderr, "fs: block %llu stream %d: decompression failed\n", (unsigned long long)i, k);
                 return -1;
@@ -307,6 +312,17 @@ static int st_block(st_rd_t *s, uint64_t i, int port0, out_t *o, port0_t *p0) {
             return 0;
         }
         if (st_decode(s, i, 0x7fu, lens)) return -1;
+        if (getenv("FS_CHECK_PLANAR")) {
+            for (int k = 0; k < FS_GROUPS; k++) {
+                const uint8_t *q = s->dec[k], *e = q + lens[k];
+                uint64_t sum = 0, pairs = 0;
+                while (q < e) { q++; sum += get_leb(&q); pairs++; }
+                if (sum != ns)
+                    fprintf(stderr, "planar block %llu stream %d: %llu pairs, runs sum %llu, block %llu samples\n",
+                            (unsigned long long)i, k, (unsigned long long)pairs, (unsigned long long)sum,
+                            (unsigned long long)ns);
+            }
+        }
         const uint8_t *p[FS_GROUPS];
         uint64_t left[FS_GROUPS], cur = 0;
         for (int k = 0; k < FS_GROUPS; k++) {

@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <libgen.h>
+#include <signal.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 
@@ -113,6 +114,7 @@ static void write_primary(bg_t *g, const fs_block_t *b, uint8_t **s, const size_
     for (int i = 0; i < ns; i++) { put32(g->pf, (uint32_t)len[i]); put32(g->pf, zl[i]); }
     for (int i = 0; i < ns; i++) { fwrite(z[i], 1, zl[i], g->pf); g->pbytes += zl[i]; free(z[i]); }
     g->pbytes += 4 + 8 + 8 + 8 * (uint64_t)ns;
+    fflush(g->pf);   // as vgch2 does: a killed writer keeps every block it finished
 }
 
 static void on_block(void *ctx, const fs_block_t *b) {
@@ -197,7 +199,7 @@ int fs_mode_encode(int argc, char **argv) {
     if (argc < 2) { fprintf(stderr, "usage: fsbench encode TRACE OUTDIR --writer W ...\n"); return 2; }
     const char *trace = argv[0], *outdir = argv[1];
     const char *writer = NULL, *transforms = "identity", *comps = "zstd1", *primary = NULL;
-    uint64_t every = 1, block_clocks = 0;
+    uint64_t every = 1, block_clocks = 0, stride = 1, kill_after = 0;
     for (int i = 2; i + 1 < argc; i += 2) {
         if (!strcmp(argv[i], "--writer")) writer = argv[i + 1];
         else if (!strcmp(argv[i], "--transforms")) transforms = argv[i + 1];
@@ -205,6 +207,8 @@ int fs_mode_encode(int argc, char **argv) {
         else if (!strcmp(argv[i], "--sample-every")) every = strtoull(argv[i + 1], NULL, 0);
         else if (!strcmp(argv[i], "--primary")) primary = argv[i + 1];
         else if (!strcmp(argv[i], "--block-clocks")) block_clocks = strtoull(argv[i + 1], NULL, 0);
+        else if (!strcmp(argv[i], "--stride")) stride = strtoull(argv[i + 1], NULL, 0);
+        else if (!strcmp(argv[i], "--kill-after")) kill_after = strtoull(argv[i + 1], NULL, 0);
         else if (!strcmp(argv[i], "--fst-pack")) {
             const char *p = argv[i + 1];
             fs_fst_pack = !strcmp(p, "zlib") ? 0 : !strcmp(p, "fastlz") ? 1 : 2;
@@ -260,12 +264,17 @@ int fs_mode_encode(int argc, char **argv) {
     const uint64_t chunk = 1ull << 20, clocks = fs_source_clocks(src);
     uint64_t *raw = malloc(2 * chunk * sizeof *raw);
     double src_ns = 0;
-    for (uint64_t c0 = 0; c0 < clocks; c0 += chunk) {
+    uint64_t processed = 0;
+    if (!stride) stride = 1;
+    for (uint64_t c0 = 0; c0 < clocks; c0 += stride * chunk) {
         const uint64_t k = clocks - c0 < chunk ? clocks - c0 : chunk;
         const double s0 = fs_thread_ns();
         if (fs_source_chunk(src, c0, k, raw)) return 1;
         src_ns += fs_thread_ns() - s0;
         w->run(st, raw, k);
+        processed += k;
+        // A crash mid-write: no finish, no index, threads killed with the process.
+        if (kill_after && processed >= kill_after) raise(SIGKILL);
     }
     w->finish(st);
     const double th1 = fs_thread_ns(), cpu1 = process_cpu_ns(), wall1 = fs_wall_ns();
@@ -304,10 +313,11 @@ int fs_mode_encode(int argc, char **argv) {
     fprintf(stderr, "pass %s %s: thread %.1f s (source %.1f s, bg %.1f s), process %.1f s, wall %.1f s\n", project,
             w->name, (th1 - th0) / 1e9, src_ns / 1e9, g->bg_ns_total / 1e9, (cpu1 - cpu0) / 1e9, (wall1 - wall0) / 1e9);
     printf("#pass,%s,%s,%s,thread_ns=%.0f,source_ns=%.0f,bg_ns=%.0f,process_ns=%.0f,wall_ns=%.0f,file=%s,file_bytes=%llu,"
-           "primary=%s,primary_bytes=%llu,primary_ns=%.0f,clocks=%llu\n",
+           "primary=%s,primary_bytes=%llu,primary_ns=%.0f,clocks=%llu,processed_clocks=%llu\n",
            project, w->name, native ? out : "-", th1 - th0, src_ns, g->bg_ns_total, cpu1 - cpu0, wall1 - wall0,
            out[0] ? out : "-", (unsigned long long)(out[0] ? file_size(out) : 0), pfile[0] ? pfile : "-",
-           (unsigned long long)(pfile[0] ? file_size(pfile) : 0), g->p_ns, (unsigned long long)clocks);
+           (unsigned long long)(pfile[0] ? file_size(pfile) : 0), g->p_ns, (unsigned long long)clocks,
+           (unsigned long long)processed);
     free(raw);
     fs_source_close(src);
     return 0;

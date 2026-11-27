@@ -109,11 +109,42 @@ static inline uint64_t transpose8(uint64_t x) {
     return x;
 }
 
+// 8x8 byte transpose: w[i] byte k <-> w[k] byte i.
+static inline void tbyte8(uint64_t *w) {
+    for (int i = 0; i < 4; i++) {
+        const uint64_t t = ((w[i] >> 32) ^ w[i + 4]) & 0x00000000FFFFFFFFull;
+        w[i] ^= t << 32; w[i + 4] ^= t;
+    }
+    static const int s2[4] = { 0, 1, 4, 5 };
+    for (int j = 0; j < 4; j++) {
+        const int i = s2[j];
+        const uint64_t t = ((w[i] >> 16) ^ w[i + 2]) & 0x0000FFFF0000FFFFull;
+        w[i] ^= t << 16; w[i + 2] ^= t;
+    }
+    for (int i = 0; i < 8; i += 2) {
+        const uint64_t t = ((w[i] >> 8) ^ w[i + 1]) & 0x00FF00FF00FF00FFull;
+        w[i] ^= t << 8; w[i + 1] ^= t;
+    }
+}
+
+static int identity_layout(void) {
+    for (int k = 0; k < 8; k++)
+        if (fs_off[k] != k) return 0;
+    return 1;
+}
+// fs_pack for the identity layout: masks and two shifts. (Any other layout
+// is one pshufb; the study's raw images use this one.)
+static inline uint64_t pack_id(uint64_t r) {
+    return (r & 0x1ffffffffffull) | ((r >> 7) & (1ull << 41)) | ((r >> 14) & (1ull << 42));
+}
+
 int fs_transform(int t, const uint64_t *raw, uint64_t n, uint64_t first_sample, uint8_t **out, size_t *lens,
                  uint64_t *clk_errors) {
     uint64_t bad = 0;
-    for (uint64_t i = 0; i < n; i++) bad += ((raw[i] >> (8 * FS_CLK)) & 1) != ((first_sample + i) & 1);
+    const uint64_t ph = (first_sample & 1) ? FS_CLK_RAW : 0;
+    for (uint64_t i = 0; i < n; i++) bad += ((raw[i] ^ ph ^ ((i & 1) ? FS_CLK_RAW : 0)) >> (8 * FS_CLK)) & 1;
     *clk_errors += bad;
+    const int id = identity_layout();
     switch (t) {
     case T_PACK6:
     case T_XOR6:
@@ -122,7 +153,7 @@ int fs_transform(int t, const uint64_t *raw, uint64_t n, uint64_t first_sample, 
         uint64_t prev = 0;
         const uint64_t keep = t == T_PACK6CLK ? ~0ull : ~(1ull << 42);
         for (uint64_t i = 0; i < n; i++) {
-            const uint64_t v = fs_pack(raw[i]) & keep;
+            const uint64_t v = (id ? pack_id(raw[i]) : fs_pack(raw[i])) & keep;
             const uint64_t w = t == T_XOR6 ? v ^ prev : v;
             prev = v;
             memcpy(p, &w, 8);
@@ -132,38 +163,30 @@ int fs_transform(int t, const uint64_t *raw, uint64_t n, uint64_t first_sample, 
         return 1;
     }
     case T_BSHUF:
-    case T_XBSHUF: {
-        uint64_t prev = 0;
-        for (uint64_t i = 0; i < n; i++) {
-            const uint64_t v = raw[i] & FS_NOCLK_MASK;
-            const uint64_t w = t == T_XBSHUF ? v ^ prev : v;
-            prev = v;
-            for (int k = 0; k < FS_GROUPS; k++) out[k][i] = (uint8_t)(w >> (8 * k));
-        }
-        for (int k = 0; k < FS_GROUPS; k++) lens[k] = (size_t)n;
-        return FS_GROUPS;
-    }
+    case T_XBSHUF:
     case T_XBITSHUF: {
         const uint64_t groups = (n + 7) / 8;
         uint64_t prev = 0;
         for (uint64_t g = 0; g < groups; g++) {
-            uint64_t x[FS_GROUPS] = { 0 };
+            uint64_t w[8];
             for (int j = 0; j < 8; j++) {
                 const uint64_t i = 8 * g + (uint64_t)j;
-                uint64_t w = 0;
-                if (i < n) {
-                    const uint64_t v = raw[i] & FS_NOCLK_MASK;
-                    w = v ^ prev;
-                    prev = v;
-                }
-                for (int k = 0; k < FS_GROUPS; k++) x[k] |= ((w >> (8 * k)) & 0xff) << (8 * j);
+                const uint64_t v = i < n ? raw[i] & FS_NOCLK_MASK : prev;
+                w[j] = t == T_BSHUF ? v : v ^ prev;
+                prev = v;
             }
-            for (int k = 0; k < FS_GROUPS; k++) {
-                const uint64_t y = transpose8(x[k]);
-                for (int b = 0; b < port_bits[k]; b++) out[k][(uint64_t)b * groups + g] = (uint8_t)(y >> (8 * b));
+            tbyte8(w);   // w[k]: port k's byte of the 8 samples
+            if (t != T_XBITSHUF) {
+                for (int k = 0; k < FS_GROUPS; k++) memcpy(out[k] + 8 * g, &w[k], 8);
+            } else {
+                for (int k = 0; k < FS_GROUPS; k++) {
+                    const uint64_t y = transpose8(w[k]);
+                    for (int b = 0; b < port_bits[k]; b++) out[k][(uint64_t)b * groups + g] = (uint8_t)(y >> (8 * b));
+                }
             }
         }
-        for (int k = 0; k < FS_GROUPS; k++) lens[k] = (size_t)(groups * (uint64_t)port_bits[k]);
+        for (int k = 0; k < FS_GROUPS; k++)
+            lens[k] = (size_t)(t == T_XBITSHUF ? groups * (uint64_t)port_bits[k] : 8 * groups);
         return FS_GROUPS;
     }
     default: return -1;

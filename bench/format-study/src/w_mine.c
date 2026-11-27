@@ -110,11 +110,13 @@ static inline void planar_sample(planar_t *w, uint64_t s, uint64_t v) {
     const uint64_t cur = w->s.want;
     while (x) {
         const unsigned k = (unsigned)__builtin_ctzll(x) >> 3;
-        uint8_t *p = w->s.p[k];
-        *p = (uint8_t)(cur >> (8 * k));
-        p += 1 + vgacap_leb128_put_inline(p + 1, s - w->start[k]);
-        w->s.p[k] = p;
-        w->start[k] = s;
+        if (s != w->start[k]) {   // a change at the block's first sample ends no run
+            uint8_t *p = w->s.p[k];
+            *p = (uint8_t)(cur >> (8 * k));
+            p += 1 + vgacap_leb128_put_inline(p + 1, s - w->start[k]);
+            w->s.p[k] = p;
+            w->start[k] = s;
+        }
         x &= ~(0xffull << (8 * k));
     }
     w->s.want = v;
