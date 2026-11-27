@@ -124,15 +124,26 @@ tick() {
         local qa=(); [ -n "$q" ] && qa=(--qspi "$q")
         # TICK_CPUS entries are a CPU, or "A,B": the simulation thread on A, the writers' threads on A or B.
         # TICK_SCOPE=1: unpinned instead, in a systemd scope with CPUQuota=200%, as a job runs (runqueue.py).
-        local pin=(taskset -c "${TCPUS[$i]}") mc=(--main-cpu "${TCPUS[$i]%%,*}")
-        if [ "${TICK_SCOPE:-0}" = 1 ]; then pin=(systemd-run --user --scope --quiet -p CPUQuota=200%); mc=(); fi
+        local pin mc
+        if [ "${TICK_SCOPE:-0}" = 1 ]; then
+            pin=(systemd-run --user --scope --quiet -p CPUQuota=200%); mc=()
+        else
+            [ "$i" -lt "${#TCPUS[@]}" ] || { log "sim tick: $p: no CPU left in TICK_CPUS (${TCPUS[*]})"; exit 1; }
+            pin=(taskset -c "${TCPUS[$i]}"); mc=(--main-cpu "${TCPUS[$i]%%,*}")
+        fi
         ( cd "$SIMSRC/$p/repo/src" && "${pin[@]}" "$S/$p/tick/Vtop" --out "$o" --clock-hz "$hz" --chunk 65536 "${mc[@]}" \
             --chunks "${TICK_CHUNKS:-4000}" --variants "${TICK_VARIANTS:-none,vgch2,runs,events,changelog,raw,raw_small}" "${qa[@]}" > "$RES/${TICK_TAG:-tick}-$p.csv" 2> "$o/stderr.log"; echo $? > "$o/exit" ) &
         pids+=($!)
         i=$((i + 1))
     done
-    log "sim tick: ${#pids[@]} projects on CPUs ${TCPUS[*]}"
+    if [ "${TICK_SCOPE:-0}" = 1 ]; then log "sim tick: ${#pids[@]} projects, unpinned, each in a scope with CPUQuota=200%"
+    else log "sim tick: ${#pids[@]} projects on CPUs ${TCPUS[*]}"; fi
     wait "${pids[@]}" || true
+    local bad=""
+    for p in $PROJECTS; do
+        [ "$(cat "$S/${TICK_TAG:-tick}/$p/exit" 2>&1)" = 0 ] || bad="$bad $p"
+    done
+    [ -z "$bad" ] || { log "sim tick: failed:$bad"; exit 1; }
     log "sim tick: done"
 }
 

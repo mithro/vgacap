@@ -56,8 +56,11 @@ pair() {   # tagA orderA tagB orderB
     local a=$!
     TICK_TAG=$3 TICK_VARIANTS=$4 TICK_CPUS=$CPUS_Y "$HERE/run_sim.sh" tick &
     local b=$!
-    wait "$a" "$b" || true
+    local rc=0
+    wait "$a" || rc=1
+    wait "$b" || rc=1
     kill "$w" || true
+    [ "$rc" = 0 ] || { log "ticks $1 / $3: a set failed"; exit 1; }
 }
 
 stage_main() {
@@ -72,8 +75,10 @@ stage_scope() {
     local n=7
     watch_rows "fx1s:$n" &
     local w=$!
-    TICK_TAG=fx1s TICK_SCOPE=1 TICK_VARIANTS=vgch2,none,lean,evplanar,events,planar,changelog "$HERE/run_sim.sh" tick || true
+    local rc=0
+    TICK_TAG=fx1s TICK_SCOPE=1 TICK_VARIANTS=vgch2,none,lean,evplanar,events,planar,changelog "$HERE/run_sim.sh" tick || rc=1
     kill "$w" || true
+    [ "$rc" = 0 ] || { log "ticks fx1s: failed"; exit 1; }
 }
 "$HERE/load_logger.sh" "$OUT" $$ &   # the host load every 30 s into load.log while this runs
 for s in ${*:-main raw scope}; do "stage_$s"; done
