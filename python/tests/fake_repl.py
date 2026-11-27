@@ -20,8 +20,10 @@ https://docs.micropython.org/en/latest/reference/repl.html#raw-mode-and-raw-past
 from __future__ import annotations
 
 import base64
+import binascii
 import builtins
 import contextlib
+import errno
 import io
 import os
 import sys
@@ -39,7 +41,10 @@ def _install_ubinascii() -> None:
     """Make `import ubinascii` work in code the fake boards exec.
 
     MicroPython ships `ubinascii` as a built-in module; CPython does not,
-    so the fakes put a one-function stand-in in `sys.modules`. It is only
+    so the fakes put a stand-in in `sys.modules`: base64 both ways and
+    `crc32`, which MicroPython v1.24.0's rp2 build has in C
+    (`extmod/modbinascii.c:173-184`, `uzlib_crc32`; on because the port's
+    ROM level is EXTRA_FEATURES). It is only
     ever reachable through an `import`, never pre-bound in the board's
     globals -- which is the distinction `RawRepl.upload()` has to respect.
     """
@@ -47,6 +52,7 @@ def _install_ubinascii() -> None:
         module = types.ModuleType("ubinascii")
         module.a2b_base64 = base64.b64decode
         module.b2a_base64 = base64.b64encode
+        module.crc32 = binascii.crc32
         sys.modules["ubinascii"] = module
 
 
@@ -178,6 +184,29 @@ class _StubStdout:
         pass
 
 
+class _FakeFileForWriting:
+    """A file `FakeBinaryBoard` opened with 'wb', truncated by the open."""
+
+    def __init__(self, board: "FakeBinaryBoard", path: str) -> None:
+        self._board = board
+        self._path = path
+        self._writes = 0
+        board.files[path] = b""
+
+    def write(self, data) -> int:
+        data = bytes(data)
+        if self._board.on_file_write is not None:
+            stored = self._board.on_file_write(self._path, self._writes, data)
+        else:
+            stored = data
+        self._writes += 1
+        self._board.files[self._path] += stored
+        return len(data)
+
+    def close(self) -> None:
+        pass
+
+
 class FakeBinaryBoard:
     """An in-memory `ReplLink` that runs raw-REPL commands with a binary stdout.
 
@@ -190,11 +219,25 @@ class FakeBinaryBoard:
 
     `corrupt` is an optional callable taking the stdout `bytearray`; it may
     mutate it in place to simulate a lossy or corrupting link.
+
+    `open()` in the script reaches `files` (path -> bytes), an in-memory
+    stand-in for the board's filesystem, never the host's: modes 'rb' and
+    'wb' only, a missing file raising `OSError(ENOENT)` as on a board, 'wb'
+    truncating the file at once and each `write()` landing as it is made, so
+    an upload cut short leaves the part it wrote. `on_file_write`, if given, is
+    called as ``on_file_write(path, n, data)`` for the `n`-th `write()` (from
+    0) to a file opened for writing and returns the bytes really stored --
+    corruption between the REPL and the flash.
     """
 
-    def __init__(self, chunk_size: int = 8192, corrupt=None, modules=None) -> None:
+    def __init__(self, chunk_size: int = 8192, corrupt=None, modules=None,
+                 files: dict[str, bytes] | None = None, on_file_write=None) -> None:
         self.chunk_size = chunk_size
         self.corrupt = corrupt
+        #: The board's filesystem, path -> contents.
+        self.files: dict[str, bytes] = dict(files or {})
+        self.on_file_write = on_file_write
+        _install_ubinascii()
         self.closed = False
         self.commands: list[str] = []
         self._pending = bytearray()
@@ -222,7 +265,17 @@ class FakeBinaryBoard:
 
         self._builtins = dict(vars(builtins))
         self._builtins["__import__"] = _import
+        self._builtins["open"] = self._open
         self._globals: dict = {"__builtins__": self._builtins}
+
+    def _open(self, path: str, mode: str = "r"):
+        if mode == "rb":
+            if path not in self.files:
+                raise OSError(errno.ENOENT, "ENOENT")
+            return io.BytesIO(self.files[path])
+        if mode == "wb":
+            return _FakeFileForWriting(self, path)
+        raise ValueError(f"the fake board's open() has no mode {mode!r}")
 
     def record_write_sizes(self, sink: list[int]) -> None:
         """Append the length of every `sys.stdout.buffer.write()` to `sink`."""

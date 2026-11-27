@@ -53,6 +53,14 @@ class ReplFramingError(Exception):
     """Raised when the board's binary output is not valid chunk framing."""
 
 
+class UploadError(RuntimeError):
+    """An uploaded file's length or crc32 on the board is not the host's.
+
+    The file is left as it is on the board: the next upload's check finds
+    the mismatch and sends the file again.
+    """
+
+
 @runtime_checkable
 class ReplLink(Protocol):
     def write(self, data: bytes) -> None: ...
