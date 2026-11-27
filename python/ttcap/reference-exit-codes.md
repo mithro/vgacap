@@ -53,7 +53,7 @@ Subcommand is the command, and Message the start of what it prints. The other co
 | Subcommand | Message | Exit | Cause | Fix |
 |---|---|---|---|---|
 | `throughput` | `corrupt=yes` | 1 | a byte came back wrong | check the cable and the link |
-| `throughput` | `short_by=N` | 1 | fewer bytes arrived than were sent | read `board_error=` on the same line |
+| `throughput` | `short_by=N` | 1 | fewer bytes arrived than were sent | read `board_error=`, if the line has one |
 | `probe` | `probe failed:` | 1 | the link cannot be opened or the board does not answer | check the link and that nothing else holds the port |
 | `reboot` | `reboot failed:` | 1 | the link cannot be opened or the board does not answer | check the link and that nothing else holds the port |
 
