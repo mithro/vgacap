@@ -1,10 +1,3 @@
----
-type: explanation
-owner: vgacap maintainers
-reader: whoever decides the simulation trace format, and whoever reviews that decision
-review: 2027-05-27
----
-
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The simulation trace format: a measured comparison
 
@@ -264,6 +257,8 @@ How to read each group of tables:
   - One process (tickE) ran its untraced colorbars model about 15 ns a clock slow, which made every variant look negative there. The median is robust to that.
 - **Sizes and background CPU.** These cover the whole trace. Sampled measurements are projected (see Method).
 - **Readers.** These are trace decode only: no sampler and no hash.
+
+<!-- analyze.py tables: begin (bench/format-study/splice_doc.py writes this part) -->
 
 ### Inputs: the 11 traces and the code paths they take
 
@@ -925,6 +920,8 @@ Exit 0 and a byte count: the tool read the whole file (its output's size). fst2v
 | the study readers: planar, events, raw, and vgch2 and FST drivers (study src/rd.c) | 517 |
 
 Spec text, words: VGCH v2 trace 4056 (docs/trace-format.md + src/stream/reference-stream-format.md).
+
+<!-- analyze.py tables: end -->
 
 ## VGCH v2's own design choices: what each costs and buys
 
