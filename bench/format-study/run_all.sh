@@ -5,7 +5,7 @@
 #   bench/format-study/run_all.sh [STAGE...]
 #
 # Stages, in order (default: all of them): build traces info writer writer2
-# encode read robust ctr analyze. The simulation check (the Verilator loop) is
+# encode read robust interop ctr analyze. The simulation check (the Verilator loop) is
 # sim/run_sim.sh, separately, because it needs the projects' sources.
 #
 # Everything goes under $OUT (default: <checkout>/tmp/format-study):
@@ -199,6 +199,15 @@ stage_robust() {
     run_pool robust "$jobs"
 }
 
+stage_interop() {
+    local jobs=$OUT/jobs-interop.txt; : > "$jobs"
+    local dir=$OUT/interop; mkdir -p "$dir"
+    for p in ttihp25a_tt_um_rebeccargb_colorbars ttihp25a_tt_um_MichaelBell_rle_vga; do
+        printf '%s\t%s\n' "$p" "$HERE/interop.sh $FS $(trace_of "$p") $FILES $dir/$p" >> "$jobs"
+    done
+    run_pool interop "$jobs"
+}
+
 stage_ctr() {
     local jobs=$OUT/jobs-ctr.txt; : > "$jobs"
     for p in $PROJECTS; do printf '%s\t%s\n' "$p" "$FS ctr $(trace_of "$p") --block-clocks 18,20,22,24,26" >> "$jobs"; done
@@ -210,5 +219,5 @@ stage_analyze() {
     log "analyze: $RES/tables.md"
 }
 
-STAGES=${*:-build traces info writer writer2 encode read robust ctr analyze}
+STAGES=${*:-build traces info writer writer2 encode read robust interop ctr analyze}
 for s in $STAGES; do "stage_$s"; done

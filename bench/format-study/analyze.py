@@ -198,17 +198,17 @@ def paired(data, meta, p, w, nullw="null"):
 wdir = "writer2" if os.path.isdir(os.path.join(RES, "writer2")) else "writer"
 wdata, wmeta, wloads = load_writer(wdir)
 odata, ometa, oloads = load_writer("writer")   # the first pass: fst, fst_clk, lxt2, vcd
-WRITERS = ["vgch2", "planar", "events", "raw", "fst", "vcd", "lxt2", "fst_clk"]
+WRITERS = ["vgch2", "runs", "planar", "events", "raw", "fst", "vcd", "lxt2", "fst_clk"]
 
 print("## Writer cost on the simulation thread (replay)\n")
-print(f"Source: `results/{wdir}` (vgch2, planar, events, raw) and `results/writer` (fst, vcd, lxt2, fst_clk).\n")
+print(f"Source: `results/{wdir}` (vgch2, runs, planar, events, raw) and `results/writer` (fst, vcd, lxt2, fst_clk).\n")
 print("### ns per clock over the null writer: estimate [95% interval]\n")
 body = []
 est_cache = {}
 for p in projects:
     row = [p]
     for w in WRITERS:
-        src = (wdata, wmeta) if w in ("vgch2", "planar", "events", "raw") else (odata, ometa)
+        src = (wdata, wmeta) if w in ("vgch2", "runs", "planar", "events", "raw") else (odata, ometa)
         r = paired(src[0], src[1], p, w)
         est_cache[(p, w)] = r
         row.append("-" if r is None else f"{r[0]:.2f} [{r[1]:.2f}, {r[2]:.2f}]")
@@ -258,6 +258,7 @@ for path in glob.glob(os.path.join(RES, "sim", "tick-*.csv")):
             d[c[2]][int(c[0])] = (float(c[3]), int(c[4]))
     tick[p] = d
 tick_est = {}
+TICKV = ["vgch2", "runs", "events", "raw", "raw_small"]
 if tick:
     print("## Simulation check: the Verilator loop, in one process\n")
     print("Each variant's model in one process, stepped in turn by 65,536-clock chunks (bench_tick.cpp). "
@@ -267,7 +268,7 @@ if tick:
         d = tick[p]
         base_c = d.get("none", {})
         row, rowp = [p, len(base_c), f"{sum(v[0] for v in base_c.values()) / max(1, sum(v[1] for v in base_c.values())):.1f}"], [p]
-        for v in ("vgch2", "events", "raw"):
+        for v in TICKV:
             ks = sorted(set(d.get(v, {})) & set(base_c))
             if not ks:
                 row.append("-"); rowp.append("-")
@@ -285,19 +286,19 @@ if tick:
             b0 = sum(base_c[k][0] for k in ks)
             rowp.append(f"{pct(sum(diff) / b0, 2)} [{pct(boots[49] * sum(clk) / b0, 2)}, {pct(boots[1949] * sum(clk) / b0, 2)}]")
         body.append(row); bodyp.append(rowp)
-    table(["project", "chunks", "untraced ns per clock", "vgch2", "events", "raw"], body)
+    table(["project", "chunks", "untraced ns per clock"] + TICKV, body)
     print("### The same as % of the untraced model's CPU\n")
-    table(["project", "vgch2", "events", "raw"], bodyp)
+    table(["project"] + TICKV, bodyp)
     print("### Replay against the in-process check, ns per clock\n")
     body = []
     for p in [x for x in ORDER if x in tick]:
         row = [p]
-        for w in ("vgch2", "events", "raw"):
+        for w in ("vgch2", "runs", "events", "raw"):
             r = est_cache.get((p, w))
             row += ["-" if r is None else f"{r[0]:.2f}", "-" if (p, w) not in tick_est else f"{tick_est[(p, w)]:.2f}"]
         body.append(row)
-    table(["project", "vgch2 replay", "vgch2 in-process", "events replay", "events in-process", "raw replay",
-           "raw in-process"], body)
+    table(["project", "vgch2 replay", "vgch2 in-process", "runs replay", "runs in-process", "events replay",
+           "events in-process", "raw replay", "raw in-process"], body)
 
 simcsv = os.path.join(RES, "sim", "sim.csv")
 if os.path.exists(simcsv):
@@ -378,11 +379,12 @@ def cand_rows(p):
     ps = passes.get((p, "vgch2"))
     if ps and ("identity", "zstd1") in e:
         out.append(("vgch2 (zstd 1)", int(ps["file_bytes"]), float(e[("identity", "zstd1")]["est_bg_ns"]) / 1e9))
-    for w in ("planar", "events"):
+    for w in ("runs", "planar", "events"):
         e = enc.get((p, w), {})
         ps = passes.get((p, w))
         if ps and ("identity", "zstd1") in e:
-            out.append((f"{w} (zstd 1)", int(ps["primary_bytes"]), float(e[("identity", "zstd1")]["est_bg_ns"]) / 1e9))
+            b = int(ps["primary_bytes"]) if w != "runs" else float(e[("identity", "zstd1")]["est_comp_bytes"])
+            out.append((f"{w} (zstd 1)", b, float(e[("identity", "zstd1")]["est_bg_ns"]) / 1e9))
     e = enc.get((p, "raw"), {})
     ps = passes.get((p, "raw"))
     if ps and ("xor6", "zstd1") in e:
