@@ -70,7 +70,7 @@ def resolve(docname, href, found_docs, srcdir):
 
 
 def lines(docname, text, found_docs, srcdir, warn=True):
-    """The docnames the landing page's lines link to, in order."""
+    """The landing page's lines that link to a page, in order: (docname, line)."""
     body = text[FRONT_MATTER.match(text).end():] if FRONT_MATTER.match(text) else text
     offset = text[:len(text) - len(body)].count("\n")
     tokens = PARSER.parse(body)
@@ -93,7 +93,7 @@ def lines(docname, text, found_docs, srcdir, warn=True):
             logger.warning(f"landing line {line}: {problem}", location=(docname, line),
                            type="vgacap", subtype="landing")
         elif target:
-            out.append(target)
+            out.append((target, line))
     return out
 
 
@@ -118,7 +118,7 @@ def tree(app):
         if landing not in texts:
             continue
         targets[landing] = lines(landing, texts[landing], env.found_docs, env.srcdir)
-        for target in targets[landing]:
+        for target, _ in targets[landing]:
             if target not in parent_of:
                 parent_of[target] = landing
                 children[landing].append(target)
@@ -128,21 +128,32 @@ def tree(app):
         while node is not None:
             above.add(node)
             node = parent_of.get(node)
-        for target in found:
-            if target in above or parent_of.get(target) == landing:
+        seen = set()
+        for target, line in found:
+            first_here = parent_of.get(target) == landing and target not in seen
+            seen.add(target)
+            if target in above or first_here:
                 continue
             logger.warning(
-                f"{target} is a line on {parent_of[target]} and on {landing}: a page has "
-                "one line; write the other mention as a cross-link, a list item that does "
-                "not start with the link", location=landing, type="vgacap", subtype="landing")
+                f"landing line {line}: {target} already has its line on {parent_of[target]}: "
+                "a page has one line; write this mention as a cross-link, a list item that "
+                "does not start with the link", location=(landing, line),
+                type="vgacap", subtype="landing")
     app.vgacap_tree = children
     return children
 
 
 def writes_toctree(text):
-    """Whether the page writes a toctree directive outside a code example."""
-    return any(token.type == "fence" and token.info.strip().startswith("{toctree}")
-               for token in PARSER.parse(text))
+    """Whether the page writes a toctree directive outside a code example, in
+    MyST or in an {eval-rst} block."""
+    for token in PARSER.parse(text):
+        if token.type != "fence":
+            continue
+        info = token.info.strip()
+        if info.startswith("{toctree}") or (
+                info.startswith("{eval-rst}") and ".. toctree::" in token.content):
+            return True
+    return False
 
 
 def on_env_get_outdated(app, env, added, changed, removed):
@@ -169,6 +180,11 @@ def on_source_read(app, docname, source):
     if children:
         entries = "\n".join("/" + child for child in children)
         source[0] += f"\n\n```{{toctree}}\n:hidden:\n\n{entries}\n```\n"
+        last = [tok for tok in PARSER.parse(source[0]) if tok.type == "fence"][-1:]
+        if not last or not last[0].info.strip().startswith("{toctree}"):
+            logger.warning("the page ends inside a code block that is not closed, so its "
+                           "sidebar entries are lost: close the block", location=docname,
+                           type="vgacap", subtype="landing")
 
 
 def setup(app):
