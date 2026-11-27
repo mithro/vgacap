@@ -9,9 +9,9 @@ picture over successive captured frames, then joining the windows.
 The numbers are those of how-to-capture-window.md's note for a 640x480
 design: 48 of its 481 lines a frame, so 11 captured frames a picture,
 the last window one line. Each thumbnail shows only the lines that
-frame gave, the rest greyed; the data flows down into the one picture
-they make, where dashed lines mark the windows and each shown frame's
-number sits beside its band. frame_rp2.py's FRAM chunks of one sweep
+frame gave, the rest greyed, and each shown frame's arrow runs down
+beside the picture into its own band, outlined and numbered, so no
+arrow crosses the picture or another arrow. frame_rp2.py's FRAM chunks of one sweep
 share a frame_counter, and libvgaframe joins them once every line is
 covered. The picture is a plain disc on a background, so a band reads
 as a slice of it.
@@ -35,7 +35,10 @@ M = 2
 W = M + 4 * TW + GAP_W + 4 * GAP + M
 PW, PH = 208, 156                    # the joined picture
 TOP = M + 19                         # the thumbnails, under the row's label
-H = TOP + TH + 24 + 70 + PH + 22 + M
+LEVEL = 12                           # between two arrows' turning levels
+LANE = 14                            # between two arrows' lanes
+PX = W - M - 4 * LANE - 4 - PW      # the joined picture, its lanes to its right
+H = TOP + TH + 24 + 12 + LEVEL * 4 + 6 + PH + 22 + M
 
 
 def band(frame):
@@ -61,7 +64,24 @@ def draw(theme):
     c = s.c
     s.label(M, M + 10, "captured frames", 13, c["muted"], "start", "bold")
 
-    px, py = (W - PW) / 2, TOP + TH + 24 + 70
+    # Each shown frame's arrow drops from its thumbnail, turns right at its
+    # own level, runs down its own lane right of the picture, and turns left
+    # into its own band. Frame 1 turns lowest and takes the inner lane, so no
+    # two arrows cross.
+    drop = TOP + TH + 24
+    shown = [f for f in SHOWN if f]
+    level = {f: drop + 12 + LEVEL * (len(shown) - 1 - i) for i, f in enumerate(shown)}
+    px, py = PX, drop + 12 + LEVEL * len(shown) + 6
+    lane = {f: px + PW + LANE * (i + 1) for i, f in enumerate(shown)}
+
+    def band_box(frame, x, y, w, h):
+        """A band of a w x h frame as (top, height), at least 3 high."""
+        y0, y1 = band(frame)
+        top, bottom = y + y0 * h, y + y1 * h
+        if bottom - top < 3:
+            top = bottom - 3
+        return top, bottom - top
+
     x = M
     for frame in SHOWN:
         if frame is None:
@@ -73,10 +93,10 @@ def draw(theme):
         s.add(f'<rect x="{x}" y="{TOP}" width="{TW}" height="{TH}" rx="2" '
               f'fill="{c["paper"]}" opacity="0.6"/>')
         picture(s, x + 1, TOP + 1, TW - 2, TH - 2, *band(frame), f"f{frame}")
+        top, h = band_box(frame, x + 1, TOP + 1, TW - 2, TH - 2)
+        s.add(f'<rect x="{x + 0.5}" y="{top:.2f}" width="{TW - 1}" height="{h:.2f}" '
+              f'fill="none" stroke="{c["str"]}" stroke-width="1.5"/>')
         s.label(x + TW / 2, TOP + TH + 17, f"frame {frame}", 12.5, c["ink"])
-        # Down from the frame into the picture.
-        tx = px + PW / 2
-        s.arrow([(x + TW / 2, TOP + TH + 24), (tx, py - 2)], c["str"], 2)
         x += TW + GAP
 
     # The joined picture: every window, its edges dashed.
@@ -86,13 +106,23 @@ def draw(theme):
         ly = py + 1 + (PH - 2) * k * WINDOW / LINES
         s.add(f'<line x1="{px + 1}" y1="{ly:.2f}" x2="{px + PW - 1}" y2="{ly:.2f}" '
               f'stroke="#ffffff" stroke-width="1" stroke-dasharray="4 3" opacity="0.85"/>')
-    # Each shown frame's number beside its band.
-    for frame in (f for f in SHOWN if f):
-        y0, y1 = band(frame)
-        mid = py + 1 + (PH - 2) * (y0 + y1) / 2
-        s.label(px + PW + 8, min(mid + 4.5, py + PH + 2), str(frame), 12, c["muted"], "start",
-                "bold")
-    s.label(W / 2, py + PH + 20, "one picture", 14, c["ink"], weight="bold")
+
+    # Each shown frame's band outlined, numbered, and reached by its arrow.
+    x = M
+    for frame in SHOWN:
+        if frame is None:
+            x += GAP_W + GAP
+            continue
+        top, h = band_box(frame, px + 1, py + 1, PW - 2, PH - 2)
+        s.add(f'<rect x="{px + 1}" y="{top:.2f}" width="{PW - 2}" height="{h:.2f}" '
+              f'fill="none" stroke="{c["str"]}" stroke-width="2"/>')
+        mid = top + h / 2
+        s.label(px - 8, mid + 4.5, str(frame), 12, c["muted"], "end", "bold")
+        cx = x + TW / 2
+        s.arrow([(cx, drop), (cx, level[frame]), (lane[frame], level[frame]),
+                 (lane[frame], mid), (px + PW + 3, mid)], c["str"], 2)
+        x += TW + GAP
+    s.label(px + PW / 2, py + PH + 20, "one picture", 14, c["ink"], weight="bold")
     return s.text()
 
 
