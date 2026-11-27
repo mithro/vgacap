@@ -114,6 +114,10 @@ class Waveform:
     def attach(self, board: "Board") -> None:
         """Called once by the `Board` this drives the pins of."""
 
+    def rst_changed(self, cycle: int) -> None:
+        """The rst_n pad may read differently from `cycle` on. A plain
+        waveform has no reset, so nothing changes."""
+
     # -- single pins ------------------------------------------------------
 
     def clock_index(self, cycle: int) -> int:
@@ -238,7 +242,11 @@ class ClockedDesign(Waveform):
         self.rst_gpio = rst_gpio
         self.settle = settle
         self.initial = initial & 0xFF
-        self.clock_rises = []
+        #: Always a list here: the design is clocked only by driven edges.
+        #: Narrower than Waveform's `list[int] | None`; the one write through
+        #: the base type (_SM.__init__, when PIO takes the clock) stores
+        #: board.pio_rises[clk], which attach() made this very list.
+        self.clock_rises: list[int] = []  # pyright: ignore[reportIncompatibleVariableOverride]
         self.clock_stopped = True  # no PWM: the pad is whatever drives it
         self.board: Board | None = None
         #: Edges before this index were clocked into an earlier configuration.
