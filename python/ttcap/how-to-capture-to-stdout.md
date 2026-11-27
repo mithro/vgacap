@@ -14,7 +14,7 @@ review: 2027-05-27
 ## What you need
 
 - A capture that works to a file, as in [How to capture a stream from a demo board](how-to-capture-stream.md).
-- The vgacap GStreamer plugin built into `build/`, as in [Developing vgacap](../../docs/development.md).
+- The vgacap GStreamer plugin built into `build/`, as in [How to build the GStreamer plugin](../../gst/how-to-build-plugin.md).
 
 ## Steps
 

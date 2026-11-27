@@ -11,9 +11,9 @@ review: 2027-05-27
 
 It follows one board: an RP2040 demo board running the stock firmware, with a Tiny Tapeout chip whose design drives the [Tiny VGA Pmod](https://github.com/mole99/tiny-vga). The board is plugged into a Linux computer by USB. Other boards, modes and the Welland bench are on the pages under [Next](#next).
 
-![A red and pink checkerboard of nested squares, 640 by 480 pixels, captured from tt_um_rejunity_vga on a Tiny Tapeout 7 chip](images/tt07-rejunity-vga.png)
+![A red and pink checkerboard of nested squares, 640 by 480 pixels, captured from tt_um_rejunity_vga on a TT07 chip](images/tt07-rejunity-vga.png)
 
-At the end you will have a frame like this: `tt_um_rejunity_vga` on a Tiny Tapeout 7 chip, from a capture like the one below ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-ttcap-capture-serial-tt07)).
+At the end you will have a frame like this: `tt_um_rejunity_vga` on a TT07 chip, from a capture like the one below ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-ttcap-capture-serial-tt07)).
 
 ## Before you start
 
@@ -100,7 +100,7 @@ Open `out/frame-0000.png`. It is the picture your design drew, rebuilt from its 
 | 3 | `board error: MemoryError`, with `bytes=0` | the firmware's heap is too full for the capture buffers | restart the board to the stock firmware's start state, then repeat step 3 |
 | 4 | `png failed:` | the capture holds no whole frame | see [How to turn a capture into PNG images](how-to-render-png.md) |
 
-[How to restart a demo board to the stock firmware's start state](../../tools/how-to-restart-a-board.md) shows the restart, with `serial:/dev/ttyACM0` as the link. A failed capture still prints `wrote capture.vgacap`, but exits 1 and holds no samples. On tt07 the first capture failed this way with `mem_free=74880`, and the retry after a restart succeeded ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)).
+[How to restart a demo board to the stock firmware's start state](../../tools/how-to-restart-a-board.md) shows the restart, with `serial:/dev/ttyACM0` as the link. A failed capture still prints `wrote capture.vgacap`, but exits 1 and holds no samples. On the tt07 board the first capture failed this way with `mem_free=74880`, and the retry after a restart succeeded ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)).
 
 ## Next
 

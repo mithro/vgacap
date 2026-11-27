@@ -66,7 +66,7 @@ Step 4 prints the board's `sys.version` and `GPIOMap.all()` ([How to probe a dem
 | 3 | `uv: No such file or directory` for a file that exists | a 64-bit uv on a 32-bit userland | do step 2 |
 | 3 | numpy or Pillow being built | `UV_NO_DEV` is not set in this shell | repeat `export UV_NO_DEV=1` |
 | 4 | `Permission denied` on the device | the user cannot open the port | add the user to `dialout` and log in again |
-| 4 | `probe failed: TimeoutError:` | another program holds the port | stop it, as on [the Welland bench](how-to-capture-welland-pi.md) |
+| 4 | `probe failed: TimeoutError:` | another program holds the port | stop it, as on [How to capture on a Welland board's own Pi](how-to-capture-welland-pi.md) |
 
 ## Next
 

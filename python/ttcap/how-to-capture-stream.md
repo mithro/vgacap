@@ -43,7 +43,7 @@ bytes=1902002 samples=1900544 chunks=117 seconds=4.035 overruns=0 dropped=0 rxst
 wrote capture.vgacap
 ```
 
-That is the command in step 2 on fpga-1, an RP2350 demo board with an FPGA breakout, from [this run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap). On the same board 750 kHz overran 6 or 7 times in 4 seconds. An earlier [750 kHz run on fpga-4](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4) was clean, before its firmware was TT SDK 3.1.1. `ttcap png capture.vgacap out/frame` turns the file into pictures ([How to turn a capture into PNG images](how-to-render-png.md)).
+That is the command in step 2 on fpga-1, an RP2350 demo board with an FPGA breakout, from [this run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap). On the same board 750 kHz overran 6 or 7 times in 4 seconds. An earlier [750 kHz run on fpga-4](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4) was clean, before its firmware was the stock firmware 3.1.1. `ttcap png capture.vgacap out/frame` turns the file into pictures ([How to turn a capture into PNG images](how-to-render-png.md)).
 
 ## If it fails
 

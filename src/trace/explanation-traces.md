@@ -25,7 +25,7 @@ A simulation that is killed leaves no seek table and perhaps half a block. A rea
 
 ## Who writes and reads traces
 
-The trace library in this directory writes them from a testbench ([How to write a simulation trace from a C or C++ testbench](how-to-write-trace.md)). The Verilator testbench of [tinytapeout-vga-videos](https://github.com/mithro/tinytapeout-vga-videos) writes its traces with it. [`synthtrace.py`](../../python/vgacap/synthtrace.py) writes what that testbench would record, without a simulator. The [C tools](../tools/README.md) read traces into frames, frame hashes and waveforms.
+The trace library in this directory writes them from a testbench ([How to write a simulation trace from a C or C++ testbench](how-to-write-trace.md)). The Verilator testbench of [tinytapeout-vga-videos](https://github.com/mithro/tinytapeout-vga-videos) writes its traces with it. [`synthtrace.py`](../../python/vgacap/synthtrace.py) writes what that testbench would record, without a simulator. [The vgacap command-line tools](../tools/README.md) read traces into frames, frame hashes and waveforms.
 
 ## The tb-v1 vectors
 

@@ -57,5 +57,5 @@ frame 0: 640x480 mode=640x480@60 cpl=800 lpf=525 hsync=neg vsync=neg partial=0 g
 
 ## Next
 
-- [The C tools](../../src/tools/README.md)
+- [The vgacap command-line tools](../../src/tools/README.md)
 - [What a simulation trace records](../../src/trace/explanation-traces.md)

@@ -9,7 +9,7 @@ review: 2027-05-27
 
 **You want an RP2350 demo board in its USB bootloader to load a UF2 file, or back on the stock firmware after the vgacap firmware.**
 
-`ttcap reboot` restarts the board through its link and returns once the board has taken the command. Its USB device then goes away and comes back as something else. Loading the vgacap firmware onto the bootloader drive is on [the vgacap firmware](../../firmware/README.md).
+`ttcap reboot` restarts the board through its link and returns once the board has taken the command. Its USB device then goes away and comes back as something else. Loading the vgacap firmware onto the bootloader drive is on [How to run the vgacap firmware from RAM and go back to stock](../../firmware/how-to-load.md).
 
 ## What you need
 
@@ -35,7 +35,7 @@ Without `--firmware`, `ttcap` asks the board which firmware runs. It waits two s
 
 ## Check
 
-Step 1 prints `the board runs micropython`, then `rebooting to bootsel`, and exits 0. Step 2 prints `rebooting to flash` and exits 0. After step 1 the board appears as a USB drive, and `lsusb` lists `Raspberry Pi RP2350 Boot`. After step 2 the board's serial device answers `ttcap probe` again ([How to probe a demo board](how-to-probe-board.md)). Both steps were run on the fpga-4 and tt09 boards, each on its own Pi ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-picosdk-firmware-fpga4)).
+Step 1 prints `the board runs micropython`, then `rebooting to bootsel`, and exits 0. Step 2 prints `rebooting to flash` and exits 0. After step 1 the board appears as a USB drive, and `lsusb` lists `Raspberry Pi RP2350 Boot`. After step 2 the board's serial device answers `ttcap probe` again ([How to probe a demo board](how-to-probe-board.md)). Both steps were run on fpga-4 and on the tt09 board, each on its own Pi ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-picosdk-firmware-fpga4)).
 
 ## If it fails
 

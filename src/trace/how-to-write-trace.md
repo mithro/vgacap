@@ -89,7 +89,7 @@ trace blocks=… samples=… table_rebuilt=0 closed=1
 VGCH v2 bits=43 spc=2 clock_bit=42 clock_first=0 spw=0 flags=0 clock=25175000 map=7,3,0,4,1,5,2,6 desc=""
 ```
 
-The [C tools](../tools/README.md) turn the trace into frames and waveforms.
+[The vgacap command-line tools](../tools/README.md) turn the trace into frames and waveforms.
 
 ## If it fails
 

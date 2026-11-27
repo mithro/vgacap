@@ -33,7 +33,7 @@ review: 2027-05-27
 
 ## Check
 
-Step 3 lists each picture with `partial=0`, and `out/frame-0000.png` shows the design. When the heap holds fewer lines than the picture, `ttcap` adds a note after the stats. On the tt09 chip, the command in step 1 printed this ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
+Step 3 lists each picture with `partial=0`, and `out/frame-0000.png` shows the design. When the heap holds fewer lines than the picture, `ttcap` adds a note after the stats. On the tt09 board, the command in step 1 printed this ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
 
 ```text
 note: each picture is assembled from 2 captured frames (410 of its 481 lines per frame): exact for a static design, torn for one that changes from frame to frame

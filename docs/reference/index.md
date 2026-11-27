@@ -9,7 +9,7 @@ review: 2027-05-27
 
 - [The vgacap firmware and module reference](../../firmware/reference.md): the vgacap firmware's protocol, board facts and files, and the MicroPython module's.
 - [Capture sources compared](../reference-capture-sources.md): each source's hardware, fastest clock and proof.
-- [Captures and their pictures](stream-and-pictures.md): the stream format, the mode table and the frame files.
+- [Stream, modes and frame files](stream-and-pictures.md): the stream format, the mode table and the frame files.
 - [The simulation trace format](../trace-format.md): the trace a simulated design writes.
 - [Vendored third-party code](../../third_party/README.md): the libraries built into vgacap, their versions and licenses, and how to update one.
 - [Images and logos in the overview figure](../diagrams/NOTICE.md): where each picture comes from, and its license.

@@ -96,13 +96,13 @@ breakout the design is enabled under the stock firmware first. The iCE40 keeps i
 resets into its bootloader and then into this firmware. That held on fpga-4, where every capture after the switch
 was pixel-exact.
 
-On an ASIC breakout the project mux's lines float in the bootloader. On tt09 the mux came back with nothing
+On an ASIC breakout the project mux's lines float in the bootloader. On the tt09 board the mux came back with nothing
 selected. The `asic_select` command replays the stock firmware's mux sequence to select the project again.
 
 GPIO 1 erases an FPGA breakout's configuration when it is low, as [the GPIO table](reference-board.md#gpios) says.
 The stock firmware leaves it driven high, and the firmware drives it high first thing at boot. It sets the level
 before the direction, so the pin never glitches low. Only `asic_select` drives it low, which is why ttcap refuses
-`--asic-index` for an FPGA board.
+`--asic-index` for a demo board with an FPGA breakout.
 
 The project clock comes from the PWM on GPIO 16. The firmware sets the system clock the stock firmware picks for
 that project clock. Its search is the stock firmware's, ported to single-precision arithmetic as MicroPython runs

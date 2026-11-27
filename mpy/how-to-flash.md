@@ -134,7 +134,7 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
     $ mpremote connect $DEV exec "import vgacap; print(vgacap.API)"
     ```
 
-14. In the vgacap checkout, restart the SDK, which ends with `tt.sdk_version=` and a `>>>` prompt.
+14. In the vgacap checkout, restart the board to the stock firmware's start state, which ends with `tt.sdk_version=` and a `>>>` prompt.
 
     ```console
     $ uv run --no-sync python tools/board_restart.py serial:$DEV
@@ -194,7 +194,7 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
     $ timeout 30 sh -c 'until curl -s localhost:8765/health > /dev/null; do sleep 1; done' || echo "no bridge after 30 s"
     ```
 
-23. On the Welland bench, restart the SDK through the bridge, which brings the idle display back from `left: the SDK is not running`.
+23. On the Welland bench, restart the board to the stock firmware's start state through the bridge, which clears `left: the SDK is not running`.
 
     ```console
     $ uv run --no-sync python tools/board_restart.py ws://127.0.0.1:8765/serial
@@ -245,7 +245,7 @@ gave the board's own hash back.
 | Step 16 prints nothing | the bridge is not listening yet | Wait for `/health` as at the end of step 15, then repeat step 16 |
 | `no bridge after 30 s` at step 15 or 22 | the bridge did not start | Read `systemctl status fpgas-tt`, start the bridge again, and repeat the step |
 | `ConnectionRefusedError: [Errno 111] Connection refused` at step 23 | the bridge is not listening yet | Wait for `/health` as at the end of step 22, then repeat step 23 |
-| `not loaded after 300 s` at step 24 | the SDK restart did not reach the board | Repeat steps 23 and 24 |
+| `not loaded after 300 s` at step 24 | the restart did not reach the board | Repeat steps 23 and 24 |
 | Neither `$DEV` nor the `RP2350` drive appears | the board runs nothing that answers on USB | Stop; recovery needs someone at the Welland bench to hold BOOTSEL while resetting the board |
 
 The fpgas-online broker's `power_cycle` switches the Pi's PoE port, so it restarts the Pi

@@ -48,7 +48,7 @@ Step 6 prints the chunks it read, with no samples dropped:
 wrote out.vgacap: 4 RAW chunks, 1024 samples, 0 dropped
 ```
 
-`out.vgacap` is then a vgacap stream that every vgacap reader takes, such as the [C tools](../src/tools/README.md).
+`out.vgacap` is then a vgacap stream that every vgacap reader takes, such as [the vgacap command-line tools](../src/tools/README.md).
 
 ## If it fails
 

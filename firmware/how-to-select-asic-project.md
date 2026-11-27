@@ -40,7 +40,7 @@ where [GPIO 1](reference-board.md#gpios) going low erases the FPGA.
 
 ## Check
 
-The capture's board report shows a full window and sync levels, as on tt09 with `tt_um_rejunity_vga_logo`
+The capture's board report shows a full window and sync levels, as on the tt09 board with `tt_um_rejunity_vga_logo`
 ([dated result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-picosdk-firmware-fpga4)):
 
 ```text
@@ -53,7 +53,7 @@ wrote frame.vgacap
 
 `ttcap png frame.vgacap frame` renders the project's picture, on a machine with `build/vgacap-frames` built
 (`cmake --build build --target vgacap-frames`). On a Welland bench Pi, build it as in step 2 of
-[How to run the hardware-in-the-loop check on the board's Pi](../tools/how-to-run-hil-on-the-pi.md). On tt09 that gave 2 frames with positive syncs and 0 glitches ([bench result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1)).
+[How to run the hardware-in-the-loop check on the board's Pi](../tools/how-to-run-hil-on-the-pi.md). On the tt09 board that gave 2 frames with positive syncs and 0 glitches ([bench result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1)).
 
 ## If it fails
 

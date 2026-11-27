@@ -13,7 +13,7 @@ review: 2027-05-27
 The module firmware keeps the stock firmware's SDK. So ttcap enables the design and runs its clock as it does
 with the stock firmware, and only the capture itself is the module's. Putting the module on a board is on
 [How to flash the module firmware and restore the board's own](how-to-flash.md). Every other `ttcap capture`
-option is on [ttcap](../python/ttcap/README.md).
+option is on [ttcap commands and options](../python/ttcap/reference-commands.md).
 
 ## What you need
 
@@ -22,7 +22,7 @@ option is on [ttcap](../python/ttcap/README.md).
 - `DEV`, its serial port, or the board's bridge address on the Welland bench, and a vgacap checkout set up to run
   `ttcap`.
 - The design's name for `--project`, or nothing when it is enabled already, and its project clock in Hz.
-  On the Welland bench an uploaded design is enabled through the bridge, after the SDK restart, as in steps 14 to
+  On the Welland bench an uploaded design is enabled through the bridge, after the restart to the stock firmware's start state, as in steps 14 to
   17 of [How to flash the module firmware and restore the board's own](how-to-flash.md): `tt.shuttle` does not know
   uploaded designs.
 - For step 4, a machine with CMake and a C compiler. On a Welland bench Pi, which has no CMake package, run
@@ -82,7 +82,7 @@ A good capture reports `overruns=0` and `rxstall=0`, and its PNG shows the desig
 | `pio 0 would have to move its pin window to GPIO 16 ...` | `--pio 0` was given | Use `--pio 1` or `--pio 2` |
 | `board has only N bytes of free heap ...` | the heap is too full for the buffers | Reset the board and try again, or lower `--buf-words` for a stream |
 | `... is not a shuttle entry on this board ... has to be enabled through the board's daemon first` | an uploaded design that `tt.shuttle` does not know | Enable it through the bridge: `curl -s -X POST localhost:8765/designs/<name>/enable` |
-| `NameError: name 'tt' isn't defined` | an `mpremote ... run` or `exec` soft-reset the board, which clears the SDK's `tt` | Restart the SDK: `uv run --no-sync python tools/board_restart.py serial:$DEV` |
+| `NameError: name 'tt' isn't defined` | an `mpremote ... run` or `exec` soft-reset the board, which clears the SDK's `tt` | Restart the board to the stock firmware's start state: `uv run --no-sync python tools/board_restart.py serial:$DEV` |
 | `the vgacap module refused the capture: ...` | an argument the firmware's tables refuse | Read the message against [the protocol's arguments](../firmware/PROTOCOL.md#arguments) |
 | `--asic-index is for --firmware picosdk ...` | `--asic-index` was given | Drop it; select an ASIC project with `--project` |
 | `overruns=` above 0 in a stream | the project clock is faster than the USB link carries | Lower `--clock-hz`, or use `--mode frame` |

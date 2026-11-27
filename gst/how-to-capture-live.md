@@ -43,7 +43,7 @@ A window opens after a few seconds with the design's picture, and closes when th
 | 2 | `the uri's query string sets 'link', which a uri may not set` | a key the URI may not set | set it as an element property |
 | 2 | `tt-serial takes a device path, so write tt-serial:///dev/ttyACM0 with three slashes` | two slashes after `tt-serial:` | write three |
 | 2 | the command runs in the background | the URI was not quoted for the shell | quote it twice, as step 2 does |
-| 4 | `is not a shuttle entry on this board and is not the enabled design either` | the FPGA bitstream is not enabled on the board | on the board's Pi, run `curl -s -X POST localhost:8765/designs/<name>/enable` ([the bridge](../python/ttcap/how-to-capture-welland-bridge.md)), then step 4 again |
+| 4 | `is not a shuttle entry on this board and is not the enabled design either` | the FPGA bitstream is not enabled on the board | on the board's Pi, run `curl -s -X POST localhost:8765/designs/<name>/enable` ([How to capture from a Welland board through the bridge](../python/ttcap/how-to-capture-welland-bridge.md)), then step 4 again |
 
 ## Next
 
