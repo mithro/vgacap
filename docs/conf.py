@@ -81,12 +81,11 @@ def markdown_files():
 
 include_patterns = [
     f for f in markdown_files()
-    # design specs, plans and studies are working documents for contributors
-    # (docs/design/ and its benchmarks in bench/), and the vendored libraries
-    # in third_party/*/ keep their own Markdown
+    # design specs and plans are working documents for contributors (the
+    # trace format study's benchmarks, bench/format-study/, with them), and
+    # the vendored libraries in third_party/*/ keep their own Markdown
     if not f.startswith("docs/superpowers/")
-    and not f.startswith("docs/design/")
-    and not f.startswith("bench/")
+    and not f.startswith("bench/format-study/")
     and not (f.startswith("third_party/") and f.count("/") > 1)
 ]
 

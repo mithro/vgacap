@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Trace format study (docs/design/2026-11-27-trace-format-study.md): the
+// Trace format study (docs/superpowers/2026-11-27-trace-format-study.md): the
 // types shared by the replay source, the candidate writers, the background
 // encoders and the readers.
 //
