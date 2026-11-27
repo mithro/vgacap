@@ -319,6 +319,34 @@ def test_a_divided_clock_is_made_and_sampled_exactly(tmp_path, sysclk, div, cycl
     assert high == (cycles - 4 - (cycles - 4) // 2 + 2) * div
 
 
+def test_slow_reset_clocks_get_a_handshake_wait_long_enough_for_them(tmp_path):
+    # Review I1: 3,000 reset clocks at 2 kHz (pio_div 1,941) take 1.5 s,
+    # more than HANDSHAKE_MS's 1 s base: only its divider term covers them.
+    rig = Rig(tmp_path, sysclk=132_000_000)
+    rig.board.idle_cycles = 200_000  # the polls, not their count, matter here
+    req = rig.request(clock_hz=2_000, clocks=4096, reset_clocks=3000, buf_words=1024)
+    stats, data = rig.run(req)
+    assert stats.clean, stats.format()
+    assert samples_of(data) == counter(4096, 3000)
+
+
+def test_the_chunk_timeout_allows_two_gaps_at_the_divided_clock(tmp_path):
+    # Review I1: the longest wait for a chunk is the reset clocks and one
+    # buffer at the real clock, 4.1 s here, which the timeout allows twice.
+    rig = Rig(tmp_path, sysclk=132_000_000)
+    seen = []
+    exec_chunks = rig.repl.exec_chunks
+
+    def recording(script, timeout):
+        seen.append(timeout)
+        return exec_chunks(script, timeout=timeout)
+
+    rig.repl.exec_chunks = recording
+    stats, _ = rig.run(clock_hz=1_000, clocks=64, reset_clocks=10, buf_words=1024)
+    assert stats.clean, stats.format()
+    assert seen == [pytest.approx(30.0 + 2 * (4 * 1024 + 10) / 1_000)]
+
+
 def test_a_divider_write_that_does_not_take_makes_the_run_not_clean(monkeypatch, tmp_path):
     # Review I1: the board reads CLKDIV back into its opening record, and
     # the host checks it against the pio_div it worked out.

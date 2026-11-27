@@ -161,11 +161,12 @@ def test_a_stalled_state_machine_resumes_on_its_divided_clock():
     assert _pins(board, CLK, start, 14) == [0] * 12 + [1] * 2
 
 
-@pytest.mark.parametrize("div", [1, 3])
+@pytest.mark.parametrize("div", [1, 3, 9])
 def test_a_wait_completes_on_a_divided_clock_cycle(div):
     # uo_out bit 0 (GPIO 33) toggles every 4 system cycles: with div 3 its
     # edges fall between the state machine's cycles, which see each level
-    # at the first of theirs after it.
+    # at the first of theirs after it; with div 9 some levels last no
+    # divided cycle at all, and the wait does not see them.
     wave = Waveform(bytes(range(256)), UO, clk_gpio=CLK, period=4)
     board = Board(wave, chip="rp2350")
     mods = board.modules()
@@ -183,20 +184,21 @@ def test_a_wait_completes_on_a_divided_clock_cycle(div):
     mods["machine"].mem32[CLKDIV0] = div << 16
     start = board.now
     sm.active(1)
-    board.advance(60)
+    span = 50 * div
+    board.advance(span + 10 * div)
     # The same program, one state-machine cycle at a time.
     want, t = [], start
-    while t < start + 50:
+    while t < start + span:
         for level, side in ((1, 1), (0, 0)):
             while wave.value(33, t) != level:
                 t += div
             t += div  # the wait completes; the nop issues
             want.append((t, side))
             t += div
-    got = [(c, board.pio_pin(17, c)) for c in range(start + 1, start + 50)
+    got = [(c, board.pio_pin(17, c)) for c in range(start + 1, start + span)
            if board.pio_pin(17, c) != board.pio_pin(17, c - 1)]
     assert len(got) >= 4
-    assert got == [w for w in want if w[0] < start + 50]
+    assert got == [w for w in want if w[0] < start + span]
 
 
 def test_clkdiv_reads_back_and_a_new_state_machine_puts_it_back_to_one():

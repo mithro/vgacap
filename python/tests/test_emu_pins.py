@@ -225,10 +225,13 @@ def test_side_set_takes_back_a_pad_a_pin_init_took():
     sm, _ = _clock_sm(board)
     sm.active(1)
     board.advance(40)
+    while board.pio_pin(CLK, board.now - 1) != 1:
+        board.advance(1)
     old = board.now - 1
     sm.active(0)
     Pin(CLK, Pin.OUT, value=0)
     released = board.now
+    assert board.pio_pin(CLK, released) == 1  # PIO's last value; the pad is SIO's
     board.advance(100)
     n = len(board.pio_rises[CLK])
     rp2 = board.modules()["rp2"]

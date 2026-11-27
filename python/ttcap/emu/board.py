@@ -662,7 +662,12 @@ class _SM:
 
         Each instruction issues on a cycle of the divided clock, `div`
         system cycles apart from `tick0`, and takes 1 + delay of them; a
-        stall ends, and a `wait` sees its pin, on one of those cycles."""
+        stall ends, and a `wait` sees its pin, on one of those cycles.
+        The real divider is free-running from its last restart
+        (`pio_sm_init`'s `pio_sm_clkdiv_restart`), so its phase against
+        the enable is not the CPU's to choose; the grid starts at the
+        enable here, a choice no capture can see, since only the time
+        between the machine's own cycles matters to it."""
         wave = self.board.wave
         code = self.code
         step = self.div
