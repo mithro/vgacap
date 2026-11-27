@@ -11,6 +11,13 @@ review: 2027-05-27
 
 `ttcap capture --mode window` is frame capture with `--window-lines` lines a frame, 48 unless given. The board sweeps the window down the picture over successive frames, and the reconstruction joins the windows into one picture. The picture is exact for a design that draws the same thing every frame, and torn for one that changes from frame to frame.
 
+For a 640x480 design, the picture is 481 lines, so 48 lines a frame takes 11 captured frames, the last one line.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/window-sweep-dark.svg">
+  <img src="diagrams/window-sweep.svg" alt="Captured frames 1, 2, 3 to 11 each give the next 48 of the picture's 481 lines, frame 11 the last one, and the bands join into one picture" width="430">
+</picture>
+
 ## What you need
 
 - An RP2350 demo board, where a frame capture works as in [How to capture whole frames at the design's own clock](how-to-capture-frames.md). On an RP2040 demo board, window capture has run only in the emulator ([#37](https://github.com/mithro/vgacap/issues/37)).

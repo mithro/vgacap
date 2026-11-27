@@ -35,7 +35,7 @@ typedef struct vgaout {
     uint64_t capture_after_clock;
     const char *store;            // the store file's name
     uint64_t store_length;
-    const char *store_sha256;     // lowercase hex
+    const char *store_xxh3_128;   // XXH3-128 of the uncompressed store, 32 lowercase hex digits
     // centre-v1 diagnostics; written when has_centre.
     int has_centre;
     int window_dx, window_dy;
@@ -44,10 +44,11 @@ typedef struct vgaout {
     int suggest_dx, suggest_dy;
     uint64_t colour_changes;
     uint64_t colour_changes_off_grid;   // UINT64_MAX: written as "-"
-    // Distinct frames, in store order: SHA-256 of each; fnv1a64 for the FNV
-    // hash file (may be NULL when only frames.txt and SHA files are written).
+    // Distinct frames, in store order: XXH3-128 of each (canonical bytes);
+    // fnv1a64 for the FNV hash file (may be NULL when only frames.txt and
+    // xxh3-128-rgb6 files are written).
     size_t n_distinct;
-    const uint8_t (*sha256)[32];
+    const uint8_t (*xxh3_128)[16];
     const uint64_t *fnv;
     // Frames.
     size_t n_frames;

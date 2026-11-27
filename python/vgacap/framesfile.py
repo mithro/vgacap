@@ -14,13 +14,13 @@ from dataclasses import dataclass, field
 from . import hashes
 from .timebase import fmt_double
 
-_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+_HEX32 = re.compile(r"[0-9a-f]{32}\Z")   # an XXH3-128 digest
 _INT = re.compile(r"-?[0-9]+\Z")
 _UINT = re.compile(r"[0-9]+\Z")
 SAMPLER_STATUSES = ("ok", "no-sync", "bad-timing", "bad-window")
 #: The hash methods' file parameter lines, after the definition.
 _PARAMS = {"fnv1a64-tb2026-rgb888": [("hash_offset_basis", "0x14650fb0739d0383")]}
-_HASH_WIDTH = {"sha256-rgb6": 64, "fnv1a64-tb2026-rgb888": 16}
+_HASH_WIDTH = {"xxh3-128-rgb6": 32, "fnv1a64-tb2026-rgb888": 16}
 
 
 class FormatError(ValueError):
@@ -61,8 +61,8 @@ class FramesFile:
     capture_after_clock: int
     store: str
     store_length: int
-    store_sha256: str
-    distinct: list[str] = field(default_factory=list)   # lowercase hex SHA-256, store order
+    store_xxh3_128: str
+    distinct: list[str] = field(default_factory=list)   # lowercase hex XXH3-128, store order
     frames: list[Frame] = field(default_factory=list)   # frame k is frames[k]
     centre: Centre | None = None                        # exactly for sampler centre-v1
 
@@ -132,12 +132,12 @@ def _check_text(**kv: str) -> None:
             raise FormatError(f"{k}: not a one-line string: {v!r}")
 
 
-def _check_store(store: str, length: int, sha: str) -> None:
+def _check_store(store: str, length: int, digest: str) -> None:
     _check_text(store=store)
     if re.search(r"[\s/\\]", store):
         raise FormatError(f"store: not a bare file name: {store!r}")
-    if not isinstance(sha, str) or not _HEX64.match(sha):
-        raise FormatError(f"store_sha256: not 64 lowercase hex digits: {sha!r}")
+    if not isinstance(digest, str) or not _HEX32.match(digest):
+        raise FormatError(f"store_xxh3_128: not 32 lowercase hex digits: {digest!r}")
     if not isinstance(length, int) or isinstance(length, bool) or length < 0:
         raise FormatError(f"store_length: not an unsigned integer: {length!r}")
 
@@ -150,22 +150,22 @@ def _check_common(o) -> None:
 
 def format_frames_txt(ff: FramesFile) -> str:
     _check_common(ff)
-    _check_store(ff.store, ff.store_length, ff.store_sha256)
+    _check_store(ff.store, ff.store_length, ff.store_xxh3_128)
     if (ff.sampler == "centre-v1") != (ff.centre is not None):
         raise FormatError("the centre-v1 keys belong to sampler centre-v1, and it always has them")
     for f in ff.frames:
         if not -1 <= f.distinct < len(ff.distinct):
             raise FormatError(f"distinct {f.distinct} out of range")
     for h in ff.distinct:
-        if not _HEX64.match(h):
-            raise FormatError(f"distinct: not lowercase hex SHA-256: {h!r}")
+        if not _HEX32.match(h):
+            raise FormatError(f"distinct: not lowercase hex XXH3-128: {h!r}")
     fc = frame_clocks(ff.frames)
     L = [f"id: {ff.id}", f"status: {ff.status}", f"sampler: {ff.sampler}", f"sampler_status: {ff.sampler_status}",
          "pixel_format: rgb6", f"width: {ff.width}", f"height: {ff.height}", f"mode: {ff.mode}",
          f"clock_hz: {ff.clock_hz}", f"clocks_per_pixel: {fmt_double(ff.clocks_per_pixel)}",
          f"capture_after_clock: {ff.capture_after_clock}", f"frame_clocks: {fc}", f"frames: {len(ff.frames)}",
          f"distinct_frames: {len(ff.distinct)}", f"store: {ff.store}", f"store_length: {ff.store_length}",
-         f"store_sha256: {ff.store_sha256}"]
+         f"store_xxh3_128: {ff.store_xxh3_128}"]
     c = ff.centre
     if c is not None:
         og = "-" if c.colour_changes_off_grid is None else str(c.colour_changes_off_grid)
@@ -299,8 +299,10 @@ def read_frames_txt(path: str | os.PathLike) -> FramesFile:
     n_distinct = ls.uint("distinct_frames")
     store = ls.value("store")
     store_length = ls.uint("store_length")
-    store_sha256 = ls.value("store_sha256")
-    _check_store(store, store_length, store_sha256)
+    if (ls.peek() or "").startswith("store_sha256: "):
+        raise FormatError("pre-XXH3 frames format (store_sha256); re-derive with vgacap-sample")
+    store_xxh3_128 = ls.value("store_xxh3_128")
+    _check_store(store, store_length, store_xxh3_128)
     centre = None
     if sampler == "centre-v1":
         wo = ls.pair("window_offset")
@@ -321,8 +323,8 @@ def read_frames_txt(path: str | os.PathLike) -> FramesFile:
     distinct = []
     for _ in range(n_distinct):
         h = ls.next()
-        if not _HEX64.match(h):
-            raise FormatError(f"distinct: not lowercase hex SHA-256: {h!r}")
+        if not _HEX32.match(h):
+            raise FormatError(f"distinct: not lowercase hex XXH3-128: {h!r}")
         distinct.append(h)
     if ls.next() != "runs:":
         raise FormatError("expected 'runs:'")
@@ -346,7 +348,7 @@ def read_frames_txt(path: str | os.PathLike) -> FramesFile:
     if len(frames) != n_frames:
         raise FormatError(f"frames: {n_frames}, runs cover {len(frames)}")
     ff = FramesFile(id_, status, sampler, sampler_status, width, height, mode, clock_hz, cpp, capture,
-                    store, store_length, store_sha256, distinct, frames, centre)
+                    store, store_length, store_xxh3_128, distinct, frames, centre)
     if ff.frame_clocks != fc:
         raise FormatError(f"frame_clocks: {fc}, the frames give {ff.frame_clocks}")
     # A writer would have grouped these frames into exactly these runs.
@@ -358,6 +360,8 @@ def read_frames_txt(path: str | os.PathLike) -> FramesFile:
 def read_hash_file(path: str | os.PathLike) -> HashFile:
     ls, _ = _read(path)
     method = ls.value("hash_method")
+    if method == "sha256-rgb6":
+        raise FormatError("pre-XXH3 hash method (sha256-rgb6); re-derive with vgacap-sample")
     if method not in hashes.DEFINITIONS:
         raise FormatError(f"unknown hash method {method!r}")
     for d in hashes.DEFINITIONS[method]:

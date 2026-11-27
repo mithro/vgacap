@@ -86,7 +86,7 @@ A good capture reports `overruns=0` and `rxstall=0`, and its PNG shows the desig
 | 1 to 3 | `NameError: name 'tt' isn't defined` | an `mpremote ... run` or `exec` soft-reset the board, which clears the SDK's `tt` | Restart the board to the stock firmware's start state: `uv run --no-sync python tools/board_restart.py serial:$DEV` |
 | 1 to 3 | `the vgacap module refused the capture: ...` | an argument the firmware's tables refuse | Read the message against [the protocol's arguments](../firmware/PROTOCOL.md#arguments) |
 | 1 to 3 | `--asic-index is for --firmware picosdk ...` | `--asic-index` was given | Drop it; select an ASIC project with `--project` |
-| 3 | `overruns=` above 0 | the project clock is faster than the USB link carries | Lower `--clock-hz`, or use `--mode frame` |
+| 3 | `overruns=` above 0, exit 1 | the project clock is faster than the USB link carries | Lower `--clock-hz`, or use `--mode frame` |
 
 ## Next
 

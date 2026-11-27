@@ -428,6 +428,41 @@ def test_a_consumer_that_closes_the_pipe_ends_the_capture_cleanly(
     assert read_stream(stdout.buffer.getvalue())[0].clock_hz == 100_000
 
 
+def test_a_lossy_capture_is_exit_one_even_when_the_consumer_closes(monkeypatch, capsys):
+    # Issue #59: the consumer leaving is a normal end, but the overruns in
+    # the board's trailer are not, and the exit status says so. This is
+    # what `vgacapttsrc` sees when it stops a capture that tore buffers.
+    no_real_fd_to_silence(monkeypatch)
+    binary_stdout(monkeypatch, fail_after=2)
+    board = capture_board(
+        PROFILE,
+        [raw_chunk(PROFILE, list(range(32)))] * 50,
+        on_interrupt=time_chunk(PROFILE, "overruns=3 rxstall=0"),
+    )
+
+    code = run_capture_cli(monkeypatch, board)
+
+    assert code == 1
+    printed = capsys.readouterr().err
+    assert "capture ended: the consumer closed the stream" in printed
+    assert "overruns: 3 buffers torn" in printed
+
+
+def test_a_lossy_stream_that_ends_on_its_own_exits_one(monkeypatch, capsys):
+    stdout = binary_stdout(monkeypatch)
+    board = capture_board(
+        PROFILE,
+        [raw_chunk(PROFILE, list(range(32))) + time_chunk(PROFILE, "overruns=2 rxstall=0")],
+    )
+
+    code = run_capture_cli(monkeypatch, board)
+
+    assert code == 1
+    assert "overruns: 2 buffers torn" in capsys.readouterr().err
+    # What was captured still reached the consumer as a valid stream.
+    assert read_stream(stdout.buffer.getvalue())[0].clock_hz == 100_000
+
+
 def test_a_pipe_that_breaks_before_any_samples_still_exits_zero(monkeypatch, capsys):
     # Exit 3 means "the sampler never saw a clock edge", which is a
     # diagnosis of the board. A consumer is entitled to take the header and

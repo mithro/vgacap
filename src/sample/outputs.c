@@ -49,8 +49,8 @@ static int store_name_ok(const char *s) {   // a bare file name: no whitespace, 
     for (; *s; s++) if (isspace((unsigned char)*s) || *s == '/' || *s == '\\') return 0;
     return 1;
 }
-static int hex64_ok(const char *s) {   // exactly 64 lowercase hex digits
-    if (!s || strlen(s) != 64) return 0;
+static int hex32_ok(const char *s) {   // exactly 32 lowercase hex digits
+    if (!s || strlen(s) != 32) return 0;
     for (; *s; s++) if (!((*s >= '0' && *s <= '9') || (*s >= 'a' && *s <= 'f'))) return 0;
     return 1;
 }
@@ -60,9 +60,9 @@ static int valid(const vgaout_t *o) {
         !line_ok(o->mode)) return 0;
     if (strcmp(o->sampler_status, "ok") && strcmp(o->sampler_status, "no-sync") &&
         strcmp(o->sampler_status, "bad-timing") && strcmp(o->sampler_status, "bad-window")) return 0;
-    if (!store_name_ok(o->store) || !hex64_ok(o->store_sha256)) return 0;
+    if (!store_name_ok(o->store) || !hex32_ok(o->store_xxh3_128)) return 0;
     if (!!o->has_centre != (strcmp(o->sampler, "centre-v1") == 0)) return 0;   // the centre keys belong to centre-v1
-    if (o->n_distinct && !o->sha256) return 0;
+    if (o->n_distinct && !o->xxh3_128) return 0;
     int have = 0; uint64_t prev = 0;
     for (size_t i = 0; i < o->n_frames; i++) {
         int64_t d = o->frames[i].distinct;
@@ -94,9 +94,9 @@ int vgaout_frames_txt(FILE *f, const vgaout_t *o) {
     if (put_double(f, "clocks_per_pixel", o->clocks_per_pixel) < 0) return -1;
     uint64_t fc = vgaout_frame_clocks(o);
     if (fprintf(f, "capture_after_clock: %" PRIu64 "\nframe_clocks: %" PRIu64 "\nframes: %zu\ndistinct_frames: %zu\n"
-                   "store: %s\nstore_length: %" PRIu64 "\nstore_sha256: %s\n",
+                   "store: %s\nstore_length: %" PRIu64 "\nstore_xxh3_128: %s\n",
                 o->capture_after_clock, fc, o->n_frames, o->n_distinct,
-                o->store, o->store_length, o->store_sha256) < 0) return -1;
+                o->store, o->store_length, o->store_xxh3_128) < 0) return -1;
     if (o->has_centre) {
         if (fprintf(f, "window_offset: %d %d\nporches: %d %d\noutside: %" PRIu64 "\nsuggested_offset: %d %d\n"
                        "colour_changes: %" PRIu64 "\n",
@@ -108,7 +108,7 @@ int vgaout_frames_txt(FILE *f, const vgaout_t *o) {
     }
     if (fputs("distinct:\n", f) < 0) return -1;
     for (size_t i = 0; i < o->n_distinct; i++) {
-        for (int b = 0; b < 32; b++) if (fprintf(f, "%02x", o->sha256[i][b]) < 0) return -1;
+        for (int b = 0; b < 16; b++) if (fprintf(f, "%02x", o->xxh3_128[i][b]) < 0) return -1;
         if (fputc('\n', f) == EOF) return -1;
     }
     if (fputs("runs:\n", f) < 0) return -1;
@@ -152,7 +152,7 @@ int vgaout_hash_file(FILE *f, const char *method, const vgaout_t *o) {
         if (d < 0) { if (fputs("-\n", f) < 0) return -1; }
         else if (fnv) { if (fprintf(f, "%016" PRIx64 "\n", o->fnv[d]) < 0) return -1; }
         else {
-            for (int b = 0; b < 32; b++) if (fprintf(f, "%02x", o->sha256[d][b]) < 0) return -1;
+            for (int b = 0; b < 16; b++) if (fprintf(f, "%02x", o->xxh3_128[d][b]) < 0) return -1;
             if (fputc('\n', f) == EOF) return -1;
         }
     }

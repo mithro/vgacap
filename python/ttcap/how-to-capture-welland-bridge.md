@@ -11,6 +11,13 @@ review: 2027-05-27
 
 Each bench board hangs off its own Raspberry Pi, and the bridge on that Pi carries the board's serial port over a WebSocket. The bridge is on the bench network, which your machine reaches through an SSH tunnel to the bench gateway. The bench boards are shared and public, so this page starts by checking that nobody else is using the board. To capture on the board's own Pi instead, see [How to capture on a Welland board's own Pi](how-to-capture-welland-pi.md).
 
+The capture takes this path from the board to your machine, here for fpga-1.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/welland-bridge-dark.svg">
+  <img src="diagrams/welland-bridge.svg" alt="Captured data goes from fpga-1 by USB to its Pi's fpgas-tt bridge, through tweed and an SSH tunnel to ttcap on your workstation" width="400">
+</picture>
+
 ## What you need
 
 - SSH access to the Welland bench gateway, `tweed.welland.mithis.com`.
