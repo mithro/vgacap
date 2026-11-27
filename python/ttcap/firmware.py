@@ -247,9 +247,11 @@ def capture_command(req: CaptureRequest) -> str:
 
 
 def setup(link: FirmwareLink, req: CaptureRequest) -> dict:
-    """Start the project clock, in `select_project()`'s order.
+    """Start the project clock.
 
-    The clock is stopped and the project held in reset before the new
+    Not `select_project()`'s sequence: the stock firmware's `tt` is not
+    running, and this protocol has no `rst_n` read-back. The clock is
+    stopped and the project held in reset before the new
     frequency is programmed, `ui_in` is set while it is held, and reset is
     released last. The firmware cannot select a design: it runs in place of
     the stock firmware, which is what knows the shuttle, so `--project` /

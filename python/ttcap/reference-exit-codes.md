@@ -42,6 +42,9 @@ Message is the start of what `ttcap capture` prints. Exit is the exit code. Caus
 | `error='framing lost` in the stats line | 1 | the stream lost its chunk framing | reset the board and capture again |
 | `board did not reply with a GPIOMap.all() dict` | 1 | the board printed something else | pass `--profile rp2040` or `--profile rp2350` |
 | `is not a shuttle entry on this board` | 1 | `--project` or `--design` names no design on the board | name a design the board has |
+| `rst_n reads 1 while reset is held` | 1 | `tt.reset_project(True)` did not pull the reset line low | check nothing else drives the board's reset line |
+| `rst_n stuck low after release` | 1 | the reset line stayed low for 100 ms after the release | check the reset button and the board's pull-up |
+| `ui_in reads 0xNN after writing 0xMM` | 1 | the stock firmware left an input undriven because it read high | turn the board's input switches off |
 | `--frames does not apply to --mode rle` | 1 | a run-length frame has no fixed size | use `--max-bytes` or `--seconds` |
 | `the capture would never stop` | 1 | `--seconds 0` with no other limit | add `--max-bytes` or `--frames` |
 | `pio 0 would have to move its pin window` | 1 | PIO block 0 holds the stock firmware's program | use `--pio 1` or `--pio 2` |

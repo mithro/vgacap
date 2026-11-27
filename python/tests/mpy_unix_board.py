@@ -31,8 +31,14 @@ class Board:
     def clock_project_stop(self):
         vgacap.sim_clock(0)
 
+    def __init__(self):
+        self._held = False
+
     def reset_project(self, hold):
-        pass
+        self._held = bool(hold)
+
+    def rst_n(self):
+        return 0 if self._held else 1
 
 
 def main():

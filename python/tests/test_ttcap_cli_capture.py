@@ -476,12 +476,12 @@ def test_find_vgacap_frames_explains_itself_when_there_is_nothing(monkeypatch):
 
 # -- --ui-in leaves a shared board as it found it ---------------------------
 
-MODE_QUERY = "print(int(tt.mode))"
+MODE_QUERY = "print('ttcap mode=%d' % int(tt.mode))"
 
 
 def _ui_in_board(profile, **kwargs) -> FakeChunkBoard:
     board = capture_board(profile, [], **kwargs)
-    board.replies[MODE_QUERY] = "2\r\n"  # ASIC_MANUAL_INPUTS, as fpgas.online
+    board.replies[MODE_QUERY] = "ttcap mode=2\r\n"  # ASIC_MANUAL_INPUTS, as fpgas.online
     return board
 
 
@@ -500,7 +500,7 @@ def test_a_capture_that_fails_after_ui_in_puts_the_mode_back(monkeypatch, tmp_pa
     assert _capture_with_ui_in(tmp_path) == 1
 
     switched = board.commands.index(
-        "from ttboard.mode import RPMode\ntt.mode = RPMode.ASIC_RP_CONTROL\ntt.ui_in.value = 5"
+        "from ttboard.mode import RPMode\ntt.mode = RPMode.ASIC_RP_CONTROL"
     )
     after = board.commands[switched + 1 :]
     assert after[-2:] == ["tt.clock_project_stop()", "tt.mode = 2"]
