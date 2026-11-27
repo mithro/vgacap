@@ -14,6 +14,7 @@ import errno
 import random
 import re
 import sys
+import time
 import zlib
 
 import pytest
@@ -472,3 +473,39 @@ def test_a_failing_close_after_a_failed_slice_does_not_hide_the_slice_error():
 
     assert "MemoryError" in str(raised.value)
     assert "ENOSPC" not in str(raised.value)
+
+
+class _SlowCheckLink:
+    """`board` behind a link that holds the check's reply back `delay` s,
+    as a board reading a large file from a slow flash would."""
+
+    def __init__(self, board: FakeBinaryBoard, delay: float):
+        self.board = board
+        self.delay = delay
+        self._due = 0.0
+
+    def write(self, data: bytes) -> None:
+        self.board.write(data)
+        if b"_ttcap_up_check" in data:
+            self._due = time.monotonic() + self.delay
+
+    def read(self, timeout: float) -> bytes:
+        wait = self._due - time.monotonic()
+        if wait > 0:
+            time.sleep(min(wait, timeout))
+            if self._due - time.monotonic() > 0:
+                return b""
+        return self.board.read(timeout)
+
+    def close(self) -> None:
+        self.board.close()
+
+
+def test_a_check_that_takes_a_while_is_waited_for():
+    # On fpga-4 a skip of 104,090 bytes took 0.04-0.05 s; the check's own
+    # timeout must leave room for a slower flash than that.
+    board = FakeBinaryBoard(files={HELD: b"held"})
+    repl = RawRepl(_SlowCheckLink(board, delay=0.3))
+    repl.enter()
+
+    assert repl.upload(HELD, b"held") is False
