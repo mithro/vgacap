@@ -17,14 +17,26 @@ Source is the capture source, Runs on the chip that samples, and Code where it l
 
 | Source | Runs on | Code | `ttcap` option | Stock firmware version | Link | Fastest stream clock | Result |
 |---|---|---|---|---|---|---|---|
-| the stock firmware | RP2350 on the demo board | [`python/ttcap/mp/`](../python/ttcap/mp/) | `--firmware micropython` | 3.1.1 | USB serial | 500 kHz | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) and [#52](https://github.com/mithro/vgacap/issues/52) |
 | the stock firmware | RP2350 on the demo board | [`python/ttcap/mp/`](../python/ttcap/mp/) | `--firmware micropython` | 3.1.1 | bridge | 400 kHz | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-hil-400k) |
-| the stock firmware | RP2350 on the demo board | [`python/ttcap/mp/`](../python/ttcap/mp/) | `--firmware micropython` | 3.1.0 | USB serial | 750 kHz | [2026-11-24](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4) |
 | the stock firmware | RP2040 on the demo board | [`python/ttcap/mp/`](../python/ttcap/mp/) | `--firmware micropython` | not recorded | USB serial | 60 kHz | [2026-09-15](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-ttcap-capture-serial-tt07) |
 | the vgacap firmware | RP2350 on the demo board | [`firmware/`](../firmware/README.md) | `--firmware picosdk` | -- | USB serial | 750 kHz | [2026-11-24](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-picosdk-firmware-fpga4) |
 | the vgacap MicroPython module | RP2350 on the demo board | [`mpy/`](../mpy/README.md) | `--firmware mpy-module` | -- | bridge | 500 kHz | [2026-11-24](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-mpy-module-fpga1) |
 | FPGA capture logic | iCE40UP5K on an FPGA breakout | [`rtl/`](../rtl/README.md) | -- | -- | bridge | 250 kHz | [2026-11-24](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-rtl-framer-fpga4) |
 | a simulator | the host CPU | [`src/trace/`](../src/trace/) | -- | -- | -- | -- | -- |
+
+### The stock firmware on an RP2350 demo board
+
+Each row is one set of stream captures at one clock. Design is the design enabled, and Clean captures how many of the set had no overrun. The 400 kHz row is the only clean figure for a VGA design over the stock firmware 3.1.1.
+
+| Version | Link | Design | Stream clock | Clean captures | Result |
+|---|---|---|---|---|---|
+| 3.1.1 | bridge | `tt_um_vgacal_bars` | 400 kHz | 4 of 4 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-hil-400k) |
+| 3.1.1 | bridge | `tt_um_vgacal_bars` | 500 kHz | 0 of 3 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| 3.1.1 | USB serial | `tt_um_vga_pattern` | 500 kHz | 1 of 3 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56) and [#52](https://github.com/mithro/vgacap/issues/52) |
+| 3.1.1 | USB serial | the idle display | 500 kHz | 2 of 2 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56) |
+| 3.1.1 | USB serial | not recorded | 500 kHz | 1 of 1 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| 3.1.1 | USB serial | not recorded | 600 kHz | 0 of 1 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| 3.1.0 | USB serial | `tt_um_vgacal_bars` | 750 kHz | 1 of 1 | [2026-11-24](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4) |
 
 ## Frame clock
 

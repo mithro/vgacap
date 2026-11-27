@@ -17,7 +17,7 @@ This page runs [`tools/hil.py`](hil.py) with `--stop-bridge` on fpga-1's Pi. The
 
 - A shell on fpga-1's Pi, `pi-sw2-p34`, reached through the Welland gateway as [the gateway's page](https://docs.fpgas.online/en/latest/sites/welland-gateway.html) shows, with `sudo` that asks no password.
 - [uv](https://docs.astral.sh/uv/) on the Pi, installed as in step 2 of [How to run ttcap on a Raspberry Pi](../python/ttcap/how-to-run-on-raspberry-pi.md).
-- A vgacap checkout on the Pi, and a C compiler. The Pi's package lists have no CMake, so step 2 runs CMake from PyPI through `uvx`. That took 5 s to configure and 3.4 s to build on fpga-1's Pi, and 15 s and 7.8 s on tt09's (bench run of PR #56, 2026-11-27).
+- A vgacap checkout on the Pi, and a C compiler. The Pi's package lists have no CMake, so step 2 runs CMake from PyPI through `uvx`. That took 5 s to configure and 3.4 s to build on fpga-1's Pi, and 15 s and 7.8 s on tt09's ([bench run of PR #56](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56), 2026-11-27).
 - The calibration design `tt_um_vgacal_bars` loaded on the board, as in [the tunnel how-to](how-to-run-hil-through-a-tunnel.md) steps 1 to 3.
 
 ## Steps
