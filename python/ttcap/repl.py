@@ -12,8 +12,10 @@ over either link, without using raw-paste mode.
 from __future__ import annotations
 
 import base64
+import re
 import threading
 import time
+import zlib
 from contextlib import ExitStack
 from typing import Iterator, Protocol, runtime_checkable
 
@@ -24,7 +26,36 @@ CTRL_D = b"\x04"
 
 RAW_REPL_BANNER = b"raw REPL; CTRL-B to exit\r\n>"
 
-_UPLOAD_CHUNK_SIZE = 256
+#: Payload bytes per `upload()` command: 2,732 characters of base64.
+_UPLOAD_SLICE_BYTES = 2048
+
+#: Has the board report an uploaded file's length and crc32 (or that it
+#: is absent), reading it back through a 2 KB buffer rather than whole --
+#: the file exists so that 104 KB never has to sit on the heap at once.
+#: `ubinascii.crc32` is C on the boards: `mod_binascii_crc32`,
+#: `extmod/modbinascii.c:173-184` in MicroPython v1.24.0, compiled in
+#: because the rp2 port builds at `MICROPY_CONFIG_ROM_LEVEL_EXTRA_FEATURES`
+#: (`ports/rp2/mpconfigport.h:71`, `py/mpconfig.h:1639,1722-1723`).
+_UPLOAD_CHECK = """\
+try:
+    f=open({name!r},'rb')
+except OSError:
+    print('ttcap upload absent')
+else:
+    b=bytearray({size});m=memoryview(b);n=0;c=0
+    while True:
+        k=f.readinto(b)
+        if not k:
+            break
+        n+=k;c=ubinascii.crc32(m[:k],c)
+    f.close()
+    del b,m
+    print('ttcap upload len=%d crc32=%d'%(n,c))
+"""
+
+_UPLOAD_CHECK_REPLY = re.compile(
+    r"ttcap upload (?:absent|len=(\d+) crc32=(\d+))\r?\n"
+)
 
 #: Every chunk tag `vgacap.stream` knows (mirrors `MIN_CHUNK_LEN`'s keys).
 #: `exec_chunks()` accepts only these as the start of an 8-byte chunk
@@ -446,20 +477,60 @@ class RawRepl:
             return False
         return True
 
-    def upload(self, name: str, source: str) -> None:
-        """Write `source` to a file named `name` on the board."""
+    def upload(self, name: str, data: bytes | str) -> bool:
+        """Write `data` to the file `name` on the board, and check it there.
+
+        A `str` is written as its UTF-8. The board is first asked for the
+        file's length and crc32 (`zlib.crc32` on the host): if both match,
+        nothing is sent and this returns False. Otherwise the file is
+        written in 2 KB base64 slices, read back the same way, and this
+        returns True. A file that does not match afterwards raises
+        `UploadError` with both lengths and both crc32s, and is left on the
+        board for the next upload's check to find. A board without
+        `ubinascii.crc32` raises `RuntimeError` naming it.
+        """
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        data = bytes(data)
+        want = (len(data), zlib.crc32(data))
         # `ubinascii` is not in a fresh raw REPL's globals: the demo board's
         # `main.py` leaves `tt` there and nothing else, so without this the
         # first chunk write below dies with `NameError`. Importing a module
         # that is already in `sys.modules` costs only the rebind.
         self._exec_checked("import ubinascii")
+        if self._uploaded(name) == want:
+            return False
         self._exec_checked(f"f=open({name!r},'wb')")
-        data = source.encode("utf-8")
-        for offset in range(0, len(data), _UPLOAD_CHUNK_SIZE):
-            chunk = data[offset : offset + _UPLOAD_CHUNK_SIZE]
-            encoded = base64.b64encode(chunk).decode("ascii")
+        for offset in range(0, len(data), _UPLOAD_SLICE_BYTES):
+            piece = data[offset : offset + _UPLOAD_SLICE_BYTES]
+            encoded = base64.b64encode(piece).decode("ascii")
             self._exec_checked(f"f.write(ubinascii.a2b_base64(b'{encoded}'))")
         self._exec_checked("f.close()")
+        got = self._uploaded(name)
+        if got != want:
+            board = (
+                "absent" if got is None
+                else f"len={got[0]} crc32=0x{got[1]:08x}"
+            )
+            raise UploadError(
+                f"upload of {name!r} did not verify: host len={want[0]} "
+                f"crc32=0x{want[1]:08x}, board {board}; the file is left "
+                "on the board"
+            )
+        return True
+
+    def _uploaded(self, name: str) -> tuple[int, int] | None:
+        """The board's (length, crc32) of file `name`, None if it is absent."""
+        code = _UPLOAD_CHECK.format(name=name, size=_UPLOAD_SLICE_BYTES)
+        reply = self._exec_checked(code, timeout=30.0)
+        m = _UPLOAD_CHECK_REPLY.fullmatch(reply)
+        if m is None:
+            raise RuntimeError(
+                f"unexpected reply to the upload check of {name!r}: {reply!r}"
+            )
+        if m.group(1) is None:
+            return None
+        return int(m.group(1)), int(m.group(2))
 
     def _exec_checked(self, code: str, timeout: float = 10.0) -> str:
         stdout, stderr = self.exec(code, timeout=timeout)
