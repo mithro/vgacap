@@ -46,7 +46,11 @@ no `release_ms`; and while the manual-clock monitor is on, its 333 ms timer
 Construction stands for a boot that is already over: it sets `rst_n` and
 `uio` as `begin_inputs_all` left them and leaves the clock pad to the
 board's waveform, the PWM that started after boot. `clock_project_PWM` is
-not emulated there (the waveform is the PWM).
+refused there with `BoardError` (the waveform is the PWM). A mode write
+there rebuilds only `rst_n`, the clock and `uio` (and drives `ui_in` in
+`ASIC_RP_CONTROL`); it does not rebuild `uo_out`, `ui_in` in the other
+modes, or the pins the SDK always makes outputs (GPIO 0-3, 5, 6, 11, 12,
+the loader's 3 and 6 among them).
 
 The design behind the pins is modelled only as far as reset goes: `design`
 counts the clock edges it saw while `rst_n` was low (a synchronous reset
@@ -457,9 +461,10 @@ class FakeLoader:
     failure after `fpga_reset()` has pulsed CRESET (`fabricfoxv2.py:67-73,
     110-112`) calls its `unconfigure()` instead: nothing loads the FPGA
     again (`fabricfoxv2.py:171-181`), so there is no design. A missing file
-    fails before the reset and leaves the old design running. Not modelled: the real loader's PIO0
-    state machine 0, which takes GPIO 6 and 3 for PIO0 and leaves its
-    program loaded.
+    fails before the reset and leaves the old design running. Not
+    modelled: the real loader's PIO0 state machine 0, which takes GPIO 6
+    and 3 for PIO0 and leaves its program loaded, and the real transfer's
+    exact duration.
     """
 
     SCK, MOSI, SS, RESET = 6, 3, 5, 1
