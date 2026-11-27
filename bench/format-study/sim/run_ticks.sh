@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Fix round 1's in-process sets (docs/design/2026-11-27-trace-format-study.md,
+# Fix round 1's in-process sets (docs/superpowers/2026-11-27-trace-format-study.md,
 # Method), one command:
 #
 #   bench/format-study/sim/run_ticks.sh [main] [raw] [scope]
@@ -75,4 +75,5 @@ stage_scope() {
     TICK_TAG=fx1s TICK_SCOPE=1 TICK_VARIANTS=vgch2,none,lean,evplanar,events,planar,changelog "$HERE/run_sim.sh" tick || true
     kill "$w" || true
 }
+"$HERE/load_logger.sh" "$OUT" $$ &   # the host load every 30 s into load.log while this runs
 for s in ${*:-main raw scope}; do "stage_$s"; done
