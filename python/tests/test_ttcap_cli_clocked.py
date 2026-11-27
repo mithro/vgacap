@@ -111,6 +111,29 @@ def test_a_clock_high_under_the_floor_warns_and_still_runs(monkeypatch, capsys, 
     assert "a sweep point, not a reference" in err
 
 
+def test_the_under_the_floor_warning_comes_before_the_board_is_loaded(monkeypatch, capsys,
+                                                                       tmp_path):
+    # Re-review R1-2: said once the timing is known, not after the run.
+    import ttcap.capture as capture
+
+    bench = Bench(monkeypatch, tmp_path)
+    args = bench.args("--clock-high", "0", clocks=16)
+    args[args.index("--clock-hz") + 1] = "7000000"
+    seen = []
+    load_held = capture.load_held
+
+    def loading(*a, **k):
+        seen.append(capsys.readouterr().err)
+        return load_held(*a, **k)
+
+    monkeypatch.setattr(capture, "load_held", loading)
+
+    assert cli.main(args) == 0
+
+    assert len(seen) == 1 and "a sweep point, not a reference" in seen[0]
+    assert "a sweep point" not in capsys.readouterr().err  # said once
+
+
 class _BinaryStdout:
     """`sys.stdout` with a `.buffer` that keeps the bytes."""
 

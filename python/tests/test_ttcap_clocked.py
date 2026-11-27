@@ -127,6 +127,14 @@ def test_500_khz_at_150_mhz_is_div_10_with_h_and_l_13():
     assert (t.pio_div, t.high, t.low) == (10, 13, 13)
 
 
+def test_an_overclocked_sysclk_still_keeps_h_and_l_in_range():
+    # Re-review R1-1: at 600 MHz the 40 ns floor bounds the cycle count;
+    # without it 17.2 MHz came out as pio_div 5, H 4, L -1.
+    t = clocked_timing(600_000_000, 17_200_000)
+    assert (t.pio_div, t.high, t.low) == (2, 11, 3)
+    assert t.sample_ns >= 40
+
+
 def test_500_khz_at_fpga_4s_132_mhz_is_exact():
     t = clocked_timing(132_000_000, 500_000)
     assert (t.pio_div, t.high, t.low) == (8, 15, 14)
@@ -721,6 +729,36 @@ def test_a_chunk_timeout_mid_stream_is_a_no_reply_failure(tmp_path, monkeypatch)
     recovers = []
     monkeypatch.setattr(rig.repl, "recover", lambda *a, **k: recovers.append(1) or "")
     with pytest.raises(TimeoutError) as info:
+        rig.run(clocks=4000, reset_clocks=10, buf_words=16)
+    sent = len(rig.link.commands)
+    body = next(i for i, c in enumerate(rig.link.commands) if "clocked clocks=" in c)
+    assert sent == body + 1  # nothing after the body
+    assert not recovers
+    assert info.value.selection["enable"] == "held" and "bytes" in info.value.selection
+    assert any("recover_clocked" in note for note in info.value.__notes__)
+    monkeypatch.undo()
+    assert recover_clocked(rig.repl, info.value)
+    assert rig.link.commands[sent:].count("tt.reset_project(False)") == 1
+    assert rig.level(RST) == 1 and rig.level(CLK) == 0
+
+
+def test_a_framing_loss_mid_stream_is_a_no_reply_failure(tmp_path, monkeypatch):
+    # Re-review U1: as a timeout (M3), nothing more is sent -- no
+    # recover(), no put-back -- until the caller has recovered the REPL.
+    from ttcap.repl import ReplFramingError
+
+    rig = Rig(tmp_path)
+    original = ClockedSession._start_stream
+
+    def stream_then_garbage(self):
+        chunks = original(self)
+        yield next(chunks)
+        raise ReplFramingError("bad chunk tag b'\\x00\\x01\\x02\\x03'")
+
+    monkeypatch.setattr(ClockedSession, "_start_stream", stream_then_garbage)
+    recovers = []
+    monkeypatch.setattr(rig.repl, "recover", lambda *a, **k: recovers.append(1) or "")
+    with pytest.raises(ReplFramingError) as info:
         rig.run(clocks=4000, reset_clocks=10, buf_words=16)
     sent = len(rig.link.commands)
     body = next(i for i, c in enumerate(rig.link.commands) if "clocked clocks=" in c)

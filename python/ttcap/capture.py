@@ -1125,6 +1125,10 @@ SYNC_WINDOW = 1024
 #: Failures after which the board may still be running the command, so
 #: nothing more may be sent until the caller has `recover()`ed.
 _NO_REPLY = (TimeoutError, LinkClosed, KeyboardInterrupt)
+#: What a clocked capture also treats as one: a framing loss mid-stream,
+#: after which the body may still be running and `recover()` may return ""
+#: without proving otherwise (#94, re-review U1).
+_CLOCKED_NO_REPLY = _NO_REPLY + (ReplFramingError,)
 
 
 class LoadHeldTimeout(TimeoutError):
@@ -1569,6 +1573,12 @@ def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> Cl
                 f"reading uo_out {CLOCKED_SAMPLE_NS} ns late needs H = {high} at sysclk "
                 f"{sysclk_hz} Hz, more than {CLOCKED_MAX_PHASE}")
     low = cycles - CLOCKED_FIXED_CYCLES - high
+    # The program's delays are 4-bit fields: whatever the search above
+    # chose, a value outside them must never reach the board (re-review R1-1).
+    if not (0 <= high <= CLOCKED_MAX_PHASE and 0 <= low <= CLOCKED_MAX_PHASE):
+        raise ValueError(
+            f"no clocked program for {clock_hz} Hz at sysclk {sysclk_hz} Hz: pio_div "
+            f"{pio_div} gives H = {high}, L = {low}, and both must be 0..{CLOCKED_MAX_PHASE}")
     return ClockedTiming(sysclk_hz=sysclk_hz, pio_div=pio_div, high=high, low=low)
 
 
@@ -1669,7 +1679,7 @@ def recover_clocked(repl: RawRepl, exc: BaseException) -> bool:
     `undo_clocked`. A failure here becomes a note on `exc`.
     """
     did = getattr(exc, "selection", None)
-    if did is None or not isinstance(exc, _NO_REPLY):
+    if did is None or not isinstance(exc, _CLOCKED_NO_REPLY):
         return False
     try:
         repl.recover()
@@ -2245,6 +2255,11 @@ class CaptureSession:
                 stream.close()
                 repl.recover()
             except ReplFramingError as exc:
+                if not self._recovers_a_quiet_board:
+                    # As for a timeout: the caller recovers the REPL.
+                    self._end_streaming()
+                    stream.close()
+                    raise
                 # The stream desynchronised, so nothing further can be read
                 # by length. Same teardown: the alternative is a script that
                 # keeps writing into the next command's output.
@@ -2305,10 +2320,10 @@ class ClockedSession(CaptureSession):
     `_prepare()` has set them.
     """
 
-    #: A chunk timeout mid-stream is a no-reply failure like any other: the
-    #: body may still be running, and `recover()` may return "" without
-    #: proving otherwise (#94), so the put-back waits for the caller's
-    #: `recover_clocked` (review M3).
+    #: A chunk timeout or a framing loss mid-stream is a no-reply failure
+    #: like any other: the body may still be running, and `recover()` may
+    #: return "" without proving otherwise (#94), so the put-back waits for
+    #: the caller's `recover_clocked` (review M3, re-review U1).
     _recovers_a_quiet_board = False
 
     def __init__(self, repl: RawRepl, req: CaptureRequest,
@@ -2318,6 +2333,9 @@ class ClockedSession(CaptureSession):
         super().__init__(repl, req, chunk_timeout=chunk_timeout)
         self.timing: ClockedTiming | None = None
         self.selection: dict | None = None
+        #: Called with `timing` as soon as it is worked out, before the
+        #: board is loaded: the CLI's below-floor warning (re-review R1-2).
+        self.on_timing: Callable[[ClockedTiming], None] | None = None
 
     @property
     def header_bytes(self) -> bytes:
@@ -2341,6 +2359,8 @@ class ClockedSession(CaptureSession):
         req, repl = self._req, self._repl
         sysclk = _board_value(_exec_checked(repl, _READ_SYSCLK), "sysclk")
         self.timing = clocked_timing(sysclk, req.clock_hz, req.clock_high)
+        if self.on_timing is not None:
+            self.on_timing(self.timing)
         cfg = dict(req.cfg(), **self.timing.cfg())
         self._script = mp.build(cfg, CLOCKED_SCRIPT)
         names = cleanup_names(cfg)
@@ -2359,7 +2379,7 @@ class ClockedSession(CaptureSession):
         did = self.selection
         if did is None:
             return  # load_held never returned: it put the board back, or says how
-        if isinstance(error, _NO_REPLY):
+        if isinstance(error, _CLOCKED_NO_REPLY):
             error.selection = did  # pyright: ignore[reportAttributeAccessIssue]
             error.add_note(
                 "the board did not reply and may still be running a command: call "

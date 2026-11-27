@@ -771,6 +771,18 @@ def capture(
     return stats
 
 
+def _warn_below_floor(timing) -> None:
+    """Say, before the board is loaded, that an H under the 40 ns floor
+    makes this run a sweep point."""
+    if timing.below_floor:
+        print(
+            "warning: --clock-high %d reads uo_out %d ns after the rising edge, under "
+            "the %d ns floor: this run is a sweep point, not a reference"
+            % (timing.high, round(timing.sample_ns), CLOCKED_SAMPLE_NS),
+            file=sys.stderr,
+        )
+
+
 def _capture_clocked(driver, out_path: str, **fields) -> CaptureStats:
     """`capture()` for `--mode clocked`: the `CaptureRequest` of `fields`,
     run by one `ClockedSession`, which loads
@@ -790,6 +802,7 @@ def _capture_clocked(driver, out_path: str, **fields) -> CaptureStats:
     with stop_ctx as stop:
         request = CaptureRequest(stop=stop, **fields)
         session = ClockedSession(driver.repl, request)
+        session.on_timing = _warn_below_floor
         with _open_output(out_path, on_consumer_close=flag.set if to_stdout else None) as fp:
             try:
                 if to_stdout:
@@ -811,13 +824,6 @@ def _capture_clocked(driver, out_path: str, **fields) -> CaptureStats:
            timing.low),
         file=say,
     )
-    if timing.below_floor:
-        print(
-            "warning: --clock-high %d reads uo_out %d ns after the rising edge, under "
-            "the %d ns floor: this run is a sweep point, not a reference"
-            % (timing.high, round(timing.sample_ns), CLOCKED_SAMPLE_NS),
-            file=sys.stderr,
-        )
     _report(stats, "stdout" if to_stdout else out_path, stream=say)
     if to_stdout and fp.consumer_closed:
         raise ConsumerClosed(stats)
