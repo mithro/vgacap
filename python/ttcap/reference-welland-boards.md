@@ -24,12 +24,12 @@ Chip is the demo board's microcontroller, whose pins are on [Demo board GPIO map
 
 ## USB serials
 
-Board is the name the pages use, and Site slug the board's name on [tinytapeout.fpgas.online](https://tinytapeout.fpgas.online). USB serial is the `usb_serial` its `status.json` shows, and Source where that was read. The tt09 board is not in `WELLAND`, so `--board` does not take it ([#39](https://github.com/mithro/vgacap/issues/39)). It was on pi-sw2-p10 on 2026-11-26 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)).
+Board is the name the pages use, and Site slug the board's name on [tinytapeout.fpgas.online](https://tinytapeout.fpgas.online). USB serial is the `usb_serial` its `status.json` shows, and Source where that was read. `--board` says whether `ttcap --board` accepts the board's name.
 
-| Board | Site slug | Breakout | USB serial | Source |
-|---|---|---|---|---|
-| fpga-1 | `fpga-1` | FPGA | `4df39a7a6856f86f` | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
-| fpga-3 | `fpga-3` | FPGA | `8c46329b33590ecb` | [`status.json`](https://tinytapeout.fpgas.online/board/fpga-3/status.json) |
-| fpga-4 | `fpga-4` | FPGA | `a2961e5cac65b25f` | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
-| tt07 | `tt-de641070db746f27` | ASIC | `de641070db746f27` | [`status.json`](https://tinytapeout.fpgas.online/board/tt-de641070db746f27/status.json) |
-| tt09 | `tt-3b0880b48ee5c388` | ASIC | `3b0880b48ee5c388` | [`status.json`](https://tinytapeout.fpgas.online/board/tt-3b0880b48ee5c388/status.json) |
+| Board | Site slug | Breakout | `--board` | USB serial | Source |
+|---|---|---|---|---|---|
+| fpga-1 | `fpga-1` | FPGA | yes | `4df39a7a6856f86f` | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| fpga-3 | `fpga-3` | FPGA | yes | `8c46329b33590ecb` | [`status.json`](https://tinytapeout.fpgas.online/board/fpga-3/status.json) |
+| fpga-4 | `fpga-4` | FPGA | yes | `a2961e5cac65b25f` | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| tt07 | `tt-de641070db746f27` | ASIC | yes | `de641070db746f27` | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| tt09 | `tt-3b0880b48ee5c388` | ASIC | no ([#39](https://github.com/mithro/vgacap/issues/39)) | `3b0880b48ee5c388` | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
