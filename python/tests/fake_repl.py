@@ -184,6 +184,15 @@ class _StubStdout:
         pass
 
 
+class _FakeFileForReading(io.BytesIO):
+    """A file `FakeBinaryBoard` opened with 'rb', kept in its `readers`."""
+
+    def __init__(self, board: "FakeBinaryBoard", path: str) -> None:
+        super().__init__(board.files[path])
+        self._path = path
+        board.readers.append(self)
+
+
 class _FakeFileForWriting:
     """A file `FakeBinaryBoard` opened with 'wb', committed only by `close()`.
 
@@ -246,7 +255,7 @@ class FakeBinaryBoard:
     'wb' only, a missing file raising `OSError(ENOENT)` and a path in `dirs`
     `OSError(EISDIR)` in either mode (`lfs2.c:3077-3079`), as on a board. A
     file opened 'wb' changes only when it is closed (`_FakeFileForWriting`).
-    Every write handle stays in `writers`; `collect()` closes those the script
+    Every handle stays in `readers` or `writers`; `collect()` closes those the script
     never closed, as the board's GC does when it finalises an unreachable
     file (`__del__` is close, `extmod/vfs_lfsx_file.c:93-95,207`).
 
@@ -271,6 +280,8 @@ class FakeBinaryBoard:
         self.on_file_close = on_file_close
         #: Every handle opened 'wb', closed or not, oldest first.
         self.writers: list[_FakeFileForWriting] = []
+        #: Every handle opened 'rb', closed or not, oldest first.
+        self.readers: list[_FakeFileForReading] = []
         _install_ubinascii()
         self.closed = False
         self.commands: list[str] = []
@@ -311,13 +322,17 @@ class FakeBinaryBoard:
         """The paths of write handles the script has not closed."""
         return [w._path for w in self.writers if not w.closed]
 
+    def unclosed_handles(self) -> list[str]:
+        """The paths of all handles, read or write, not closed."""
+        return [f._path for f in self.readers + self.writers if not f.closed]
+
     def _open(self, path: str, mode: str = "r"):
         if mode in ("rb", "wb") and path in self.dirs:
             raise OSError(errno.EISDIR, "EISDIR")
         if mode == "rb":
             if path not in self.files:
                 raise OSError(errno.ENOENT, "ENOENT")
-            return io.BytesIO(self.files[path])
+            return _FakeFileForReading(self, path)
         if mode == "wb":
             return _FakeFileForWriting(self, path)
         raise ValueError(f"the fake board's open() has no mode {mode!r}")

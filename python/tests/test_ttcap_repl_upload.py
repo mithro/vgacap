@@ -262,15 +262,17 @@ def _fail_slice(index: int):
     return hook
 
 
-def test_every_write_handle_is_closed():
+def test_every_handle_is_closed():
     # On littlefs the data and size reach the directory only at close
     # (the fake models that), so a missing close is a short file there.
+    # The check's read handles are closed too, rather than left to a GC.
     payload = _payload()
-    board = FakeBinaryBoard()
+    board = FakeBinaryBoard(files={HELD: b"old"})
 
     _repl(board).upload(HELD, payload)
 
-    assert board.unclosed_writers() == []
+    assert len(board.readers) == 2 and len(board.writers) == 1
+    assert board.unclosed_handles() == []
     assert board.files[HELD] == payload
 
 
