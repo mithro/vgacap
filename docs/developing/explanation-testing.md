@@ -32,7 +32,7 @@ The C tests in [`tests/`](../../tests) run under `ctest`. They check the stream 
 
 ## Continuous integration
 
-CI runs the three layers above on every push and pull request, in a configuration with GStreamer and one without. It also cross-builds the vgacap firmware and the MicroPython rp2 port, which no host test can run. In the GStreamer job, a skipped plugin, hardware-check or RTL test fails the job, because a skip would hide a check that did not run. The jobs and their steps are on [Continuous integration jobs](reference-ci-jobs.md).
+CI runs the three layers above on every push and pull request, in a configuration with GStreamer and one without. It also cross-builds the vgacap firmware and the MicroPython rp2 port, which no host test can run. In the GStreamer job, a skipped plugin, hardware-check or RTL test fails the job, because a skip would hide a check that did not run. The jobs and their steps are on [Continuous integration jobs](reference/reference-ci-jobs.md).
 
 ## The hardware-in-the-loop check
 

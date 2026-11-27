@@ -59,6 +59,8 @@ extensions = [
     "vgacap_picture",   # <picture> light/dark twins -> the theme-switched pair
     "vgacap_rules",     # the docs.fpgas.online rules a machine can decide
     "vgacap_developing",  # the Developing vgacap reference tables, from their sources
+    "vgacap_vectors",   # the tb-v1 test vectors' tables, from the vectors
+    "vgacap_generated", # reference tables built from their source (modes.c, argparse)
     "ttcap_reference",  # ttcap's options, pin maps and bench boards, from its source
 ]
 source_suffix = {".md": "markdown"}
@@ -88,15 +90,8 @@ include_patterns = [
 # Pages written before the site followed the docs.fpgas.online rules. Each
 # is split into typed pages by the content change named here, which takes it
 # off this list; the build fails on a listed page that already passes.
-vgacap_rules_pending = {
-    page: "split into typed pages (docs/superpowers/specs/2026-11-27-docs-site-design.md)"
-    for page in (
-        "README", "firmware/README", "firmware/PROTOCOL",
-        "mpy/README", "capture-rp1/README", "rtl/README", "gst/README",
-        "src/tools/README", "docs/frames-format",
-        "docs/trace-format", "docs/diagrams/NOTICE",
-    )
-}
+# Every page is split now, so the list is empty.
+vgacap_rules_pending = {}
 
 # GitHub-style ids for headings, so `file.md#some-heading` links resolve.
 myst_heading_anchors = 6

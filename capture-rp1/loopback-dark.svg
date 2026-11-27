@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="506" viewBox="0 0 560 506" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="560" height="506" fill="#131416"/>
+<rect x="2" y="2" width="406" height="318" rx="8" fill="none" stroke="#a0a8b8" stroke-width="1.5"/>
+<text x="16" y="24" font-size="14" fill="#a0a8b8" text-anchor="start" font-weight="bold">RP1</text>
+<rect x="22" y="38" width="366" height="58" rx="8" fill="#251d3d" stroke="#a78bfa" stroke-width="1.5"/>
+<text x="205.0" y="62" font-size="14" fill="#e6e9ef" text-anchor="middle" font-weight="bold">state machine: generator</text>
+<text x="205.0" y="82" font-size="12" fill="#a0a8b8" text-anchor="middle" font-weight="normal" font-family="ui-monospace, Menlo, Consolas, monospace">--gen-counter</text>
+<line x1="161.08" y1="96" x2="161.08" y2="133" stroke="#6ea2f5" stroke-width="2.5"/>
+<path d="M155.08 131 L161.08 140 L167.08 131 Z" fill="#6ea2f5"/>
+<line x1="322.12" y1="96" x2="322.12" y2="133" stroke="#f0904a" stroke-width="2.5"/>
+<path d="M316.12 131 L322.12 140 L328.12 131 Z" fill="#f0904a"/>
+<text x="153.08" y="123" font-size="12" fill="#6ea2f5" text-anchor="end" font-weight="normal">out 8 bits</text>
+<text x="314.12" y="123" font-size="12" fill="#f0904a" text-anchor="end" font-weight="normal">clock</text>
+<rect x="22" y="140" width="226.92" height="52" rx="8" fill="#16243b" stroke="#6ea2f5" stroke-width="1.5"/>
+<text x="135.45999999999998" y="162" font-size="14" fill="#e6e9ef" text-anchor="middle" font-weight="bold">GPIO 4 to GPIO 11</text>
+<text x="135.45999999999998" y="181" font-size="12" fill="#a0a8b8" text-anchor="middle" font-weight="normal">data</text>
+<rect x="260.91999999999996" y="140" width="127.08000000000001" height="52" rx="8" fill="#16243b" stroke="#f0904a" stroke-width="1.5"/>
+<text x="324.46" y="162" font-size="14" fill="#e6e9ef" text-anchor="middle" font-weight="bold">GPIO 12</text>
+<text x="324.46" y="181" font-size="12" fill="#a0a8b8" text-anchor="middle" font-weight="normal">clock</text>
+<line x1="388" y1="166.0" x2="432" y2="166.0" stroke="#5d6574" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="432" y="134" width="126" height="64" rx="8" fill="none" stroke="#5d6574" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="495.0" y="160" font-size="13" fill="#a0a8b8" text-anchor="middle" font-weight="bold">40-pin header</text>
+<text x="495.0" y="180" font-size="12" fill="#a0a8b8" text-anchor="middle" font-weight="normal">no wires</text>
+<line x1="161.08" y1="192" x2="161.08" y2="229" stroke="#6ea2f5" stroke-width="2.5"/>
+<path d="M155.08 227 L161.08 236 L167.08 227 Z" fill="#6ea2f5"/>
+<line x1="322.12" y1="192" x2="322.12" y2="229" stroke="#f0904a" stroke-width="2.5"/>
+<path d="M316.12 227 L322.12 236 L328.12 227 Z" fill="#f0904a"/>
+<text x="153.08" y="219" font-size="12" fill="#6ea2f5" text-anchor="end" font-weight="normal">in pins, 8</text>
+<text x="314.12" y="219" font-size="12" fill="#f0904a" text-anchor="end" font-weight="normal">wait for edge</text>
+<rect x="22" y="236" width="366" height="58" rx="8" fill="#251d3d" stroke="#a78bfa" stroke-width="1.5"/>
+<text x="205.0" y="260" font-size="14" fill="#e6e9ef" text-anchor="middle" font-weight="bold">state machine: sampler</text>
+<text x="205.0" y="280" font-size="12" fill="#a0a8b8" text-anchor="middle" font-weight="normal">RX FIFO, 8 words</text>
+<line x1="161.08" y1="294" x2="161.08" y2="353" stroke="#4cc38a" stroke-width="2.5"/>
+<path d="M155.08 351 L161.08 360 L167.08 351 Z" fill="#4cc38a"/>
+<text x="171.08" y="346" font-size="12" fill="#4cc38a" text-anchor="start" font-weight="normal">DMA</text>
+<rect x="22" y="360" width="366" height="52" rx="8" fill="#173326" stroke="#4cc38a" stroke-width="1.5"/>
+<text x="205.0" y="383" font-size="14" fill="#e6e9ef" text-anchor="middle" font-weight="bold">DRAM: one capture buffer</text>
+<text x="205.0" y="401" font-size="12" fill="#a0a8b8" text-anchor="middle" font-weight="normal">32 KB a transfer, 4 queued</text>
+<line x1="161.08" y1="412" x2="161.08" y2="445" stroke="#4cc38a" stroke-width="2.5"/>
+<path d="M155.08 443 L161.08 452 L167.08 443 Z" fill="#4cc38a"/>
+<rect x="22" y="452" width="366" height="52" rx="8" fill="#173326" stroke="#4cc38a" stroke-width="1.5"/>
+<text x="205.0" y="475" font-size="14" fill="#e6e9ef" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">counter.vgacap</text>
+<text x="205.0" y="493" font-size="12" fill="#a0a8b8" text-anchor="middle" font-weight="normal">VGCH, RAW chunks, TIME</text>
+</svg>

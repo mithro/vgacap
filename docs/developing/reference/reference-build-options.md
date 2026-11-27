@@ -7,7 +7,7 @@ review: 2027-05-27
 
 # Build options and test settings
 
-This page lists the CMake options of the vgacap build and the environment variables its tests read. It is for someone building or testing vgacap in a configuration other than the default. The steps are on [How to build vgacap and run its tests](../development.md).
+This page lists the CMake options of the vgacap build and the environment variables its tests read. It is for someone building or testing vgacap in a configuration other than the default. The steps are on [How to build vgacap and run its tests](../../development.md).
 
 ## CMake options
 
@@ -16,7 +16,7 @@ The table is made from the `option()` lines of every `CMakeLists.txt` when this 
 ```{vgacap-cmake-options}
 ```
 
-`VGACAP_HOST_EXTRAS` builds the [vendored libraries](../../third_party/reference-vendored-libraries.md) and the simulation trace tools that need them. With it `OFF`, `vgacap-dump` reads plain streams only and refuses a zstd file with a message. `VGACAP_JCC_PAD` adds NOP padding only, so every output is the same with it on or off. It applies only to GCC or Clang on x86-64, where CMake checks that the assembler takes the flag.
+`VGACAP_HOST_EXTRAS` builds the [vendored libraries](../../../third_party/reference-vendored-libraries.md) and the simulation trace tools that need them. With it `OFF`, `vgacap-dump` reads plain streams only and refuses a zstd file with a message. `VGACAP_JCC_PAD` adds NOP padding only, so every output is the same with it on or off. It applies only to GCC or Clang on x86-64, where CMake checks that the assembler takes the flag.
 
 ## Test labels
 

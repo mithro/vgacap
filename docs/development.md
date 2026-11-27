@@ -9,7 +9,7 @@ review: 2027-05-27
 
 **You have a vgacap checkout, and you want the C libraries, the tools and the GStreamer plugin built, and every test run.**
 
-This page builds the host side with CMake and runs its C and Python tests, as the CI jobs do. It does not build [the vgacap firmware](../firmware/README.md) for the RP2350, which its own pages cover. What each test layer covers is on [How vgacap is tested](developing/explanation-testing.md), and every option is on [Build options and test settings](developing/reference-build-options.md).
+This page builds the host side with CMake and runs its C and Python tests, as the CI jobs do. It does not build [the vgacap firmware](../firmware/README.md) for the RP2350, which its own pages cover. What each test layer covers is on [The test layers of vgacap](developing/explanation-testing.md), and every option is on [Build options and test settings](developing/reference/reference-build-options.md).
 
 ## What you need
 
@@ -63,7 +63,7 @@ Step 5 ends with a summary of passed and skipped tests and no failures. Without 
 
 ## Next
 
-- [How vgacap is tested](developing/explanation-testing.md)
-- [Build options and test settings](developing/reference-build-options.md)
-- [Continuous integration jobs](developing/reference-ci-jobs.md)
+- [The test layers of vgacap](developing/explanation-testing.md)
+- [Build options and test settings](developing/reference/reference-build-options.md)
+- [Continuous integration jobs](developing/reference/reference-ci-jobs.md)
 - [How to run the hardware-in-the-loop check through a tunnel](../tools/how-to-run-hil-through-a-tunnel.md)
