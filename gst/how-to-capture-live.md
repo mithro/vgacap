@@ -7,7 +7,7 @@ review: 2027-05-27
 
 # How to capture live in GStreamer
 
-**You have a demo board with the stock firmware on USB, and want its design's picture on screen or in a video file, live.**
+**You have a demo board with the stock firmware, on USB or on the bench through the bridge, and want its design's picture live.**
 
 This page uses `vgacapbin`. It builds a `vgacapttsrc` from a URI, and puts `vgadecode` behind it. The capture runs at a clock the USB link can carry, so the design runs slower than real time. How the element runs and stops `ttcap` is on [How vgacapttsrc runs and stops a capture](explanation-live-source.md).
 
@@ -30,7 +30,7 @@ Quote the URI twice, as step 2 does: the shell would otherwise stop at `&`.
 
 ## Check
 
-A window opens after a few seconds with the design's picture, and closes when the 10 seconds are up. The pipeline ends with `Got EOS from element "pipeline0".` and exits 0. In step 5, `live.mkv` plays at about 1.19 frames a second, the rate 500 kHz gives 640x480@60.
+A window opens after a few seconds with the design's picture, and closes when the 10 seconds are up. The pipeline ends with `Got EOS from element "pipeline0".` and exits 0. In step 5, `live.mkv` plays at about 1.19 frames a second, the rate 500 kHz gives 640x480@60. A [bench run on fpga-1](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1) recorded 10 frames at 640x480 and 25/21 frames a second.
 
 ## If it fails
 
@@ -40,10 +40,10 @@ A window opens after a few seconds with the design's picture, and closes when th
 | 2 | an `ERROR` quoting `ttcap`'s last lines | the board is not on that port | give the port the board is on |
 | 2 | an `ERROR` quoting `ttcap`'s last lines | another program holds the port | stop that program |
 | 2 | an `ERROR` quoting `ttcap`'s last lines | the project name is wrong | give the project's exact `tt_um_` name |
-| 4 | `is not a shuttle entry on this board and is not the enabled design either` | the FPGA bitstream is not enabled on the board | enable it through the board's daemon first, then run step 4 again |
 | 2 | `the uri's query string sets 'link', which a uri may not set` | a key the URI may not set | set it as an element property |
 | 2 | `tt-serial takes a device path, so write tt-serial:///dev/ttyACM0 with three slashes` | two slashes after `tt-serial:` | write three |
 | 2 | the command runs in the background | the URI was not quoted for the shell | quote it twice, as step 2 does |
+| 4 | `is not a shuttle entry on this board and is not the enabled design either` | the FPGA bitstream is not enabled on the board | on the board's Pi, run `curl -s -X POST localhost:8765/designs/<name>/enable` ([the bridge](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed)), then step 4 again |
 
 ## Next
 
