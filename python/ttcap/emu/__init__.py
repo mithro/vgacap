@@ -54,7 +54,8 @@ run at the system clock; any `freq` is refused), and `irq` between state
 machines (state machines run one after another within each step, so a
 flag that two running state machines share is refused). A state machine
 reading back a pin PIO drives, a floating input, and side-set onto a pad a
-`Pin` init took back from PIO are refused. A pad a `Pin` init took back is
+`Pin` init took back from PIO are refused, and so are a `ClockedDesign`'s
+`rst_n` and clock driven by two state machines. A pad a `Pin` init took back is
 still refused to `in pins` and `wait`, though the board would let a
 state machine read it. `ClockedDesign.configure()` forgets the design
 before it: `count_at` for a cycle before the load returns `initial`, not
