@@ -52,11 +52,11 @@ Type "help()" for more information.
 | Step | What you see | Likely cause | Fix |
 |---|---|---|---|
 | 1 | `"clients"` above 0 | someone is using the board | Wait until it shows 0, or use another board |
-| 1 | another `usb_serial` | the boards have moved between Pis | Find fpga-1's Pi on its page, and use its octet in steps 2 to 5 |
+| 1 | another `usb_serial` | the boards have moved between Pis | Find fpga-1's Pi on its page, and use its octet in step 2 |
 | 4 | `FAIL probe` with `did not answer within 60s` | the tunnel is down | Run step 2 again |
 | 4 | `hil: another hil run already holds ...` and exit 2 | another run is using the board | Wait for it to end |
 | 4 | `hil: no .../build/vgacap-frames` and exit 2 | vgacap is not built | Build it, then run step 4 again |
-| 4 | `FAIL capture` with `overruns=` above 0 | the bridge cannot carry the capture at this clock | Run steps 3 and 4 at a lower `--clock-hz`, such as 300000 |
+| 4 | `FAIL capture` with `overruns=` above 0 | the bridge cannot carry the capture at this clock | Run steps 3 and 4 at a lower `--clock-hz`, such as [300000](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
 | 4 | `SKIP reference` and `SKIP frame` with `tt-vga-testpatterns is not next door` | `--testpatterns` is missing or wrong | Give `--testpatterns` the tt-vga-testpatterns checkout |
 | 4 | `SKIP` for `demo-frames` to `stop` | no `gst-launch-1.0` or no plugin in `build/` | Install GStreamer and build the plugin, then run step 4 again |
 
