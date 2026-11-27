@@ -16,7 +16,7 @@ import io
 
 import pytest
 from emu_repl import EmuRepl
-from fake_tt import ASIC_MANUAL_INPUTS, ASIC_RP_CONTROL
+from fake_tt import ASIC_MANUAL_INPUTS, ASIC_RP_CONTROL, FakeFPGAMux, FakeProjectMux
 
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
 from ttcap.capture import (
@@ -29,6 +29,7 @@ from ttcap.capture import (
     cleanup_names,
     load_held,
     load_held_cfg,
+    select_project,
     undo_load_held,
 )
 from ttcap.emu import Board, ClockedDesign
@@ -109,8 +110,9 @@ def test_the_file_is_uploaded_to_its_directory_and_deleted_after(tmp_path):
     rig = Rig(tmp_path)
     rig.load()
     assert HELD_PATH == "/_vgacap/held.bin" and HELD_DIR == "/_vgacap"
-    assert HELD_DIR in rig.link.dirs
+    assert rig.sent("_ttcap_mkdir('/_vgacap')")
     assert HELD_PATH not in rig.link.files
+    assert HELD_DIR not in rig.link.dirs  # removed once empty
     assert rig.link.unclosed_handles() == []
 
 
@@ -126,7 +128,7 @@ def test_the_body_runs_the_four_steps_in_order(tmp_path):
     rig = Rig(tmp_path)
     rig.load()
     body = next(c for c in rig.link.commands if "spi_transferPIO" in c)
-    steps = ["tt.pins.safe_bidir()", "tt.clock_project_stop()",
+    steps = ["tt.pins.safe_bidir()", "tt.shuttle.reset()", "tt.clock_project_stop()",
              "Pin(CLK_GPIO,Pin.OUT,value=0)", "fabricfoxv2.spi_transferPIO(HELD)"]
     where = [body.replace(" ", "").index(s.replace(" ", "")) for s in steps]
     assert where == sorted(where)
@@ -204,7 +206,9 @@ def test_an_upload_that_does_not_verify_runs_no_load(tmp_path):
     assert not rig.sent("spi_transferPIO")
     assert not rig.sent("tt.reset_project(True)")
     # Left for the next upload's check, as upload() documents.
-    assert rig.link.files[HELD_PATH] == BITSTREAM[:-1]
+    # A file that did not verify is deleted, and its empty directory too.
+    assert HELD_PATH not in rig.link.files
+    assert HELD_DIR not in rig.link.dirs
 
 
 # -- a load that did not work ----------------------------------------------------
@@ -378,8 +382,8 @@ def test_the_body_drives_gpio_16_and_loads_the_held_file():
 @pytest.mark.parametrize("data, match", [
     (b"", "empty"),
     (b"\x01" * 300, "sync word"),
-    (b"\xff\x00" + b"\x00" * SYNC_WINDOW + b"\x7e\xaa\x99\x7e", "sync word"),
-], ids=["empty", "no-sync", "sync-past-the-window"])
+    (b"\x00" * SYNC_WINDOW + b"\x7e\xaa\x99\x7e" + b"\x01" * 100, "sync word"),
+], ids=["empty", "no-sync", "sync-starting-at-the-window"])
 def test_data_that_cannot_configure_an_ice40_is_refused_before_any_command(
         tmp_path, data, match):
     # fpga_reset() clears the FPGA before the transfer (fabricfoxv2.py:110-
@@ -390,6 +394,12 @@ def test_data_that_cannot_configure_an_ice40_is_refused_before_any_command(
     with pytest.raises(ValueError, match=match):
         rig.load()
     assert rig.link.commands == before
+
+
+def test_a_sync_word_starting_on_the_windows_last_byte_is_accepted(tmp_path):
+    data = b"\x00" * (SYNC_WINDOW - 1) + b"\x7e\xaa\x99\x7e" + b"\x01" * 100
+    rig = Rig(tmp_path, bitstream=data)
+    assert rig.load()["bytes"] == len(data)
 
 
 def test_a_sync_word_after_a_comment_block_is_accepted(tmp_path):
@@ -526,3 +536,69 @@ def test_a_lost_link_in_the_body_carries_the_selection_and_sends_nothing_more(
     assert raised.value.selection["enable"] == "held"
     assert len(rig.link.commands) == sent + _commands_before_the_body(tmp_path)
     assert HELD_PATH in rig.link.files
+
+
+# -- round 2 -----------------------------------------------------------------------
+
+
+def test_an_asic_carrier_is_refused_before_the_upload(tmp_path):
+    # RP2350_DBV3 is told by the GPIO layout, which an ASIC carrier shares;
+    # there spi_transferPIO pulses GPIO 1, the TT mux's reset, and still
+    # prints the right count. Only the FPGA mux's `run` is 'FPGA'
+    # (fpga_mux.py:163; project_mux.py:593 gives the shuttle, 'tt06').
+    rig = Rig(tmp_path, shuttle=FakeProjectMux("tt06"))
+    with pytest.raises(CaptureError, match="load_held needs the FPGA breakout: "
+                       "tt.shuttle is not the FPGA mux"):
+        rig.load()
+    assert rig.link.writers == []
+    assert not rig.sent("spi_transferPIO")
+    assert not rig.sent("tt.reset_project(True)")
+    assert rig.link.loader.loads == []
+
+
+def test_an_upload_that_fails_mid_write_deletes_the_file(tmp_path):
+    rig = Rig(tmp_path)
+
+    def failing(path, n, data):
+        if n == 3:
+            raise OSError(errno.EIO, "EIO")
+        return data
+
+    rig.link.on_file_write = failing
+    with pytest.raises(RuntimeError, match="EIO"):
+        rig.load()
+    assert HELD_PATH not in rig.link.files
+    assert HELD_DIR not in rig.link.dirs
+    assert not rig.sent("tt.reset_project(True)")
+
+
+def test_a_count_one_over_the_length_is_an_error(tmp_path):
+    rig = Rig(tmp_path)
+    files = rig.link.files
+    rig.link.loader.open = lambda path, mode: io.BytesIO(files[path] + b"\x00")
+    with pytest.raises(CaptureError, match="fed the FPGA %d bytes" % (len(BITSTREAM) + 1)):
+        rig.load()
+
+
+def test_the_sdk_forgets_the_previous_design_as_its_own_enable_does(tmp_path):
+    # FPGAMux.enable -> reset_and_clock_mux() -> reset() sets enabled to
+    # None (fpga_mux.py:137-160); the body runs the same reset().
+    rig = Rig(tmp_path, shuttle=FakeFPGAMux(enabled="tt_um_vgacal_bars"))
+    rig.load()
+    assert rig.link.tt.shuttle.enabled is None
+    with pytest.raises(CaptureError, match="not the enabled design"):
+        select_project(rig.repl, request(design="tt_um_vgacal_bars"))
+
+
+def test_the_directory_is_kept_while_it_holds_another_file(tmp_path):
+    rig = Rig(tmp_path, files={HELD_DIR + "/other.bin": b"x"}, dirs={HELD_DIR})
+    rig.load()
+    assert HELD_PATH not in rig.link.files
+    assert HELD_DIR in rig.link.dirs
+
+
+def test_a_failed_load_removes_the_empty_directory_too(tmp_path):
+    rig = Rig(tmp_path, loader={"fail": OSError(errno.EIO, "EIO"), "fail_after": 40})
+    with pytest.raises(CaptureError):
+        rig.load()
+    assert HELD_DIR not in rig.link.dirs

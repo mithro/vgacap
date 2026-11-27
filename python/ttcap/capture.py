@@ -713,10 +713,10 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
                 # entries, so neither spelling finds it. Seen on fpga-4,
                 # 2026-11-23: `tt.shuttle.enabled` was
                 # `<FPGA BitStream tt_um_vgacal_bars>` while `has()` said
-                # False. Already enabled is what was asked for. The name
-                # can be stale: `load_held` loads the FPGA behind the SDK's
-                # back, so after it this trusts a design the FPGA no longer
-                # holds. `restart_sdk` clears that.
+                # False. Already enabled is what was asked for. After
+                # `load_held` the name is None (its body runs
+                # `tt.shuttle.reset()`), so the design it replaced is
+                # refused here rather than taken as enabled.
                 out = _exec_checked(
                     repl,
                     "print(getattr(getattr(tt.shuttle, 'enabled', None), "
@@ -1039,7 +1039,7 @@ FPGA_CLK_GPIO = 16
 #: icepack writes `FF 00`, its comment lines, `00 FF`, then this word.
 SYNC_WORD = b"\x7e\xaa\x99\x7e"
 
-#: How far into the file the sync word may start. The tt-vga-testpatterns
+#: The sync word must start in the first SYNC_WINDOW bytes. The tt-vga-testpatterns
 #: bitstreams have it at byte 4 (no comment lines). 1024 bytes leaves room
 #: for the comment lines other tools write between `FF 00` and `00 FF`, and
 #: still rejects a file that holds the word only by chance, deep inside.
@@ -1077,16 +1077,29 @@ finally:
     del _ttcap_mkdir
 """
 
-#: Delete a file, leaving no name in the REPL's globals.
+#: Delete `HELD_PATH`, then `HELD_DIR` if that leaves it empty (MicroPython's
+#: ENOENT is 2 and ENOTEMPTY 39), leaving no name in the REPL's globals.
 _REMOVE = """\
-def _ttcap_remove(p):
+def _ttcap_remove(p, d):
     import os
     os.remove(p)
+    try:
+        os.rmdir(d)
+    except OSError as e:
+        if e.errno not in (2, 39):
+            raise
 try:
-    _ttcap_remove({path!r})
+    _ttcap_remove({path!r}, {dir!r})
 finally:
     del _ttcap_remove
-"""
+""".format(path=HELD_PATH, dir=HELD_DIR)
+
+#: Whether `tt.shuttle` is the FPGA breakout's mux: `FPGAMux.run` is 'FPGA'
+#: (tt-micropython-firmware v3.1.1, `fpga/fpga_mux.py:163`), and an ASIC
+#: carrier's `ProjectMux.run` is its shuttle, such as 'tt06'. The GPIO map
+#: cannot tell them apart, and on a carrier the loader's GPIO 1 is the TT
+#: mux's reset.
+_FPGA_CHECK = "print('ttcap fpga=%d' % (getattr(tt.shuttle, 'run', None) == 'FPGA'))"
 
 _LOAD_DONE = re.compile(r"Transmission complete, total bytes: (\d+)")
 _LOAD_ERROR = "Error accessing file:"
@@ -1142,16 +1155,18 @@ def _check_bitstream(data: bytes) -> None:
     an empty or wrong file all the same."""
     if not data:
         raise ValueError("the bitstream is empty: loading it would leave the FPGA blank")
-    if data.find(SYNC_WORD, 0, SYNC_WINDOW + len(SYNC_WORD) - 1) < 0:
+    # find()'s end bounds where the word may end, so the last start it can
+    # return is SYNC_WINDOW - 1: the word must start in the window.
+    if data.find(SYNC_WORD, 0, SYNC_WINDOW - 1 + len(SYNC_WORD)) < 0:
         raise ValueError(
-            "no iCE40 sync word 7E AA 99 7E in the bitstream's first %d bytes: "
-            "this is not an iCE40 bitstream" % SYNC_WINDOW)
+            "no iCE40 sync word 7E AA 99 7E starting in the bitstream's first %d "
+            "bytes: this is not an iCE40 bitstream" % SYNC_WINDOW)
 
 
 def _delete_held(repl: RawRepl, exc: BaseException) -> None:
     """Delete `HELD_PATH` after `exc`, noting on it a delete that fails too."""
     try:
-        _exec_checked(repl, _REMOVE.format(path=HELD_PATH))
+        _exec_checked(repl, _REMOVE)
     except Exception as again:  # noqa: BLE001 - reported on exc
         exc.add_note(f"deleting {HELD_PATH} failed too: {again}")
 
@@ -1169,7 +1184,7 @@ def undo_load_held(repl: RawRepl, did: dict, error: BaseException | None = None)
     `undo_selection`, and without, the first is raised.
     """
     steps = [
-        lambda: _exec_checked(repl, _REMOVE.format(path=HELD_PATH)),
+        lambda: _exec_checked(repl, _REMOVE),
         lambda: _exec_checked(repl, "tt.reset_project(False)"),
     ]
     first = None
@@ -1198,8 +1213,11 @@ def load_held(repl: RawRepl, req: CaptureRequest, path_on_host) -> dict:
     Before any board command it refuses (`ValueError`) a request that
     names a design, a profile other than the FPGA breakout's demo board
     (RP2350, clock on GPIO `FPGA_CLK_GPIO`), an empty file, and a file
-    without the iCE40 sync word in its first `SYNC_WINDOW` bytes. Then:
+    without the iCE40 sync word starting in its first `SYNC_WINDOW` bytes.
+    Then:
 
+    0. check that `tt.shuttle` is the FPGA mux (`run` is 'FPGA'), else raise
+       `CaptureError`: the GPIO layout an ASIC carrier shares cannot tell;
     1. make `HELD_DIR` on the board, an existing one being fine, and
        `RawRepl.upload()` the bitstream to `HELD_PATH`, which checks its
        length and crc32 there and skips the write if they already match;
@@ -1207,12 +1225,12 @@ def load_held(repl: RawRepl, req: CaptureRequest, path_on_host) -> dict:
        set the mode, monitor and `ui_in` as it does, then `hold_reset`.
        The clock is never started;
     3. the board body, `load_held_rp2.py`: `tt.pins.safe_bidir()`,
-       `tt.clock_project_stop()`, drive the clock pad low, then the SDK's
-       `fabricfoxv2.spi_transferPIO(HELD_PATH)`;
+       `tt.shuttle.reset()`, `tt.clock_project_stop()`, drive the clock pad
+       low, then the SDK's `fabricfoxv2.spi_transferPIO(HELD_PATH)`;
     4. check what it printed (`_check_load`): one "Transmission complete,
        total bytes: N" line with N the bitstream's length, no "Error
        accessing file" line, and `rst_n` and the clock pad reading 0;
-    5. delete `HELD_PATH`.
+    5. delete `HELD_PATH`, and `HELD_DIR` if that leaves it empty.
 
     Returns `select_project`'s keys, with `enable` "held" and one more,
     `bytes`, the loader's byte count. It has no `rst_n_wait_ms`.
@@ -1229,15 +1247,15 @@ def load_held(repl: RawRepl, req: CaptureRequest, path_on_host) -> dict:
     and `monitoring_before` are for putting the board back after that
     capture.
 
-    The SDK does not know about the load: `tt.shuttle.enabled`, and the
-    fpgas.online daemon's idea of the design, still name the previous one.
-    A later `select_project` naming that design takes it as already
-    enabled and captures whatever the FPGA now holds. `restart_sdk`, which
-    soft-resets the board so the SDK loads its default project again,
-    clears that.
+    `tt.shuttle.enabled` is None afterwards, the SDK's own state midway
+    through `FPGAMux.enable`, whose `reset_and_clock_mux()` runs the same
+    `reset()` (`fpga_mux.py:137-160`). So a later `select_project` naming
+    the previous design refuses it rather than taking it as enabled. The
+    fpgas.online daemon's idea of the design still names the previous one.
 
-    Errors. An upload that does not verify raises `UploadError` and runs no
-    load. A reset sequence that fails puts the board back as
+    Errors. An upload that fails, `UploadError` or a board error, deletes
+    the file and runs no load; one that gets no reply leaves the file for
+    the caller to delete after `repl.recover()`. A reset sequence that fails puts the board back as
     `select_project` does and deletes the file, unless it timed out. A load
     that fails where the board answered (step 4, or a traceback) deletes
     the file, releases reset, stops the clock and puts the mode and monitor
@@ -1260,8 +1278,15 @@ def load_held(repl: RawRepl, req: CaptureRequest, path_on_host) -> dict:
     _check_bitstream(data)
     body = mp.build(load_held_cfg(profile), LOAD_HELD_SCRIPT)
     did: dict = {"project": None, "enable": "held", "clock_hz": req.clock_hz}
+    if not _board_value(_exec_checked(repl, _FPGA_CHECK), "fpga"):
+        raise CaptureError("load_held needs the FPGA breakout: tt.shuttle is not the FPGA mux")
     _exec_checked(repl, _MKDIR.format(path=HELD_DIR))
-    repl.upload(HELD_PATH, data)
+    try:
+        repl.upload(HELD_PATH, data)
+    except BaseException as exc:
+        if not isinstance(exc, _NO_REPLY):
+            _delete_held(repl, exc)
+        raise
     try:
         _reset_sequence(repl, req, did, lambda: hold_reset(repl))
     except BaseException as exc:
@@ -1282,7 +1307,7 @@ def load_held(repl: RawRepl, req: CaptureRequest, path_on_host) -> dict:
         raise
     try:
         did["bytes"] = _check_load(stdout, stderr, len(data))
-        _exec_checked(repl, _REMOVE.format(path=HELD_PATH))
+        _exec_checked(repl, _REMOVE)
     except BaseException as exc:
         undo_load_held(repl, did, error=exc)
         raise
