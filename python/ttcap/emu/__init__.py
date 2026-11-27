@@ -24,10 +24,14 @@ and writes the same chunk stream it would write over USB:
   back cycle by cycle. Once side-set drives the design's clock pin,
   `uo_out` advances one value per rising edge it drives, and only
   then. The PIO IRQ register (block + 0x030) is
-  write-1-to-clear from `mem32`.
+  write-1-to-clear from `mem32`. `StateMachine.exec()` runs a `nop`, whose
+  side-set drives its pins at once, enabled or not; any other instruction
+  is refused.
 * **DMA**: channels with chaining, completion IRQs that call the script's
   own handlers, and the `mem32` register writes the scripts use (re-arming
   `WRITE_ADDR`/`TRANS_COUNT`, and the PIO `CTRL` atomic-clear alias).
+* **IO_BANK0**: a `mem32` read of a pad's `GPIOn_CTRL` gives its FUNCSEL:
+  the PIO block driving it, SIO for a pad a `Pin` mode took, else NULL.
 * **Pins** come from a `Waveform`: a project clock of `period` system
   cycles and the design's `uo_out` per project clock, e.g. from
   `vgacap.synth.frame_samples()` or an Icarus dump of real RTL -- or from
@@ -50,7 +54,7 @@ What it does not model: IRQ and timer latency (handlers run at the
 completion cycle, timers at the end of an advance), DMA bus contention,
 the input synchroniser (a fixed delay on every pin alike, so it moves
 nothing relative to anything else), the PIO clock divider (state machines
-run at the system clock; any `freq` is refused), and `irq` between state
+run at the system clock; any `freq`, and any `SMn_CLKDIV` but 1.0, is refused), and `irq` between state
 machines (state machines run one after another within each step, so a
 flag that two running state machines share is refused). A state machine
 reading back a pin PIO drives, a floating input, and side-set onto a pad a

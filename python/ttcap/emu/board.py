@@ -43,6 +43,15 @@ DMA_AL1_CTRL = 0x10
 PWM_BASE = {"rp2040": 0x40050000, "rp2350": 0x400A8000}
 PWM_SLICE_STRIDE = 0x14
 PWM_CSR, PWM_DIV, PWM_TOP = 0x00, 0x04, 0x10
+#: IO_BANK0 (pico-sdk addressmap.h): GPIOn_CTRL is at + 8 n + 4, FUNCSEL
+#: its bits 4:0 (hardware/regs/io_bank0.h).
+IO_BANK0_BASE = {"rp2040": 0x40014000, "rp2350": 0x40028000}
+GPIO_COUNT = {"rp2040": 30, "rp2350": 48}
+#: FUNCSEL values: SIO, PIO0 (PIO1 and PIO2 follow), NULL (the reset value).
+FUNCSEL_SIO, FUNCSEL_PIO0, FUNCSEL_NULL = 5, 6, 31
+#: SM0_CLKDIV; INT in bits 31:16, FRAC in 15:8. 1 << 16 is a divider of 1.
+PIO_SM0_CLKDIV = 0x0C8
+CLKDIV_ONE = 1 << 16
 #: Emulated SRAM: buffers get addresses here.
 SRAM_BASE = 0x20000000
 #: DMA TREQ value meaning "unpaced" (RP2040 0x3f; the same here for both).
@@ -358,8 +367,8 @@ class _SM:
         "in_base", "in_count", "index", "irq_flags", "irq_waiting", "isr",
         "isr_count", "now", "osr", "osr_count", "out_right", "pc", "program",
         "push_thresh", "rx", "rx_depth", "shift_left", "shiftctrl", "side_last",
-        "sideset_gpios", "sidesets", "tx", "tx_depth", "wrap_target", "wrap_top",
-        "x", "y",
+        "side_count", "side_en", "sideset_gpios", "sidesets", "tx", "tx_depth",
+        "wrap_target", "wrap_top", "x", "y",
     )
 
     def __init__(self, board: "Board", block: "_PioBlock", index: int) -> None:
@@ -385,6 +394,9 @@ class _SM:
         #: drove on them (None before anything has).
         self.sideset_gpios: list[int] = []
         self.side_last: int | None = None
+        #: PINCTRL.SIDESET_COUNT without the enable bit, and EXECCTRL.SIDE_EN.
+        self.side_count = 0
+        self.side_en = 0
         self.sidesets: list[int | None] = []
         self.irq_flags: frozenset[int] = frozenset()
         self.reset_state()
@@ -458,6 +470,7 @@ class _SM:
             else:
                 self.sidesets.append(side & ((1 << count) - 1))
         self.sideset_gpios = gpios
+        self.side_count, self.side_en = count, side_en
         self.side_last = None
         self.reset_state()
         if gpios:
@@ -525,6 +538,23 @@ class _SM:
         drive = self.board.pio_drive
         for i, gpio in enumerate(self.sideset_gpios):
             drive(self, gpio, (value >> i) & 1, self.now)
+
+    def exec_word(self, word: int) -> None:
+        """`pio_sm_exec`: run one instruction now, enabled or not. Only
+        `nop` (`mov y, y`) is emulated: its side-set, if it has one, drives
+        the pins from this cycle, and its delay is ignored."""
+        word &= 0xFFFF
+        if word >> 13 != 5 or self._decode(word) != (_MOV, 2, 0, 2):
+            raise BoardError("exec of 0x%04x: only nop is emulated" % word)
+        count = self.side_count
+        if not self.sideset_gpios or not count:
+            return
+        field_bits = count + self.side_en
+        side = ((word >> 8) & 0x1F) >> (5 - field_bits)
+        if self.side_en and not (side >> count) & 1:
+            return
+        self.now = max(self.now, self.board.now)
+        self._side(side & ((1 << count) - 1))
 
     def _decode(self, word: int) -> tuple:
         op = word >> 13
@@ -1376,7 +1406,21 @@ class Board:
         for offset, value in zip((PWM_CSR, PWM_DIV, PWM_TOP), self.pwm):
             if addr == self.pwm_base + offset:
                 return value
+        io = IO_BANK0_BASE[self.chip]
+        gpio, reg = divmod(addr - io, 8)
+        if reg == 4 and 0 <= gpio < GPIO_COUNT[self.chip]:
+            return self.funcsel(gpio)
         raise BoardError("mem32 read of unmodelled address 0x%08x" % addr)
+
+    def funcsel(self, gpio: int) -> int:
+        """GPIOn_CTRL.FUNCSEL now: the PIO block whose state machine drives
+        the pad, SIO for a pad a `Pin` mode took, else NULL. A pad the
+        firmware's PWM clocks reads NULL too: the PWM is not modelled."""
+        if self.pio_owns(gpio, self.now):
+            return FUNCSEL_PIO0 + self.pio_pin_owner[gpio].block.index
+        if self.pads.get(gpio, (None,))[0] is not None:
+            return FUNCSEL_SIO
+        return FUNCSEL_NULL
 
     def mem32_write(self, addr: int, value: int) -> None:
         value &= MASK32
@@ -1398,6 +1442,13 @@ class Board:
                     return
                 if addr == shiftctrl | ALIAS_SET:
                     sm.write_shiftctrl(sm.shiftctrl | value)
+                    return
+                if addr == block.address(PIO_SM0_CLKDIV + PIO_SM_STRIDE * sm.index):
+                    if value != CLKDIV_ONE:
+                        raise BoardError(
+                            "SM%d_CLKDIV 0x%08x: the PIO clock divider is not emulated; "
+                            "state machines run at the system clock (0x%08x)"
+                            % (sm.index, value, CLKDIV_ONE))
                     return
             if addr == block.address(PIO_CTRL | ALIAS_CLR):
                 for sm in block.sms:
@@ -1870,6 +1921,14 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
                     raise BoardError("get() would block forever: RX FIFO empty, SM stopped")
                 board.advance(board.idle_cycles)
             return sm.rx.pop(0) >> shift
+
+        def exec(self, instr):
+            # rp2_pio.c: a string is assembled with PINCTRL.SIDESET_COUNT
+            # (the enable bit included) and EXECCTRL.SIDE_EN.
+            sm = self._sm
+            if isinstance(instr, str):
+                instr = rp2.asm_pio_encode(instr, sm.side_count + sm.side_en, sm.side_en)
+            sm.exec_word(instr)
 
         def rx_fifo(self):
             return len(self._sm.rx)
