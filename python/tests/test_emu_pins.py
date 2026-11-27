@@ -238,3 +238,59 @@ def test_writing_the_latch_of_a_pad_pio_drives_changes_nothing():
     assert board.pio_rises[CLK] == rises
     assert Pin(CLK).value() == 0
     assert board.latch[CLK] == 1
+
+
+def test_init_with_only_a_pull_keeps_the_mode():
+    # machine_pin.c: with no mode, FUNCSEL and direction are left alone and
+    # only the pull is set -- what the SDK's StandardPin.pull setter does
+    # (standard.py:76-79).
+    board = _board()
+    Pin = _pin(board)
+    p = Pin(5, Pin.OUT, value=0)
+    p.init(pull=Pin.PULL_UP)
+    assert board.pads[5] == (Pin.OUT, Pin.PULL_UP)
+    assert p.value() == 0
+
+
+def test_a_release_and_a_rise_in_one_pin_init_is_an_edge():
+    # The release takes effect in the cycle of the init, so the level SIO
+    # drives in that same init is compared with PIO's last one: a rise.
+    board = _board()
+    Pin = _pin(board)
+    sm, _ = _clock_sm(board)
+    sm.active(1)
+    board.advance(3)  # PIO holds the clock low
+    sm.active(0)
+    n = len(board.pio_rises[CLK])
+    Pin(CLK, Pin.OUT, value=1)
+    assert board.pio_rises[CLK][n:] == [board.now]
+    assert board.pad_level(CLK, board.now) == 1
+
+
+def test_once_the_cpu_has_the_clock_another_state_machine_may_read_uo_out():
+    # No state machine drives the clock any more, so none can run ahead of
+    # its edges: the CPU's land between advances.
+    board = _board()
+    Pin = _pin(board)
+    rp2 = board.modules()["rp2"]
+    sm, _ = _clock_sm(board)
+    sm.active(1)
+    board.advance(3)
+    sm.active(0)
+    Pin(CLK, Pin.OUT, value=0)
+
+    @rp2.asm_pio()
+    def reader():
+        in_(pins, 8)  # noqa: F821
+        push(noblock)  # noqa: F821
+
+    sm2 = rp2.StateMachine(5, reader, in_base=Pin(33))
+    sm2.active(1)
+    board.advance(20)
+    assert sm2.rx_fifo() > 0
+
+
+def test_the_clock_pad_as_an_input_with_no_pull_reads_0_as_on_fpga_1():
+    board = _board()
+    Pin = _pin(board)
+    assert Pin(CLK, Pin.IN).value() == 0

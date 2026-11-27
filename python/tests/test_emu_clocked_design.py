@@ -195,3 +195,12 @@ def test_rst_n_written_in_the_cycle_of_an_edge_counts_for_that_edge():
     Pin(RST, Pin.OUT, value=0)
     assert board.now == edge
     assert board.wave.count_at(edge) == 0
+
+
+def test_the_in_window_shows_the_clock_pad_the_cpu_drives():
+    board = _board()
+    Pin = board.modules()["machine"].Pin
+    clk = Pin(CLK, Pin.OUT, value=1)
+    assert board.wave.window(CLK, 1, board.now) & 1 == 1
+    clk.value(0)
+    assert board.wave.window(CLK, 1, board.now) & 1 == 0

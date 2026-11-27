@@ -218,3 +218,45 @@ def test_a_failed_load_prints_the_error_and_does_not_raise(files, fail, error):
     assert not any(line.startswith("Transmission complete") for line in text)
     assert text[-3:] == ["State machine deactivated, SS high", "clk=0", ""]
     assert loader.loads == [b"\x01" * 40 if fail else b""]
+
+
+def test_a_timer_callback_that_takes_time_does_not_fire_itself_again():
+    # Due moves on before the callback runs, so a callback that advances
+    # the board (a Pin read, a sleep) cannot recurse into itself.
+    board = Board(Waveform(b"\0", [], clk_gpio=CLK, period=2))
+    fired = []
+
+    def callback():
+        fired.append(board.now)
+        board.advance(10)
+
+    board.add_timer(1000, callback)
+    for _ in range(3):
+        board.advance(1000)
+    assert fired == [1000, 2010, 3020]
+
+
+def test_clock_project_stop_makes_the_clock_pad_an_input_with_its_pull_down():
+    board = _design_board()
+    tt = board_sdk(board)
+    Pin = board.modules()["machine"].Pin
+    Pin(CLK, Pin.OUT, value=0)
+    tt.clock_project_stop()  # demoboard.py:394-401, with no clock running
+    assert board.pads[CLK] == (Pin.IN, Pin.PULL_DOWN)
+
+
+def test_a_mode_write_makes_the_uio_pins_inputs_again():
+    board = _design_board()
+    tt = board_sdk(board)
+    Pin = board.modules()["machine"].Pin
+    Pin(25, Pin.OUT, value=1)
+    tt.mode = ASIC_RP_CONTROL
+    assert all(board.pads[g] == (Pin.IN, Pin.PULL_DOWN) for g in range(25, 33))
+
+
+def test_the_loader_leaves_ss_high():
+    board = _design_board()
+    loader = FakeLoader(board, {HELD: b"\x01" * 10})
+    loader.spi_transferPIO(HELD)
+    Pin = board.modules()["machine"].Pin
+    assert Pin(FakeLoader.SS).value() == 1
