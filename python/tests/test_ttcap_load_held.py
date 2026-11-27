@@ -32,7 +32,7 @@ from ttcap.capture import (
     undo_load_held,
 )
 from ttcap.emu import Board, ClockedDesign
-from ttcap.repl import RawRepl, UploadError
+from ttcap.repl import LinkClosed, RawRepl, UploadError
 
 CLK, RST = 16, 14
 UO = list(range(33, 41))
@@ -507,3 +507,22 @@ def test_the_monitor_firing_before_it_is_turned_off_leaves_the_clock_driven_low(
     assert rig.board.pads[CLK] == (rig.Pin.OUT, None)
     assert rig.level(CLK) == 0
     assert rig.board.wave.count_at(rig.board.now) == 0
+
+
+def test_a_lost_link_in_the_body_carries_the_selection_and_sends_nothing_more(
+        tmp_path, monkeypatch):
+    rig = Rig(tmp_path)
+    real_exec = rig.repl.exec
+
+    def lost(code, timeout=10.0, **kwargs):
+        if "spi_transferPIO" in code:
+            raise LinkClosed("the link closed")
+        return real_exec(code, timeout=timeout, **kwargs)
+
+    monkeypatch.setattr(rig.repl, "exec", lost)
+    sent = len(rig.link.commands)
+    with pytest.raises(LinkClosed) as raised:
+        rig.load()
+    assert raised.value.selection["enable"] == "held"
+    assert len(rig.link.commands) == sent + _commands_before_the_body(tmp_path)
+    assert HELD_PATH in rig.link.files
