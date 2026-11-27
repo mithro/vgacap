@@ -206,6 +206,108 @@ class Waveform:
         return word
 
 
+class ClockedDesign(Waveform):
+    """An exact 8-bit counter on `uo_out`, clocked only by real edges.
+
+    There is no free-running clock: the design counts the rising edges on
+    its clock pad, whoever drives them -- PIO side-set or a CPU `Pin` --
+    and nothing else. On each edge it takes 0 if `rst_n` (GPIO `rst_gpio`,
+    as the pad reads at that cycle) is low, a synchronous reset, else its
+    value plus 1, modulo 256. The value after edge n is on the `uo_out`
+    pins from `settle` cycles after it; `initial` is on them before the
+    first edge, and again after `configure()` (a bitstream load).
+
+    The input synchroniser is not modelled: an `in pins` reads the pads in
+    the cycle it issues.
+    """
+
+    def __init__(
+        self,
+        uo_gpios: Sequence[int],
+        clk_gpio: int,
+        rst_gpio: int,
+        settle: int = 0,
+        constants: dict[int, int] | None = None,
+        initial: int = 0,
+    ) -> None:
+        super().__init__(b"\0", uo_gpios, clk_gpio, period=2, delay=settle, constants=constants)
+        if settle < 0:
+            raise ValueError("settle must not be negative")
+        self.rst_gpio = rst_gpio
+        self.settle = settle
+        self.initial = initial & 0xFF
+        self.clock_rises = []
+        self.clock_stopped = True  # no PWM: the pad is whatever drives it
+        self.board: Board | None = None
+        #: Edges before this index were clocked into an earlier configuration.
+        self._first = 0
+        #: The value after edge `_first + i`, for edges before board.now
+        #: (later ones could still see a CPU write to rst_n in their cycle).
+        self._after: list[int] = []
+
+    def attach(self, board: "Board") -> None:
+        self.board = board
+        board.pio_rises[self.clk_gpio] = self.clock_rises
+
+    def configure(self) -> None:
+        """A bitstream load: the registers start again from `initial`."""
+        self._first = len(self.clock_rises)
+        self._after = []
+
+    def count(self, n: int) -> int:
+        """The counter after the first `n` rising edges."""
+        first = self._first
+        if n <= first:
+            return self.initial
+        after = self._after
+        if n - first <= len(after):
+            return after[n - first - 1]
+        board = self.board
+        now, rst, rises = board.now, self.rst_gpio, self.clock_rises
+        value = after[-1] if after else self.initial
+        cache = True
+        for i in range(first + len(after), n):
+            r = rises[i]
+            value = (value + 1) & 0xFF if board.pad_level(rst, r) else 0
+            if cache and r < now:
+                after.append(value)
+            else:
+                cache = False
+        return value
+
+    def count_at(self, cycle: int) -> int:
+        """The counter's value on the `uo_out` pins at `cycle`."""
+        return self.count(self.clock_index(cycle))
+
+    def value(self, gpio: int, cycle: int) -> int:
+        if gpio == self.clk_gpio:
+            return self.board.pad_level(gpio, cycle)
+        bit = self.uo_bit.get(gpio)
+        if bit is not None:
+            return (self.count_at(cycle) >> bit) & 1
+        return self.constants.get(gpio, 0) & 1
+
+    def next_time(self, gpio: int, want: int, cycle: int) -> int | None:
+        if self.value(gpio, cycle) == want:
+            return cycle
+        bit = self.uo_bit.get(gpio)
+        if bit is None:
+            return None  # the clock and constants change only between advances
+        rises, settle = self.clock_rises, self.settle
+        for i in range(bisect.bisect_right(rises, cycle - settle), len(rises)):
+            if (self.count(i + 1) >> bit) & 1 == want:
+                return rises[i] + settle
+        return None
+
+    def window(self, base: int, count: int, cycle: int) -> int:
+        key = (base, count)
+        table, clk_pos = self._tables[key] if key in self._tables else self._table(base, count)
+        word = table[self.count_at(cycle)]
+        if clk_pos >= 0 and self.board.pad_level(self.clk_gpio, cycle):
+            word |= 1 << clk_pos
+        return word
+
+
 # --------------------------------------------------------------------------
 # PIO
 
@@ -1808,4 +1910,4 @@ def assemble(build: Callable[[types.ModuleType], object]) -> list:
     return build(Board(wave).modules()["rp2"])
 
 
-__all__ = ["Board", "BoardError", "Waveform", "assemble"]
+__all__ = ["Board", "BoardError", "ClockedDesign", "Waveform", "assemble"]

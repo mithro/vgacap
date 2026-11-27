@@ -47,6 +47,6 @@ machines run one after another within each step, so a flag that two
 running state machines share is refused).
 """
 
-from ttcap.emu.board import Board, BoardError, Waveform
+from ttcap.emu.board import Board, BoardError, ClockedDesign, Waveform
 
-__all__ = ["Board", "BoardError", "Waveform"]
+__all__ = ["Board", "BoardError", "ClockedDesign", "Waveform"]
