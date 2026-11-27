@@ -25,8 +25,8 @@ option is on [ttcap](../python/ttcap/README.md).
   On the Welland bench an uploaded design is enabled through the bridge, after the SDK restart, as in steps 14 to
   17 of [How to flash the module firmware and restore the board's own](how-to-flash.md): `tt.shuttle` does not know
   uploaded designs.
-- For step 4, a machine with CMake and a C compiler. The Welland bench's Pis have no CMake, so step 4 runs on
-  a workstation checkout, with the `.vgacap` file copied there.
+- For step 4, a machine with CMake and a C compiler. On a Welland bench Pi, which has no CMake package, run
+  CMake from PyPI through `uvx`, as in step 2 of [How to run the hardware-in-the-loop check on the board's Pi](../tools/how-to-run-hil-on-the-pi.md).
 
 ## Steps
 

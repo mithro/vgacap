@@ -97,10 +97,10 @@ Open `out/frame-0000.png`. It is the picture your design drew, rebuilt from its 
 | Step | What you see | Likely cause | Fix |
 |---|---|---|---|
 | 2 | `probe failed:` | the port is wrong or busy | see [How to probe a demo board](how-to-probe-board.md) |
-| 3 | `board error: MemoryError`, with `bytes=0` | the firmware's heap is too full for the capture buffers | restart the SDK, then repeat step 3 |
+| 3 | `board error: MemoryError`, with `bytes=0` | the firmware's heap is too full for the capture buffers | restart the board to the stock firmware's start state, then repeat step 3 |
 | 4 | `png failed:` | the capture holds no whole frame | see [How to turn a capture into PNG images](how-to-render-png.md) |
 
-To restart the SDK, run `uv run python tools/board_restart.py serial:/dev/ttyACM0`, or press Ctrl-C, Ctrl-B and Ctrl-D in a serial terminal. A failed capture still prints `wrote capture.vgacap`, but exits 1 and holds no samples. On tt07 the first capture failed this way with `mem_free=74880`, and the retry after a restart succeeded ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)).
+[How to restart a demo board to the stock firmware's start state](../../tools/how-to-restart-a-board.md) shows the restart, with `serial:/dev/ttyACM0` as the link. A failed capture still prints `wrote capture.vgacap`, but exits 1 and holds no samples. On tt07 the first capture failed this way with `mem_free=74880`, and the retry after a restart succeeded ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)).
 
 ## Next
 

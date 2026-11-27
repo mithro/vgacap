@@ -52,7 +52,7 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
    $ curl -s localhost:8765/health
    ```
 
-3. On the Welland bench, stop the bridge, which frees `/dev/ttboard`.
+3. On the Welland bench, stop the bridge as on [How to stop the fpgas-tt daemon and start it again](https://docs.fpgas.online/en/latest/boards/tt-fpga/setup/stop-daemon.html), which frees `/dev/ttboard`.
 
    ```console
    $ sudo systemctl stop fpgas-tt

@@ -41,7 +41,7 @@ never written. A reboot, a reset or a power cycle brings the stock firmware back
    $ curl -s -X POST localhost:8765/designs/<name>/enable
    ```
 
-3. On the Welland bench, stop the bridge, which frees `/dev/ttboard`.
+3. On the Welland bench, stop the bridge as on [How to stop the fpgas-tt daemon and start it again](https://docs.fpgas.online/en/latest/boards/tt-fpga/setup/stop-daemon.html), which frees `/dev/ttboard`.
 
    ```console
    $ sudo systemctl stop fpgas-tt

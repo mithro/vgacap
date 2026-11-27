@@ -77,8 +77,7 @@ that on its fragmented heap; the vgacap firmware always passes one.
 [`pio/vgacap_stream.pio`](pio/vgacap_stream.pio) and [`pio/vgacap_frame.pio`](pio/vgacap_frame.pio) are the
 programs' readable sources, at the board's default operands. A capture's edge, sync levels, sample delay and
 period are known only when it starts. So [`core/fw_pio.c`](core/fw_pio.c) builds the loaded words at run time,
-instruction for instruction in the `.pio` order. The comment in `core/fw_pio.h` names a single
-`vgacap_capture.pio`, which does not exist ([issue #45](https://github.com/mithro/vgacap/issues/45)).
+instruction for instruction in the `.pio` order.
 
 Two references hold the builder. The firmware build assembles the `.pio` files with pioasm and fails if the output
 differs from the checked-in `.hex`. The host tests compare the built words with that `.hex`. They also compare them

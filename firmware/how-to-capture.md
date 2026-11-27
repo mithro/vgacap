@@ -22,8 +22,8 @@ how, and every other `ttcap capture` option is on [ttcap](../python/ttcap/README
 - On a demo board with an FPGA breakout, the design enabled before the firmware was loaded, as on
   [How to run the vgacap firmware from RAM and go back to stock](how-to-load.md). Without one, frame captures fail
   with `board went quiet`.
-- For step 4, a machine with CMake and a C compiler. The Welland bench's Pis have no CMake, so step 4 runs on
-  a workstation checkout, with the `.vgacap` file copied there.
+- For step 4, a machine with CMake and a C compiler. On a Welland bench Pi, which has no CMake package, run
+  CMake from PyPI through `uvx`, as in step 2 of [How to run the hardware-in-the-loop check on the board's Pi](../tools/how-to-run-hil-on-the-pi.md).
 - The design's project clock in Hz: 25000000 for a 640x480@60 design at 25 MHz.
 - With an ASIC breakout, the project's mux index: [How to select an ASIC project with the vgacap firmware](how-to-select-asic-project.md).
 

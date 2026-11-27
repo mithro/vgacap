@@ -35,7 +35,7 @@ The run prints one line and exits 0:
 bytes=1000000 seconds=1.395 kbytes_per_s=700.0 corrupt=no
 ```
 
-That is an RP2350 demo board on its own Pi ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). The rate is an upper bound. A board that sent 716 KB/s overran at 600 kHz, and was clean at 500 kHz in a 4-second run on USB serial ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). How long a clock stays clean is open ([#52](https://github.com/mithro/vgacap/issues/52)).
+That is an RP2350 demo board on its own Pi ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). The rate is an upper bound. A board that sent 716 KB/s overran at 600 kHz, and was clean at 500 kHz in a 4-second run on USB serial ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). Each source's fastest clean clock is on [Capture sources compared](../../docs/reference-capture-sources.md).
 
 ## If it fails
 
