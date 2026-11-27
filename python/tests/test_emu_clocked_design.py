@@ -259,14 +259,14 @@ def test_rst_n_driven_by_a_later_state_machine_resets_edges_already_counted():
     clock = rp2.StateMachine(4, _free_running(rp2), sideset_base=Pin(CLK), in_base=Pin(33))
 
     @rp2.asm_pio(sideset_init=rp2.PIO.OUT_HIGH)
-    def reset_at_100():
+    def reset_at_100():  # low from 100 cycles after the start
         nop().side(1)[15]  # noqa: F821
         nop().side(1)[15]  # noqa: F821
         nop().side(1)[15]  # noqa: F821
         nop().side(1)[15]  # noqa: F821
         nop().side(1)[15]  # noqa: F821
         nop().side(1)[15]  # noqa: F821
-        nop().side(1)[2]  # noqa: F821
+        nop().side(1)[3]  # noqa: F821
         label("low")  # noqa: F821
         jmp("low").side(0)  # noqa: F821
 
@@ -275,7 +275,10 @@ def test_rst_n_driven_by_a_later_state_machine_resets_edges_already_counted():
     reset.active(1)
     board.advance(300)
     rises = board.pio_rises[CLK]
-    low_from = board.pio_rises[CLK][0] + 99
+    low_from = board.pio_rises[CLK][0] + 100
+    # An edge every 3 cycles: one lands in the cycle before rst_n falls, and
+    # counts, since rst_n is read in the edge's own cycle.
+    assert low_from - 1 in rises
     assert board.pio_pin(17, low_from) == 0 and board.pio_pin(17, low_from - 1) == 1
     assert design.count_at(board.now) == 0
     assert [design.count(i + 1) for i in range(len(rises))] == [
@@ -298,3 +301,16 @@ def test_one_design_cannot_drive_two_boards():
     Board(design)
     with pytest.raises(BoardError, match="already drives"):
         Board(design)
+
+
+def test_rst_n_falling_the_cycle_after_an_edge_does_not_reset_that_edge():
+    # rst_n is read in the edge's own cycle, not the next one.
+    board = _board()
+    Pin = board.modules()["machine"].Pin
+    clk = Pin(CLK, Pin.OUT, value=0)
+    clk.value(1)
+    edge = board.now
+    board.advance(1)
+    Pin(RST, Pin.OUT, value=0)  # a Pin init costs no time: lands at edge + 1
+    assert board.pad_level(RST, edge) == 1 and board.pad_level(RST, edge + 1) == 0
+    assert board.wave.count_at(board.now) == 1
