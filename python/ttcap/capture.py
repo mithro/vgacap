@@ -724,6 +724,27 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
                         "and is not the enabled design either; an uploaded FPGA "
                         "bitstream has to be enabled through the board's daemon "
                         "first") from None
+
+    def reset() -> None:
+        did["rst_n_wait_ms"] = reset_design(repl, clock_command(req), req.clock_hz)
+
+    _reset_sequence(repl, req, did, reset)
+    return did
+
+
+def _reset_sequence(repl: RawRepl, req: CaptureRequest, did: dict,
+                    reset: Callable[[], None]) -> None:
+    """Steps 2 to 6 of `select_project`, which `load_held` shares: the one
+    reset sequence, with what happens once the inputs are set left to
+    `reset`.
+
+    Stops the clock, writes the mode and turns off the monitor, writes
+    `ui_in` and reads it back, recording in `did` what `restore_mode`
+    puts back, and then calls `reset`. `select_project`'s runs
+    `reset_design`; `load_held`'s holds reset and loads the bitstream.
+    A failure after the clock stops puts the board back, as
+    `select_project` describes, before the error is raised.
+    """
     _exec_checked(repl, "tt.clock_project_stop()")
     # Read before the mode write below, which turns the monitor on.
     monitoring = _board_value(_exec_checked(repl, _READ_MONITORING), "monitoring")
@@ -753,7 +774,7 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
                     "ASIC_RP_CONTROL, the stock firmware leaves undriven any "
                     "input that reads high, for fear of contention" % (got, req.ui_in))
             did["ui_in"] = req.ui_in
-        did["rst_n_wait_ms"] = reset_design(repl, clock_command(req), req.clock_hz)
+        reset()
     except BaseException as exc:
         # The caller never sees `did`, and its teardown does not cover a
         # setup that raised, so the board is put back here: the clock
@@ -761,7 +782,6 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
         # not left clocked, in ASIC_RP_CONTROL or without its monitor.
         undo_selection(repl, did, stop=True, error=exc)
         raise
-    return did
 
 
 #: How long `reset_design` waits for `rst_n` to read 1 after the release.
@@ -832,6 +852,29 @@ def _board_value(stdout: str, key: str) -> int:
     raise CaptureError(f"board did not report {key}, said {stdout.strip()!r}")
 
 
+def hold_reset(repl: RawRepl) -> None:
+    """Hold the design in reset: `tt.reset_project(True)`, and `rst_n` must
+    read 0. The first step of `reset_design`, and the last before the load
+    in `load_held`. If the read-back fails, reset is released before the
+    error is raised."""
+    _exec_checked(repl, "tt.reset_project(True)")
+    try:
+        if _board_value(_exec_checked(repl, _READ_RST_N), "rst_n") != 0:
+            raise CaptureError(
+                "rst_n reads 1 while reset is held: tt.reset_project(True) did not drive it low")
+    except BaseException as exc:
+        _release_reset(repl, exc)
+        raise
+
+
+def _release_reset(repl: RawRepl, exc: BaseException) -> None:
+    """Release reset after `exc`, noting on it a release that fails too."""
+    try:
+        _exec_checked(repl, "tt.reset_project(False)")
+    except Exception as again:  # noqa: BLE001 - reported on exc
+        exc.add_note(f"releasing reset failed too: {again}")
+
+
 def reset_design(repl: RawRepl, clock: str, clock_hz: float) -> int:
     """Reset the design with its clock running: the one reset sequence.
 
@@ -849,11 +892,8 @@ def reset_design(repl: RawRepl, clock: str, clock_hz: float) -> int:
     held in reset with `rst_n` driven low. Nothing may write `tt.mode`
     after this: the write rebuilds the pins and releases reset.
     """
-    _exec_checked(repl, "tt.reset_project(True)")
+    hold_reset(repl)
     try:
-        if _board_value(_exec_checked(repl, _READ_RST_N), "rst_n") != 0:
-            raise CaptureError(
-                "rst_n reads 1 while reset is held: tt.reset_project(True) did not drive it low")
         _exec_checked(repl, clock)
         # The board sleeps reset_hold_ms first (16 s at 1 Hz), and the
         # exec timeout is one deadline for the whole command.
@@ -865,10 +905,7 @@ def reset_design(repl: RawRepl, clock: str, clock_hz: float) -> int:
                 "rst_n stuck low after release: it read 0 for %d ms after "
                 "tt.reset_project(False)" % waited)
     except BaseException as exc:
-        try:
-            _exec_checked(repl, "tt.reset_project(False)")
-        except Exception as again:  # noqa: BLE001 - reported on exc
-            exc.add_note(f"releasing reset failed too: {again}")
+        _release_reset(repl, exc)
         raise
     return waited
 
