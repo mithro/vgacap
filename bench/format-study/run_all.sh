@@ -98,7 +98,9 @@ run_pool() {
     done < "$jobs"
     wait "${busy[@]}" || true
     kill "$loadpid" "$progpid" || true
-    log "stage $stage: done in $(( $(date +%s) - start ))s; failed: $(cat "$RES/$stage/FAILED" 2>/dev/null | tr '\n' ' ')"
+    local failed=none
+    [ ! -s "$RES/$stage/FAILED" ] || failed=$(tr '\n' ' ' < "$RES/$stage/FAILED")
+    log "stage $stage: done in $(( $(date +%s) - start ))s; failed: $failed"
 }
 
 trace_of() { echo "$TR/$1_trace.vgch.zst"; }
