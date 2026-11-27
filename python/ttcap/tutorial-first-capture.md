@@ -47,7 +47,7 @@ sys.version: 3.4.0; MicroPython v1.24.0 on 2024-10-25
 GPIOMap.all(): {'uio1': 22, 'uio5': 26, ... 'rp_projclk': 0, ... 'uo_out0': 5, ...}
 ```
 
-`'rp_projclk': 0` and `'uo_out0': 5` mark an RP2040 demo board. `ttcap` reads the same map during a capture to pick the board's pin layout. A `probe failed:` line means the port is wrong or busy; [How to probe a demo board](how-to-probe-board.md) lists the causes.
+`'rp_projclk': 0` and `'uo_out0': 5` mark an RP2040 demo board. `ttcap` reads the same map during a capture to pick the board's pin layout.
 
 ## 3. Capture two frames
 
@@ -96,7 +96,7 @@ Open `out/frame-0000.png`. It is the picture your design drew, rebuilt from its 
 
 | Step | What you see | Likely cause | Fix |
 |---|---|---|---|
-| 2 | `probe failed:` | the port is wrong or busy | see How to probe a demo board, linked under step 2 |
+| 2 | `probe failed:` | the port is wrong or busy | see [How to probe a demo board](how-to-probe-board.md) |
 | 3 | `board error: MemoryError`, with `bytes=0` | the firmware's heap is too full for the capture buffers | restart the board to the stock firmware's start state, then repeat step 3 |
 | 4 | `png failed:` | the capture holds no whole frame | see [How to turn a capture into PNG images](how-to-render-png.md) |
 

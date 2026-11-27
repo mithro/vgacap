@@ -31,7 +31,7 @@ such as [#45](https://github.com/mithro/vgacap/issues/45).
 | [`pico/hal_pico.c`](pico/hal_pico.c) | the firmware's own half of the RP2350 HAL | yes | no | none |
 | [`pico/main.c`](pico/main.c) | `main()` | yes | no | none |
 | [`pico/usb_descriptors.c`](pico/usb_descriptors.c) | USB descriptors | yes | no | none |
-| [`pico/tusb_config.h`](pico/tusb_config.h) | TinyUSB configuration | yes | no | none |
+| [`pico/tusb_config.h`](pico/tusb_config.h) | [TinyUSB](https://github.com/hathach/tinyusb) configuration | yes | no | none |
 | [`pico/boards/tt_demoboard_v3.h`](pico/boards/tt_demoboard_v3.h) | pico-sdk board header | yes | no | none |
 | [`pio/vgacap_stream.pio`](pio/vgacap_stream.pio) | streaming sampler source | checked | no | #45 |
 | [`pio/vgacap_frame.pio`](pio/vgacap_frame.pio) | frame trigger source | checked | no | #45 |
