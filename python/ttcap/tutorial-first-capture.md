@@ -90,7 +90,7 @@ wrote 3 png(s)
 
 Open `out/frame-0000.png`. It is the picture your design drew, rebuilt from its sync signals and its six colour bits. The first frame of a capture is never whole, so a two-frame capture gives one to three PNGs.
 
-`glitches=` counts the sync pulses the rebuild rejected as too short since the previous frame, and `glitches_total` counts them over the whole capture. A real chip can put out such pulses: the capture pictured above had `glitches_total=10`. The picture is still rebuilt whole ([Glitches](../../src/tools/README.md#glitches)). `partial=0` says every line of the frame was captured.
+`glitches=` counts the sync pulses the rebuild rejected as too short since the previous frame, and `glitches_total` counts them over the whole capture. A real chip can put out such pulses: the capture pictured above had `glitches_total=10`. The picture is still rebuilt whole ([Glitch pulses](../../src/frame/explanation-rebuilding-frames.md#glitch-pulses)). `partial=0` says every line of the frame was captured.
 
 ## If a step fails
 

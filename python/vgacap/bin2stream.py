@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Wrap a raw per-clock sample dump (one sample per byte or per 32-bit word)
-into a vgacap stream.
+"""Wrap a raw per-clock sample dump (one sample per byte) into a vgacap stream.
 
     uv run vgacap-bin2stream dump.bin out.vgacap --desc "iverilog tt_um_vga_pattern"
 
-By default the input is one byte per clock with the Tiny VGA signal map and
-is written as RAW chunks with sample_bits=8, samples_per_word=4.
+Each input byte is one clock's uo_out, read with the Tiny VGA signal map,
+and is written as RAW chunks with sample_bits=8, samples_per_word=4.
 """
 from __future__ import annotations
 
@@ -17,14 +16,22 @@ from .stream import TINYVGA_MAP, Header, Writer
 CHUNK_SAMPLES = 65536
 
 
+def parser() -> argparse.ArgumentParser:
+    """The command line; the documentation's option table is built from it."""
+    ap = argparse.ArgumentParser(prog="vgacap-bin2stream", description=__doc__.split("\n\n")[0])
+    ap.add_argument("input", type=pathlib.Path,
+                    help="the dump: one byte per clock, the design's uo_out")
+    ap.add_argument("output", type=pathlib.Path, help="the vgacap stream to write")
+    ap.add_argument("--desc", default="", help="text for the header's desc field")
+    ap.add_argument("--clock-hz", type=int, default=0,
+                    help="the design clock in Hz, for the header; 0 means unknown")
+    ap.add_argument("--mode", type=int, default=3, choices=(0, 1, 2, 3),
+                    help="the header's mode: 0 extclk; 1 selfclk; 2 event; 3 unknown")
+    return ap
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("input", type=pathlib.Path)
-    ap.add_argument("output", type=pathlib.Path)
-    ap.add_argument("--desc", default="")
-    ap.add_argument("--clock-hz", type=int, default=0)
-    ap.add_argument("--mode", type=int, default=3, help="0 extclk, 1 selfclk, 2 event, 3 unknown")
-    a = ap.parse_args(argv)
+    a = parser().parse_args(argv)
 
     data = a.input.read_bytes()
     header = Header(sample_bits=8, samples_per_word=4, flags=0, signal_map=TINYVGA_MAP,
