@@ -52,8 +52,8 @@ That is the command in step 2 on fpga-1, an RP2350 demo board with an FPGA break
 | 2 | `board has only N bytes of free heap` | the two DMA buffers do not fit | reset the board or lower `--buf-words` |
 | 2 | `no samples captured`, exit 3 | the sampler saw no project clock | check the design is enabled and clocked |
 | 2 | `is not a shuttle entry on this board` | the board has no design of that name | check the name with the board's own tools |
-| 3 | `overruns=` above 0 | the clock is faster than the link carries | lower `--clock-hz` or raise `--buf-words` |
-| 3 | `rxstall=1` | the PIO's FIFO overflowed and samples were lost | lower `--clock-hz` |
+| 3 | `overruns: N buffers torn`, exit 1 | the clock is faster than the link carries | lower `--clock-hz` or raise `--buf-words` |
+| 3 | `rx stall: the RX FIFO overflowed`, exit 1 | the PIO's FIFO overflowed and samples were lost | lower `--clock-hz` |
 
 The heap `ttcap` needs before it starts is `8 × --buf-words + 24000` bytes: 56,768 bytes at the default 4096. Each overrun is marked in the file, and the tools that read it drop the picture in progress there. Every other message is on [ttcap exit codes and messages](reference-exit-codes.md).
 

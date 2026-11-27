@@ -612,22 +612,59 @@ def test_an_rle_capture_with_an_rx_stall_exits_one(monkeypatch, capsys, tmp_path
     assert [tuple(i[1:]) for i in items if i[0] == "run"] == [(7, 3), (9, 4)]
 
 
-def test_a_stream_capture_with_an_rx_stall_still_exits_zero(monkeypatch, capsys, tmp_path):
-    # Only RLE makes the stall fatal; a RAW stream with a stall is short of
-    # samples, but every word it has is in step.
+def _lossy_capture(monkeypatch, tmp_path, mode, trailer) -> int:
+    """One capture in `mode` whose closing TIME chunk is `trailer`."""
     profile = RP2350_DBV3
     chunks = sample_chunks(profile, list(range(32)))
-    chunks[0] = chunks[0].replace(b"rxstall=0", b"rxstall=1")
+    chunks[0] = chunks[0].replace(b"overruns=0 rxstall=0", trailer.encode())
     board = capture_board(profile, chunks)
     monkeypatch.setattr(cli, "link_from_url", lambda url: board)
-
-    code = cli.main(
-        ["capture", "serial:/dev/null", "--profile", "rp2350", "--clock-hz", "100000",
-         "--seconds", "0.05", "--out", str(tmp_path / "s.vgacap")]
+    return cli.main(
+        ["capture", "serial:/dev/null", "--profile", "rp2350", "--mode", mode,
+         "--clock-hz", "100000", "--seconds", "0.05", "--out", str(tmp_path / "s.vgacap")]
     )
 
-    assert code == 0
-    assert "rxstall=1" in capsys.readouterr().out
+
+@pytest.mark.parametrize("mode", ["stream", "frame", "window"])
+def test_a_capture_with_overruns_exits_one_in_every_mode(monkeypatch, capsys, tmp_path, mode):
+    # Issue #59: a capture that lost samples did not do what it was asked,
+    # whichever mode it ran in. What was written is kept and still valid.
+    code = _lossy_capture(monkeypatch, tmp_path, mode, "overruns=2 rxstall=0")
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "overruns=2" in captured.out
+    assert "overruns: 2 buffers torn" in captured.err
+    assert read_stream((tmp_path / "s.vgacap").read_bytes())[0].clock_hz == 100_000
+
+
+@pytest.mark.parametrize("mode", ["stream", "frame", "window"])
+def test_a_capture_with_an_rx_stall_exits_one_in_every_mode(monkeypatch, capsys, tmp_path, mode):
+    # A RAW stream with a stall is short of samples, even though every word
+    # it has is in step, so it is a lossy capture like any other.
+    code = _lossy_capture(monkeypatch, tmp_path, mode, "overruns=0 rxstall=1")
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "rxstall=1" in captured.out
+    assert "rx stall: the RX FIFO overflowed" in captured.err
+    assert "overruns:" not in captured.err
+
+
+def test_an_rle_capture_with_overruns_exits_one(monkeypatch, capsys, tmp_path):
+    chunks = rle_chunks(RP2350_DBV3, [(7, 3), (9, 4)],
+                        ["overrun", "overruns=1 rxstall=0 saturated=0 sysclk_hz=150000000"])
+
+    assert _rle_capture(monkeypatch, tmp_path, chunks, "--max-bytes", "65536") == 1
+
+    assert "overruns: 1 buffer torn" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("mode", ["stream", "frame", "window"])
+def test_a_clean_capture_still_exits_zero_in_every_mode(monkeypatch, capsys, tmp_path, mode):
+    assert _lossy_capture(monkeypatch, tmp_path, mode, "overruns=0 rxstall=0") == 0
+    err = capsys.readouterr().err
+    assert "overruns:" not in err and "rx stall" not in err
 
 
 def test_rle_refuses_frames_before_touching_the_board(monkeypatch, capsys, tmp_path):

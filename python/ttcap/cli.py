@@ -19,7 +19,8 @@ Subcommands:
 Exit codes: 0 success, 1 a board, link or tool error (including a capture
 that ended through `CaptureStats.error`/`timed_out`, one whose board
 raised or sent an `error=` message (`CaptureStats.board_error`, printed),
-and an `--mode rle` capture whose board reported an RX stall), 2 a usage
+and a capture in any `--mode` whose board reported overruns or an RX
+stall, `lossy_capture()`), 2 a usage
 error (argparse's own), 3 a capture that produced no samples at all and
 no board error -- the one failure worth telling apart, because it means
 the sampler never saw a clock edge.
@@ -216,8 +217,35 @@ class ConsumerClosed(Exception):
     Deliberately not an `OSError`, so it cannot be swept up by
     `CAPTURE_FAILURES` and reported as "capture failed". It is raised only
     after the capture has been reported in full, and `main()` turns it into
-    exit 0 -- see `_StdoutStream` for why a broken pipe is a normal end.
+    exit 0 -- see `_StdoutStream` for why a broken pipe is a normal end --
+    unless `stats` show the capture lost samples (`lossy_capture()`).
     """
+
+    def __init__(self, stats: CaptureStats | None = None) -> None:
+        super().__init__()
+        #: The capture's stats, as reported; None if it never got that far.
+        self.stats = stats
+
+
+def lossy_capture(stats: CaptureStats) -> list[str]:
+    """The samples the board says it lost, one stderr line per kind of loss.
+
+    Empty for a capture that lost nothing. These are the two halves of
+    `CaptureStats.clean` that `main()` does not already turn into exit 1
+    (`error`, `timed_out` and the board's `stderr` are checked first), and
+    they apply to every `--mode` alike (issue #59): a capture with overruns
+    or an RX stall did not do what it was asked, so it exits 1. What was
+    written is still a valid stream.
+    """
+    lines = []
+    if stats.overruns:
+        lines.append(
+            "overruns: %d buffer%s torn"
+            % (stats.overruns, "" if stats.overruns == 1 else "s")
+        )
+    if stats.rxstall:
+        lines.append("rx stall: the RX FIFO overflowed and samples were lost")
+    return lines
 
 
 class _StopFlag:
@@ -293,7 +321,8 @@ class _StdoutStream:
       to stop cooperatively, and the few chunks that arrive before its
       trailer are counted in the stats and dropped here. That keeps the
       board's closing `TIME` chunk, which carries the only `overruns` and
-      `rxstall` report there is, and lets the run exit 0.
+      `rxstall` report there is, and lets the run exit 0 when that report
+      says nothing was lost.
     """
 
     def __init__(self, buffer, on_close=None) -> None:
@@ -706,7 +735,7 @@ def capture(
                     print(note, file=say)
             driver.teardown(selection, stop_clock_after)
             if to_stdout and fp.consumer_closed:
-                raise ConsumerClosed()
+                raise ConsumerClosed(stats)
         finally:
             driver.close()
     finally:
@@ -943,7 +972,8 @@ def build_parser() -> argparse.ArgumentParser:
         "is. Allow at least one DMA buffer for that -- with the default "
         "--buf-words, about 22 ms on an RP2350 at 750 kHz but about 137 ms "
         "on an RP2040 at 60 kHz -- before escalating to a second signal or "
-        "a kill. Both endings exit 0."
+        "a kill. Both endings exit 0, unless that report shows overruns or "
+        "an RX stall: a capture that lost samples exits 1."
     )
     capture_limit = capture_parser.add_mutually_exclusive_group()
     capture_limit.add_argument(
@@ -1144,15 +1174,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 asic_index=args.asic_index,
                 board=args.board,
             )
-        except ConsumerClosed:
+        except ConsumerClosed as closed:
             # The normal end of a pull: the pipeline stopped reading. The
             # capture itself succeeded and its stats are already on stderr,
             # so this is exit 0 -- Task 4 waits on this child's status and
             # would otherwise turn a good capture into a bus error. Not
             # even `samples == 0` earns a 3 here: a consumer is entitled to
             # take the header and leave, and "the sampler never saw a clock
-            # edge" would be a diagnosis of the wrong machine.
+            # edge" would be a diagnosis of the wrong machine. Lost samples
+            # are another matter: they are the board's, not the consumer's,
+            # and exit 1 here as everywhere else -- once there were samples
+            # to lose, so the header-and-leave case above stays exit 0.
             print(CONSUMER_CLOSED_MESSAGE, file=sys.stderr)
+            stats = closed.stats
+            if stats is not None and stats.samples:
+                lost = lossy_capture(stats)
+                for line in lost:
+                    print(line, file=sys.stderr)
+                return 1 if lost else 0
             return 0
         except BrokenPipeError as exc:
             # Defence in depth: `_StdoutStream` absorbs the broken pipe on
@@ -1192,7 +1231,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 3
-        return 0
+        lost = lossy_capture(stats)
+        for line in lost:
+            print(line, file=sys.stderr)
+        return 1 if lost else 0
     if args.command == "reboot":
         try:
             reboot(args.link, firmware=args.firmware, to=args.to)

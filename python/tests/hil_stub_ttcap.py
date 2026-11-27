@@ -20,7 +20,8 @@ tested:
     ok            (default) everything answers
     probe-fails   `probe` exits 1 with a message, as an unreachable board does
     probe-hangs   `probe` never answers, so hil.py's timeout has to fire
-    overruns      `capture` reports overruns=3, as a board that cannot keep up
+    overruns      `capture` reports overruns=3 and exits 1, as `ttcap capture`
+                  does for a board that cannot keep up
     demo-fails    `demo` exits 1 at once, before touching its outdir, as a
                   demo that dies on its arguments does
 """
@@ -104,6 +105,10 @@ def capture(argv: list[str]) -> int:
                          chunks.group(1) if chunks else "0", elapsed, overruns))
     print("  board: fake capture complete")
     print("wrote %s" % out)
+    if overruns:
+        # `ttcap capture` exits 1 on a lossy capture (issue #59).
+        print("overruns: %d buffers torn" % overruns, file=sys.stderr)
+        return 1
     return 0
 
 
