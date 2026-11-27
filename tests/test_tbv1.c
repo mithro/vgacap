@@ -372,7 +372,8 @@ static uint32_t mix(uint32_t v) {
 // Picture f: rows of runs 1 to 9 pixels long (black among the colours);
 // column 0 lit on even rows and black on odd ones, so that the left porch's
 // black run continues into the picture; column 639 a one-pixel colour on
-// every third row, else black into the right porch.
+// every third row, else red, which tricky_gen continues into the right
+// porch.
 static uint8_t tricky_px[TRICKY_FRAMES][480][640];
 static uint32_t tricky_f;
 static uint8_t tricky_pix(void *user, uint16_t x, uint16_t y) { (void)user; return tricky_px[tricky_f][y][x]; }
@@ -389,7 +390,7 @@ static void tricky_draw(void) {
                 x += len;
             }
             tricky_px[f][y][0] = (y & 1) ? 0 : 0x3F;
-            tricky_px[f][y][639] = (y % 3 == 0) ? 0x15 : 0;
+            tricky_px[f][y][639] = (y % 3 == 0) ? 0x15 : 0x30;
             if (y % 3 == 0) tricky_px[f][y][638] = 0;
         }
 }
@@ -398,12 +399,15 @@ static void tricky_draw(void) {
 // (feed_calib) and two more, then frame hd (= *first_tricky) with rows 199 to 203
 // black and no hsync pulse on rows 200 to 202, so one black run crosses four
 // lines; frame hd + 2 with no vsync pulse and no hsync pulse on its blanking
-// rows, so one black run crosses into the next frame; then two more.
-// *frames is how many there are.
+// rows, so one black run crosses into the next frame; frame hd + 4 with a
+// second vsync pulse at rows 299 to 301, so that it ends just after a line
+// whose red run crosses the picture's right edge and the next row is never
+// drawn; then one more. On every row but every third, the red of column 639
+// continues through the front porch. *frames is how many there are.
 static gen_t tricky_gen(const vgaframe_mode_t *m, uint64_t num, uint64_t den, uint64_t *first_tricky,
                         uint64_t *frames) {
     const uint64_t cpl = vgaframe_mode_line_px(m), lpf = vgaframe_mode_frame_lines(m), fl = cpl * lpf;
-    const uint64_t hd = (uint64_t)(feed_calib * HZ * (double)den / ((double)fl * (double)num)) + 3, nf = hd + 5;
+    const uint64_t hd = (uint64_t)(feed_calib * HZ * (double)den / ((double)fl * (double)num)) + 3, nf = hd + 6;
     free(frame_buf);
     frame_buf = malloc(fl * nf * sizeof *frame_buf);
     for (uint64_t k = 0; k < nf; k++) {
@@ -411,6 +415,12 @@ static gen_t tricky_gen(const vgaframe_mode_t *m, uint64_t num, uint64_t den, ui
         synth_frame_hvsync(m, tricky_pix, NULL, frame_buf + k * fl, (size_t)fl);
     }
     const uint32_t h_off = m->h_sync_positive ? 0 : 0x80, v_off = m->v_sync_positive ? 0 : 0x08;
+    const uint32_t h_sync_start = (uint32_t)m->h_active + m->h_front;
+    for (uint64_t k = 0; k < nf; k++)
+        for (uint64_t row = 0; row < m->v_active; row++)
+            if (row % 3 != 0)
+                for (uint64_t x = m->h_active; x < h_sync_start; x++)
+                    frame_buf[k * fl + row * cpl + x] |= 0x11;   // red: rgb6 0x30
     for (uint64_t row = 199; row <= 203; row++)
         for (uint64_t x = 0; x < cpl; x++) {
             uint32_t *u = &frame_buf[hd * fl + row * cpl + x];
@@ -421,6 +431,13 @@ static gen_t tricky_gen(const vgaframe_mode_t *m, uint64_t num, uint64_t den, ui
         uint32_t *u = &frame_buf[(hd + 2) * fl + i];
         *u = (*u & ~0x08u) | v_off;
         if (i / cpl >= m->v_active) *u = (*u & ~0x80u) | h_off;
+    }
+    for (uint64_t i = 0; i < fl; i++) {                // as synth_frame_hvsync's pulse, at rows 300 and 301
+        const uint64_t row = i / cpl, x = i % cpl;
+        if ((row == 299 && x >= h_sync_start) || row == 300 || (row == 301 && x < h_sync_start)) {
+            uint32_t *u = &frame_buf[(hd + 4) * fl + i];
+            *u = (*u & ~0x08u) | (v_off ^ 0x08u);
+        }
     }
     *first_tricky = hd; *frames = nf;
     gen_t g = { frame_buf, fl * nf, 1, 0, 0, num, den };
