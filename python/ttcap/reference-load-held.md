@@ -118,7 +118,7 @@ Message is the start of the error. Raised as is its type. Cause is what made it,
 | `the held load failed on the board` | `CaptureError` | the board script raised | put back |
 | `timed out waiting for` | `LoadHeldTimeout` | the board script ran past `LOAD_HELD_TIMEOUT` | mid-load |
 
-Put back means the file deleted, reset released, the clock stopped, and the mode and monitor restored. A stage 3 timeout, or a stage 4 to 8 failure that is a timeout, leaves the file on the board: the caller calls `repl.recover()`, then deletes it. Whether `load_held` should do that itself is [#92](https://github.com/mithro/vgacap/issues/92).
+Put back means the file deleted, reset released, the clock stopped, and the mode and monitor restored. A delete after a failure takes a file that is not there as deleted, and still removes the empty directory; stage 16 does not, since after a good load the file must be there. A stage 3 timeout, or a stage 4 to 8 failure that is a timeout, leaves the file on the board: the caller calls `repl.recover()`, then deletes it. Whether `load_held` should do that itself is [#92](https://github.com/mithro/vgacap/issues/92).
 
 ## After a body timeout
 
