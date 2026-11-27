@@ -36,8 +36,10 @@ exactly `clocks` edges the program parks with the clock low.
 DMA. One channel, paced by the RX DREQ, no IRQs: the main loop polls it,
 re-arms it into the other buffer (`trigger=True`) before writing anything,
 and only then writes the full buffer out as a `RAW ` chunk. A late re-arm
-only stalls the PIO, low. `overruns` counts a buffer armed while still
-marked full, and must stay 0. `stalled_buffers` counts buffers during
+only stalls the PIO, low. The DMA stops at the end of each buffer, and
+the loop re-arms it into a buffer only after that buffer was written, so
+no buffer can be overwritten: `overruns` is always 0, there for the one
+closing-record shape every mode has. `stalled_buffers` counts buffers during
 which FDEBUG.RXSTALL was set; it is information only and is non-zero on
 almost every buffer.
 
@@ -163,7 +165,7 @@ def main(out):
         "clocked clocks=%d reset_clocks=%d pio_div=%d cycles_per_clock=%d"
         % (CLOCKS, RESET_CLOCKS, PIO_DIV, CYCLES)).encode())
     status = "error"
-    samples = stalled = overruns = 0
+    samples = stalled = 0
     sm = prog = dma = bufs = poller = stdin = logs = None
     start = time.ticks_ms()
     error = None
@@ -181,7 +183,6 @@ def main(out):
         poller = select.poll()  # noqa: F821
         poller.register(stdin, select.POLLIN)  # noqa: F821
         bufs = [bytearray(4 * BUF_WORDS), bytearray(4 * BUF_WORDS)]
-        full = [False, False]
         prog = make_clocked(HIGH, LOW, IN_COUNT)  # noqa: F821
         # The prelude's new_state_machine, with the side-set pin: dropping
         # the block's stale programs first. PIO_NUM is never 0 here (the
@@ -224,13 +225,10 @@ def main(out):
                     status = "stopped"
                     return
                 machine.idle()  # noqa: F821
-            full[index] = True
             left -= words
             got = words
             if left:
                 words = min(BUF_WORDS, left)
-                if full[1 - index]:
-                    overruns += 1
                 dma.config(write=bufs[1 - index], count=words, trigger=True)
             if machine.mem32[FDEBUG_ADDR] & RXSTALL_BIT:  # noqa: F821
                 stalled += 1
@@ -240,7 +238,6 @@ def main(out):
                 return
             write_raw_chunk(out, bufs[index], 4 * got, 4 * got)
             samples += 4 * got
-            full[index] = False
             if not left:
                 status = "ok"
                 return
@@ -266,8 +263,8 @@ def main(out):
             write_time_chunk(out, 0, error.encode())  # noqa: F821
             status = "error"
         write_time_chunk(out, 0, (  # noqa: F821
-            "samples=%d stalled_buffers=%d overruns=%d status=%s sysclk_hz=%d elapsed_ms=%d"
-            % (samples, stalled, overruns, status, machine.freq(),  # noqa: F821
+            "samples=%d stalled_buffers=%d overruns=0 status=%s sysclk_hz=%d elapsed_ms=%d"
+            % (samples, stalled, status, machine.freq(),  # noqa: F821
                time.ticks_diff(time.ticks_ms(), start))).encode())
         if hasattr(out, "flush"):
             out.flush()

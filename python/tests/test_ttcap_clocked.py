@@ -269,6 +269,73 @@ def test_the_read_is_h_plus_1_cycles_after_the_edge(tmp_path):
     assert samples_of(data) == [0] + counter(16, 2)[:-1]
 
 
+def test_every_clock_is_high_for_h_plus_2_cycles_reset_clocks_included(tmp_path):
+    # nop [H] then the `in`, both side-set high; the push takes it low. A
+    # loop that took the clock low at its `in` would read in the same cycle
+    # but give a shorter high phase, which a design's setup time would see.
+    rig = Rig(tmp_path)
+    stats, _ = rig.run(clocks=16, reset_clocks=6)  # H 12, L 11
+    assert stats.clean
+    rises = rig.board.wave.clock_rises[rig.rises_before:]
+    assert len(rises) == 16
+    for rise in rises:
+        assert rig.board.pad_level(CLK, rise + 13) == 1, rise
+        assert rig.board.pad_level(CLK, rise + 14) == 0, rise
+
+
+def test_a_stop_inside_one_long_buffer_ends_the_run(tmp_path):
+    # All 4000 clocks fit one buffer: only the check inside the DMA wait
+    # can see the stop before the run is over.
+    rig = Rig(tmp_path)
+    started = []
+
+    def stop_when(board):
+        if not board.blocks[1].sms[0].enabled:
+            return False
+        started.append(board.now)
+        return board.now > started[0] + 10_000
+
+    rig.board.stop_when = stop_when
+    stats, data = rig.run(clocks=4000, reset_clocks=10, buf_words=1000)
+    assert stats.status == "stopped" and not stats.clean
+    assert samples_of(data) == []
+    assert rig.rises < 4000
+
+
+def test_a_stop_with_the_clock_high_hands_the_pad_back_low(tmp_path):
+    # This stop lands in a high phase (asserted). The teardown's exec
+    # drives the pad low from the state machine's own time, which the
+    # emulator may have run a cycle or two past the board's: the pad is
+    # read there. Without the exec it would stay high until the put-back.
+    rig = Rig(tmp_path)
+    tt = rig.link.tt
+    sm = rig.board.blocks[1].sms[0]
+    at_stop, at_put_back = [], []
+    stop_clock = tt.clock_project_stop
+
+    def recording_stop():
+        at_put_back.append(rig.board.pad_level(CLK, max(sm.now, rig.board.now)))
+        stop_clock()
+
+    tt.clock_project_stop = recording_stop
+    started = []
+
+    def stop_when(board):
+        if not sm.enabled:
+            return False
+        started.append(board.now)
+        if board.now > started[0] + 10_000:
+            at_stop.append(board.pad_level(CLK, board.now))
+            return True
+        return False
+
+    rig.board.stop_when = stop_when
+    stats, _ = rig.run(clocks=4000, reset_clocks=10, buf_words=1000)
+    assert stats.status == "stopped"
+    assert at_stop[-1] == 1  # the case under test: stopped with the clock high
+    assert at_put_back[-1] == 0  # the body's own teardown took it low
+
+
 def test_a_stale_irq_flag_does_not_release_reset_early(tmp_path):
     rig = Rig(tmp_path)
     rig.board.blocks[1].irq |= 1
