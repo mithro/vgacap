@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="766" viewBox="0 0 520 766" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+<title id="t">The vgacap firmware data path</title>
+<desc id="d">uo_out from the design on the breakout enters PIO block 1 of the RP2350B, then its RX FIFO and two DMA channels, into a 440 KB arena used as two buffers for a stream or one window for a frame, then out of the TinyUSB serial port over USB to ttcap, which writes a .vgacap file.</desc>
+<style>
+  .title { font-size: 15px; font-weight: 600; fill: #e6e9ef; }
+  .part { font-size: 13px; font-weight: 700; fill: #e6e9ef; }
+  .sub { font-size: 12px; fill: #a3acbd; }
+  .net { font-size: 12.5px; font-weight: 700; }
+  .chipname { font-size: 11px; font-weight: 700; letter-spacing: 0.03em; }
+  .legend { font-size: 12.5px; fill: #e6e9ef; }
+</style>
+<defs>
+<marker id="m-sig" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="3.2" markerHeight="3.2" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6ea8ff"/></marker>
+<marker id="m-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="3.2" markerHeight="3.2" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#ff8a3d"/></marker>
+</defs>
+<rect x="0" y="0" width="520" height="766" fill="#131416"/>
+<rect x="16" y="16" width="488" height="520" rx="8" fill="#15233b" stroke="#34507e" stroke-width="1.25"/>
+<text x="30" y="42" class="title" text-anchor="start">Tiny Tapeout demo board</text>
+<line x1="159.2" y1="57" x2="159.2" y2="62" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="159.2" y1="126" x2="159.2" y2="131" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="177.5" y1="57" x2="177.5" y2="62" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="177.5" y1="126" x2="177.5" y2="131" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="195.8" y1="57" x2="195.8" y2="62" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="195.8" y1="126" x2="195.8" y2="131" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="214.2" y1="57" x2="214.2" y2="62" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="214.2" y1="126" x2="214.2" y2="131" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="232.5" y1="57" x2="232.5" y2="62" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="232.5" y1="126" x2="232.5" y2="131" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="250.8" y1="57" x2="250.8" y2="62" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="250.8" y1="126" x2="250.8" y2="131" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="269.2" y1="57" x2="269.2" y2="62" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="269.2" y1="126" x2="269.2" y2="131" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="287.5" y1="57" x2="287.5" y2="62" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="287.5" y1="126" x2="287.5" y2="131" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="305.8" y1="57" x2="305.8" y2="62" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="305.8" y1="126" x2="305.8" y2="131" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="324.2" y1="57" x2="324.2" y2="62" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="324.2" y1="126" x2="324.2" y2="131" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="342.5" y1="57" x2="342.5" y2="62" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="342.5" y1="126" x2="342.5" y2="131" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="360.8" y1="57" x2="360.8" y2="62" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="360.8" y1="126" x2="360.8" y2="131" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<rect x="150.0" y="62" width="220" height="64" rx="4" fill="#3a4357" stroke="#3a4357" stroke-width="1"/>
+<text x="158.0" y="77" class="chipname" text-anchor="start" fill="#ffffff">ASIC or FPGA breakout</text>
+<rect x="200.0" y="88" width="120" height="28" rx="4" fill="#1e2230" stroke="#6b7385" stroke-width="1"/>
+<text x="260.0" y="106.5" class="part" text-anchor="middle">your design</text>
+<line x1="260.0" y1="132" x2="260.0" y2="186" stroke="#6ea8ff" stroke-width="3" marker-end="url(#m-sig)"/>
+<text x="270.0" y="156" class="net" text-anchor="start" fill="#6ea8ff">uo_out[7:0]</text>
+<text x="270.0" y="172" class="sub" text-anchor="start">GPIO 33 to 40</text>
+<line x1="79.0" y1="189" x2="79.0" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="79.0" y1="518" x2="79.0" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="97.1" y1="189" x2="97.1" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="97.1" y1="518" x2="97.1" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="115.2" y1="189" x2="115.2" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="115.2" y1="518" x2="115.2" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="133.3" y1="189" x2="133.3" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="133.3" y1="518" x2="133.3" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="151.4" y1="189" x2="151.4" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="151.4" y1="518" x2="151.4" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="169.5" y1="189" x2="169.5" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="169.5" y1="518" x2="169.5" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="187.6" y1="189" x2="187.6" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="187.6" y1="518" x2="187.6" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="205.7" y1="189" x2="205.7" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="205.7" y1="518" x2="205.7" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="223.8" y1="189" x2="223.8" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="223.8" y1="518" x2="223.8" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="241.9" y1="189" x2="241.9" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="241.9" y1="518" x2="241.9" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="260.0" y1="189" x2="260.0" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="260.0" y1="518" x2="260.0" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="278.1" y1="189" x2="278.1" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="278.1" y1="518" x2="278.1" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="296.2" y1="189" x2="296.2" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="296.2" y1="518" x2="296.2" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="314.3" y1="189" x2="314.3" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="314.3" y1="518" x2="314.3" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="332.4" y1="189" x2="332.4" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="332.4" y1="518" x2="332.4" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="350.5" y1="189" x2="350.5" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="350.5" y1="518" x2="350.5" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="368.6" y1="189" x2="368.6" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="368.6" y1="518" x2="368.6" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="386.7" y1="189" x2="386.7" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="386.7" y1="518" x2="386.7" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="404.8" y1="189" x2="404.8" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="404.8" y1="518" x2="404.8" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="422.9" y1="189" x2="422.9" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="422.9" y1="518" x2="422.9" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="441.0" y1="189" x2="441.0" y2="194" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<line x1="441.0" y1="518" x2="441.0" y2="523" stroke="#3a4357" stroke-width="2" stroke-linecap="round"/>
+<rect x="70.0" y="194" width="380" height="324" rx="4" fill="#3a4357" stroke="#3a4357" stroke-width="1"/>
+<text x="78.0" y="209" class="chipname" text-anchor="start" fill="#ffffff">RP2350B, running the vgacap firmware</text>
+<rect x="170.0" y="222" width="180" height="30" rx="4" fill="#1e2230" stroke="#6b7385" stroke-width="1"/>
+<text x="260.0" y="241.5" class="part" text-anchor="middle">PIO block 1</text>
+<line x1="260.0" y1="252" x2="260.0" y2="268" stroke="#ff8a3d" stroke-width="2.5" marker-end="url(#m-data)"/>
+<rect x="170.0" y="270" width="180" height="30" rx="4" fill="#1e2230" stroke="#6b7385" stroke-width="1"/>
+<text x="260.0" y="289.5" class="part" text-anchor="middle">RX FIFO</text>
+<line x1="260.0" y1="300" x2="260.0" y2="316" stroke="#ff8a3d" stroke-width="2.5" marker-end="url(#m-data)"/>
+<rect x="170.0" y="318" width="180" height="30" rx="4" fill="#1e2230" stroke="#6b7385" stroke-width="1"/>
+<text x="260.0" y="337.5" class="part" text-anchor="middle">DMA, 2 channels</text>
+<line x1="260.0" y1="348" x2="260.0" y2="362" stroke="#ff8a3d" stroke-width="2.5" marker-end="url(#m-data)"/>
+<rect x="92.0" y="364" width="336" height="92" rx="6" fill="#2e1d10" stroke="#7a4520" stroke-width="1.25"/>
+<text x="260.0" y="384" class="part" text-anchor="middle">440 KB arena</text>
+<rect x="106.0" y="398" width="136" height="44" rx="4" fill="#1e2230" stroke="#6b7385" stroke-width="1"/>
+<text x="174.0" y="418.0" class="part" text-anchor="middle">2 buffers</text>
+<text x="174.0" y="433.0" class="sub" text-anchor="middle">stream</text>
+<rect x="278.0" y="398" width="136" height="44" rx="4" fill="#1e2230" stroke="#6b7385" stroke-width="1"/>
+<text x="346.0" y="418.0" class="part" text-anchor="middle">1 window</text>
+<text x="346.0" y="433.0" class="sub" text-anchor="middle">frame</text>
+<circle cx="260.0" cy="420" r="13" fill="#1e2230" stroke="#6b7385"/>
+<text x="260.0" y="424.5" class="part" text-anchor="middle">or</text>
+<line x1="260.0" y1="456" x2="260.0" y2="470" stroke="#ff8a3d" stroke-width="2.5" marker-end="url(#m-data)"/>
+<rect x="170.0" y="472" width="180" height="30" rx="4" fill="#1e2230" stroke="#6b7385" stroke-width="1"/>
+<text x="260.0" y="491.5" class="part" text-anchor="middle">TinyUSB serial port</text>
+<line x1="260.0" y1="523" x2="260.0" y2="586" stroke="#ff8a3d" stroke-width="4" marker-end="url(#m-data)"/>
+<text x="272.0" y="566" class="net" text-anchor="start" fill="#ff8a3d">USB</text>
+<rect x="150.0" y="590" width="220" height="40" rx="6" fill="#1e2230" stroke="#a58bff" stroke-width="1.75"/>
+<text x="260.0" y="615" class="part" text-anchor="middle">ttcap on the host</text>
+<line x1="260.0" y1="630" x2="260.0" y2="666" stroke="#ff8a3d" stroke-width="4" marker-end="url(#m-data)"/>
+<text x="272.0" y="652" class="sub" text-anchor="start">VGCH header, then the chunks</text>
+<rect x="150.0" y="670" width="220" height="40" rx="6" fill="#2e1d10" stroke="#7a4520" stroke-width="1.25"/>
+<text x="260.0" y="695" class="part" text-anchor="middle">capture.vgacap</text>
+<line x1="110.0" y1="744" x2="142.0" y2="744" stroke="#6ea8ff" stroke-width="3" marker-end="url(#m-sig)"/>
+<text x="150.0" y="748.5" class="legend" text-anchor="start">signals</text>
+<line x1="241.8" y1="744" x2="273.8" y2="744" stroke="#ff8a3d" stroke-width="4" marker-end="url(#m-data)"/>
+<text x="281.8" y="748.5" class="legend" text-anchor="start">captured samples</text>
+</svg>

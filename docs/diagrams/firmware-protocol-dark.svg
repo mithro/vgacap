@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="518" height="760" viewBox="0 0 518 760" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+<title id="t">A frame capture through the vgacap firmware</title>
+<desc id="d">ttcap on the host and the vgacap firmware exchange lines: a sync with hello, setup of the clock and reset, the frame command and its ok, then TIME, FRAM and DONE chunks, then the clock stopped.</desc>
+<style>
+  .head { font-size: 15px; font-weight: 600; fill: #e6e9ef; }
+  .phase { font-size: 10.5px; font-weight: 700; fill: #a3acbd; letter-spacing: 0.04em; }
+  .msg { font-size: 13.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .legend { font-size: 12.5px; fill: #e6e9ef; }
+</style>
+<defs>
+<marker id="m-cmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6ea8ff"/></marker>
+<marker id="m-reply" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#4cc790"/></marker>
+<marker id="m-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="2.4" markerHeight="2.4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#ff8a3d"/></marker>
+<marker id="m-end" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#a3acbd"/></marker>
+</defs>
+<rect x="0" y="0" width="518" height="760" fill="#131416"/>
+<rect x="16" y="73" width="486" height="58" rx="6" fill="#1b1e24"/>
+<text x="30" y="102.0" class="phase" text-anchor="middle" transform="rotate(-90 30 102.0)">sync</text>
+<rect x="16" y="133" width="486" height="298" rx="6" fill="#1b1e24"/>
+<text x="30" y="282.0" class="phase" text-anchor="middle" transform="rotate(-90 30 282.0)">setup</text>
+<rect x="16" y="433" width="486" height="208" rx="6" fill="#1b1e24"/>
+<text x="30" y="537.0" class="phase" text-anchor="middle" transform="rotate(-90 30 537.0)">capture</text>
+<rect x="16" y="643" width="486" height="58" rx="6" fill="#1b1e24"/>
+<text x="30" y="672.0" class="phase" text-anchor="middle" transform="rotate(-90 30 672.0)">teardown</text>
+<rect x="42" y="16" width="140" height="44" rx="8" fill="#15233b" stroke="#34507e" stroke-width="1.25"/>
+<text x="112" y="43" class="head" text-anchor="middle">ttcap (host)</text>
+<line x1="112" y1="60" x2="112" y2="710" stroke="#5d6578" stroke-width="1.5" stroke-dasharray="4 4"/>
+<rect x="362" y="16" width="140" height="44" rx="8" fill="#15233b" stroke="#34507e" stroke-width="1.25"/>
+<text x="432" y="43" class="head" text-anchor="middle">vgacap firmware</text>
+<line x1="432" y1="60" x2="432" y2="710" stroke="#5d6578" stroke-width="1.5" stroke-dasharray="4 4"/>
+<line x1="112" y1="92" x2="428" y2="92" stroke="#6ea8ff" stroke-width="1.75" marker-end="url(#m-cmd)"/>
+<text x="272.0" y="87" class="msg" text-anchor="middle" fill="#6ea8ff">0x03  hello</text>
+<line x1="432" y1="122" x2="116" y2="122" stroke="#4cc790" stroke-width="1.75" marker-end="url(#m-reply)"/>
+<text x="272.0" y="117" class="msg" text-anchor="middle" fill="#4cc790">ok vgacap-fw proto=1 ...</text>
+<line x1="112" y1="152" x2="428" y2="152" stroke="#6ea8ff" stroke-width="1.75" marker-end="url(#m-cmd)"/>
+<text x="272.0" y="147" class="msg" text-anchor="middle" fill="#6ea8ff">clock hz=0</text>
+<line x1="432" y1="182" x2="116" y2="182" stroke="#4cc790" stroke-width="1.75" marker-end="url(#m-reply)"/>
+<text x="272.0" y="177" class="msg" text-anchor="middle" fill="#4cc790">ok clock_hz=0 ...</text>
+<line x1="112" y1="212" x2="428" y2="212" stroke="#6ea8ff" stroke-width="1.75" marker-end="url(#m-cmd)"/>
+<text x="272.0" y="207" class="msg" text-anchor="middle" fill="#6ea8ff">reset hold=1</text>
+<line x1="432" y1="242" x2="116" y2="242" stroke="#4cc790" stroke-width="1.75" marker-end="url(#m-reply)"/>
+<text x="272.0" y="237" class="msg" text-anchor="middle" fill="#4cc790">ok reset=1</text>
+<line x1="112" y1="272" x2="428" y2="272" stroke="#6ea8ff" stroke-width="1.75" stroke-dasharray="6 4" marker-end="url(#m-cmd)"/>
+<text x="272.0" y="267" class="msg" text-anchor="middle" fill="#6ea8ff">asic_select index=N   (ASIC only)</text>
+<line x1="432" y1="302" x2="116" y2="302" stroke="#4cc790" stroke-width="1.75" stroke-dasharray="6 4" marker-end="url(#m-reply)"/>
+<text x="272.0" y="297" class="msg" text-anchor="middle" fill="#4cc790">ok asic_select index=N</text>
+<line x1="112" y1="332" x2="428" y2="332" stroke="#6ea8ff" stroke-width="1.75" marker-end="url(#m-cmd)"/>
+<text x="272.0" y="327" class="msg" text-anchor="middle" fill="#6ea8ff">clock hz=25000000</text>
+<line x1="432" y1="362" x2="116" y2="362" stroke="#4cc790" stroke-width="1.75" marker-end="url(#m-reply)"/>
+<text x="272.0" y="357" class="msg" text-anchor="middle" fill="#4cc790">ok clock_hz=25000000 ... period=4</text>
+<line x1="112" y1="392" x2="428" y2="392" stroke="#6ea8ff" stroke-width="1.75" marker-end="url(#m-cmd)"/>
+<text x="272.0" y="387" class="msg" text-anchor="middle" fill="#6ea8ff">reset hold=0</text>
+<line x1="432" y1="422" x2="116" y2="422" stroke="#4cc790" stroke-width="1.75" marker-end="url(#m-reply)"/>
+<text x="272.0" y="417" class="msg" text-anchor="middle" fill="#4cc790">ok reset=0</text>
+<line x1="112" y1="452" x2="428" y2="452" stroke="#6ea8ff" stroke-width="1.75" marker-end="url(#m-cmd)"/>
+<text x="272.0" y="447" class="msg" text-anchor="middle" fill="#6ea8ff">frame cpl=800 ... max_frames=2 ...</text>
+<line x1="432" y1="482" x2="116" y2="482" stroke="#4cc790" stroke-width="1.75" marker-end="url(#m-reply)"/>
+<text x="272.0" y="477" class="msg" text-anchor="middle" fill="#4cc790">ok frame</text>
+<line x1="432" y1="512" x2="116" y2="512" stroke="#ff8a3d" stroke-width="4" marker-end="url(#m-data)"/>
+<rect x="156.4" y="501" width="231.2" height="22" rx="4" fill="#2e1d10" stroke="#7a4520" stroke-width="1"/>
+<text x="272.0" y="516.5" class="msg" text-anchor="middle" fill="#e6e9ef">TIME  frame window=481 ...</text>
+<line x1="432" y1="542" x2="116" y2="542" stroke="#ff8a3d" stroke-width="4" marker-end="url(#m-data)"/>
+<rect x="201.5" y="531" width="141.0" height="22" rx="4" fill="#2e1d10" stroke="#7a4520" stroke-width="1"/>
+<text x="272.0" y="546.5" class="msg" text-anchor="middle" fill="#e6e9ef">FRAM  picture 0</text>
+<line x1="432" y1="572" x2="116" y2="572" stroke="#ff8a3d" stroke-width="4" marker-end="url(#m-data)"/>
+<rect x="201.5" y="561" width="141.0" height="22" rx="4" fill="#2e1d10" stroke="#7a4520" stroke-width="1"/>
+<text x="272.0" y="576.5" class="msg" text-anchor="middle" fill="#e6e9ef">FRAM  picture 1</text>
+<line x1="432" y1="602" x2="116" y2="602" stroke="#ff8a3d" stroke-width="4" marker-end="url(#m-data)"/>
+<rect x="152.3" y="591" width="239.39999999999998" height="22" rx="4" fill="#2e1d10" stroke="#7a4520" stroke-width="1"/>
+<text x="272.0" y="606.5" class="msg" text-anchor="middle" fill="#e6e9ef">TIME  frames=2 stalls=0 ...</text>
+<line x1="432" y1="632" x2="116" y2="632" stroke="#a3acbd" stroke-width="1.75" stroke-dasharray="2 3" marker-end="url(#m-end)"/>
+<text x="272.0" y="627" class="msg" text-anchor="middle" fill="#a3acbd">DONE</text>
+<line x1="112" y1="662" x2="428" y2="662" stroke="#6ea8ff" stroke-width="1.75" marker-end="url(#m-cmd)"/>
+<text x="272.0" y="657" class="msg" text-anchor="middle" fill="#6ea8ff">clock hz=0</text>
+<line x1="432" y1="692" x2="116" y2="692" stroke="#4cc790" stroke-width="1.75" marker-end="url(#m-reply)"/>
+<text x="272.0" y="687" class="msg" text-anchor="middle" fill="#4cc790">ok clock_hz=0 ...</text>
+<line x1="36" y1="734" x2="68" y2="734" stroke="#6ea8ff" stroke-width="1.75" marker-end="url(#m-cmd)"/>
+<text x="76" y="738.5" class="legend" text-anchor="start">command</text>
+<line x1="149.8" y1="734" x2="181.8" y2="734" stroke="#4cc790" stroke-width="1.75" marker-end="url(#m-reply)"/>
+<text x="189.8" y="738.5" class="legend" text-anchor="start">reply</text>
+<line x1="248.8" y1="734" x2="280.8" y2="734" stroke="#ff8a3d" stroke-width="4" marker-end="url(#m-data)"/>
+<text x="288.8" y="738.5" class="legend" text-anchor="start">chunk</text>
+<line x1="347.8" y1="734" x2="379.8" y2="734" stroke="#a3acbd" stroke-width="1.75" stroke-dasharray="2 3" marker-end="url(#m-end)"/>
+<text x="387.8" y="738.5" class="legend" text-anchor="start">end marker</text>
+</svg>
