@@ -77,16 +77,16 @@ if(VGACAP_HOST_EXTRAS)
   # --- sample: the shared calibration and frame clock (src/sample), host only ---
   add_library(vgacap_sample STATIC src/sample/calib.c src/sample/frameclock.c src/sample/tbv1.c src/sample/centrev1.c src/sample/hashes.c src/sample/outputs.c)
   target_link_libraries(vgacap_sample PUBLIC vgacap_frame vgacap_trace vgacap_stream vgacap_sha256 vgacap_zstd m)
-  # centre-v1's row loops vectorise with GCC at -O3 only: -O2's very cheap
-  # cost model refuses a loop that needs a scalar epilogue or widens its sum.
-  set_source_files_properties(src/sample/centrev1.c PROPERTIES COMPILE_OPTIONS
-    "$<$<AND:$<C_COMPILER_ID:GNU,Clang,AppleClang>,$<NOT:$<CONFIG:Debug>>>:-O3>")
   # vgacap-sample: a simulation trace to its samplers' stores (centre-v1 by default,
   # tb-v1 on request), frames.txt and hash files, in one pass. It reads the reader's stats (src/trace) for
   # VGACAP_SAMPLE_DEBUG.
   add_executable(vgacap-sample src/tools/vgacap_sample.c)
   target_include_directories(vgacap-sample PRIVATE src/trace)
   target_link_libraries(vgacap-sample PRIVATE vgacap_sample)
+  # centre-v1's row loops vectorise with GCC at -O3 only: -O2's very cheap
+  # cost model refuses a loop that needs a scalar epilogue or widens its sum.
+  set_source_files_properties(src/sample/centrev1.c PROPERTIES COMPILE_OPTIONS
+    "$<$<AND:$<C_COMPILER_ID:GNU,Clang,AppleClang>,$<NOT:$<CONFIG:Debug>>>:-O3>")
   # Test-only helper for python/tests/test_calib.py: calibration and frame
   # clock of a trace.
   add_executable(vgacap-calib-dump tests/calib_dump.c)
