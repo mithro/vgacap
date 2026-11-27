@@ -500,7 +500,7 @@ def test_a_capture_that_fails_after_ui_in_puts_the_mode_back(monkeypatch, tmp_pa
     assert _capture_with_ui_in(tmp_path) == 1
 
     switched = board.commands.index(
-        "from ttboard.mode import RPMode\ntt.mode = RPMode.ASIC_RP_CONTROL\ntt.ui_in.value = 5"
+        "from ttboard.mode import RPMode\ntt.mode = RPMode.ASIC_RP_CONTROL"
     )
     after = board.commands[switched + 1 :]
     assert after[-2:] == ["tt.clock_project_stop()", "tt.mode = 2"]

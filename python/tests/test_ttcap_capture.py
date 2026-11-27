@@ -110,9 +110,12 @@ def test_sends_the_setup_commands_in_order():
     assert board.commands == [
         "tt.shuttle['tt_um_rejunity_vga'].enable()",
         "tt.clock_project_stop()",
+        capture._READ_MONITORING,
         "tt.reset_project(True)",
+        capture._READ_RST_N,
         "tt.clock_project_PWM(250000)",
         "tt.reset_project(False)",
+        capture._AWAIT_RST_N,
     ]
     assert did == {
         "project": "tt_um_rejunity_vga",
