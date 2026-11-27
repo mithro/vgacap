@@ -56,6 +56,13 @@ void fs_vgch_set_source(const char *trace_path) {
     vgacap_trace_close(r);
 }
 
+// The source's header and META texts, for the lean candidate (w_lean.c).
+void fs_vgch_source(const vgacap_header_t **h, const char **open_meta, const char **close_meta);
+void fs_vgch_source(const vgacap_header_t **h, const char **open_meta, const char **close_meta) {
+    if (!have_src) { fprintf(stderr, "fs: lean needs fs_vgch_set_source\n"); exit(2); }
+    *h = &src_header; *open_meta = src_open; *close_meta = src_close;
+}
+
 // ---- the candidate ------------------------------------------------------------------
 typedef struct {
     vgacap_trace_writer_t *t;

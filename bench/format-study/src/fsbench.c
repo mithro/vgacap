@@ -5,6 +5,7 @@
 //   fsbench writer TRACE OUTDIR [options]     simulation-thread cost by replay
 //   fsbench encode TRACE OUTDIR [options]     sizes and background CPU (bg.c)
 //   fsbench read   ...                        reader throughput (rd.c)
+//   fsbench copy   TRACE OUT --writer W       the whole trace through vgch2 or lean, compressed, to OUT
 //
 // Every mode prints CSV rows (with a header line) on stdout; run_all.sh
 // collects them under tmp/format-study/results/.
@@ -178,6 +179,38 @@ static int mode_writer(int argc, char **argv) {
     return 0;
 }
 
+// ---- copy: the whole trace, every clock, through a VGCH v2 writer to a file ----------------
+// For test_lean.sh: the file must be the published trace, byte for byte.
+static int mode_copy(int argc, char **argv) {
+    if (argc < 4 || strcmp(argv[2], "--writer")) { fprintf(stderr, "usage: fsbench copy TRACE OUT --writer vgch2|lean\n"); return 2; }
+    const char *trace = argv[0], *out = argv[1];
+    const fs_writer_t *w = fs_writer_by_name(argv[3]);
+    if (!w || (strcmp(w->name, "vgch2") && strcmp(w->name, "lean"))) { fprintf(stderr, "fsbench copy: vgch2 or lean\n"); return 2; }
+    fs_source_t *src = fs_source_open(trace);
+    if (!src) return 1;
+    fs_vgch_set_source(trace);
+    fs_hook_skip = 0;
+    const uint64_t chunk = 1ull << 20, clocks = fs_source_clocks(src);
+    uint64_t *raw = malloc(2 * chunk * sizeof *raw);
+    if (!raw) { fprintf(stderr, "fsbench: out of memory\n"); return 1; }
+    const double w0 = fs_wall_ns();
+    void *st = w->create(0, out, NULL, NULL);
+    double run_ns = 0;
+    for (uint64_t c0 = 0; c0 < clocks; c0 += chunk) {
+        const uint64_t k = clocks - c0 < chunk ? clocks - c0 : chunk;
+        if (fs_source_chunk(src, c0, k, raw)) return 1;
+        const double t0 = fs_thread_ns();
+        w->run(st, raw, k);
+        run_ns += fs_thread_ns() - t0;
+    }
+    w->finish(st);
+    printf("project,writer,clocks,run_thread_ns,wall_ns\n%s,%s,%llu,%.0f,%.0f\n", project_of(trace), w->name,
+           (unsigned long long)clocks, run_ns, fs_wall_ns() - w0);
+    free(raw);
+    fs_source_close(src);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: fsbench info|writer|encode|read ...\n");
@@ -187,6 +220,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "writer")) return mode_writer(argc - 2, argv + 2);
     if (!strcmp(argv[1], "encode")) return fs_mode_encode(argc - 2, argv + 2);
     if (!strcmp(argv[1], "read")) return fs_mode_read(argc - 2, argv + 2);
+    if (!strcmp(argv[1], "copy")) return mode_copy(argc - 2, argv + 2);
     if (!strcmp(argv[1], "ctr")) return fs_mode_ctr(argc - 2, argv + 2);
     fprintf(stderr, "fsbench: unknown mode %s\n", argv[1]);
     return 2;

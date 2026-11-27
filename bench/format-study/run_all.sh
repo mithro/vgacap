@@ -4,7 +4,7 @@
 #
 #   bench/format-study/run_all.sh [STAGE...]
 #
-# Stages, in order (default: all of them): build traces info writer writer2
+# Stages, in order (default: all of them): build traces info lean writer writer2
 # encode read validate robust interop ctr analyze. The simulation check (the Verilator loop) is
 # sim/run_sim.sh, separately, because it needs the projects' sources.
 #
@@ -226,6 +226,17 @@ stage_interop() {
     run_pool interop "$jobs"
 }
 
+# The lean writer (src/trace_write_lean.c) must write vgacap's file: each
+# published trace replayed through it, and through vgacap's own writer, is
+# compared with the published file byte for byte (test_lean.sh).
+stage_lean() {
+    local jobs=$OUT/jobs-lean.txt; : > "$jobs"
+    local dir=$OUT/lean-scratch; mkdir -p "$dir"
+    for p in $PROJECTS; do printf '%s\t%s\n' "$p" "$HERE/test_lean.sh $FS $(trace_of "$p") $dir" >> "$jobs"; done
+    run_pool lean "$jobs"
+    [ ! -s "$RES/lean/FAILED" ] || { log "lean: files differ: $(tr '\n' ' ' < "$RES/lean/FAILED")"; exit 1; }
+}
+
 stage_ctr() {
     local jobs=$OUT/jobs-ctr.txt; : > "$jobs"
     for p in $PROJECTS; do printf '%s\t%s\n' "$p" "$FS ctr $(trace_of "$p") --block-clocks 18,20,22,24,26" >> "$jobs"; done
@@ -237,5 +248,5 @@ stage_analyze() {
     log "analyze: $RES/tables.md"
 }
 
-STAGES=${*:-build traces info writer writer2 encode read validate robust interop ctr analyze}
+STAGES=${*:-build traces info lean writer writer2 encode read validate robust interop ctr analyze}
 for s in $STAGES; do "stage_$s"; done
