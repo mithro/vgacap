@@ -196,6 +196,13 @@ stage_read() {
 
 # The readers of a job (derive.py) on each stored candidate's file, and
 # vgch2 with a lazy-BLKH open (read2_rounds.sh).
+# zstd1 with each block cold and warm in cache (warm_cache.sh), on 8 CPUs of CPUS.
+stage_warm() {
+    local c; read -r -a c <<< "$CPUS"
+    CPUS="${c[*]:0:8}" OUT=$OUT "$HERE/warm_cache.sh" > "$LOGS/warm.log" 2>&1
+    log "warm: $RES/warm"
+}
+
 stage_read2() {
     local jobs=$OUT/jobs-read2.txt; : > "$jobs"
     for p in $PROJECTS; do
@@ -283,5 +290,5 @@ stage_analyze() {
     log "analyze: $RES/tables.md, spliced into the study document"
 }
 
-STAGES=${*:-build traces info lean writer writer2 encode encode2 read read2 validate robust interop ctr analyze}
+STAGES=${*:-build traces info lean writer writer2 encode encode2 warm read read2 validate robust interop ctr analyze}
 for s in $STAGES; do "stage_$s"; done
