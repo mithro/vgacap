@@ -35,7 +35,9 @@ The switch comes before the reset, because every mode change rebuilds the firmwa
 1. switch the input mode;
 2. turn off the manual-clock monitor, where the board has one, which could otherwise stop the clock during the run;
 3. set `ui_in` and read it back;
-4. hold reset and check that `rst_n` reads 0, start the clock, wait at least 16 clock periods and 1 ms, then release reset and check that `rst_n` reads 1 ([#58](https://github.com/mithro/vgacap/issues/58)).
+4. hold reset and check that `rst_n` reads 0;
+5. start the clock, and wait at least 16 clock periods and 1 ms;
+6. release reset and check that `rst_n` reads 1 ([#58](https://github.com/mithro/vgacap/issues/58)).
 
 The input mode and the monitor are put back after the capture.
 
