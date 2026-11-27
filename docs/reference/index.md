@@ -13,4 +13,4 @@ review: 2027-05-27
 - [Tools, elements and capture-source facts](tools-and-sources.md): the command-line tools, the GStreamer elements, vgacap-rp1, the raw framer and the test vectors.
 - [Stream, modes and frame files](stream-and-pictures.md): the stream format, the mode table and the frame files.
 - [The simulation trace format](../trace-format.md): the trace a simulated design writes.
-- [Images and logos in the overview figure](../diagrams/NOTICE.md): where each picture comes from, and its license.
+- [Images and logos on these pages](../diagrams/NOTICE.md): where each picture comes from, and its license.

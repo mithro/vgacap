@@ -24,7 +24,7 @@ give byte-identical images, whose region hashes to `5dc230b2…`, the hash fpga-
 
 - One Tiny Tapeout demo board v3 (RP2350B), running the stock firmware, with a USB cable to a Linux machine.
 
-  <img src="../docs/diagrams/images/tt-etr-dbv3p2.jpg" alt="The Tiny Tapeout demo board v3, with a breakout plugged into its centre socket." width="240">
+  <img src="../docs/diagrams/images/tt-etr-dbv3p2.jpg" alt="The Tiny Tapeout demo board ETR v3.2, with its breakout connectors empty." width="240">
 
 - On that machine: `sudo`, Python 3, `curl`, `timeout` and [mpremote](https://docs.micropython.org/en/latest/reference/mpremote.html).
 - On that machine, a vgacap checkout set up to run `ttcap`, as on [How to run ttcap on a Raspberry Pi](../python/ttcap/how-to-run-on-raspberry-pi.md), for steps 14 and 23.
