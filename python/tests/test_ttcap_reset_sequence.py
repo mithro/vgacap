@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 from fake_repl import FakeBinaryBoard
-from fake_tt import ASIC_MANUAL_INPUTS, ASIC_RP_CONTROL, FakeTT, sdk_modules
+from fake_tt import ASIC_MANUAL_INPUTS, ASIC_RP_CONTROL, IN, FakeTT, sdk_modules
 
 from ttcap import capture
 from ttcap.boards import RP2350_DBV3
@@ -92,7 +92,7 @@ def test_ui_in_is_set_and_the_design_clocked_while_held_in_reset():
 
     did = select_project(repl, request(ui_in=5))
 
-    assert tt.design.clocked_in_reset
+    assert tt.design.edges_in_reset >= 16
     assert tt.design.ui_in_at_release == [5]
     assert tt.design.rst_n_levels == [0, 1]
     assert tt.rst_n() == 1 and tt.clock_hz == 1_000_000
@@ -104,7 +104,7 @@ def test_without_ui_in_the_design_is_still_clocked_in_reset():
     tt = FakeTT()
     board, repl = connect(tt)
     select_project(repl, request())
-    assert tt.design.clocked_in_reset
+    assert tt.design.edges_in_reset >= 16
     assert tt.design.rst_n_levels == [0, 1]
     assert tt.pin_rebuilds == 1  # no mode write at all
 
@@ -180,9 +180,71 @@ def test_rst_n_stuck_low_with_ui_in_still_puts_the_board_back():
 
 
 def test_a_slow_release_is_waited_for():
-    tt = FakeTT(release_ms=capture.RST_N_RELEASE_TIMEOUT_MS // 2)
+    tt = FakeTT(release_ms=50)
     board, repl = connect(tt)
-    select_project(repl, request())
+    did = select_project(repl, request())
+    assert tt.rst_n() == 1
+    assert did["rst_n_wait_ms"] == 50
+
+
+def test_the_stuck_low_error_gives_the_time_the_board_measured():
+    class CoarseClock(FakeTT):
+        def advance(self, ms):
+            super().advance(7 * ms)  # each sleep_ms(1) takes 7 ms
+
+    tt = CoarseClock(pullup=False)
+    board, repl = connect(tt)
+    with pytest.raises(CaptureError, match="it read 0 for 105 ms after"):
+        select_project(repl, request())
+
+
+# -- a failed reset leaves no clock running and no reset driven ------------------
+
+
+def test_rst_n_stuck_low_without_ui_in_stops_the_clock():
+    # fpga-4 and every fpgas.online board: no --ui-in, no monitor.
+    tt = FakeTT(manual_clock=False, pullup=False)
+    board, repl = connect(tt)
+    with pytest.raises(CaptureError, match="rst_n stuck low after release"):
+        select_project(repl, request())
+    assert tt.clock_hz == 0
+
+
+def test_rst_n_stuck_high_leaves_reset_released():
+    class StuckHigh(FakeTT):
+        def rst_n_level(self, pin):
+            return 1
+
+    tt = StuckHigh(manual_clock=False)
+    board, repl = connect(tt)
+    with pytest.raises(CaptureError, match="rst_n reads 1 while reset is held"):
+        select_project(repl, request())
+    assert tt.rst_n.mode == IN
+
+
+def test_a_failed_clock_command_leaves_reset_released():
+    class NoClock(FakeTT):
+        def clock_project_PWM(self, freq_hz, *args, **kwargs):
+            raise OSError("no clock")
+
+    tt = NoClock(manual_clock=False)
+    board, repl = connect(tt)
+    with pytest.raises(CaptureError, match="no clock"):
+        select_project(repl, request())
+    assert tt.rst_n.mode == IN
+    assert tt.rst_n() == 1
+    assert tt.clock_hz == 0
+
+
+# -- reset is held for enough clocks ---------------------------------------------
+
+
+@pytest.mark.parametrize("hz", [100, 1_000, 25_000_000])
+def test_reset_is_held_for_at_least_16_clocks(hz):
+    tt = FakeTT(manual_clock=False)
+    board, repl = connect(tt)
+    select_project(repl, request(clock_hz=hz))
+    assert tt.design.edges_in_reset >= 16
     assert tt.rst_n() == 1
 
 

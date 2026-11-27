@@ -27,8 +27,13 @@ Each behaviour below cites the SDK source it copies (v3.1.1, d485c7a):
 - The SDK logs at INFO on stdout (`log.py:44-54`), with the messages above.
 
 The design behind the pins is modelled only as far as reset goes: `design`
-records whether the clock ran while `rst_n` was low (a synchronous reset
-needs that) and what `ui_in` was when reset ended.
+counts the clock edges it saw while `rst_n` was low (a synchronous reset
+needs some) and records what `ui_in` was when reset ended.
+
+Time is the fake's own millisecond clock, `now_ms`, which only the
+board-side `time.sleep_ms` moves (`mpy_time`). A raw-REPL round trip takes
+no time here, so the edges a design gets in reset are only those the host's
+commands wait for on the board: a host cannot count on the link's latency.
 """
 
 from __future__ import annotations
@@ -53,10 +58,17 @@ class Design:
     def __init__(self) -> None:
         #: The clock ran while rst_n was low.
         self.clocked_in_reset = False
+        #: Sum of clock_hz x milliseconds while rst_n was low and clocked.
+        self._reset_hz_ms = 0
         #: The level of ui_in each time rst_n went from 0 to 1.
         self.ui_in_at_release: list[int] = []
         #: rst_n levels in the order they changed.
         self.rst_n_levels: list[int] = []
+
+    @property
+    def edges_in_reset(self) -> int:
+        """Rising clock edges while rst_n was low."""
+        return self._reset_hz_ms // 1000
 
 
 class RstPin:
@@ -177,6 +189,14 @@ class FakeTT:
         if level == 0 and self.clock_hz:
             self.design.clocked_in_reset = True
 
+    def advance(self, ms: int) -> None:
+        """Let `ms` milliseconds pass on the board, clocking the design."""
+        for _ in range(int(ms)):
+            if self.rst_n_level(self.rst_n) == 0 and self.clock_hz:
+                self.design._reset_hz_ms += self.clock_hz
+            self.now_ms += 1
+            self.changed()
+
     # -- the SDK's calls -----------------------------------------------------
     @property
     def mode(self) -> int:
@@ -258,8 +278,7 @@ def mpy_time(tt: FakeTT) -> types.ModuleType:
     module.ticks_diff = lambda a, b: a - b
 
     def sleep_ms(ms: int) -> None:
-        tt.now_ms += int(ms)
-        tt.changed()
+        tt.advance(ms)
 
     module.sleep_ms = sleep_ms
     return module
