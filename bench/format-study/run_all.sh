@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Reproduces every number of docs/design/2026-11-27-trace-format-study.md:
+# Reproduces every number of docs/superpowers/2026-11-27-trace-format-study.md:
 #
 #   bench/format-study/run_all.sh [STAGE...]
 #
 # Stages, in order (default: all of them): build traces info lean writer writer2
-# encode read validate robust interop ctr analyze. The simulation check (the Verilator loop) is
+# encode encode2 read read2 validate robust interop ctr analyze. The simulation check (the Verilator loop) is
 # sim/run_sim.sh, separately, because it needs the projects' sources.
 #
 # Everything goes under $OUT (default: <checkout>/tmp/format-study):
@@ -192,6 +192,38 @@ stage_read() {
     run_pool read "$jobs"
 }
 
+# The readers of a job (derive.py) on each stored candidate's file, and
+# vgch2 with a lazy-BLKH open (read2_rounds.sh).
+stage_read2() {
+    local jobs=$OUT/jobs-read2.txt; : > "$jobs"
+    for p in $PROJECTS; do
+        printf '%s\t%s\n' "$p" "$HERE/read2_rounds.sh $FS $(trace_of "$p") $FILES $p $(awk -F, 'NR==2{print $NF}' "$RES/info/$p.csv")" >> "$jobs"
+    done
+    run_pool read2 "$jobs"
+}
+
+# Background CPU again, 3 times, for its spread: each stored candidate's
+# configuration at zstd 1 alone, every block, the repetitions apart in time
+# (all of the first, then the second, then the third). No primary file;
+# vgch2's real file goes to files2/ and is removed.
+stage_encode2() {
+    local jobs=$OUT/jobs-encode2.txt; : > "$jobs"
+    local f2=$OUT/files2; mkdir -p "$f2"
+    for k in 1 2 3; do
+        for p in $PROJECTS; do
+            local t; t=$(trace_of "$p")
+            printf '%s\t%s\n' "$p.vgch2.r$k" "$FS encode $t $f2 --writer vgch2 --transforms identity --comps zstd1; rm -f $f2/$p.vgch2.trace.zst" >> "$jobs"
+            printf '%s\t%s\n' "$p.planar.r$k" "$FS encode $t $f2 --writer planar --transforms identity --comps zstd1" >> "$jobs"
+            printf '%s\t%s\n' "$p.events.r$k" "$FS encode $t $f2 --writer events --transforms identity --comps zstd1" >> "$jobs"
+            printf '%s\t%s\n' "$p.evplanar.r$k" "$FS encode $t $f2 --writer events --transforms events-planar --comps zstd1" >> "$jobs"
+            printf '%s\t%s\n' "$p.changelog.r$k" "$FS encode $t $f2 --writer changelog --transforms changelog-planar --comps zstd1" >> "$jobs"
+            printf '%s\t%s\n' "$p.rawplanar.r$k" "$FS encode $t $f2 --writer raw --transforms planar-runs --comps zstd1" >> "$jobs"
+            printf '%s\t%s\n' "$p.raw.r$k" "$FS encode $t $f2 --writer raw --transforms xor6 --comps zstd1" >> "$jobs"
+        done
+    done
+    run_pool encode2 "$jobs"
+}
+
 # The converted files (changelog, events and raw stored as planar): their
 # runs hash the same as vgacap's reader's (the read stage's validate rows).
 stage_validate() {
@@ -245,8 +277,9 @@ stage_ctr() {
 
 stage_analyze() {
     (cd "$HERE" && uv run --script analyze.py "$OUT") > "$RES/tables.md" 2> "$LOGS/analyze.log"
-    log "analyze: $RES/tables.md"
+    (cd "$HERE" && uv run --script splice_doc.py "$RES/tables.md" "$ROOT/docs/superpowers/2026-11-27-trace-format-study.md")
+    log "analyze: $RES/tables.md, spliced into the study document"
 }
 
-STAGES=${*:-build traces info lean writer writer2 encode read validate robust interop ctr analyze}
+STAGES=${*:-build traces info lean writer writer2 encode encode2 read read2 validate robust interop ctr analyze}
 for s in $STAGES; do "stage_$s"; done

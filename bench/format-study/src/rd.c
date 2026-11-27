@@ -26,6 +26,8 @@
 //   sample    vgacap-sample: the runs of uo_out and rst_n together (its
 //             calibration reads rst_n). A full scan merged on those bits;
 //             for a planar file, its two streams merged.
+//   infoscan  info as a merged full scan with tracetool's counting consumer,
+//             for every format (for a planar file, its 7 streams merged).
 //   uohash    tracetool uohash: uo_out over its default first 2^25 clocks,
 //             open included.
 //   (vgacap-export reads every pin: the scan pattern.)
@@ -575,7 +577,8 @@ static uint64_t rd_samples(rd_t *r) {
 
 // [from, to) to the consumer. mode 0: full runs; 1 (port0): uo_out runs
 // merged; 2 (sample): uo_out and rst_n runs merged; 3 (info): full runs
-// through tracetool's change count, into *inf.
+// through tracetool's change count, into *inf (a planar file: each stream
+// on its own); 4 (infoscan): 3 from merged full runs, for every format.
 static int rd_read_mode(rd_t *r, uint64_t from, uint64_t to, int mode, cons_t *c, info_t *inf) {
     static out_t o;
     static port0_t p0;
@@ -585,8 +588,8 @@ static int rd_read_mode(rd_t *r, uint64_t from, uint64_t to, int mode, cons_t *c
     if (inf) { memset(inf, 0, sizeof *inf); inf->c = c; }
     o.from = from; o.to = to; o.done = 0; o.n = 0;
     const int planar = r->kind == K_ST && ((st_rd_t *)r->ctx)->kind == 1;
-    fs_runs_fn fn = mode == 1 || mode == 2 ? p0_fn : mode == 3 ? info_fn : cons_fn;
-    void *user = mode == 1 || mode == 2 ? (void *)&p0 : mode == 3 ? (void *)inf : (void *)c;
+    fs_runs_fn fn = mode == 1 || mode == 2 ? p0_fn : mode >= 3 ? info_fn : cons_fn;
+    void *user = mode == 1 || mode == 2 ? (void *)&p0 : mode >= 3 ? (void *)inf : (void *)c;
     int rc;
     if (r->kind == K_VG || r->kind == K_LZ) {
         rc = r->kind == K_VG ? vg_read(r->ctx, from, to, fn, user) : fs_lazy_read(r->ctx, from, to, fn, user);
@@ -599,7 +602,7 @@ static int rd_read_mode(rd_t *r, uint64_t from, uint64_t to, int mode, cons_t *c
         // runs for modes 2 and 3 and filter them as vgch2's do.
         o.fn = fn;
         o.user = user;
-        const int m = planar ? mode : mode == 1 ? 1 : 0;
+        const int m = planar && mode < 3 ? mode : mode == 1 ? 1 : 0;
         rc = r->kind == K_ST ? st_read(r->ctx, from, to, m, &o, &p0) : fst_read(r->ctx, from, to, m == 1, &o);
         out_flush(&o);
     }
@@ -679,6 +682,11 @@ int fs_mode_read(int argc, char **argv) {
                 info_t inf;
                 const double s0 = fs_thread_ns();
                 if (rd_read_mode(&r, 0, UINT64_MAX, 3, &c, &inf)) return 1;
+                row(kind_s, base, pat, rep, fs_thread_ns() - s0, &c, info_hash(inf.changes));
+            } else if (!strcmp(pat, "infoscan")) {
+                info_t inf;
+                const double s0 = fs_thread_ns();
+                if (rd_read_mode(&r, 0, UINT64_MAX, 4, &c, &inf)) return 1;
                 row(kind_s, base, pat, rep, fs_thread_ns() - s0, &c, info_hash(inf.changes));
             } else if (!strcmp(pat, "sample")) {
                 const double s0 = fs_thread_ns();
