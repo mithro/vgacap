@@ -26,6 +26,7 @@ from ttcap import mp
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
 from ttcap.capture import (
     CLOCKED_RESET_CLOCKS,
+    CLOCKED_SAMPLE_NS,
     MODE_SELFCLK,
     CaptureError,
     CaptureRequest,
@@ -127,12 +128,58 @@ def test_500_khz_at_150_mhz_is_div_10_with_h_and_l_13():
     assert (t.pio_div, t.high, t.low) == (10, 13, 13)
 
 
-def test_an_overclocked_sysclk_still_keeps_h_and_l_in_range():
-    # Re-review R1-1: at 600 MHz the 40 ns floor bounds the cycle count;
-    # without it 17.2 MHz came out as pio_div 5, H 4, L -1.
-    t = clocked_timing(600_000_000, 17_200_000)
-    assert (t.pio_div, t.high, t.low) == (2, 11, 3)
-    assert t.sample_ns >= 40
+def test_the_read_floor_is_80_ns():
+    # R2-HW: batch b2 on fpga-4 (tt_um_vga_ca, 133 MHz, 7 MHz, divider 1)
+    # read the previous clock's value up to H 4 (38 ns), matched nothing at
+    # H 5 (45 ns), was 324 of 4,096 anchor clocks wrong at H 6 (53 ns), and
+    # exact from H 7 (60 ns) on. The floor is 80 ns, a third above that.
+    assert CLOCKED_SAMPLE_NS == 80
+
+
+def test_at_7_mhz_and_133_mhz_only_h_10_and_up_are_references():
+    # The b2 sweep's clock: 19 cycles. H 7..9 read right on fpga-4 but are
+    # under the margin; H 5 and 6, which read wrong, are no longer clean
+    # references.
+    assert clocked_timing(133_000_000, 7_000_000).high == 10
+    for high in range(16):
+        t = clocked_timing(133_000_000, 7_000_000, high=high)
+        assert (t.pio_div, t.cycles_per_clock) == (1, 19)
+        assert t.below_floor == (high < 10), high
+
+
+def test_the_fastest_clock_at_133_mhz_is_9_5_mhz_with_h_10():
+    t = clocked_timing(133_000_000, 9_500_000)
+    assert (t.pio_div, t.high, t.low) == (1, 10, 0)
+    assert t.clock_hz == 9_500_000
+    assert t.sample_ns == pytest.approx(11e9 / 133e6)  # 82.7 ns
+    # Up to 13 cycles' worth, 10.23 MHz, still gets the 14 cycles; 13 would read early.
+    assert clocked_timing(133_000_000, 10_230_769).cycles_per_clock == 14
+    with pytest.raises(ValueError, match="fastest clocked rate at sysclk 133000000 Hz, 9500000 Hz"):
+        clocked_timing(133_000_000, 10_230_770)
+    # The old default at the old fastest rate, H 5 at 14.67 MHz, read garbage.
+    with pytest.raises(ValueError, match="fastest"):
+        clocked_timing(133_000_000, 14_666_667)
+
+
+def test_a_read_exactly_on_the_floor_is_not_below_it():
+    # 150 MHz: H 11 reads 12 cycles, 80 ns, after the edge.
+    t = clocked_timing(150_000_000, 10_000_000)
+    assert (t.pio_div, t.high, t.low) == (1, 11, 0)
+    assert t.sample_ns == pytest.approx(80)
+    assert not t.below_floor
+    assert clocked_timing(150_000_000, 10_000_000, high=10).below_floor
+
+
+def test_an_overclocked_sysclk_finds_the_fastest_divider_whose_h_fits():
+    # 600 MHz: 80 ns is 48 cycles, so H would be 47 at divider 1 and 23 at
+    # divider 2, neither of which the 4-bit delay holds. Divider 3, H 15,
+    # 19 cycles, is the fastest clock there is, and a rate above it is
+    # refused, not quietly slowed (re-review R1-1: H and L stay 0..15).
+    t = clocked_timing(600_000_000, 10_526_316)
+    assert (t.pio_div, t.high, t.low) == (3, 15, 0)
+    assert t.sample_ns == pytest.approx(80)
+    with pytest.raises(ValueError, match="fastest clocked rate at sysclk 600000000 Hz, 10526315 Hz"):
+        clocked_timing(600_000_000, 10_800_000)  # 56 cycles' worth, under div 3 x 19
 
 
 def test_500_khz_at_fpga_4s_132_mhz_is_exact():
@@ -143,33 +190,33 @@ def test_500_khz_at_fpga_4s_132_mhz_is_exact():
 
 @pytest.mark.parametrize("sysclk", [125_000_000, 132_000_000, 133_000_000, 150_000_000])
 @pytest.mark.parametrize("hz", [100, 1_000, 61_234, 400_000, 500_000, 1_000_000, 2_500_000,
-                                4_000_000, 9_999_999, 14_000_000])
-def test_the_clock_is_never_faster_than_asked_and_the_read_at_least_40_ns_late(sysclk, hz):
+                                4_000_000, 8_000_000, 9_400_000])
+def test_the_clock_is_never_faster_than_asked_and_the_read_at_least_80_ns_late(sysclk, hz):
     t = clocked_timing(sysclk, hz)
     assert t.clock_hz <= hz
     assert 0 <= t.high <= 15 and 0 <= t.low <= 15
-    assert t.sample_ns >= 40
-    # Nearest not faster: no divider and cycle count that reads 40 ns late
+    assert t.sample_ns >= 80
+    # Nearest not faster: no divider and cycle count that reads 80 ns late
     # makes a clock between this one and the one asked for.
     # For each divider its fastest such clock is the one to compare: the
     # fewest cycles that are not faster, and no fewer than the read needs.
     for div in range(1, 65536):
-        least = 4 + max(0, -(-40 * sysclk // (1_000_000_000 * div)) - 1)
-        cycles = max(least, -(-sysclk // (hz * div)))
-        if cycles <= 34:
+        least_high = max(0, -(-80 * sysclk // (1_000_000_000 * div)) - 1)
+        cycles = max(4 + least_high, -(-sysclk // (hz * div)))
+        if cycles <= 34 and least_high <= 15:
             rate = sysclk / (div * cycles)
             assert not t.clock_hz < rate <= hz, (div, cycles, rate)
 
 
-def test_the_fastest_clock_at_150_mhz_reads_40_ns_after_the_edge():
-    # 9 cycles: 16,666,666.7 Hz, the read 6 cycles after the edge.
-    t = clocked_timing(150_000_000, 16_666_667)
-    assert (t.pio_div, t.high, t.low) == (1, 5, 0)
-    assert t.sample_ns == pytest.approx(40)
-    # Anything up to 8 cycles' worth still gets 9; 8 cycles would read early.
-    assert clocked_timing(150_000_000, 18_749_999).cycles_per_clock == 9
+def test_the_fastest_clock_at_150_mhz_reads_80_ns_after_the_edge():
+    # 15 cycles: 10 MHz, the read 12 cycles after the edge.
+    t = clocked_timing(150_000_000, 10_000_000)
+    assert (t.pio_div, t.high, t.low) == (1, 11, 0)
+    assert t.sample_ns == pytest.approx(80)
+    # Anything up to 14 cycles' worth still gets 15; 14 would read early.
+    assert clocked_timing(150_000_000, 10_714_285).cycles_per_clock == 15
     with pytest.raises(ValueError, match="fastest"):
-        clocked_timing(150_000_000, 18_750_000)
+        clocked_timing(150_000_000, 10_714_286)
 
 
 def test_a_clock_below_the_largest_divider_is_refused():
@@ -191,12 +238,13 @@ def test_a_chosen_h_moves_the_read_within_the_nearest_clock_it_fits():
         clocked_timing(SYSCLK, 5_000_000, high=16)
 
 
-def test_an_h_under_the_40_ns_floor_is_a_marked_sweep_point(tmp_path):
+def test_an_h_under_the_80_ns_floor_is_a_marked_sweep_point(tmp_path):
     # Review M2: allowed, for the H sweep, but said so in the opening
     # record and the desc; still clean, since the run did what was asked.
     assert not clocked_timing(SYSCLK, 7_000_000).below_floor
     assert clocked_timing(SYSCLK, 7_000_000, high=0).below_floor  # 7.5 ns
-    assert not clocked_timing(SYSCLK, 7_000_000, high=5).below_floor  # 45 ns
+    assert clocked_timing(SYSCLK, 7_000_000, high=6).below_floor  # 53 ns: read wrong on fpga-4
+    assert not clocked_timing(SYSCLK, 7_000_000, high=10).below_floor  # 83 ns
     rig = Rig(tmp_path)
     stats, data = rig.run(clock_hz=7_000_000, clock_high=0, clocks=16, reset_clocks=2)
     assert stats.clean, stats.format()

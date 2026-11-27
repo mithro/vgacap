@@ -772,8 +772,8 @@ def capture(
 
 
 def _warn_below_floor(timing) -> None:
-    """Say, before the board is loaded, that an H under the 40 ns floor
-    makes this run a sweep point."""
+    """Say, before the board is loaded, that an H under the read floor
+    (`CLOCKED_SAMPLE_NS`) makes this run a sweep point."""
     if timing.below_floor:
         print(
             "warning: --clock-high %d reads uo_out %d ns after the rising edge, under "
@@ -1284,8 +1284,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="clocked mode: H, the PIO delay of the clock's high phase, 0..15, "
         "which sets how long after the rising edge uo_out is read (default: "
-        "the shortest wait of at least 40 ns, or the middle of the clock "
-        "when that is later)",
+        "the shortest wait of at least %d ns, or the middle of the clock "
+        "when that is later; a design slower than tt_um_vga_ca on fpga-4 "
+        "needs more)" % CLOCKED_SAMPLE_NS,
     )
 
     reboot_parser = subparsers.add_parser(

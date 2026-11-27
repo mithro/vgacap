@@ -109,9 +109,13 @@ CLOCKED_MAX_PHASE = 15
 #: PIO cycles of one clock that are not H or L: one each for `nop`, `in`,
 #: `push` and `jmp`.
 CLOCKED_FIXED_CYCLES = 4
-#: The `in` reads uo_out at least this long after the rising edge: about
-#: 25 ns of settling measured on fpga-4, plus the 2-cycle input synchroniser.
-CLOCKED_SAMPLE_NS = 40
+#: The `in` reads uo_out at least this long after the rising edge. Measured
+#: on one design and one board -- tt_um_vga_ca on fpga-4, 2026-11-28, batch
+#: b2, at 133 MHz and 7 MHz: reads up to 38 ns after the edge got the
+#: previous clock's value, 45 and 53 ns were wrong, and from 60 ns on every
+#: sample matched the reference. 80 ns is that 60 ns plus a third. A design
+#: with a slower clock-to-output path needs a later read: a larger H.
+CLOCKED_SAMPLE_NS = 80
 #: The largest integer SMn_CLKDIV (its INT field is 16 bits, 0 meaning
 #: 65536, which is left alone).
 CLOCKED_MAX_DIV = 65535
@@ -1507,6 +1511,21 @@ def _least_high(sysclk_hz: int, pio_div: int) -> int:
     return max(0, -(-CLOCKED_SAMPLE_NS * sysclk_hz // (1_000_000_000 * pio_div)) - 1)
 
 
+def _fastest_clock(sysclk_hz: int, high: int | None) -> tuple[int, int] | None:
+    """(pio_div, cycles) of the fastest clock at `sysclk_hz`: with H at the
+    floor, or `high` if given, and L 0. None if no divider can make one."""
+    best = None
+    for pio_div in range(1, CLOCKED_MAX_DIV + 1):
+        if best is not None and pio_div * CLOCKED_FIXED_CYCLES > best[0] * best[1]:
+            break
+        h = _least_high(sysclk_hz, pio_div) if high is None else high
+        if h > CLOCKED_MAX_PHASE:
+            continue  # the 4-bit delay cannot wait that long at this divider
+        if best is None or pio_div * (CLOCKED_FIXED_CYCLES + h) < best[0] * best[1]:
+            best = (pio_div, CLOCKED_FIXED_CYCLES + h)
+    return best
+
+
 def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> ClockedTiming:
     """The clock nearest `clock_hz` that is not faster, at `sysclk_hz`.
 
@@ -1519,10 +1538,12 @@ def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> Cl
     few cycles a divider may take.
 
     `high` sets H instead, for a sweep of the sample point: the clock is the
-    nearest not-faster one in which that H leaves L in 0..15, and the 40 ns
-    floor does not apply. Refused (`ValueError`): a clock faster than the fastest one
-    that reads 40 ns late, a clock slower than the largest divider makes,
-    and an H that fits no clock.
+    nearest not-faster one in which that H leaves L in 0..15, and the floor
+    does not apply (`ClockedTiming.below_floor` says when the read is
+    earlier). Refused (`ValueError`): a clock faster than the fastest one
+    that reads `CLOCKED_SAMPLE_NS` late (at sysclks where H would pass 15 at
+    divider 1, a larger divider's), a clock slower than the largest divider
+    makes, and an H that fits no clock.
     """
     if sysclk_hz <= 0 or clock_hz <= 0:
         raise ValueError(f"sysclk_hz and clock_hz must be positive, got {sysclk_hz}, {clock_hz}")
@@ -1534,14 +1555,14 @@ def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> Cl
         raise ValueError(
             "%d Hz is below the slowest clocked rate at sysclk %d Hz, %.1f Hz"
             % (clock_hz, sysclk_hz, sysclk_hz / (CLOCKED_MAX_DIV * most)))
-    # Divider 1 makes the fastest clock there is; a rate above it is
-    # refused rather than quietly slowed to it.
-    fewest = CLOCKED_FIXED_CYCLES + (_least_high(sysclk_hz, 1) if high is None else high)
-    if -(-sysclk_hz // clock_hz) < fewest:
+    # A rate above the fastest clock there is is refused rather than
+    # quietly slowed to it.
+    fastest = _fastest_clock(sysclk_hz, high)
+    if fastest is None or -(-sysclk_hz // clock_hz) < fastest[0] * fastest[1]:
         raise ValueError(
             "%d Hz is above the fastest clocked rate at sysclk %d Hz, %d Hz, the "
             "fastest that reads uo_out %d ns after the rising edge"
-            % (clock_hz, sysclk_hz, sysclk_hz // fewest,
+            % (clock_hz, sysclk_hz, sysclk_hz // (fastest[0] * fastest[1]) if fastest else 0,
                CLOCKED_SAMPLE_NS if high is None else
                round((high + 1) * 1e9 / sysclk_hz)))
     best = None  # (pio_div, cycles)
@@ -1550,7 +1571,10 @@ def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> Cl
             break  # even the fewest cycles at this divider are slower than the best
         cycles = -(-sysclk_hz // (clock_hz * pio_div))
         if high is None:
-            cycles = max(cycles, CLOCKED_FIXED_CYCLES + _least_high(sysclk_hz, pio_div))
+            least = _least_high(sysclk_hz, pio_div)
+            if least > CLOCKED_MAX_PHASE:
+                continue  # the floor needs an H the 4-bit delay cannot hold
+            cycles = max(cycles, CLOCKED_FIXED_CYCLES + least)
         else:
             cycles = max(cycles, CLOCKED_FIXED_CYCLES + high)
             if cycles - CLOCKED_FIXED_CYCLES - high > CLOCKED_MAX_PHASE:
