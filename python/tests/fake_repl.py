@@ -266,7 +266,8 @@ class FakeBinaryBoard:
     `import os` gets the board's `os`, never the host's: `mkdir` adds to
     `dirs` (`OSError(EEXIST)` for a path already there, file or directory)
     and `remove` deletes a file (`OSError(ENOENT)` for one that is not
-    there), as littlefs does (`lfs2_mkdir_` and `lfs2_remove_` in
+    there), and `rmdir` an empty directory (`ENOTEMPTY` for one holding
+    anything, `ENOENT` for one not there), as littlefs does (`lfs2_mkdir_` and `lfs2_remove_` in
     MicroPython b006887db6's `lib/littlefs/lfs2.c`). With `parents` a
     file opened 'wb', or a directory made, needs its parent directory in
     `dirs`, or the root, else `OSError(ENOENT)`: `lfs2_dir_find` fails
@@ -375,8 +376,17 @@ class FakeBinaryBoard:
                 raise OSError(errno.ENOENT, "ENOENT")
             del self.files[path]
 
+        def rmdir(path: str) -> None:
+            if path not in self.dirs:
+                raise OSError(errno.ENOENT, "ENOENT")
+            inside = path.rstrip("/") + "/"
+            if any(p.startswith(inside) for p in [*self.files, *self.dirs]):
+                raise OSError(errno.ENOTEMPTY, "ENOTEMPTY")
+            self.dirs.discard(path)
+
         module.mkdir = mkdir
         module.remove = remove
+        module.rmdir = rmdir
         return module
 
     def _open(self, path: str, mode: str = "r"):

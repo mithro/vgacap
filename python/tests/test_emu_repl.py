@@ -70,6 +70,16 @@ def test_os_remove_deletes_a_file_and_a_missing_one_is_enoent():
     assert out.strip() == str(errno.ENOENT)
 
 
+def test_os_rmdir_removes_an_empty_directory_only():
+    board = FakeBinaryBoard(files={"/a/f": b"x"}, dirs={"/a", "/b"})
+    repl = _repl(board)
+    code = ("import os\ntry:\n os.rmdir(%r)\nexcept OSError as e:\n print(e.errno)")
+    assert repl.exec(code % "/a")[0].strip() == str(errno.ENOTEMPTY)
+    assert repl.exec(code % "/c")[0].strip() == str(errno.ENOENT)
+    assert repl.exec(code % "/b") == ("", "")
+    assert board.dirs == {"/a"}
+
+
 def test_with_parents_a_file_needs_its_directory():
     # lfs2_file_opencfg: a path whose parent does not exist is LFS_ERR_NOENT.
     board = FakeBinaryBoard(parents=True)

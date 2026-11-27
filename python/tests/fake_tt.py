@@ -227,6 +227,33 @@ class Pins:
                     pull=pin_cls.PULL_DOWN)
 
 
+class FakeFPGAMux:
+    """`tt.shuttle` on the FPGA breakout: `FPGAMux` (`fpga/fpga_mux.py`).
+
+    `run` is 'FPGA' (`fpga_mux.py:163`); `reset()` forgets the enabled
+    design (`:137-138`), as `enable()` does before it loads one
+    (`:144-160`). `enabled` is the name of the design the SDK believes is
+    loaded, or None; the real one holds a `BitStream`, whose `name` is it.
+    """
+
+    run = "FPGA"
+
+    def __init__(self, enabled: str | None = None) -> None:
+        self.enabled = None if enabled is None else types.SimpleNamespace(name=enabled)
+
+    def reset(self) -> None:
+        self.enabled = None
+
+
+class FakeProjectMux:
+    """`tt.shuttle` on an ASIC carrier: `ProjectMux`, whose `run` is the
+    shuttle's name from the chip ROM, such as 'tt06' (`project_mux.py:593`)."""
+
+    def __init__(self, run: str = "tt06") -> None:
+        self.run = run
+        self.enabled = None
+
+
 class FakeTT:
     """The `tt` DemoBoard, for the calls ttcap makes.
 
@@ -236,12 +263,15 @@ class FakeTT:
     and fpga-4, where `tt.manual_project_clock` is None).
     `release_ms` is how long an input `rst_n` takes to read 1.
     `board` is a `ttcap.emu.Board` whose pins these are (module docstring).
+    `shuttle` is `tt.shuttle`: an FPGA breakout's `FakeFPGAMux` unless
+    given, a `FakeProjectMux` for an ASIC carrier.
     """
 
     def __init__(self, mode: int = ASIC_MANUAL_INPUTS, *, pullup: bool = True,
                  switches: int = 0, manual_clock: bool = True, release_ms: int = 0,
-                 board=None) -> None:
+                 board=None, shuttle=None) -> None:
         self.board = board
+        self.shuttle = FakeFPGAMux() if shuttle is None else shuttle
         self.machine = board.modules()["machine"] if board is not None else None
         self.pullup = pullup
         self.switches = switches & 0xFF
