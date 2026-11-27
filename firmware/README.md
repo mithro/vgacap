@@ -11,5 +11,5 @@ review: 2027-05-27
 - [How to run the vgacap firmware from RAM and go back to stock](how-to-load.md): loading it on a demo board, and rebooting to the stock firmware.
 - [How to capture with the vgacap firmware](how-to-capture.md): frame, window and stream captures with `ttcap capture --firmware picosdk`.
 - [How to select an ASIC project with the vgacap firmware](how-to-select-asic-project.md): `--asic-index` on a demo board with an ASIC breakout.
-- Reference, under Reference: [The vgacap firmware reference](reference.md).
+- Reference, under Reference: [The vgacap firmware and module reference](reference.md).
 - Building and testing, under Developing vgacap: [Developing the vgacap firmware](developing.md).
