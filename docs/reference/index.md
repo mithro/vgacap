@@ -7,10 +7,10 @@ review: 2027-05-27
 
 # Reference
 
-- [The vgacap firmware and module reference](../../firmware/reference.md): the vgacap firmware's protocol, board facts and files, and the MicroPython module's.
 - [Capture sources compared](../reference-capture-sources.md): each source's hardware, fastest clock and proof.
+- [ttcap reference](../../python/ttcap/index-reference.md): the `ttcap` commands, exit codes, pin maps and bench boards.
+- [The vgacap firmware and module reference](../../firmware/reference.md): the vgacap firmware's protocol, board facts and files, and the MicroPython module's.
+- [Tools, elements and capture-source facts](tools-and-sources.md): the command-line tools, the GStreamer elements, vgacap-rp1, the raw framer and the test vectors.
 - [Stream, modes and frame files](stream-and-pictures.md): the stream format, the mode table and the frame files.
 - [The simulation trace format](../trace-format.md): the trace a simulated design writes.
-- [Vendored third-party code](../../third_party/README.md): the libraries built into vgacap, their versions and licenses, and how to update one.
 - [Images and logos in the overview figure](../diagrams/NOTICE.md): where each picture comes from, and its license.
-- [ttcap reference](../../python/ttcap/index-reference.md): the `ttcap` commands, exit codes, pin maps and bench boards.
