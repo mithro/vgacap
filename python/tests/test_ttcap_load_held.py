@@ -10,6 +10,7 @@ counting them, not by trusting the commands.
 
 from __future__ import annotations
 
+import dataclasses
 import errno
 import io
 
@@ -17,22 +18,29 @@ import pytest
 from emu_repl import EmuRepl
 from fake_tt import ASIC_MANUAL_INPUTS, ASIC_RP_CONTROL
 
-from ttcap.boards import RP2350_DBV3
+from ttcap.boards import RP2040_TT06, RP2350_DBV3
 from ttcap.capture import (
     HELD_DIR,
     HELD_PATH,
+    SYNC_WINDOW,
     CaptureError,
     CaptureRequest,
+    LoadHeldTimeout,
+    cleanup_names,
     load_held,
     load_held_cfg,
+    undo_load_held,
 )
 from ttcap.emu import Board, ClockedDesign
 from ttcap.repl import RawRepl, UploadError
 
 CLK, RST = 16, 14
 UO = list(range(33, 41))
+#: The header icepack writes with no comment lines, as in
+#: tt-vga-testpatterns' bitstreams: FF 00, 00 FF, then the sync word.
+HEADER = b"\xff\x00\x00\xff\x7e\xaa\x99\x7e"
 #: About the size of a real iCE40 bitstream, and not a multiple of 2048.
-BITSTREAM = bytes(range(256)) * 400 + b"\x7e"
+BITSTREAM = HEADER + bytes(range(256)) * 400 + b"\x7e"
 
 
 def request(**kwargs) -> CaptureRequest:
@@ -362,3 +370,138 @@ def test_the_body_drives_gpio_16_and_loads_the_held_file():
     cfg = load_held_cfg(RP2350_DBV3)
     assert cfg["clk_gpio"] == 16
     assert cfg["path"] == HELD_PATH
+
+
+# -- round 1: what is refused before any board command --------------------------
+
+
+@pytest.mark.parametrize("data, match", [
+    (b"", "empty"),
+    (b"\x01" * 300, "sync word"),
+    (b"\xff\x00" + b"\x00" * SYNC_WINDOW + b"\x7e\xaa\x99\x7e", "sync word"),
+], ids=["empty", "no-sync", "sync-past-the-window"])
+def test_data_that_cannot_configure_an_ice40_is_refused_before_any_command(
+        tmp_path, data, match):
+    # fpga_reset() clears the FPGA before the transfer (fabricfoxv2.py:110-
+    # 112), so a file that cannot configure it would leave no design while
+    # the count still matched.
+    rig = Rig(tmp_path, bitstream=data)
+    before = list(rig.link.commands)
+    with pytest.raises(ValueError, match=match):
+        rig.load()
+    assert rig.link.commands == before
+
+
+def test_a_sync_word_after_a_comment_block_is_accepted(tmp_path):
+    # Lattice's iCEcube2 writes comment lines between FF 00 and 00 FF.
+    comment = b"Lattice\x00iCEcube2 2020.12.27940\x00Part: iCE40UP5K-SG48\x00" * 3
+    data = b"\xff\x00" + comment + b"\x00\xff\x7e\xaa\x99\x7e" + b"\x01" * 1000
+    rig = Rig(tmp_path, bitstream=data)
+    assert rig.load()["bytes"] == len(data)
+
+
+@pytest.mark.parametrize("profile", [
+    RP2040_TT06,
+    dataclasses.replace(RP2350_DBV3, clk_gpio=15),
+], ids=["rp2040", "rp2350-clock-on-15"])
+def test_a_board_without_the_fpga_loader_or_its_clock_pin_is_refused(tmp_path, profile):
+    rig = Rig(tmp_path)
+    before = list(rig.link.commands)
+    with pytest.raises(ValueError, match="FPGA"):
+        rig.load(request(profile=profile))
+    assert rig.link.commands == before
+
+
+# -- round 1: a timeout keeps what is needed to put the board back ----------------
+
+
+def test_a_timeout_carries_the_selection_and_undo_load_held_puts_the_board_back(
+        tmp_path, monkeypatch):
+    rig = Rig(tmp_path, mode=ASIC_MANUAL_INPUTS)
+    real_exec = rig.repl.exec
+
+    def timing_out(code, timeout=10.0, **kwargs):
+        if "spi_transferPIO" in code:
+            raise TimeoutError("timed out waiting for b'\\x04'")
+        return real_exec(code, timeout=timeout, **kwargs)
+
+    monkeypatch.setattr(rig.repl, "exec", timing_out)
+    with pytest.raises(LoadHeldTimeout) as raised:
+        rig.load(request(ui_in=3))
+    assert isinstance(raised.value, TimeoutError)
+    selection = raised.value.selection
+    assert selection["mode_before"] == ASIC_MANUAL_INPUTS
+    assert selection["ui_in"] == 3
+    # What the board is left in: RP control, reset held, the file kept.
+    assert rig.link.tt.mode == ASIC_RP_CONTROL
+    assert rig.level(RST) == 0
+    assert HELD_PATH in rig.link.files
+    monkeypatch.undo()
+    rig.repl.recover(timeout=0.2)
+    undo_load_held(rig.repl, selection)
+    assert rig.link.tt.mode == ASIC_MANUAL_INPUTS
+    assert rig.level(RST) == 1
+    assert rig.board.pads[CLK] == (rig.Pin.IN, rig.Pin.PULL_DOWN)
+    assert HELD_PATH not in rig.link.files
+
+
+# -- round 1: a failed reset sequence -------------------------------------------
+
+
+def test_a_failed_reset_sequence_deletes_the_file(tmp_path):
+    rig = Rig(tmp_path)
+    rig.link.tt.reset_project = lambda put_in_reset: None  # rst_n never goes low
+    with pytest.raises(CaptureError, match="rst_n reads 1 while reset is held"):
+        rig.load()
+    assert HELD_PATH not in rig.link.files
+    assert rig.link.loader.loads == []
+
+
+def test_a_timeout_in_the_reset_sequence_keeps_the_file(tmp_path, monkeypatch):
+    rig = Rig(tmp_path)
+    real_exec = rig.repl.exec
+
+    def timing_out(code, timeout=10.0, **kwargs):
+        if code == "tt.reset_project(True)":
+            raise TimeoutError("timed out waiting for b'OK'")
+        return real_exec(code, timeout=timeout, **kwargs)
+
+    monkeypatch.setattr(rig.repl, "exec", timing_out)
+    with pytest.raises(TimeoutError):
+        rig.load()
+    assert HELD_PATH in rig.link.files
+    assert not rig.sent("os.remove")
+
+
+# -- round 1: the body's names, and the monitor firing early -----------------------
+
+
+def test_the_next_capture_deletes_the_load_bodys_names():
+    names = cleanup_names(load_held_cfg(RP2350_DBV3))
+    assert {"Pin", "fabricfoxv2", "HELD"} <= set(names)
+
+
+def test_the_monitor_firing_before_it_is_turned_off_leaves_the_clock_driven_low(tmp_path):
+    # ASIC_RP_CONTROL turns the monitor on; if its 333 ms timer fires
+    # before `monitoring = False`, clock_project_once() takes GPIO16 as an
+    # SIO output (demoboard.py:317-330). The body's clock_project_stop()
+    # and drive-low must still leave it low with no edge after the load.
+    rig = Rig(tmp_path, mode=ASIC_MANUAL_INPUTS)
+    rig.link.tt.manual_project_clock.pin_activated = True
+    real_run = rig.link._run
+    rises_at_body = []
+
+    def run(code):
+        if code == "tt.manual_project_clock.monitoring = False":
+            rig.board.advance(rig.board.sysclk_hz * 334 // 1000)
+        if "spi_transferPIO" in code:
+            rises_at_body.append(len(rig.board.wave.clock_rises))
+        return real_run(code)
+
+    rig.link._run = run
+    rig.load(request(ui_in=1))
+    assert rig.rises == 1  # the monitor's one clock_project_once() edge
+    assert len(rig.board.wave.clock_rises) == rises_at_body[0]
+    assert rig.board.pads[CLK] == (rig.Pin.OUT, None)
+    assert rig.level(CLK) == 0
+    assert rig.board.wave.count_at(rig.board.now) == 0
