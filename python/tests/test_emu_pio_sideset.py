@@ -466,6 +466,55 @@ def test_irq_wait_does_not_raise_the_flag_again_while_it_waits():
     assert mem32[IRQ] == 1 << 1 and pio_sm.pc == 1
 
 
+def _irq_loop(rp2, kind, flag):
+    @rp2.asm_pio()
+    def p():
+        label("top")  # noqa: F821
+        if kind == "wait":
+            irq(block, flag)  # noqa: F821
+        else:
+            irq(clear, flag)  # noqa: F821
+        jmp("top")  # noqa: F821
+
+    return p
+
+
+def test_an_irq_flag_shared_by_two_running_state_machines_is_refused():
+    # State machines run one after another within each advance, so a flag
+    # one of them sets or clears would reach the other at the wrong cycle.
+    board = _board()
+    rp2 = board.modules()["rp2"]
+    sm0, _ = _sm(board, _irq_loop(rp2, "wait", 0))
+    sm1, _ = _sm(board, _irq_loop(rp2, "clear", 0), sm_num=1)
+    sm0.active(1)
+    sm1.active(1)
+    with pytest.raises(BoardError, match="IRQ flag 0 .* another running state machine"):
+        board.advance(10)
+
+
+def test_irq_flags_used_by_one_state_machine_each_are_fine():
+    board = _board()
+    rp2 = board.modules()["rp2"]
+    mem32 = board.modules()["machine"].mem32
+    sm0, _ = _sm(board, _irq_loop(rp2, "wait", 0))
+    sm1, _ = _sm(board, _irq_loop(rp2, "clear", 1), sm_num=1)
+    sm0.active(1)
+    sm1.active(1)
+    board.advance(10)
+    assert mem32[IRQ] == 1
+
+
+def test_a_stopped_state_machine_does_not_count_as_sharing_a_flag():
+    board = _board()
+    rp2 = board.modules()["rp2"]
+    mem32 = board.modules()["machine"].mem32
+    sm0, _ = _sm(board, _irq_loop(rp2, "wait", 0))
+    _sm(board, _irq_loop(rp2, "clear", 0), sm_num=1)  # loaded, never started
+    sm0.active(1)
+    board.advance(10)
+    assert mem32[IRQ] == 1
+
+
 # -- the clocked program of design note 4e ------------------------------------
 
 

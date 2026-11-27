@@ -39,8 +39,10 @@ and writes the same chunk stream it would write over USB:
 What it does not model: IRQ latency (handlers run at the completion cycle), DMA bus
 contention, the input synchroniser (a fixed delay on every pin alike,
 so it moves nothing relative to anything else), the PIO clock divider
-(`freq` is ignored: state machines run at the system clock), and reading
-back a pin PIO drives (refused).
+(`freq` is ignored: state machines run at the system clock), reading
+back a pin PIO drives (refused), and `irq` between state machines (state
+machines run one after another within each step, so a flag that two
+running state machines share is refused).
 """
 
 from ttcap.emu.board import Board, BoardError, Waveform

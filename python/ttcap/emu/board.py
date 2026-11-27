@@ -212,6 +212,7 @@ class _SM:
         self.sideset_gpios: list[int] = []
         self.side_last: int | None = None
         self.sidesets: list[int | None] = []
+        self.irq_flags: frozenset[int] = frozenset()
         self.reset_state()
         self.enabled = False
         self.disable_at: int | None = None
@@ -264,6 +265,8 @@ class _SM:
         count, side_en, gpios, init = self._sideset_config(prog, execctrl, sideset_base)
         self.program = prog
         self.code = [self._decode(word) for word in data]
+        #: The IRQ flags this program's `irq` instructions touch.
+        self.irq_flags = frozenset(ins[3] for ins in self.code if ins[0] == _IRQ)
         # Bits 12:8 are SIDESET_COUNT bits of side-set at the top -- the
         # top one the enable bit when EXECCTRL.SIDE_EN is set, and counted
         # in SIDESET_COUNT -- and delay below them (RP2040 datasheet 3.4.1,
@@ -585,6 +588,16 @@ class _SM:
                 _, clr, wait, flag = ins
                 bit = 1 << flag
                 block = self.block
+                # State machines run one after another within each
+                # Board.advance(), so a flag one sets or clears would reach
+                # another at the wrong cycle, or out of order: refused.
+                for other in block.sms:
+                    if other is not self and other.enabled and flag in other.irq_flags:
+                        raise BoardError(
+                            "IRQ flag %d is also used by another running state machine "
+                            "(PIO%d SM%d); irq between state machines is not emulated"
+                            % (flag, block.index, other.index)
+                        )
                 if clr:  # Clear: Wait has no effect
                     block.irq &= ~bit
                 elif not wait:
