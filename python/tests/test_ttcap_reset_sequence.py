@@ -282,3 +282,21 @@ def test_the_sdks_prints_do_not_confuse_the_read_backs():
     printed = "".join(board.outputs)
     assert "Setting mode to ASIC_RP_CONTROL" in printed
     assert "Changing reset to output mode" in printed
+
+
+def test_the_release_command_gets_time_for_its_wait_at_1_hz():
+    """At 1 Hz the board sleeps 16 s before the release; a 10 s exec
+    deadline would time out while the board is still running it."""
+    tt = FakeTT(manual_clock=False)
+    board = TTBoard(tt)
+    timeouts: dict[str, float] = {}
+
+    class SpyRepl(RawRepl):
+        def exec(self, code, timeout=10.0, **kwargs):
+            timeouts[code] = timeout
+            return super().exec(code, timeout=timeout, **kwargs)
+
+    repl = SpyRepl(board)
+    repl.enter()
+    select_project(repl, request(clock_hz=1))
+    assert timeouts[capture.release_command(1)] >= 10.0 + 16.0
