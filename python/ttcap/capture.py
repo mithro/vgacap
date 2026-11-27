@@ -27,10 +27,12 @@ the host's re-serialisation.
 from __future__ import annotations
 
 import io
+import re
 import struct
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Iterator
 
 from vgacap.modes import MODES
@@ -38,7 +40,7 @@ from vgacap.stream import Header, Writer
 
 from . import mp
 from .boards import BoardProfile, pwm_slice_addr
-from .repl import CHUNK_HEADER_LEN, RawRepl, ReplFramingError
+from .repl import CHUNK_HEADER_LEN, LinkClosed, RawRepl, ReplFramingError
 
 EDGES = ("falling", "rising")
 #: Board-side program bodies a `CaptureRequest` may name (`ttcap/mp/`).
@@ -711,7 +713,10 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
                 # entries, so neither spelling finds it. Seen on fpga-4,
                 # 2026-11-23: `tt.shuttle.enabled` was
                 # `<FPGA BitStream tt_um_vgacal_bars>` while `has()` said
-                # False. Already enabled is what was asked for.
+                # False. Already enabled is what was asked for. After
+                # `load_held` the name is None (its body runs
+                # `tt.shuttle.reset()`), so the design it replaced is
+                # refused here rather than taken as enabled.
                 out = _exec_checked(
                     repl,
                     "print(getattr(getattr(tt.shuttle, 'enabled', None), "
@@ -724,6 +729,27 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
                         "and is not the enabled design either; an uploaded FPGA "
                         "bitstream has to be enabled through the board's daemon "
                         "first") from None
+
+    def reset() -> None:
+        did["rst_n_wait_ms"] = reset_design(repl, clock_command(req), req.clock_hz)
+
+    _reset_sequence(repl, req, did, reset)
+    return did
+
+
+def _reset_sequence(repl: RawRepl, req: CaptureRequest, did: dict,
+                    reset: Callable[[], None]) -> None:
+    """Steps 2 to 6 of `select_project`, which `load_held` shares: the one
+    reset sequence, with what happens once the inputs are set left to
+    `reset`.
+
+    Stops the clock, writes the mode and turns off the monitor, writes
+    `ui_in` and reads it back, recording in `did` what `restore_mode`
+    puts back, and then calls `reset`. `select_project`'s runs
+    `reset_design`; `load_held`'s holds reset and loads the bitstream.
+    A failure after the clock stops puts the board back, as
+    `select_project` describes, before the error is raised.
+    """
     _exec_checked(repl, "tt.clock_project_stop()")
     # Read before the mode write below, which turns the monitor on.
     monitoring = _board_value(_exec_checked(repl, _READ_MONITORING), "monitoring")
@@ -753,7 +779,7 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
                     "ASIC_RP_CONTROL, the stock firmware leaves undriven any "
                     "input that reads high, for fear of contention" % (got, req.ui_in))
             did["ui_in"] = req.ui_in
-        did["rst_n_wait_ms"] = reset_design(repl, clock_command(req), req.clock_hz)
+        reset()
     except BaseException as exc:
         # The caller never sees `did`, and its teardown does not cover a
         # setup that raised, so the board is put back here: the clock
@@ -761,7 +787,6 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
         # not left clocked, in ASIC_RP_CONTROL or without its monitor.
         undo_selection(repl, did, stop=True, error=exc)
         raise
-    return did
 
 
 #: How long `reset_design` waits for `rst_n` to read 1 after the release.
@@ -832,6 +857,29 @@ def _board_value(stdout: str, key: str) -> int:
     raise CaptureError(f"board did not report {key}, said {stdout.strip()!r}")
 
 
+def hold_reset(repl: RawRepl) -> None:
+    """Hold the design in reset: `tt.reset_project(True)`, and `rst_n` must
+    read 0. The first step of `reset_design`, and the last before the load
+    in `load_held`. If the read-back fails, reset is released before the
+    error is raised."""
+    _exec_checked(repl, "tt.reset_project(True)")
+    try:
+        if _board_value(_exec_checked(repl, _READ_RST_N), "rst_n") != 0:
+            raise CaptureError(
+                "rst_n reads 1 while reset is held: tt.reset_project(True) did not drive it low")
+    except BaseException as exc:
+        _release_reset(repl, exc)
+        raise
+
+
+def _release_reset(repl: RawRepl, exc: BaseException) -> None:
+    """Release reset after `exc`, noting on it a release that fails too."""
+    try:
+        _exec_checked(repl, "tt.reset_project(False)")
+    except Exception as again:  # noqa: BLE001 - reported on exc
+        exc.add_note(f"releasing reset failed too: {again}")
+
+
 def reset_design(repl: RawRepl, clock: str, clock_hz: float) -> int:
     """Reset the design with its clock running: the one reset sequence.
 
@@ -849,11 +897,8 @@ def reset_design(repl: RawRepl, clock: str, clock_hz: float) -> int:
     held in reset with `rst_n` driven low. Nothing may write `tt.mode`
     after this: the write rebuilds the pins and releases reset.
     """
-    _exec_checked(repl, "tt.reset_project(True)")
+    hold_reset(repl)
     try:
-        if _board_value(_exec_checked(repl, _READ_RST_N), "rst_n") != 0:
-            raise CaptureError(
-                "rst_n reads 1 while reset is held: tt.reset_project(True) did not drive it low")
         _exec_checked(repl, clock)
         # The board sleeps reset_hold_ms first (16 s at 1 Hz), and the
         # exec timeout is one deadline for the whole command.
@@ -865,10 +910,7 @@ def reset_design(repl: RawRepl, clock: str, clock_hz: float) -> int:
                 "rst_n stuck low after release: it read 0 for %d ms after "
                 "tt.reset_project(False)" % waited)
     except BaseException as exc:
-        try:
-            _exec_checked(repl, "tt.reset_project(False)")
-        except Exception as again:  # noqa: BLE001 - reported on exc
-            exc.add_note(f"releasing reset failed too: {again}")
+        _release_reset(repl, exc)
         raise
     return waited
 
@@ -880,6 +922,9 @@ def cleanup_names(cfg: dict) -> list[str]:
     names: set[str] = set()
     for script in CAPTURE_SCRIPTS:
         names.update(mp.module_level_names(mp.build(cfg, script)))
+    # `load_held`'s body runs into the same globals and leaves its names
+    # (`Pin`, `fabricfoxv2`, `HELD`) for the next capture to clear.
+    names.update(mp.module_level_names(mp.build(cfg, LOAD_HELD_SCRIPT)))
     return sorted(names)
 
 
@@ -972,6 +1017,313 @@ def undo_selection(
                 first = exc
     if first is not None:
         raise first
+
+
+#: The directory `load_held` puts the bitstream in, which `RawRepl.upload()`
+#: does not make, and the file.
+HELD_DIR = "/_vgacap"
+HELD_PATH = HELD_DIR + "/held.bin"
+
+#: Seconds `load_held` gives the board body: the loader feeds the FPGA a
+#: byte at a time from MicroPython, so a 104 KB bitstream takes seconds.
+LOAD_HELD_TIMEOUT = 60.0
+
+#: The board body `load_held` runs after the prelude.
+LOAD_HELD_SCRIPT = "load_held_rp2.py"
+
+#: The project clock's GPIO on the RP2350 demo board v3
+#: (`gpio_map_dbv3.py`), the only board with the FPGA breakout's loader.
+FPGA_CLK_GPIO = 16
+
+#: The iCE40 synchronisation word. The FPGA ignores what comes before it;
+#: icepack writes `FF 00`, its comment lines, `00 FF`, then this word.
+SYNC_WORD = b"\x7e\xaa\x99\x7e"
+
+#: The sync word must start in the first SYNC_WINDOW bytes. The tt-vga-testpatterns
+#: bitstreams have it at byte 4 (no comment lines). 1024 bytes leaves room
+#: for the comment lines other tools write between `FF 00` and `00 FF`, and
+#: still rejects a file that holds the word only by chance, deep inside.
+SYNC_WINDOW = 1024
+
+#: Failures after which the board may still be running the command, so
+#: nothing more may be sent until the caller has `recover()`ed.
+_NO_REPLY = (TimeoutError, LinkClosed, KeyboardInterrupt)
+
+
+class LoadHeldTimeout(TimeoutError):
+    """`load_held`'s board body did not reply in time.
+
+    `selection` is the dict `load_held` would have returned, without
+    `bytes`: after `repl.recover()`, `undo_load_held(repl, selection)`
+    puts the board back.
+    """
+
+    def __init__(self, message: str, selection: dict) -> None:
+        super().__init__(message)
+        self.selection = selection
+
+#: Make a directory, an existing one being fine (MicroPython's EEXIST is 17).
+_MKDIR = """\
+def _ttcap_mkdir(p):
+    import os
+    try:
+        os.mkdir(p)
+    except OSError as e:
+        if e.errno != 17:
+            raise
+try:
+    _ttcap_mkdir({path!r})
+finally:
+    del _ttcap_mkdir
+"""
+
+#: Delete `HELD_PATH`, then `HELD_DIR` if that leaves it empty (MicroPython's
+#: ENOENT is 2 and ENOTEMPTY 39), leaving no name in the REPL's globals. With
+#: `missing` true, a file that is not there is fine and the directory is
+#: still tried.
+_REMOVE_TEMPLATE = """\
+def _ttcap_remove(p, d, m):
+    import os
+    try:
+        os.remove(p)
+    except OSError as e:
+        if not (m and e.errno == 2):
+            raise
+    try:
+        os.rmdir(d)
+    except OSError as e:
+        if e.errno not in (2, 39):
+            raise
+try:
+    _ttcap_remove({path!r}, {dir!r}, {missing!r})
+finally:
+    del _ttcap_remove
+"""
+
+#: After a good load: the file must be there.
+_REMOVE = _REMOVE_TEMPLATE.format(path=HELD_PATH, dir=HELD_DIR, missing=False)
+
+#: After a failure: the file may never have been made, or already be gone.
+_REMOVE_IF_THERE = _REMOVE_TEMPLATE.format(path=HELD_PATH, dir=HELD_DIR, missing=True)
+
+#: Whether `tt.shuttle` is the FPGA breakout's mux: `FPGAMux.run` is 'FPGA'
+#: (tt-micropython-firmware v3.1.1, `fpga/fpga_mux.py:163`), and an ASIC
+#: carrier's `ProjectMux.run` is its shuttle, such as 'tt06'. The GPIO map
+#: cannot tell them apart, and on a carrier the loader's GPIO 1 is the TT
+#: mux's reset.
+_FPGA_CHECK = "print('ttcap fpga=%d' % (getattr(tt.shuttle, 'run', None) == 'FPGA'))"
+
+_LOAD_DONE = re.compile(r"Transmission complete, total bytes: (\d+)")
+_LOAD_ERROR = "Error accessing file:"
+
+
+def load_held_cfg(profile: BoardProfile) -> dict:
+    """The `CFG` dict for `load_held_rp2.py`: the prelude's keys (from
+    `capture_cfg`) and the bitstream's `path` on the board."""
+    return dict(capture_cfg(profile), path=HELD_PATH)
+
+
+def _check_load(stdout: str, stderr: str, want: int) -> int:
+    """The byte count of a held load whose body printed `stdout`, which
+    must be `want`, with `rst_n` and the clock pad reading 0 after it.
+
+    The loader catches its own `OSError` and only prints it
+    (`fabricfoxv2.py:169-170` in tt-micropython-firmware v3.1.1), so a
+    failed load is found in what it printed, not in `stderr`.
+    """
+    if stderr.strip():
+        raise CaptureError(f"the held load failed on the board:\n{stderr.strip()}")
+    if not stdout.strip():
+        raise CaptureError("the held load said nothing: the board body printed no line")
+    lines = [line.strip() for line in stdout.splitlines()]
+    errors = [line for line in lines if line.startswith(_LOAD_ERROR)]
+    if errors:
+        raise CaptureError(f"the loader failed and carried on: {errors[0]!r}")
+    counts = [m for m in (_LOAD_DONE.fullmatch(line) for line in lines) if m]
+    if not counts:
+        raise CaptureError(
+            "the loader printed no 'Transmission complete, total bytes: N' "
+            f"line, said {stdout.strip()!r}")
+    if len(counts) > 1:
+        raise CaptureError(
+            f"the loader printed {len(counts)} lines of 'Transmission "
+            "complete', for one load")
+    got = int(counts[0].group(1))
+    if got != want:
+        raise CaptureError(
+            f"the loader fed the FPGA {got} bytes of a {want}-byte bitstream "
+            f"({counts[0].group(0)!r})")
+    if _board_value(stdout, "rst_n") != 0:
+        raise CaptureError("rst_n reads 1 after the load: reset was not held through it")
+    if _board_value(stdout, "clk") != 0:
+        raise CaptureError(
+            "the clock pad reads 1 after the load: it was not held low through it")
+    return got
+
+
+def _check_bitstream(data: bytes) -> None:
+    """Refuse a file that cannot configure an iCE40, before the board is
+    touched: the loader clears the FPGA first, and its count would match
+    an empty or wrong file all the same."""
+    if not data:
+        raise ValueError("the bitstream is empty: loading it would leave the FPGA blank")
+    # find()'s end bounds where the word may end, so the last start it can
+    # return is SYNC_WINDOW - 1: the word must start in the window.
+    if data.find(SYNC_WORD, 0, SYNC_WINDOW - 1 + len(SYNC_WORD)) < 0:
+        raise ValueError(
+            "no iCE40 sync word 7E AA 99 7E starting in the bitstream's first %d "
+            "bytes: this is not an iCE40 bitstream" % SYNC_WINDOW)
+
+
+def _delete_held(repl: RawRepl, exc: BaseException) -> None:
+    """Delete `HELD_PATH` after `exc`, noting on it a delete that fails too."""
+    try:
+        _exec_checked(repl, _REMOVE_IF_THERE)
+    except Exception as again:  # noqa: BLE001 - reported on exc
+        exc.add_note(f"deleting {HELD_PATH} failed too: {again}")
+
+
+def undo_load_held(repl: RawRepl, did: dict, error: BaseException | None = None) -> None:
+    """Put the board back after a `load_held` that failed: delete
+    `HELD_PATH`, release reset, stop the clock, and put the mode and
+    monitor `did` records back.
+
+    For a load that timed out, `did` is the exception's `selection`, and
+    `repl.recover()` comes first. Not for a load that worked: until the
+    clocked capture drives the clock pin, nothing may stop the clock or
+    write the mode (see `load_held`). Each step is tried even if one
+    fails; with `error`, failures become notes on it, as in
+    `undo_selection`, and without, the first is raised.
+    """
+    steps = [
+        lambda: _exec_checked(repl, _REMOVE_IF_THERE),
+        lambda: _exec_checked(repl, "tt.reset_project(False)"),
+    ]
+    first = None
+    for step in steps:
+        try:
+            step()
+        except Exception as exc:  # noqa: BLE001 - reported below
+            if error is not None:
+                error.add_note(f"putting the board back failed too: {exc}")
+            elif first is None:
+                first = exc
+    try:
+        undo_selection(repl, did, stop=True, error=error)
+    except Exception as exc:  # noqa: BLE001 - reported below
+        if first is None:
+            first = exc
+    if first is not None:
+        raise first
+
+
+def load_held(repl: RawRepl, req: CaptureRequest, path_on_host) -> dict:
+    """Load the FPGA bitstream at `path_on_host` with the project clock held
+    low and `rst_n` held low, so no clock edge reaches the design before
+    clock 0.
+
+    Before any board command it refuses (`ValueError`) a request that
+    names a design, a profile other than the FPGA breakout's demo board
+    (RP2350, clock on GPIO `FPGA_CLK_GPIO`), an empty file, and a file
+    without the iCE40 sync word starting in its first `SYNC_WINDOW` bytes.
+    Then:
+
+    0. check that `tt.shuttle` is the FPGA mux (`run` is 'FPGA'), else raise
+       `CaptureError`: the GPIO layout an ASIC carrier shares cannot tell;
+    1. make `HELD_DIR` on the board, an existing one being fine, and
+       `RawRepl.upload()` the bitstream to `HELD_PATH`, which checks its
+       length and crc32 there and skips the write if they already match;
+    2. `select_project`'s reset sequence up to its load: stop the clock,
+       set the mode, monitor and `ui_in` as it does, then `hold_reset`.
+       The clock is never started;
+    3. the board body, `load_held_rp2.py`: `tt.pins.safe_bidir()`,
+       `tt.shuttle.reset()`, `tt.clock_project_stop()`, drive the clock pad
+       low, then the SDK's `fabricfoxv2.spi_transferPIO(HELD_PATH)`;
+    4. check what it printed (`_check_load`): one "Transmission complete,
+       total bytes: N" line with N the bitstream's length, no "Error
+       accessing file" line, and `rst_n` and the clock pad reading 0;
+    5. delete `HELD_PATH`, and `HELD_DIR` if that leaves it empty.
+
+    Returns `select_project`'s keys, with `enable` "held" and one more,
+    `bytes`, the loader's byte count. It has no `rst_n_wait_ms`.
+
+    The board afterwards. The design has seen no clock edge since the
+    load, so it sits at its power-up value, not its reset value: a design
+    with a synchronous reset has not been reset. The clocked capture must
+    clock it with `rst_n` still low for its reset cycles before clock 0.
+    The clock pad is held low by a `machine.Pin` the SDK does not know of.
+    Until that capture drives the clock pin, nothing may call
+    `tt.clock_project_stop()`, `stop_clock`, `undo_selection` or
+    `restore_mode`, or write `tt.mode`: each un-drives GPIO16, leaving it to
+    the RP2's pull-down, and a mode write releases reset too. `mode_before`
+    and `monitoring_before` are for putting the board back after that
+    capture.
+
+    `tt.shuttle.enabled` is None afterwards, the SDK's own state midway
+    through `FPGAMux.enable`, whose `reset_and_clock_mux()` runs the same
+    `reset()` (`fpga_mux.py:137-160`). So a later `select_project` naming
+    the previous design refuses it rather than taking it as enabled. The
+    fpgas.online daemon's idea of the design still names the previous one.
+
+    Errors. An upload that fails, `UploadError` or a board error, deletes
+    the file and runs no load; one that gets no reply leaves the file for
+    the caller to delete after `repl.recover()`. A reset sequence that fails puts the board back as
+    `select_project` does and deletes the file, unless it timed out. A load
+    that fails where the board answered (step 4, or a traceback) deletes
+    the file, releases reset, stops the clock and puts the mode and monitor
+    back before raising `CaptureError`. A body that does not reply sends
+    nothing more, since the loader may still be running: a timeout raises
+    `LoadHeldTimeout`, and it and any other such exception carry
+    `selection`. The caller must `repl.recover()`, as after a timed-out
+    `upload()`, then `undo_load_held(repl, exc.selection)`.
+    """
+    if req.selection:
+        raise ValueError(
+            f"load_held loads its own bitstream, but the request names {req.selection!r}")
+    profile = req.profile
+    if profile.chip != "rp2350" or profile.clk_gpio != FPGA_CLK_GPIO:
+        raise ValueError(
+            f"load_held needs the FPGA breakout's demo board (RP2350, clock on GPIO "
+            f"{FPGA_CLK_GPIO}), but profile {profile.name} has the clock on GPIO "
+            f"{profile.clk_gpio}")
+    data = Path(path_on_host).read_bytes()
+    _check_bitstream(data)
+    body = mp.build(load_held_cfg(profile), LOAD_HELD_SCRIPT)
+    did: dict = {"project": None, "enable": "held", "clock_hz": req.clock_hz}
+    if not _board_value(_exec_checked(repl, _FPGA_CHECK), "fpga"):
+        raise CaptureError("load_held needs the FPGA breakout: tt.shuttle is not the FPGA mux")
+    _exec_checked(repl, _MKDIR.format(path=HELD_DIR))
+    try:
+        repl.upload(HELD_PATH, data)
+    except BaseException as exc:
+        if not isinstance(exc, _NO_REPLY):
+            _delete_held(repl, exc)
+        raise
+    try:
+        _reset_sequence(repl, req, did, lambda: hold_reset(repl))
+    except BaseException as exc:
+        if not isinstance(exc, _NO_REPLY):
+            _delete_held(repl, exc)
+        raise
+    try:
+        stdout, stderr = repl.exec(body, timeout=LOAD_HELD_TIMEOUT)
+    except BaseException as exc:
+        note = ("the held load got no reply and may still be running: call "
+                "recover() on the REPL, then undo_load_held(repl, exc.selection)")
+        if isinstance(exc, TimeoutError):
+            timeout = LoadHeldTimeout(str(exc), did)
+            timeout.add_note(note)
+            raise timeout from exc
+        exc.selection = did  # pyright: ignore[reportAttributeAccessIssue]
+        exc.add_note(note)
+        raise
+    try:
+        did["bytes"] = _check_load(stdout, stderr, len(data))
+        _exec_checked(repl, _REMOVE)
+    except BaseException as exc:
+        undo_load_held(repl, did, error=exc)
+        raise
+    return did
 
 
 def _describe(req: CaptureRequest) -> str:

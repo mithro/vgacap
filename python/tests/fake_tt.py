@@ -227,6 +227,33 @@ class Pins:
                     pull=pin_cls.PULL_DOWN)
 
 
+class FakeFPGAMux:
+    """`tt.shuttle` on the FPGA breakout: `FPGAMux` (`fpga/fpga_mux.py`).
+
+    `run` is 'FPGA' (`fpga_mux.py:163`); `reset()` forgets the enabled
+    design (`:137-138`), as `enable()` does before it loads one
+    (`:144-160`). `enabled` is the name of the design the SDK believes is
+    loaded, or None; the real one holds a `BitStream`, whose `name` is it.
+    """
+
+    run = "FPGA"
+
+    def __init__(self, enabled: str | None = None) -> None:
+        self.enabled = None if enabled is None else types.SimpleNamespace(name=enabled)
+
+    def reset(self) -> None:
+        self.enabled = None
+
+
+class FakeProjectMux:
+    """`tt.shuttle` on an ASIC carrier: `ProjectMux`, whose `run` is the
+    shuttle's name from the chip ROM, such as 'tt06' (`project_mux.py:593`)."""
+
+    def __init__(self, run: str = "tt06") -> None:
+        self.run = run
+        self.enabled = None
+
+
 class FakeTT:
     """The `tt` DemoBoard, for the calls ttcap makes.
 
@@ -236,12 +263,15 @@ class FakeTT:
     and fpga-4, where `tt.manual_project_clock` is None).
     `release_ms` is how long an input `rst_n` takes to read 1.
     `board` is a `ttcap.emu.Board` whose pins these are (module docstring).
+    `shuttle` is `tt.shuttle`: an FPGA breakout's `FakeFPGAMux` unless
+    given, a `FakeProjectMux` for an ASIC carrier.
     """
 
     def __init__(self, mode: int = ASIC_MANUAL_INPUTS, *, pullup: bool = True,
                  switches: int = 0, manual_clock: bool = True, release_ms: int = 0,
-                 board=None) -> None:
+                 board=None, shuttle=None) -> None:
         self.board = board
+        self.shuttle = FakeFPGAMux() if shuttle is None else shuttle
         self.machine = board.modules()["machine"] if board is not None else None
         self.pullup = pullup
         self.switches = switches & 0xFF
@@ -447,6 +477,13 @@ class FakeLoader:
     `fail_after` bytes have gone -- prints "Error accessing file: ..." and
     is swallowed, as the real one swallows it (`fabricfoxv2.py:169-170`).
 
+    `files` is copied, so a file written on the board after the loader was
+    made never reaches it. A loader that has to read what `RawRepl.upload()`
+    wrote takes `open` instead: the board's own `open()`
+    (`FakeBinaryBoard._open`), through which it reads the file as the real
+    one does (`with open(filepath, 'rb')`, `fabricfoxv2.py:110`). A
+    missing file or a directory is then that `open()`'s `OSError`.
+
     `drain_lines` is how many "Waiting for FIFO to drain, free slots: 1"
     lines it prints before "Transmission complete" (`fabricfoxv2.py:163-
     165`; `tx_fifo()` is the FIFO's level, `rp2_pio.c:891-893` in
@@ -466,16 +503,27 @@ class FakeLoader:
     modelled: the real loader's PIO0 state machine 0, which takes GPIO 6
     and 3 for PIO0 and leaves its program loaded, and the real transfer's
     exact duration.
+
+    An empty file loads nothing after `fpga_reset()` has cleared the FPGA:
+    the real loader sends only its 6 termination bytes and still prints
+    "Transmission complete, total bytes: 0" (`fabricfoxv2.py:139-167`), so
+    the fake calls `unconfigure()`, not `configure()`. A non-empty file is
+    taken as a valid bitstream: the fake does not look for the iCE40 sync
+    word or check the configuration, which the FPGA does and the RP2 cannot
+    read back (there is no CDONE pin in `gpio_map_dbv3.py`).
     """
 
     SCK, MOSI, SS, RESET = 6, 3, 5, 1
 
     def __init__(self, board=None, files: dict[str, bytes] | None = None, *,
                  fail: OSError | None = None, fail_after: int = 0,
-                 drain_lines: int = 0) -> None:
+                 drain_lines: int = 0, open=None) -> None:  # noqa: A002 - the board's open()
+        if files is not None and open is not None:
+            raise ValueError("give the loader files or open, not both")
         self.board = board
         self.drain_lines = drain_lines
         self.files = dict(files or {})
+        self.open = open
         self.fail = fail
         self.fail_after = fail_after
         #: The bytes each call fed the FPGA, a failed one included.
@@ -498,9 +546,13 @@ class FakeLoader:
         fed = bytearray()
         reset = False
         try:
-            if filepath not in self.files:
+            if self.open is not None:
+                with self.open(filepath, "rb") as f:
+                    data = f.read()
+            elif filepath not in self.files:
                 raise OSError(2, "ENOENT")
-            data = self.files[filepath]
+            else:
+                data = self.files[filepath]
             reset = True  # fpga_reset() comes after the open (fabricfoxv2.py:110-112)
             if pins:  # fpga_reset, then the dummy byte with SS high
                 pins["RESET"].low()
@@ -524,7 +576,10 @@ class FakeLoader:
                 print("Waiting for FIFO to drain, free slots: 1")
             print(f"Transmission complete, total bytes: {len(fed)}")
             if board is not None and hasattr(board.wave, "configure"):
-                board.wave.configure()
+                if fed:
+                    board.wave.configure()
+                else:
+                    board.wave.unconfigure()  # reset, then no configuration
         except OSError as e:
             print(f"Error accessing file: {e}")
             if reset and board is not None and hasattr(board.wave, "unconfigure"):

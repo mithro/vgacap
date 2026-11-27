@@ -19,9 +19,9 @@ import pytest
 
 from ttcap import mp
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
-from ttcap.capture import capture_cfg
+from ttcap.capture import capture_cfg, load_held_cfg
 
-SCRIPTS = ["prelude.py", "capture_rp2.py", "throughput.py"]
+SCRIPTS = ["prelude.py", "capture_rp2.py", "throughput.py", "load_held_rp2.py"]
 
 #: What the board must be able to compile. The unminified capture script was
 #: 25,358 bytes and did not reliably fit.
@@ -90,6 +90,13 @@ def test_the_uploaded_capture_script_fits_in_the_board(profile):
     assert len(script) < MAX_SCRIPT_BYTES
     # ... and it is a real saving, not a file that was already small.
     assert len(script) < len(mp.source("capture_rp2.py")) / 2
+
+
+def test_the_held_load_script_fits_in_the_board():
+    script = mp.build(load_held_cfg(RP2350_DBV3), "load_held_rp2.py")
+
+    assert len(script) < MAX_SCRIPT_BYTES
+    compile(script, "load_held_rp2.py", "exec")
 
 
 def test_every_def_in_the_built_script_locates_back_to_its_file():
