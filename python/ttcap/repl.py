@@ -29,6 +29,34 @@ RAW_REPL_BANNER = b"raw REPL; CTRL-B to exit\r\n>"
 #: Payload bytes per `upload()` command: 2,732 characters of base64.
 _UPLOAD_SLICE_BYTES = 2048
 
+#: The board-side name of `upload()`'s write handle, the only name it
+#: binds in the REPL's globals while a write is open (apart from the module
+#: `ubinascii`, which it imports and leaves).
+_UPLOAD_HANDLE = "_ttcap_up_f"
+
+#: Closes and unbinds the write handle, if one is bound; a no-op otherwise.
+#: Sent before the check and after the slices, the failure path included.
+#: A handle merely dropped is not safe: file objects are allocated with a
+#: finaliser and `__del__` is close (`extmod/vfs_lfsx_file.c:93-95,207` in
+#: MicroPython v1.24.0; finalisers are on at the rp2 port's ROM level,
+#: `py/mpconfig.h:659-661`), and littlefs commits a dirty handle's size and
+#: data at close (`lib/littlefs/lfs2.c:3182-3184,3367-3412`). So an orphaned
+#: handle from a failed upload, finalised by some later GC, would commit
+#: its stale contents over the file the retry wrote -- possibly after the
+#: retry's read-back passed. Closing twice is a no-op
+#: (`vfs_lfsx_file.c:180-183`).
+_UPLOAD_CLOSE = f"""\
+try:
+    {_UPLOAD_HANDLE}
+except NameError:
+    pass
+else:
+    try:
+        {_UPLOAD_HANDLE}.close()
+    finally:
+        del {_UPLOAD_HANDLE}
+"""
+
 #: Has the board report an uploaded file's length and crc32 (or that it
 #: is absent), reading it back through a 2 KB buffer rather than whole --
 #: the file exists so that 104 KB never has to sit on the heap at once.
@@ -36,21 +64,33 @@ _UPLOAD_SLICE_BYTES = 2048
 #: `extmod/modbinascii.c:173-184` in MicroPython v1.24.0, compiled in
 #: because the rp2 port builds at `MICROPY_CONFIG_ROM_LEVEL_EXTRA_FEATURES`
 #: (`ports/rp2/mpconfigport.h:71`, `py/mpconfig.h:1639,1722-1723`).
+#: Its working names are a function's locals, and the function is deleted,
+#: so it leaves nothing in the REPL's globals. Only ENOENT is "absent": a
+#: directory (littlefs gives EISDIR, `lfs2.c:3077-3079`) or a read error
+#: raises, and nothing is written. (`OSError.errno` is `args[0]`,
+#: `py/objexcept.c:286`.)
 _UPLOAD_CHECK = """\
+def _ttcap_up_check(p):
+    try:
+        f=open(p,'rb')
+    except OSError as e:
+        if e.errno==2:
+            return 'absent'
+        raise
+    try:
+        b=bytearray({size});m=memoryview(b);n=0;c=0
+        while True:
+            k=f.readinto(b)
+            if not k:
+                break
+            n+=k;c=ubinascii.crc32(m[:k],c)
+    finally:
+        f.close()
+    return 'len=%d crc32=%d'%(n,c)
 try:
-    f=open({name!r},'rb')
-except OSError:
-    print('ttcap upload absent')
-else:
-    b=bytearray({size});m=memoryview(b);n=0;c=0
-    while True:
-        k=f.readinto(b)
-        if not k:
-            break
-        n+=k;c=ubinascii.crc32(m[:k],c)
-    f.close()
-    del b,m
-    print('ttcap upload len=%d crc32=%d'%(n,c))
+    print('ttcap upload',_ttcap_up_check({name!r}))
+finally:
+    del _ttcap_up_check
 """
 
 _UPLOAD_CHECK_REPLY = re.compile(
@@ -487,7 +527,13 @@ class RawRepl:
         returns True. A file that does not match afterwards raises
         `UploadError` with both lengths and both crc32s, and is left on the
         board for the next upload's check to find. A board without
-        `ubinascii.crc32` raises `RuntimeError` naming it.
+        `ubinascii.crc32` raises `RuntimeError` naming it, as does a target
+        that is a directory.
+
+        Every handle it opens on the board is closed before it returns or
+        raises, and before the file is reopened. It leaves no names in the
+        REPL's globals but `ubinascii`; while a write is open the handle is
+        bound as `_ttcap_up_f`, so a caller must not use that name.
         """
         if isinstance(data, str):
             data = data.encode("utf-8")
@@ -498,14 +544,29 @@ class RawRepl:
         # first chunk write below dies with `NameError`. Importing a module
         # that is already in `sys.modules` costs only the rebind.
         self._exec_checked("import ubinascii")
+        # A handle a lost host never closed is closed before anything
+        # reopens the file (see `_UPLOAD_CLOSE`).
+        self._exec_checked(_UPLOAD_CLOSE)
         if self._uploaded(name) == want:
             return False
-        self._exec_checked(f"f=open({name!r},'wb')")
-        for offset in range(0, len(data), _UPLOAD_SLICE_BYTES):
-            piece = data[offset : offset + _UPLOAD_SLICE_BYTES]
-            encoded = base64.b64encode(piece).decode("ascii")
-            self._exec_checked(f"f.write(ubinascii.a2b_base64(b'{encoded}'))")
-        self._exec_checked("f.close()")
+        self._exec_checked(f"{_UPLOAD_HANDLE}=open({name!r},'wb')")
+        try:
+            for offset in range(0, len(data), _UPLOAD_SLICE_BYTES):
+                piece = data[offset : offset + _UPLOAD_SLICE_BYTES]
+                encoded = base64.b64encode(piece).decode("ascii")
+                self._exec_checked(
+                    f"{_UPLOAD_HANDLE}.write(ubinascii.a2b_base64(b'{encoded}'))"
+                )
+        except BaseException:
+            # Best effort: the slice's own failure is the one to report. If
+            # this close does not get through either, the next upload's
+            # first close does it.
+            try:
+                self._exec_checked(_UPLOAD_CLOSE)
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        self._exec_checked(_UPLOAD_CLOSE)
         got = self._uploaded(name)
         if got != want:
             board = (
@@ -535,7 +596,11 @@ class RawRepl:
     def _exec_checked(self, code: str, timeout: float = 10.0) -> str:
         stdout, stderr = self.exec(code, timeout=timeout)
         if stderr:
-            raise RuntimeError(f"remote error executing {code!r}: {stderr}")
+            # Only the command's head: a slice command is 2.8 KB of base64.
+            head = code if len(code) <= 80 else code[:80] + "..."
+            raise RuntimeError(
+                f"remote error executing {head!r} ({len(code)} chars): {stderr}"
+            )
         return stdout
 
 
