@@ -122,7 +122,8 @@ tick() {
         local q; q=$(grep -m1 -o -- '--qspi [^ ]*' "$SIMSRC/$p/sim.log" | cut -d' ' -f2 || true)
         local hz; hz=$(grep -m1 -o -- '--clock-hz [^ ]*' "$SIMSRC/$p/sim.log" | cut -d' ' -f2)
         local qa=(); [ -n "$q" ] && qa=(--qspi "$q")
-        ( cd "$SIMSRC/$p/repo/src" && taskset -c "${TCPUS[$i]}" "$S/$p/tick/Vtop" --out "$o" --clock-hz "$hz" --chunk 65536 \
+        # TICK_CPUS entries are a CPU, or "A,B": the simulation thread on A, the writers' threads on A or B.
+        ( cd "$SIMSRC/$p/repo/src" && taskset -c "${TCPUS[$i]}" "$S/$p/tick/Vtop" --out "$o" --clock-hz "$hz" --chunk 65536 --main-cpu "${TCPUS[$i]%%,*}" \
             --chunks "${TICK_CHUNKS:-4000}" --variants "${TICK_VARIANTS:-none,vgch2,runs,events,changelog,raw,raw_small}" "${qa[@]}" > "$RES/${TICK_TAG:-tick}-$p.csv" 2> "$o/stderr.log"; echo $? > "$o/exit" ) &
         pids+=($!)
         i=$((i + 1))

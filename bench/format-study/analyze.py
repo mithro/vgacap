@@ -235,6 +235,21 @@ for p in projects:
     body.append(row)
 table(["project", "untraced ns per clock"] + WRITERS, body)
 
+if os.path.isdir(os.path.join(RES, "writer2-run1")):
+    print("### The replay run twice: ns per clock over null, first run (`writer2-run1`) and second (`writer2`)\n")
+    r1data, r1meta, _ = load_writer("writer2-run1")
+    body = []
+    for p in projects:
+        row = [p]
+        for w in ("vgch2", "planar", "events", "raw"):
+            a, b = paired(r1data, r1meta, p, w), est_cache.get((p, w))
+            row.append("-" if not (a and b) else f"{a[0]:.2f} / {b[0]:.2f}")
+        a, b = paired(r1data, r1meta, p, "vgch2"), paired(r1data, r1meta, p, "events")
+        c, d = est_cache.get((p, "vgch2")), est_cache.get((p, "events"))
+        row.append("-" if not (a and b and c and d) or b[0] <= 0 or d[0] <= 0 else f"{a[0] / b[0]:.2f} / {c[0] / d[0]:.2f}")
+        body.append(row)
+    table(["project", "vgch2", "planar", "events", "raw", "vgch2 over events"], body)
+
 print("### The replayed chunks against the whole trace\n")
 body = []
 for p in projects:
@@ -281,10 +296,9 @@ def tick_one(d, v):
     return est, boots[24], boots[974], sum(diff) / b0, b0 / sum(clk), len(ks)
 
 
-tick_est = {}
-if tickrep:
-    print("## Simulation check: the Verilator loop, in one process\n")
-    tags = sorted(tickrep)
+def tick_tables(title, note, tags):
+    """The in-process tables for one set of processes; returns (project, variant) -> median ns."""
+    out_est = {}
     tp = [x for x in ORDER if any(x in tickrep[t] for t in tags)]
     est_all = defaultdict(list)
     for t in tags:
@@ -295,10 +309,10 @@ if tickrep:
                 r = tick_one(tickrep[t][p], v)
                 if r:
                     est_all[(p, v)].append((t, r))
-    print("Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks "
-          f"(262 M clocks) a process (bench_tick.cpp); {len(tags)} processes ({', '.join(tags)}), each with the "
-          "variants in another order. ns per clock over the untraced model, paired by chunk.\n")
-    print("### Across the processes: median of the processes' estimates [lowest, highest]\n")
+    print(f"### {title}\n")
+    print(note + f" {len(tags)} processes ({', '.join(tags)}), each with the variants in another order. "
+          "ns per clock over the untraced model, paired by chunk.\n")
+    print("#### Across the processes: ns per clock, median of the processes' estimates [lowest, highest]\n")
     body, bodyp = [], []
     for p in tp:
         row, rowp = [p], [p]
@@ -309,14 +323,14 @@ if tickrep:
                 continue
             ns = sorted(x[0] for x in e)
             pc = sorted(x[3] for x in e)
-            tick_est[(p, v)] = statistics.median(ns)
+            out_est[(p, v)] = statistics.median(ns)
             row.append(f"{statistics.median(ns):.1f} [{ns[0]:.1f}, {ns[-1]:.1f}]")
             rowp.append(f"{pct(statistics.median(pc), 1)} [{pct(pc[0], 1)}, {pct(pc[-1], 1)}]")
         body.append(row); bodyp.append(rowp)
     table(["project"] + TICKV, body)
-    print("### The same as % of the untraced model's CPU: median [lowest, highest]; the budget is 5%\n")
+    print("#### The same as % of the untraced model's CPU: median [lowest, highest]; the budget is 5%\n")
     table(["project"] + TICKV, bodyp)
-    print("### Each process: estimate [95% bootstrap interval over its chunks], ns per clock\n")
+    print("#### Each process: estimate [95% bootstrap interval over its chunks], ns per clock\n")
     body = []
     for p in tp:
         for t in tags:
@@ -332,20 +346,40 @@ if tickrep:
             row.insert(2, "-" if n0 is None else f"{n0:.1f}")
             body.append(row)
     table(["project", "process", "untraced ns per clock"] + TICKV, body)
+    return out_est
+
+
+tick_est = {}
+if tickrep:
+    print("## Simulation check: the Verilator loop, in one process\n")
+    two = sorted(t for t in tickrep if t.startswith("tick2"))
+    one = sorted(t for t in tickrep if not t.startswith("tick2"))
+    note = ("Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks "
+            "(262 M clocks) a process (bench_tick.cpp).")
+    if two:
+        tick_est = tick_tables("Two CPUs a process: the simulation thread on one, the writers' threads on either",
+                               note + " As in a job's two-CPU scope.", two)
+    if one:
+        e1 = tick_tables("One CPU a process: the writers' threads share the simulation's core",
+                         note + " The background threads compete with the simulation on its core, so candidates "
+                         "with heavy background work (raw, changelog, vgch2) are penalised.", one)
+        if not tick_est:
+            tick_est = e1
     print("### Replay against the in-process check, ns per clock\n")
     body = []
+    tp = [x for x in ORDER if any(x in tickrep[t] for t in tickrep)]
     for p in tp:
         row = [p]
-        for w in ("vgch2", "runs", "events", "raw"):
+        for w in ("vgch2", "runs", "events", "changelog", "raw"):
             r = est_cache.get((p, w))
             row += ["-" if r is None else f"{r[0]:.2f}", "-" if (p, w) not in tick_est else f"{tick_est[(p, w)]:.2f}"]
         body.append(row)
     table(["project", "vgch2 replay", "vgch2 in-process", "runs replay", "runs in-process", "events replay",
-           "events in-process", "raw replay", "raw in-process"], body)
+           "events in-process", "changelog replay", "changelog in-process", "raw replay", "raw in-process"], body)
 
 simcsv = os.path.join(RES, "sim", "sim.csv")
 if os.path.exists(simcsv):
-    print("## Simulation check: the real Verilator loop\n")
+    print("## Simulation check, side by side: whole testbench runs (too noisy, not used)\n")
     sim = defaultdict(lambda: defaultdict(dict))
     sload = []
     for r in csv.DictReader(open(simcsv)):
@@ -616,6 +650,18 @@ if rob:
         body.append([p, r["case"], r["format"], r["cut"], r["file_bytes"], r["exit"],
                      pct(rec / ref, 2) if ok and ref else "unreadable"])
     table(["project", "case", "format", "cut", "bytes kept", "reader exit", "samples recovered (%)"], body)
+
+# ---- 6a. interop -----------------------------------------------------------------------------------
+iop = []
+for path in sorted(glob.glob(os.path.join(RES, "interop", "*.csv"))):
+    iop += list(csv.DictReader(open(path)))
+if iop:
+    print("## Interop: existing tools on each file\n")
+    print("Exit 0 and a byte count: the tool read the whole file (its output's size). fst2vcd and lxt2vcd are "
+          "GTKWave's own readers; zstd -d is the spec's reader without seeking.\n")
+    body = [[SHORT[r["project"]], r["file"].replace(LONG.get(SHORT[r["project"]], "") + ".", "").replace(
+        LONG.get(SHORT[r["project"]], ""), ""), r["tool"], r["exit"], f"{int(r['bytes_out'] or 0):,}"] for r in iop]
+    table(["project", "file", "tool", "exit", "bytes out"], body)
 
 # ---- 7. the container ----------------------------------------------------------------------------
 ctr = []

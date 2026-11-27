@@ -16,7 +16,11 @@
 // and raw are the study's (w_mine.h), with their compressor threads.
 //
 //   bench_tick --out DIR [--variants none,vgch2,events,raw] [--chunk 65536]
-//              [--chunks 4000] [--qspi SPEC] [--clock-hz HZ]
+//              [--chunks 4000] [--qspi SPEC] [--clock-hz HZ] [--main-cpu N]
+// --main-cpu N: once every writer's thread exists (each inherits the
+// process's CPUs, given by taskset), the simulation thread alone moves to
+// CPU N, so that the background threads run beside it, as in a job's
+// two-CPU scope, not on its core.
 // CSV on stdout: chunk,round_slot,variant,ns,clocks.
 #include "Vtop.h"
 #include "Vtop___024root.h"
@@ -33,6 +37,8 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <pthread.h>
+#include <sched.h>
 #include <time.h>
 #include <vector>
 
@@ -153,6 +159,7 @@ int main(int argc, char** argv) {
     std::string out = ".", variants = "none,vgch2,events,raw", qspi_spec;
     uint64_t chunk = 65536, chunks = 4000;
     uint32_t clock_hz = 25175000;
+    int main_cpu = -1;
     for (int i = 1; i + 1 < argc; i += 2) {
         std::string a = argv[i], v = argv[i + 1];
         if (a == "--out") out = v;
@@ -161,6 +168,7 @@ int main(int argc, char** argv) {
         else if (a == "--chunks") chunks = std::strtoull(v.c_str(), nullptr, 0);
         else if (a == "--qspi") qspi_spec = v;
         else if (a == "--clock-hz") clock_hz = static_cast<uint32_t>(std::strtoul(v.c_str(), nullptr, 0));
+        else if (a == "--main-cpu") main_cpu = std::atoi(v.c_str());
         else { std::fprintf(stderr, "bench_tick: unknown option %s\n", a.c_str()); return 2; }
     }
     std::vector<std::unique_ptr<Sim>> sims;
@@ -220,6 +228,13 @@ int main(int argc, char** argv) {
         top.ena = 1; top.rst_n = 0; top.ui_in = 0; top.uio_in = 0; top.clk = 0;
         top.eval();
         sims.push_back(std::move(s));
+    }
+    if (main_cpu >= 0) {
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        CPU_SET(main_cpu, &set);
+        if (pthread_setaffinity_np(pthread_self(), sizeof set, &set) != 0)
+            std::fprintf(stderr, "bench_tick: cannot pin to CPU %d\n", main_cpu);
     }
     for (auto& s : sims) run(*s, 10);
     for (auto& s : sims) s->top->rst_n = 1;
