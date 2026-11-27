@@ -294,3 +294,19 @@ def test_the_clock_pad_as_an_input_with_no_pull_reads_0_as_on_fpga_1():
     board = _board()
     Pin = _pin(board)
     assert Pin(CLK, Pin.IN).value() == 0
+
+
+def test_a_write_to_a_pad_never_configured_configures_nothing():
+    board = _board()
+    _pin(board)(5).value(1)
+    assert 5 not in board.pads and board.latch[5] == 1
+
+
+def test_toggle_flips_the_latch_not_the_pad():
+    # machine_pin.c: toggle is gpio_xor_mask, the output latch; an input
+    # pad pulled high still has latch 0, so toggle sets it to 1.
+    board = _board()
+    Pin = _pin(board)
+    p = Pin(5, Pin.IN, pull=Pin.PULL_UP)
+    p.toggle()
+    assert board.latch[5] == 1
