@@ -75,7 +75,7 @@ def draw(theme):
         picture(s, x + 1, TOP + 1, TW - 2, TH - 2, *band(frame), f"f{frame}")
         s.label(x + TW / 2, TOP + TH + 17, f"frame {frame}", 12.5, c["ink"])
         # Down from the frame into the picture.
-        tx = px + PW * (x + TW / 2 - M) / (W - 2 * M)
+        tx = px + PW / 2
         s.arrow([(x + TW / 2, TOP + TH + 24), (tx, py - 2)], c["str"], 2)
         x += TW + GAP
 

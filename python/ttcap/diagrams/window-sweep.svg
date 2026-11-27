@@ -6,30 +6,30 @@
 <clipPath id="f1"><rect x="3" y="22.00" width="86" height="6.39"/></clipPath>
 <g clip-path="url(#f1)"><rect x="3" y="22" width="86" height="64" fill="#2f6fd6"/><circle cx="46.00" cy="54.00" r="23.04" fill="#ffd23f"/></g>
 <text x="46.0" y="104" font-size="12.5" fill="#1d2433" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">frame 1</text>
-<path d="M46.0 111 L132.48356807511738 179" fill="none" stroke="#e0580a" stroke-width="2"/>
-<path d="M132.48356807511738 179 L123.7 177.1 L128.5 170.9 Z" fill="#e0580a"/>
+<path d="M46.0 111 L215.0 179" fill="none" stroke="#e0580a" stroke-width="2"/>
+<path d="M215.0 179 L206.0 179.6 L208.9 172.3 Z" fill="#e0580a"/>
 <rect x="102" y="21" width="88" height="66" rx="2" fill="#5b6577" stroke="#7d8799" stroke-width="1.25"/>
 <rect x="102" y="21" width="88" height="66" rx="2" fill="#ffffff" opacity="0.6"/>
 <clipPath id="f2"><rect x="103" y="28.39" width="86" height="6.39"/></clipPath>
 <g clip-path="url(#f2)"><rect x="103" y="22" width="86" height="64" fill="#2f6fd6"/><circle cx="146.00" cy="54.00" r="23.04" fill="#ffd23f"/></g>
 <text x="146.0" y="104" font-size="12.5" fill="#1d2433" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">frame 2</text>
-<path d="M146.0 111 L181.3098591549296 179" fill="none" stroke="#e0580a" stroke-width="2"/>
-<path d="M181.3098591549296 179 L174.1 173.6 L181.0 170.0 Z" fill="#e0580a"/>
+<path d="M146.0 111 L215.0 179" fill="none" stroke="#e0580a" stroke-width="2"/>
+<path d="M215.0 179 L206.5 176.1 L212.0 170.5 Z" fill="#e0580a"/>
 <rect x="202" y="21" width="88" height="66" rx="2" fill="#5b6577" stroke="#7d8799" stroke-width="1.25"/>
 <rect x="202" y="21" width="88" height="66" rx="2" fill="#ffffff" opacity="0.6"/>
 <clipPath id="f3"><rect x="203" y="34.77" width="86" height="6.39"/></clipPath>
 <g clip-path="url(#f3)"><rect x="203" y="22" width="86" height="64" fill="#2f6fd6"/><circle cx="246.00" cy="54.00" r="23.04" fill="#ffd23f"/></g>
 <text x="246.0" y="104" font-size="12.5" fill="#1d2433" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">frame 3</text>
-<path d="M246.0 111 L230.1361502347418 179" fill="none" stroke="#e0580a" stroke-width="2"/>
-<path d="M230.1361502347418 179 L228.2 170.2 L235.8 172.0 Z" fill="#e0580a"/>
+<path d="M246.0 111 L215.0 179" fill="none" stroke="#e0580a" stroke-width="2"/>
+<path d="M215.0 179 L214.8 170.0 L221.9 173.2 Z" fill="#e0580a"/>
 <text x="315.0" y="59.0" font-size="16" fill="#5b6577" text-anchor="middle" font-weight="bold" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">...</text>
 <rect x="340" y="21" width="88" height="66" rx="2" fill="#5b6577" stroke="#7d8799" stroke-width="1.25"/>
 <rect x="340" y="21" width="88" height="66" rx="2" fill="#ffffff" opacity="0.6"/>
 <clipPath id="f11"><rect x="341" y="83.00" width="86" height="3.00"/></clipPath>
 <g clip-path="url(#f11)"><rect x="341" y="22" width="86" height="64" fill="#2f6fd6"/><circle cx="384.00" cy="54.00" r="23.04" fill="#ffd23f"/></g>
 <text x="384.0" y="104" font-size="12.5" fill="#1d2433" text-anchor="middle" font-weight="normal" style="font-family:'DejaVu Sans',Verdana,Arial,sans-serif">frame 11</text>
-<path d="M384.0 111 L297.5164319248826 179" fill="none" stroke="#e0580a" stroke-width="2"/>
-<path d="M297.5164319248826 179 L301.5 170.9 L306.3 177.1 Z" fill="#e0580a"/>
+<path d="M384.0 111 L215.0 179" fill="none" stroke="#e0580a" stroke-width="2"/>
+<path d="M215.0 179 L221.1 172.3 L224.0 179.6 Z" fill="#e0580a"/>
 <rect x="111.0" y="181" width="208" height="156" rx="2" fill="#ffffff" stroke="#7d8799" stroke-width="1.5"/>
 <clipPath id="all"><rect x="112.0" y="182.00" width="206" height="154.00"/></clipPath>
 <g clip-path="url(#all)"><rect x="112.0" y="182" width="206" height="154" fill="#2f6fd6"/><circle cx="215.00" cy="259.00" r="55.44" fill="#ffd23f"/></g>
