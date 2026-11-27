@@ -1,0 +1,794 @@
+// SPDX-License-Identifier: Apache-2.0
+// THE TRACE FORMAT STUDY'S COPY of vgacap src/trace/trace_read.c (at f3f84ab,
+// unchanged in that file to c91290a), with one change, marked "LAZY:": the
+// open reads only block 0's start (and the last block, whole, as before);
+// every other block's first sample is read from its BLKH when a read first
+// needs it (the binary search for `from`, a block's successor check). No
+// format change: the blocks hold what they did. The public API is renamed
+// (lazy.h) so this copy links beside vgacap's. Measured by fsbench read
+// --kind vgch2lazy (rd_lazy.c).
+//
+// The trace reader: a trace (zstd seekable, one frame a block) or a plain
+// VGCH stream, mmap'ed read-only, read by sample ranges.
+//
+// Opening a trace. The blocks are the seek table's frames when the table is
+// there and agrees with what can be checked without reading the frames:
+// each frame's header, where the table puts it, declares the decompressed
+// size the table gives (at most a block's), and the table's skippable frame
+// runs exactly to the end of the file. A frame's compressed size is not
+// checked at open (that would walk every zstd block header, paging in
+// nearly the whole file): a wrong one fails when the frame is decoded.
+// Otherwise (a trace cut short, or a table that does not match) the frames
+// are walked from the start with ZSTD_findFrameCompressedSize and kept up to
+// the first incomplete one, and table_rebuilt is 1. The start of every
+// block is decompressed until its BLKH, which gives the block's first
+// sample (block 0 also gives the header and META(open)). The last block is
+// decompressed whole: its checksum is checked, its runs give the sample
+// total and it may hold META(close). In a rebuilt table a last block that
+// fails is dropped and the one before it is tried.
+//
+// Reading [from, to). The block holding `from` is found by binary search on
+// the blocks' first samples; it and the blocks after it, while they start
+// before `to`, are decompressed whole (zstd checks each frame's checksum)
+// and fed to a stream reader made with vgacap_reader_init_header, which
+// takes the position from the BLKH silently (a seek reports nothing). Block
+// 0 is read with an ordinary reader, since it starts with the VGCH. A plain
+// stream is one pseudo-block, fed from the start.
+#define _POSIX_C_SOURCE 200809L
+#define ZSTD_STATIC_LINKING_ONLY   // ZSTD_isSkippableFrame
+#include "lazy.h"
+#include "trace_read_stats.h"
+#include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <zstd.h>
+#include <zstd_seekable.h>
+
+#define FEED_SLICE (1u << 20)        // a read checks for its end this often
+#define START_LIMIT (64u * 1024u)    // a block's BLKH must come within this many bytes
+
+struct block {
+    size_t off, csize;   // the zstd frame in the file
+    uint64_t first;      // its BLKH
+    int known;           // LAZY: first has been read
+};
+
+struct vgacap_trace_reader {
+    vgacap_trace_info_t info;
+    const uint8_t *map;
+    size_t size;
+    struct block *blocks;   // compressed only
+    uint32_t nblocks, cap;
+    ZSTD_DCtx *dctx;
+    uint8_t *buf;           // one block, decompressed
+    int64_t buf_block;      // which block `buf` holds, or -1
+    size_t buf_len;
+    char *open_meta, *close_meta;
+    uint64_t clk;           // the clock bit's mask, or 0
+    int generic_runs;       // vgacap_trace_set_generic_runs
+    vgacap_trace_read_stats_t stats;
+    vgacap_reader_t sr;
+};
+
+static void set_err(char *err, size_t errlen, const char *fmt, ...) {
+    if (!err || !errlen) return;
+    va_list ap; va_start(ap, fmt);
+    vsnprintf(err, errlen, fmt, ap);
+    va_end(ap);
+}
+
+static char *copy_text(const char *p, size_t n) {
+    char *s = malloc(n + 1);
+    if (s) { memcpy(s, p, n); s[n] = 0; }
+    return s;
+}
+
+static int starts_with(const char *p, size_t n, const char *prefix) {
+    size_t k = strlen(prefix);
+    return n >= k && memcmp(p, prefix, k) == 0;
+}
+
+static int add_block(vgacap_trace_reader_t *R, size_t off, size_t csize) {
+    if (R->nblocks == R->cap) {
+        uint32_t cap = R->cap ? 2 * R->cap : 64;
+        struct block *b = realloc(R->blocks, cap * sizeof *b);
+        if (!b) return -1;
+        R->blocks = b; R->cap = cap;
+    }
+    R->blocks[R->nblocks].off = off;
+    R->blocks[R->nblocks].csize = csize;
+    R->blocks[R->nblocks].first = 0;
+    R->blocks[R->nblocks].known = 0;
+    R->nblocks++;
+    return 0;
+}
+
+// A data frame we can hold: complete, of a known size up to a block's.
+static int frame_ok(const uint8_t *p, size_t avail, size_t *csize) {
+    if (ZSTD_isSkippableFrame(p, avail)) return 0;
+    size_t c = ZSTD_findFrameCompressedSize(p, avail);
+    if (ZSTD_isError(c)) return 0;
+    unsigned long long d = ZSTD_getFrameContentSize(p, c);
+    if (d == ZSTD_CONTENTSIZE_UNKNOWN || d == ZSTD_CONTENTSIZE_ERROR || d > VGACAP_TRACE_BLOCK_BYTES) return 0;
+    *csize = c;
+    return 1;
+}
+
+// ---- the seek table, or the frames walked -------------------------------------
+
+// The blocks from the seek table, if it is there and agrees with the frame
+// headers. Reads the table and each frame's header only. Returns 0, or 1 if
+// the table cannot be used (R->nblocks is then 0).
+static int blocks_from_table(vgacap_trace_reader_t *R) {
+    ZSTD_seekable *zs = ZSTD_seekable_create();
+    if (!zs) return 1;
+    int bad = ZSTD_isError(ZSTD_seekable_initBuff(zs, R->map, R->size)) ? 1 : 0;
+    unsigned n = bad ? 0 : ZSTD_seekable_getNumFrames(zs);
+    if (n == 0) bad = 1;
+    size_t end = 0;
+    for (unsigned i = 0; i < n && !bad; i++) {
+        unsigned long long off = ZSTD_seekable_getFrameCompressedOffset(zs, i);
+        size_t csize = ZSTD_seekable_getFrameCompressedSize(zs, i);
+        size_t dsize = ZSTD_seekable_getFrameDecompressedSize(zs, i);
+        if (off != end || off >= R->size || csize > R->size - off || ZSTD_isSkippableFrame(R->map + off, csize)) {
+            bad = 1; break;
+        }
+        // The frame header only (at most 18 bytes).
+        unsigned long long d = ZSTD_getFrameContentSize(R->map + off, csize);
+        R->stats.bytes_touched += ZSTD_FRAMEHEADERSIZE_MAX < csize ? ZSTD_FRAMEHEADERSIZE_MAX : csize;
+        if (d == ZSTD_CONTENTSIZE_UNKNOWN || d == ZSTD_CONTENTSIZE_ERROR || d != dsize ||
+            d > VGACAP_TRACE_BLOCK_BYTES || add_block(R, (size_t)off, csize)) {
+            bad = 1; break;
+        }
+        end = (size_t)off + csize;
+    }
+    // What follows the last frame is the table itself, a skippable frame to
+    // the end of the file (its header gives its size).
+    if (!bad && (end >= R->size || !ZSTD_isSkippableFrame(R->map + end, R->size - end) ||
+                 ZSTD_findFrameCompressedSize(R->map + end, R->size - end) != R->size - end))
+        bad = 1;
+    if (!bad) R->stats.bytes_touched += R->size - end;
+    ZSTD_seekable_free(zs);
+    if (bad) R->nblocks = 0;
+    return bad;
+}
+
+// Walks the frames from the start, keeping each complete one, up to the
+// first incomplete one, or a skippable frame (the table, or what is left of it).
+static int blocks_by_walking(vgacap_trace_reader_t *R) {
+    size_t pos = 0, c;
+    while (pos < R->size && frame_ok(R->map + pos, R->size - pos, &c)) {
+        R->stats.bytes_touched += c;   // findFrameCompressedSize walks the whole frame
+        if (add_block(R, pos, c)) return -1;
+        pos += c;
+    }
+    return 0;
+}
+
+// A reader left inside a chunk (its header or payload) or hunting for one:
+// the bytes it was fed stopped mid-chunk.
+static int mid_chunk(const vgacap_reader_t *sr) { return sr->scanning || sr->in_payload || sr->hdrfill; }
+
+// ---- decompressing ----------------------------------------------------------------
+
+static int decode_block(vgacap_trace_reader_t *R, uint32_t i, char *err, size_t errlen) {
+    if (R->buf_block == (int64_t)i) return 0;
+    if (!R->buf && !(R->buf = malloc(VGACAP_TRACE_BLOCK_BYTES))) { set_err(err, errlen, "out of memory"); return -1; }
+    R->buf_block = -1;
+    const struct block *b = &R->blocks[i];
+    size_t d = ZSTD_decompressDCtx(R->dctx, R->buf, VGACAP_TRACE_BLOCK_BYTES, R->map + b->off, b->csize);
+    R->stats.blocks_decoded++;
+    R->stats.bytes_touched += b->csize;
+    if (ZSTD_isError(d)) {
+        set_err(err, errlen, "block %u (offset %zu): zstd: %s", i, b->off, ZSTD_getErrorName(d));
+        return -1;
+    }
+    R->buf_block = i; R->buf_len = d;
+    return 0;
+}
+
+// What the start of a block holds, up to its BLKH.
+struct start {
+    vgacap_trace_reader_t *R;
+    int block0, events, got_block, bad;
+    uint64_t first;
+    const char *what;
+};
+
+static void on_start(void *user, const vgacap_event_t *ev) {
+    struct start *s = user;
+    if (s->got_block || s->bad) return;
+    int k = s->events++;
+    switch (ev->type) {
+    case VGACAP_EV_HEADER:
+        if (!s->block0 || k != 0) { s->bad = 1; s->what = "VGCH where the container has none"; break; }
+        s->R->info.header = *ev->u.header;
+        break;
+    case VGACAP_EV_META:
+        if (!s->block0 || k != 1 || !starts_with(ev->u.meta.text, ev->u.meta.len, "meta=open\n")) {
+            s->bad = 1; s->what = "block 0 must be VGCH, META(open), BLKH(0)"; break;
+        }
+        if (!(s->R->open_meta = copy_text(ev->u.meta.text, ev->u.meta.len))) { s->bad = 1; s->what = "out of memory"; }
+        break;
+    case VGACAP_EV_BLOCK:
+        if (k != (s->block0 ? 2 : 0)) {
+            s->bad = 1; s->what = s->block0 ? "block 0 must be VGCH, META(open), BLKH(0)" : "a block must start with its BLKH";
+            break;
+        }
+        s->got_block = 1; s->first = ev->u.block.first_sample;
+        break;
+    case VGACAP_EV_RESYNC: s->bad = 1; s->what = ev->u.resync.what; break;
+    case VGACAP_EV_ERROR: s->bad = 1; s->what = ev->u.error.what; break;
+    default:
+        s->bad = 1; s->what = s->block0 ? "block 0 must be VGCH, META(open), BLKH(0)" : "a block must start with its BLKH";
+        break;
+    }
+}
+
+// Decompresses the start of block i until its BLKH. Block 0 also gives the
+// header and META(open).
+static int read_start(vgacap_trace_reader_t *R, uint32_t i, char *err, size_t errlen) {
+    struct block *b = &R->blocks[i];
+    struct start s; memset(&s, 0, sizeof s);
+    s.R = R; s.block0 = i == 0;
+    if (i == 0) vgacap_reader_init(&R->sr, on_start, &s);
+    else vgacap_reader_init_header(&R->sr, on_start, &s, &R->info.header);
+    ZSTD_DCtx_reset(R->dctx, ZSTD_reset_session_only);
+    uint8_t out[4096];
+    ZSTD_inBuffer in = { R->map + b->off, b->csize, 0 };
+    size_t total = 0, consumed = 0;
+    while (!s.got_block && !s.bad && total < START_LIMIT) {
+        ZSTD_outBuffer ob = { out, sizeof out, 0 };
+        size_t rc = ZSTD_decompressStream(R->dctx, &ob, &in);
+        if (ZSTD_isError(rc)) {
+            set_err(err, errlen, "block %u (offset %zu): zstd: %s", i, b->off, ZSTD_getErrorName(rc));
+            return -1;
+        }
+        vgacap_reader_feed(&R->sr, out, ob.pos);
+        total += ob.pos;
+        R->stats.bytes_touched += in.pos - consumed;
+        consumed = in.pos;
+        if (rc == 0 || (ob.pos == 0 && in.pos == in.size)) break;   // the frame ended
+    }
+    if (s.bad || !s.got_block) {
+        set_err(err, errlen, "block %u (offset %zu): %s", i, b->off,
+                s.bad ? s.what : "no BLKH at its start");
+        return -1;
+    }
+    if (i == 0 && s.first != 0) { set_err(err, errlen, "block 0: BLKH(%llu), not BLKH(0)", (unsigned long long)s.first); return -1; }
+    // LAZY: the order is checked against the neighbours already read.
+    if (i > 0 && R->blocks[i - 1].known && s.first <= R->blocks[i - 1].first) {
+        set_err(err, errlen, "block %u: BLKH(%llu) is not after block %u's BLKH(%llu)", i,
+                (unsigned long long)s.first, i - 1, (unsigned long long)R->blocks[i - 1].first);
+        return -1;
+    }
+    if (i + 1 < R->nblocks && R->blocks[i + 1].known && s.first >= R->blocks[i + 1].first) {
+        set_err(err, errlen, "block %u: BLKH(%llu) is not before block %u's BLKH(%llu)", i,
+                (unsigned long long)s.first, i + 1, (unsigned long long)R->blocks[i + 1].first);
+        return -1;
+    }
+    b->first = s.first;
+    b->known = 1;
+    return 0;
+}
+
+// LAZY: block i's first sample, read from its BLKH the first time.
+static int first_of(vgacap_trace_reader_t *R, uint32_t i, uint64_t *first, char *err, size_t errlen) {
+    if (!R->blocks[i].known && read_start(R, i, err, errlen)) return -1;
+    *first = R->blocks[i].first;
+    return 0;
+}
+
+// The whole of a stream fed through a reader: the sample total, the META
+// texts and the first loss.
+struct scan {
+    vgacap_trace_reader_t *R;
+    uint64_t n;
+    int have_header;
+    const char *loss, *error;
+};
+
+static void on_scan(void *user, const vgacap_event_t *ev) {
+    struct scan *s = user;
+    switch (ev->type) {
+    case VGACAP_EV_HEADER:
+        if (!s->have_header) s->R->info.header = *ev->u.header;
+        s->have_header = 1; s->n = 0;
+        break;
+    case VGACAP_EV_BLOCK: s->n = ev->u.block.first_sample; break;
+    case VGACAP_EV_RUN: s->n += ev->u.run.run; break;
+    case VGACAP_EV_META: {
+        char **dst = NULL;
+        if (starts_with(ev->u.meta.text, ev->u.meta.len, "meta=open\n") && !s->R->open_meta) dst = &s->R->open_meta;
+        if (starts_with(ev->u.meta.text, ev->u.meta.len, "meta=close\n")) dst = &s->R->close_meta;
+        if (dst) {
+            free(*dst);
+            if (!(*dst = copy_text(ev->u.meta.text, ev->u.meta.len)) && !s->error) s->error = "out of memory";
+        }
+        break;
+    }
+    case VGACAP_EV_RESYNC: if (!s->loss) s->loss = ev->u.resync.what; break;
+    case VGACAP_EV_ERROR: if (!s->error) s->error = ev->u.error.what; break;
+    default: break;
+    }
+}
+
+// The last block, whole: its checksum, its sample total and META(close).
+static int read_last(vgacap_trace_reader_t *R, char *err, size_t errlen) {
+    uint32_t i = R->nblocks - 1;
+    if (decode_block(R, i, err, errlen)) return -1;
+    struct scan s; memset(&s, 0, sizeof s);
+    s.R = R; s.have_header = 1;
+    if (i == 0) vgacap_reader_init(&R->sr, on_scan, &s);
+    else vgacap_reader_init_header(&R->sr, on_scan, &s, &R->info.header);
+    vgacap_reader_feed(&R->sr, R->buf, R->buf_len);
+    if (s.error || s.loss || mid_chunk(&R->sr)) {
+        set_err(err, errlen, "block %u: %s", i, s.error ? s.error : s.loss ? s.loss : "ends inside a chunk");
+        free(R->close_meta); R->close_meta = NULL;
+        return -1;
+    }
+    R->info.samples = s.n;
+    return 0;
+}
+
+static int open_trace(vgacap_trace_reader_t *R, char *err, size_t errlen) {
+    if (!(R->dctx = ZSTD_createDCtx())) { set_err(err, errlen, "out of memory"); return -1; }
+    R->info.compressed = 1;
+    if (blocks_from_table(R)) {
+        R->info.table_rebuilt = 1;
+        if (blocks_by_walking(R)) { set_err(err, errlen, "out of memory"); return -1; }
+    }
+    if (R->nblocks == 0) { set_err(err, errlen, "no complete block (the trace was cut short inside block 0)"); return -1; }
+    // LAZY: block 0 only (the header and META(open)); the rest when read.
+    if (read_start(R, 0, err, errlen)) return -1;
+    // A rebuilt table's last frame may be whole in shape but bad inside
+    // (its checksum, a cut that left a valid-looking frame): drop it.
+    while (read_last(R, err, errlen)) {
+        if (!R->info.table_rebuilt || R->nblocks == 1) return -1;
+        R->nblocks--;
+    }
+    R->info.blocks = R->nblocks;
+    return 0;
+}
+
+static int open_plain(vgacap_trace_reader_t *R, char *err, size_t errlen) {
+    struct scan s; memset(&s, 0, sizeof s);
+    s.R = R;
+    vgacap_reader_init(&R->sr, on_scan, &s);
+    vgacap_reader_feed(&R->sr, R->map, R->size);
+    if (s.error) { set_err(err, errlen, "%s", s.error); return -1; }
+    if (!s.have_header) { set_err(err, errlen, "no VGCH header"); return -1; }
+    R->info.samples = s.n;
+    R->info.blocks = 1;
+    return 0;
+}
+
+vgacap_trace_reader_t *vgacap_trace_open(const char *path, char *err, size_t errlen) {
+    vgacap_trace_reader_t *R = calloc(1, sizeof *R);
+    if (!R) { set_err(err, errlen, "out of memory"); return NULL; }
+    R->buf_block = -1;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { set_err(err, errlen, "%s: %s", path, strerror(errno)); free(R); return NULL; }
+    struct stat st;
+    if (fstat(fd, &st) != 0) { set_err(err, errlen, "%s: %s", path, strerror(errno)); close(fd); free(R); return NULL; }
+    if (st.st_size < 8) {
+        set_err(err, errlen, "%s: neither a trace nor a VGCH stream (%lld bytes)", path, (long long)st.st_size);
+        close(fd); free(R); return NULL;
+    }
+    R->size = (size_t)st.st_size;
+    void *m = mmap(NULL, R->size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (m == MAP_FAILED) { set_err(err, errlen, "%s: mmap: %s", path, strerror(errno)); free(R); return NULL; }
+    R->map = m;
+    static const uint8_t zstd_magic[4] = { 0x28, 0xb5, 0x2f, 0xfd };
+    char msg[256] = "";
+    int rc;
+    if (memcmp(R->map, zstd_magic, 4) == 0) rc = open_trace(R, msg, sizeof msg);
+    else if (memcmp(R->map, VGACAP_TAG_HEADER, 4) == 0) rc = open_plain(R, msg, sizeof msg);
+    else { snprintf(msg, sizeof msg, "neither a trace nor a VGCH stream"); rc = -1; }
+    if (rc) {
+        set_err(err, errlen, "%s: %s", path, msg);
+        vgacap_trace_close(R);
+        return NULL;
+    }
+    R->info.open_meta = R->open_meta;
+    R->info.close_meta = R->close_meta;
+    R->clk = R->info.header.clock_bit == VGACAP_CLOCK_BIT_NONE ? 0 : (uint64_t)1 << R->info.header.clock_bit;
+    return R;
+}
+
+const vgacap_trace_info_t *vgacap_trace_info(const vgacap_trace_reader_t *r) { return &r->info; }
+
+// ---- reading ranges -----------------------------------------------------------------
+//
+// Runs are collected into batches (struct rd's arrays) and handed to the
+// caller's batch function when a batch fills, at the end of every block, and
+// before an error is reported, so the caller sees exactly the runs, in the
+// order, that a run-at-a-time reader would deliver before it stopped.
+//
+// A RUNS chunk that starts where the stream reader is between chunks, lies
+// whole in the buffer and that the reader would accept is decoded here
+// directly, pairs to batch entries (runs_fast). The rules are runs_byte's
+// (src/stream/reader.c): a pair count that is not zero and the length can
+// hold, values without the clock bit, bits above sample_bits or the previous
+// pair's value, runs in LEB128 of at most ten bytes, the tenth at most 1,
+// minimally encoded and not zero, no run that takes n past 2^64 - 1, and
+// pairs that fill the chunk exactly. A
+// chunk that breaks any of them goes to the stream reader after all, from
+// its start, the runs already delivered from it being passed over (struct
+// rd's `skip`): the reader then delivers the same runs and reports the
+// fault as it always did. Every other chunk goes to the stream reader.
+
+#define BATCH VGACAP_TRACE_RUNS_MAX
+
+struct rd {
+    uint64_t n, from, to, clk;
+    vgacap_trace_runs_fn fn;
+    void *user;
+    int done, strict;
+    int generic;       // runs_fast takes its generic body (vgacap_trace_set_generic_runs)
+    const char *what;
+    uint64_t skip;     // RUN events the stream reader is to pass over
+    size_t nb;         // runs in the batch
+    vgacap_trace_run_t runs[BATCH];
+};
+
+static void flush(struct rd *d) {
+    size_t n = d->nb;
+    d->nb = 0;
+    if (n && d->fn(d->user, d->runs, n)) d->done = 1;
+}
+
+// A run of `run` samples of `value` (the clock bit of its first sample) at
+// sample d->n, clipped to [from, to).
+static inline void put(struct rd *d, uint64_t value, uint64_t run) {
+    uint64_t a = d->n, e = d->n + run;
+    d->n = e;
+    if (e <= d->from) return;
+    if (a >= d->to) { d->done = 1; return; }
+    uint64_t s = a > d->from ? a : d->from, t = e < d->to ? e : d->to;
+    size_t i = d->nb++;
+    d->runs[i].first_sample = s;
+    d->runs[i].value = value ^ (((s - a) & 1) ? d->clk : 0);
+    d->runs[i].run = t - s;
+    if (e >= d->to) d->done = 1;
+    if (d->nb == BATCH) flush(d);
+}
+
+static void on_read(void *user, const vgacap_event_t *ev) {
+    struct rd *d = user;
+    if (d->done) return;
+    switch (ev->type) {
+    case VGACAP_EV_HEADER: d->n = 0; break;
+    case VGACAP_EV_BLOCK: d->n = ev->u.block.first_sample; break;
+    case VGACAP_EV_RUN:
+        if (d->skip) { d->skip--; d->n += ev->u.run.run; break; }
+        put(d, ev->u.run.value, ev->u.run.run);
+        break;
+    case VGACAP_EV_RESYNC:
+        if (!d->strict) break;
+        flush(d);
+        if (!d->done) { d->what = ev->u.resync.what; d->done = 1; }
+        break;
+    case VGACAP_EV_ERROR:
+        flush(d);
+        if (!d->done) { d->what = ev->u.error.what; d->done = 1; }
+        break;
+    default: break;
+    }
+}
+
+static uint32_t le32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+// Little-endian whatever the host's order: one load on a little-endian
+// host (GCC 14 does not merge the byte-wise form here, and it cost 1.2
+// ns/clock on the busy trace).
+static uint64_t le64(const uint8_t *p) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    uint64_t v;
+    memcpy(&v, p, 8);
+    return v;
+#else
+    return (uint64_t)le32(p) | ((uint64_t)le32(p + 4) << 32);
+#endif
+}
+
+// Between chunks, with the header that makes a RUNS chunk of this length
+// acceptable (reader.c's header_problem and chunk_rule for RUNS).
+static int runs_fast_ok(const vgacap_reader_t *sr, uint32_t len) {
+    if (sr->failed || sr->scanning || sr->in_payload || sr->hdrfill) return 0;
+    if (!sr->have_header || sr->header.version != 2) return 0;
+    if (len < 4 || len > VGACAP_MAX_CHUNK_LEN) return 0;
+    if (sr->header.clock_bit != VGACAP_CLOCK_BIT_NONE && !sr->pos_known) return 0;
+    return 1;
+}
+
+// put(d, v, run) for a pair runs_decode accepted, on its locals: 0 to go on,
+// 1 when the read is done or the batch function asked to stop (d->n and
+// d->nb are then stored, and runs_decode returns 0).
+static inline __attribute__((always_inline)) int runs_put(struct rd *d, vgacap_trace_run_t *out, uint64_t *np,
+                                                          size_t *nbp, uint64_t from, uint64_t to, uint64_t dclk,
+                                                          uint64_t v, uint64_t run) {
+    const uint64_t a = *np, e = a + run;
+    size_t nb = *nbp;
+    *np = e;
+    // The usual case: inside the range, a + run < to without the sum
+    // (run is never 0).
+    if (a >= from && a < to && run < to - a) {
+        out[nb].first_sample = a; out[nb].value = v; out[nb].run = run;
+        nb++;
+    } else {
+        if (e <= from) return 0;
+        if (a >= to) { d->done = 1; d->n = e; d->nb = nb; return 1; }
+        const uint64_t s0 = a > from ? a : from, t0 = e < to ? e : to;
+        out[nb].first_sample = s0;
+        out[nb].value = v ^ (((s0 - a) & 1) ? dclk : 0);
+        out[nb].run = t0 - s0;
+        nb++;
+        if (e >= to) { d->done = 1; d->n = e; d->nb = nb; return 1; }
+    }
+    if (nb == BATCH) {
+        d->n = e; d->nb = nb;
+        flush(d);
+        nb = 0;
+        if (d->done) return 1;
+    }
+    *nbp = nb;
+    return 0;
+}
+
+// The RUNS chunk at p (header included, 8 + len bytes in the buffer), its
+// values `vb` bytes wide. Returns 0 when it was decoded (or the read is
+// done), leaving the stream reader as runs_byte would; -1 when it breaks a
+// rule: d->n is back at the chunk's start, d->skip is the runs delivered
+// from it, and the caller feeds the chunk to the stream reader.
+//
+// runs_fast calls it with vb a constant and `wide` 1: then, while a pair's
+// worst case (vb value bytes and a ten-byte LEB128 run) is in the buffer,
+// one bounds test per pair does; the chunk's tail, and every pair when
+// `wide` is 0, takes the loop that tests each byte. Both loops apply the
+// same rules in the same order, so the fault and the runs before it are the
+// same either way.
+static inline __attribute__((always_inline)) int runs_decode(vgacap_reader_t *sr, struct rd *d, const uint8_t *p,
+                                                             uint32_t len, const unsigned vb, const int wide) {
+    const vgacap_header_t *h = &sr->header;
+    const uint8_t *q = p + 12, *end = p + 8 + (size_t)len;
+    const uint32_t count = le32(p + 8);
+    if (count == 0 || len - 4u < (uint64_t)count * (vb + 1u)) return -1;
+    const uint64_t mask = h->sample_bits >= 64 ? ~(uint64_t)0 : (((uint64_t)1 << h->sample_bits) - 1u);
+    const uint64_t clk = h->clock_bit == VGACAP_CLOCK_BIT_NONE ? 0 : (uint64_t)1 << h->clock_bit;
+    const uint64_t bad_bits = clk | ~mask;
+    const uint64_t vmask = vb >= 8 ? ~(uint64_t)0 : (((uint64_t)1) << (8u * vb)) - 1u;
+    // put()'s work, on locals: the batch arrays are uint64_t, as d->n is,
+    // so through d every store would make the compiler reload the rest.
+    const uint64_t from = d->from, to = d->to, dclk = d->clk;
+    vgacap_trace_run_t *const out = d->runs;
+    // clock_first ^ (sample & 1) as the clock bit: cf, flipped on odd samples.
+    const uint64_t cf = clk && (h->clock_first & 1u) ? clk : 0;
+    const uint64_t n0 = d->n;
+    uint64_t n = n0;
+    size_t nb = d->nb;
+    // The clock bit of a pair's first sample: clock_first ^ (its sample & 1).
+    uint64_t pos = sr->sample_pos, prev = 0;
+    uint32_t done = 0;
+    if (wide) {
+        for (; done < count && (size_t)(end - q) >= vb + 10u; done++) {
+            const uint64_t value = le64(q) & vmask;   // vb + 10 >= 8 bytes are there
+            q += vb;
+            if ((value & bad_bits) || (done && value == prev)) goto bad;
+            uint64_t run;
+            uint8_t b = *q++;
+            if (b < 0x80u) {
+                run = b;
+            } else {
+                run = b & 0x7Fu;
+                // At most ten bytes: the tenth (k 9) above 1 is a fault,
+                // and every byte with 0x80 set is above 1.
+                for (unsigned k = 1;; k++) {
+                    b = *q++;
+                    if (k == 9 && b > 1u) goto bad;
+                    run |= (uint64_t)(b & 0x7Fu) << (7u * k);
+                    if (!(b & 0x80u)) break;
+                }
+            }
+            if (b == 0) goto bad;               // a zero run, or not minimally encoded
+            if (run > UINT64_MAX - pos) goto bad;   // would take n past 2^64 - 1
+            const uint64_t v = value | (cf ^ (clk & (0 - (pos & 1u))));
+            pos += run;
+            prev = value;
+            if (runs_put(d, out, &n, &nb, from, to, dclk, v, run)) return 0;
+        }
+    }
+    for (; done < count; done++) {
+        if ((size_t)(end - q) < vb + 1u) goto bad;
+        uint64_t value = 0;
+        if ((size_t)(end - q) >= 8) {
+            value = le64(q) & vmask;
+        } else {
+            for (unsigned k = 0; k < vb; k++) value |= (uint64_t)q[k] << (8u * k);
+        }
+        q += vb;
+        if ((value & bad_bits) || (done && value == prev)) goto bad;
+        uint64_t run;
+        uint8_t b = *q++;                   // q < end: vb + 1 bytes were there
+        if (b < 0x80u) {
+            run = b;
+        } else {
+            run = b & 0x7Fu;
+            for (unsigned k = 1;; k++) {
+                if (q == end) goto bad;
+                b = *q++;
+                if (k == 9 && b > 1u) goto bad;
+                run |= (uint64_t)(b & 0x7Fu) << (7u * k);
+                if (!(b & 0x80u)) break;
+            }
+        }
+        if (b == 0) goto bad;               // a zero run, or not minimally encoded
+        if (run > UINT64_MAX - pos) goto bad;   // would take n past 2^64 - 1
+        const uint64_t v = value | (cf ^ (clk & (0 - (pos & 1u))));
+        pos += run;
+        prev = value;
+        if (runs_put(d, out, &n, &nb, from, to, dclk, v, run)) return 0;
+    }
+    d->n = n; d->nb = nb;
+    if (q != end) goto bad;
+    // The stream reader's state after the chunk, as runs_byte leaves it.
+    memcpy(sr->tag, p, 4);
+    memcpy(sr->hdrbuf, p, 8);
+    memcpy(sr->pbuf, p + 8, 4);
+    sr->length = len; sr->consumed = len;
+    sr->in_payload = 0; sr->hdrfill = 0; sr->pfill = 0;
+    sr->sample_index = 0; sr->remaining_items = 0;
+    sr->vbytes = (uint8_t)vb; sr->vfill = 0; sr->lebcount = 0;
+    sr->pair_value = 0; sr->pair_run = 0;
+    sr->prev_value = prev; sr->have_prev = 1;
+    sr->skip_what = NULL;
+    sr->sample_pos = pos;
+    return 0;
+bad:
+    d->nb = nb;          // the runs before the fault stay in the batch
+    d->n = n0;
+    d->skip = done;
+    return -1;
+}
+
+// runs_decode specialised on the value width: vb a constant (tt-um-43's 43
+// bits are 6 bytes), so its shifts and masks are constants and fewer loop
+// values compete for registers. d->generic (a test hook) takes the generic
+// body with no specialisation and no wide loop.
+static int runs_fast(vgacap_reader_t *sr, struct rd *d, const uint8_t *p, uint32_t len) {
+    const unsigned vb = (sr->header.sample_bits + 7u) / 8u;
+    if (!d->generic) {
+        switch (vb) {
+        case 1: return runs_decode(sr, d, p, len, 1, 1);
+        case 2: return runs_decode(sr, d, p, len, 2, 1);
+        case 3: return runs_decode(sr, d, p, len, 3, 1);
+        case 4: return runs_decode(sr, d, p, len, 4, 1);
+        case 5: return runs_decode(sr, d, p, len, 5, 1);
+        case 6: return runs_decode(sr, d, p, len, 6, 1);
+        case 7: return runs_decode(sr, d, p, len, 7, 1);
+        case 8: return runs_decode(sr, d, p, len, 8, 1);
+        default: break;
+        }
+    }
+    return runs_decode(sr, d, p, len, vb, 0);
+}
+
+// Feeds p[0, n) through the stream reader, its RUNS chunks by runs_fast
+// where it can, until the read is done.
+static void feed_until_done(vgacap_reader_t *sr, struct rd *d, const uint8_t *p, size_t n) {
+    size_t pos = 0, refed_end = 0;   // refed_end: the end of a chunk runs_fast handed back
+    while (pos < n && !d->done) {
+        // By the end of a handed-back chunk the stream reader has delivered
+        // (and passed over) every run runs_fast had.
+        assert(pos < refed_end || !d->skip);
+        size_t k = n - pos;
+        if (!sr->failed && !sr->scanning && !sr->in_payload && !sr->hdrfill && k >= 8) {
+            uint32_t len = le32(p + pos + 4);
+            if (memcmp(p + pos, VGACAP_TAG_RUNS, 4) == 0 && runs_fast_ok(sr, len) && len <= k - 8) {
+                if (runs_fast(sr, d, p + pos, len) == 0) { pos += 8 + (size_t)len; continue; }
+                refed_end = pos + 8 + (size_t)len;
+            }
+            // One chunk, header and payload, if it is all there.
+            if ((uint64_t)len + 8 < k) k = (size_t)len + 8;
+        } else if (sr->in_payload && sr->length - sr->consumed < k) {
+            k = sr->length - sr->consumed;     // the rest of the chunk
+        }
+        if (k > FEED_SLICE) k = FEED_SLICE;
+        if (vgacap_reader_feed(sr, p + pos, k)) break;
+        pos += k;
+    }
+    (void)refed_end;   // read by the assert only
+}
+
+static int one_by_one(void *user, const vgacap_trace_run_t *runs, size_t n) {
+    const struct { vgacap_trace_run_fn fn; void *user; } *o = user;
+    for (size_t i = 0; i < n; i++)
+        if (o->fn(o->user, runs[i].first_sample, runs[i].value, runs[i].run)) return 1;
+    return 0;
+}
+
+int vgacap_trace_read(vgacap_trace_reader_t *R, uint64_t from, uint64_t to,
+                      vgacap_trace_run_fn fn, void *user, char *err, size_t errlen) {
+    struct { vgacap_trace_run_fn fn; void *user; } o = { fn, user };
+    return vgacap_trace_read_runs(R, from, to, one_by_one, &o, err, errlen);
+}
+
+int vgacap_trace_read_runs(vgacap_trace_reader_t *R, uint64_t from, uint64_t to,
+                           vgacap_trace_runs_fn fn, void *user, char *err, size_t errlen) {
+    if (from >= to || from >= R->info.samples) return 0;
+    struct rd *d = malloc(sizeof *d);
+    if (!d) { set_err(err, errlen, "out of memory"); return -1; }
+    memset(d, 0, offsetof(struct rd, runs));
+    d->from = from; d->to = to; d->clk = R->clk; d->fn = fn; d->user = user;
+    d->generic = R->generic_runs;
+    int rc = 0;
+    if (!R->info.compressed) {
+        vgacap_reader_init(&R->sr, on_read, d);
+        feed_until_done(&R->sr, d, R->map, R->size);
+        flush(d);
+        if (d->what) { set_err(err, errlen, "%s", d->what); rc = -1; }
+        free(d);
+        return rc;
+    }
+    d->strict = 1;
+    // The last block whose first sample is at or before `from`.
+    uint32_t lo = 0, hi = R->nblocks;   // blocks[lo].first <= from < blocks[hi].first
+    while (hi - lo > 1) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        uint64_t fm;
+        if (first_of(R, mid, &fm, err, errlen)) { free(d); return -1; }   // LAZY
+        if (fm <= from) lo = mid; else hi = mid;
+    }
+    for (uint32_t i = lo; i < R->nblocks && !d->done; i++) {
+        uint64_t fi, fnext = 0;   // LAZY: the block's start and its successor's, read when needed
+        if (first_of(R, i, &fi, err, errlen)) { rc = -1; break; }
+        if (fi >= to) break;
+        if (i + 1 < R->nblocks && first_of(R, i + 1, &fnext, err, errlen)) { rc = -1; break; }
+        if (decode_block(R, i, err, errlen)) { rc = -1; break; }
+        if (i == 0) vgacap_reader_init(&R->sr, on_read, d);
+        else vgacap_reader_init_header(&R->sr, on_read, d, &R->info.header);
+        feed_until_done(&R->sr, d, R->buf, R->buf_len);
+        flush(d);
+        if (d->what) { set_err(err, errlen, "block %u: %s", i, d->what); rc = -1; break; }
+        if (!d->done && mid_chunk(&R->sr)) { set_err(err, errlen, "block %u: ends inside a chunk", i); rc = -1; break; }
+        if (!d->done && i + 1 < R->nblocks && d->n != fnext) {
+            set_err(err, errlen, "block %u ends at sample %llu but block %u starts at %llu", i,
+                    (unsigned long long)d->n, i + 1, (unsigned long long)R->blocks[i + 1].first);
+            rc = -1; break;
+        }
+    }
+    free(d);
+    return rc;
+}
+
+int vgacap_trace_block_data(vgacap_trace_reader_t *R, uint32_t i, const uint8_t **data, size_t *len,
+                            char *err, size_t errlen) {
+    if (i >= R->info.blocks) { set_err(err, errlen, "block %u: the file has %u", i, R->info.blocks); return -1; }
+    if (!R->info.compressed) { *data = R->map; *len = R->size; return 0; }
+    if (decode_block(R, i, err, errlen)) return -1;
+    *data = R->buf; *len = R->buf_len;
+    return 0;
+}
+
+void vgacap_trace_read_stats(const vgacap_trace_reader_t *R, vgacap_trace_read_stats_t *out) { *out = R->stats; }
+
+void vgacap_trace_set_generic_runs(vgacap_trace_reader_t *R, int on) { R->generic_runs = on ? 1 : 0; }
+
+void vgacap_trace_close(vgacap_trace_reader_t *R) {
+    if (!R) return;
+    if (R->map) munmap((void *)(uintptr_t)R->map, R->size);
+    ZSTD_freeDCtx(R->dctx);
+    free(R->blocks); free(R->buf);
+    free(R->open_meta); free(R->close_meta);
+    free(R);
+}

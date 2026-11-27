@@ -32,6 +32,12 @@ target_include_directories(study_lean_writer PRIVATE src ${VGACAP_ROOT}/include 
 target_compile_options(study_lean_writer PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/src/vgch_hook.h)
 target_link_libraries(study_lean_writer PUBLIC study_vgch_writer)
 
+# The lazy-BLKH reader (src/trace_read_lazy.c): vgacap's reader, copied, with
+# block starts read when first needed; API renamed (src/lazy.h).
+add_library(study_lazy_reader STATIC src/trace_read_lazy.c)
+target_include_directories(study_lazy_reader PRIVATE src ${VGACAP_ROOT}/include ${VGACAP_ROOT}/src/trace)
+target_link_libraries(study_lazy_reader PUBLIC study_vgch_writer)
+
 add_library(study_lz4hc STATIC third_party/lz4hc/lz4hc.c)
 target_include_directories(study_lz4hc SYSTEM PUBLIC third_party/lz4hc ${VGACAP_ROOT}/third_party/libfst)
 
@@ -42,17 +48,18 @@ target_compile_options(study_lxt2 PRIVATE -w)
 target_link_libraries(study_lxt2 PUBLIC vgacap_zlib)
 target_include_directories(study_lxt2 SYSTEM PUBLIC ${VGACAP_ROOT}/third_party/zlib)
 
-add_executable(fsbench src/fsbench.c src/source.c src/w_vgch.c src/w_mine.c src/w_ext.c src/w_lean.c src/bg.c src/rd.c src/codec.c src/ctr.c)
+add_executable(fsbench src/fsbench.c src/source.c src/w_vgch.c src/w_mine.c src/w_ext.c src/w_lean.c src/bg.c src/rd.c src/rd_lazy.c src/codec.c src/ctr.c)
 target_include_directories(fsbench PRIVATE src ${VGACAP_ROOT}/include ${VGACAP_ROOT}/src/trace)
 target_compile_options(fsbench PRIVATE -Wall -Wextra -Werror -Wno-sign-conversion)
-target_link_libraries(fsbench PRIVATE study_lean_writer study_vgch_writer vgacap_fst study_lxt2 study_lz4hc vgacap_zstd vgacap_zlib m)
+target_link_libraries(fsbench PRIVATE study_lazy_reader study_lean_writer study_vgch_writer vgacap_fst study_lxt2 study_lz4hc vgacap_zstd vgacap_zlib m)
 
 # The simulation check (sim/run_sim.sh) links the study's writers into a
 # Verilator testbench: everything but fsbench's main, as one library.
-add_library(study_sim STATIC src/source.c src/w_vgch.c src/w_lean.c src/trace_write_lean.c src/w_mine.c src/w_ext.c src/bg.c src/rd.c src/codec.c src/ctr.c)
+add_library(study_sim STATIC src/source.c src/w_vgch.c src/w_lean.c src/trace_write_lean.c src/w_mine.c src/w_ext.c src/bg.c src/rd.c src/rd_lazy.c src/trace_read_lazy.c src/codec.c src/ctr.c)
 target_include_directories(study_sim PRIVATE src ${VGACAP_ROOT}/include ${VGACAP_ROOT}/src/trace)
 target_compile_options(study_sim PRIVATE -Wall -Wextra -Werror -Wno-sign-conversion)
 # vgacap's code, inside the lean writer, is built as vgacap builds it: not under -Werror.
 set_source_files_properties(src/trace_write_lean.c PROPERTIES COMPILE_OPTIONS
   "-include;${CMAKE_CURRENT_SOURCE_DIR}/src/vgch_hook.h;-Wno-error")
+set_source_files_properties(src/trace_read_lazy.c PROPERTIES COMPILE_OPTIONS "-Wno-error")
 target_link_libraries(study_sim PRIVATE vgacap_fst study_lxt2 study_lz4hc vgacap_zstd vgacap_zlib)

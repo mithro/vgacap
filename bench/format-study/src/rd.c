@@ -17,6 +17,20 @@
 //   validate  a hash of the canonical runs (adjacent equal values merged)
 //             and of the uo_out runs, to check that every format holds the
 //             same samples
+// and the readers of a job (tinytapeout-vga-videos ttvga/harness/derive.py):
+//   info      tracetool info: the changes of each port over the whole
+//             trace. A full scan with tracetool's counting consumer; for a
+//             planar file, each stream on its own (no merge), counting its
+//             value changes. The hash column holds the 7 counts, mixed, so
+//             the formats can be compared.
+//   sample    vgacap-sample: the runs of uo_out and rst_n together (its
+//             calibration reads rst_n). A full scan merged on those bits;
+//             for a planar file, its two streams merged.
+//   uohash    tracetool uohash: uo_out over its default first 2^25 clocks,
+//             open included.
+//   (vgacap-export reads every pin: the scan pattern.)
+// --kind vgch2lazy reads a VGCH v2 file with the lazy-BLKH copy of vgacap's
+// reader (trace_read_lazy.c, rd_lazy.c).
 #define _GNU_SOURCE
 #include "codec.h"
 #include "fs.h"
@@ -75,12 +89,14 @@ static int cons_fn(void *user, const fs_run_t *r, size_t n) {
     return 0;
 }
 
-// port0 from full runs: merges into uo_out runs, then to the consumer.
+// port0 from full runs: merges into uo_out runs (or, with another mask,
+// the runs of those bits: sample's uo_out and rst_n), then to the consumer.
 typedef struct {
     cons_t *c;
     fs_run_t out[BATCH];
     size_t n;
     uint64_t first, val, len;
+    uint64_t mask;
 } port0_t;
 
 static void p0_emit(port0_t *p, uint64_t first, uint64_t val, uint64_t len) {
@@ -101,8 +117,36 @@ static void p0_done(port0_t *p) {
 }
 static int p0_fn(void *user, const fs_run_t *r, size_t n) {
     port0_t *p = user;
-    for (size_t i = 0; i < n; i++) p0_emit(p, r[i].first_sample, r[i].value & 0xff, r[i].run);
+    for (size_t i = 0; i < n; i++) p0_emit(p, r[i].first_sample, r[i].value & p->mask, r[i].run);
     return 0;
+}
+
+// info from full runs: tracetool info's count_changes (tracetool.c), its ports.
+#define RST43 (1ull << 40)
+static const struct { unsigned lo, width; } INFO_PORTS[FS_GROUPS] = { {0, 8}, {8, 8}, {16, 8}, {24, 8}, {32, 8}, {40, 1}, {41, 1} };
+typedef struct {
+    cons_t *c;
+    int have;
+    uint64_t prev, changes[FS_GROUPS];
+} info_t;
+static int info_fn(void *user, const fs_run_t *r, size_t n) {
+    info_t *f = user;
+    for (size_t i = 0; i < n; i++) {
+        const uint64_t v = r[i].value & ~CLK43;
+        if (f->have) {
+            const uint64_t d = v ^ f->prev;
+            for (int k = 0; k < FS_GROUPS; k++)
+                if ((d >> INFO_PORTS[k].lo) & ((1u << INFO_PORTS[k].width) - 1u)) f->changes[k]++;
+        }
+        f->have = 1;
+        f->prev = v;
+    }
+    return cons_fn(f->c, r, n);
+}
+static uint64_t info_hash(const uint64_t *ch) {
+    uint64_t h = 0;
+    for (int k = 0; k < FS_GROUPS; k++) h = mix(h, ch[k]);
+    return h;
 }
 
 // ---- a batch of runs, clipped to [from, to) ---------------------------------------------------
@@ -299,6 +343,44 @@ static int st_block(st_rd_t *s, uint64_t i, int port0, out_t *o, port0_t *p0) {
     const uint64_t first = s->b[i].first, ns = s->b[i].nsamples;
     size_t lens[FS_MAX_STREAMS];
     if (s->kind == 1) {   // planar
+        if (port0 == 3) {   // info: each stream on its own, its value changes counted
+            if (st_decode(s, i, 0x7fu, lens)) return -1;
+            info_t *f = (info_t *)(void *)p0;
+            for (int k = 0; k < FS_GROUPS; k++) {
+                const uint8_t *q = s->dec[k], *e = q + lens[k];
+                uint64_t prev = f->prev >> (8 * k) & 0xff, ch = 0, pairs = 0;
+                int have = f->have;
+                while (q < e) {
+                    const uint64_t v = *q++;
+                    (void)get_leb(&q);
+                    ch += have && v != prev;
+                    prev = v; have = 1; pairs++;
+                }
+                f->changes[k] += ch;
+                f->c->runs += pairs;
+                f->prev = (f->prev & ~(0xffull << (8 * k))) | (prev << (8 * k));
+            }
+            f->have = 1;
+            f->c->samples += ns;
+            return 0;
+        }
+        if (port0 == 2) {   // sample: uo_out (stream 0) and rst_n (stream 5), merged
+            if (st_decode(s, i, 0x21u, lens)) return -1;
+            const uint8_t *pu = s->dec[0], *pr = s->dec[5];
+            uint64_t vu = *pu++, lu = get_leb(&pu), vr = *pr++, lr = get_leb(&pr);
+            uint64_t a = first;
+            const uint64_t end = first + ns;
+            while (a < end && !o->done) {
+                const uint64_t m = lu < lr ? lu : lr;
+                out_run(o, a, vu | (vr & 1) << 40, m);
+                a += m;
+                if (a >= end) break;
+                lu -= m; lr -= m;
+                if (!lu) { vu = *pu++; lu = get_leb(&pu); }
+                if (!lr) { vr = *pr++; lr = get_leb(&pr); }
+            }
+            return 0;
+        }
         if (port0) {
             if (st_decode(s, i, 1u, lens)) return -1;
             const uint8_t *p = s->dec[0], *e = p + lens[0];
@@ -461,8 +543,14 @@ static int fst_read(void *ctx, uint64_t from, uint64_t to, int port0, out_t *o) 
 }
 static void fst_close(void *ctx) { fst_rd_t *f = ctx; fstReaderClose(f->r); free(f); }
 
+// ---- vgch2lazy: rd_lazy.c ----------------------------------------------------------------------------
+void *fs_lazy_open(const char *path);
+int fs_lazy_read(void *ctx, uint64_t from, uint64_t to, fs_runs_fn fn, void *user);
+uint64_t fs_lazy_samples(void *ctx);
+void fs_lazy_close(void *ctx);
+
 // ---- the driver -----------------------------------------------------------------------------------
-enum { K_VG, K_ST, K_FST };
+enum { K_VG, K_ST, K_FST, K_LZ };
 
 typedef struct {
     int kind;
@@ -471,38 +559,55 @@ typedef struct {
 
 static int rd_open(rd_t *r, int kind, const char *path) {
     r->kind = kind;
-    r->ctx = kind == K_VG ? vg_open(path) : kind == K_ST ? st_open(path) : fst_open(path);
+    r->ctx = kind == K_VG ? vg_open(path) : kind == K_ST ? st_open(path) : kind == K_LZ ? fs_lazy_open(path) : fst_open(path);
     return r->ctx ? 0 : -1;
 }
 static void rd_close(rd_t *r) {
     if (r->kind == K_VG) vg_close(r->ctx);
+    else if (r->kind == K_LZ) fs_lazy_close(r->ctx);
     else if (r->kind == K_ST) st_close(r->ctx);
     else fst_close(r->ctx);
 }
 static uint64_t rd_samples(rd_t *r) {
-    return r->kind == K_VG ? vg_samples(r->ctx) : r->kind == K_ST ? st_samples(r->ctx) : ((fst_rd_t *)r->ctx)->samples;
+    return r->kind == K_VG ? vg_samples(r->ctx) : r->kind == K_LZ ? fs_lazy_samples(r->ctx) :
+           r->kind == K_ST ? st_samples(r->ctx) : ((fst_rd_t *)r->ctx)->samples;
 }
 
-// [from, to) to the consumer: full runs, or (port0) uo_out runs merged.
-static int rd_read(rd_t *r, uint64_t from, uint64_t to, int port0, cons_t *c) {
+// [from, to) to the consumer. mode 0: full runs; 1 (port0): uo_out runs
+// merged; 2 (sample): uo_out and rst_n runs merged; 3 (info): full runs
+// through tracetool's change count, into *inf.
+static int rd_read_mode(rd_t *r, uint64_t from, uint64_t to, int mode, cons_t *c, info_t *inf) {
     static out_t o;
     static port0_t p0;
     memset(&p0, 0, sizeof p0);
     p0.c = c;
+    p0.mask = mode == 2 ? 0xffull | RST43 : 0xffull;
+    if (inf) { memset(inf, 0, sizeof *inf); inf->c = c; }
     o.from = from; o.to = to; o.done = 0; o.n = 0;
+    const int planar = r->kind == K_ST && ((st_rd_t *)r->ctx)->kind == 1;
+    fs_runs_fn fn = mode == 1 || mode == 2 ? p0_fn : mode == 3 ? info_fn : cons_fn;
+    void *user = mode == 1 || mode == 2 ? (void *)&p0 : mode == 3 ? (void *)inf : (void *)c;
     int rc;
-    if (r->kind == K_VG) {
-        rc = vg_read(r->ctx, from, to, port0 ? p0_fn : cons_fn, port0 ? (void *)&p0 : (void *)c);
+    if (r->kind == K_VG || r->kind == K_LZ) {
+        rc = r->kind == K_VG ? vg_read(r->ctx, from, to, fn, user) : fs_lazy_read(r->ctx, from, to, fn, user);
+    } else if (planar && mode == 3) {
+        rc = st_read(r->ctx, from, to, 3, &o, (port0_t *)(void *)inf);
     } else {
         // Readers that deliver uo_out runs themselves still go through p0
-        // (merging what is already merged costs a compare a run).
-        o.fn = port0 ? p0_fn : cons_fn;
-        o.user = port0 ? (void *)&p0 : (void *)c;
-        rc = r->kind == K_ST ? st_read(r->ctx, from, to, port0, &o, &p0) : fst_read(r->ctx, from, to, port0, &o);
+        // (merging what is already merged costs a compare a run). A planar
+        // file reads the streams a mode needs; the other kinds read full
+        // runs for modes 2 and 3 and filter them as vgch2's do.
+        o.fn = fn;
+        o.user = user;
+        const int m = planar ? mode : mode == 1 ? 1 : 0;
+        rc = r->kind == K_ST ? st_read(r->ctx, from, to, m, &o, &p0) : fst_read(r->ctx, from, to, m == 1, &o);
         out_flush(&o);
     }
-    if (port0) p0_done(&p0);
+    if (mode == 1 || mode == 2) p0_done(&p0);
     return rc;
+}
+static int rd_read(rd_t *r, uint64_t from, uint64_t to, int port0, cons_t *c) {
+    return rd_read_mode(r, from, to, port0 ? 1 : 0, c, NULL);
 }
 
 static const char *project_name = "?";
@@ -532,7 +637,7 @@ int fs_mode_read(int argc, char **argv) {
         else { fprintf(stderr, "fsbench read: unknown option %s\n", argv[i]); return 2; }
     }
     if (hz) fs_clock_hz = hz;
-    const int kind = !strcmp(kind_s, "vgch2") ? K_VG : !strcmp(kind_s, "stdy") ? K_ST : K_FST;
+    const int kind = !strcmp(kind_s, "vgch2") ? K_VG : !strcmp(kind_s, "vgch2lazy") ? K_LZ : !strcmp(kind_s, "stdy") ? K_ST : K_FST;
     const char *base = strrchr(path, '/');
     base = base ? base + 1 : path;
     printf("project,kind,file,pattern,rep,ns,runs,samples,hash\n");
@@ -570,6 +675,21 @@ int fs_mode_read(int argc, char **argv) {
                     row(kind_s, base, "seek", rep * 1000 + k, fs_thread_ns() - s0, &c, 2 * c0);
                 }
                 continue;   // closed already
+            } else if (!strcmp(pat, "info")) {
+                info_t inf;
+                const double s0 = fs_thread_ns();
+                if (rd_read_mode(&r, 0, UINT64_MAX, 3, &c, &inf)) return 1;
+                row(kind_s, base, pat, rep, fs_thread_ns() - s0, &c, info_hash(inf.changes));
+            } else if (!strcmp(pat, "sample")) {
+                const double s0 = fs_thread_ns();
+                if (rd_read_mode(&r, 0, UINT64_MAX, 2, &c, NULL)) return 1;
+                row(kind_s, base, pat, rep, fs_thread_ns() - s0, &c, 0);
+            } else if (!strcmp(pat, "uohash")) {
+                rd_close(&r);   // its own open is part of it
+                const double s0 = fs_thread_ns();
+                if (rd_open(&r, kind, path)) return 1;
+                if (rd_read(&r, 0, 2ull << 25, 1, &c)) return 1;
+                row(kind_s, base, pat, rep, fs_thread_ns() - s0, &c, 0);
             } else if (!strcmp(pat, "validate")) {
                 c.hashing = 1;
                 if (rd_read(&r, 0, UINT64_MAX, 0, &c)) return 1;

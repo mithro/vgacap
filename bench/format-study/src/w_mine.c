@@ -23,6 +23,11 @@
 // Verilator put it in the simulation check (fs_sim_create).
 uint64_t fs_clk_raw = FS_CLK_RAW, fs_noclk = FS_NOCLK_MASK;
 static int clk_byte = FS_CLK;
+// planar: stream k (port k, in fs.h's order) is raw-image byte pl_byte[k],
+// and byte b is stream pl_stream[b]. The replay's images are in port order;
+// the simulation check's are in Verilator's (fs_sim_create).
+static int pl_byte[FS_GROUPS] = { 0, 1, 2, 3, 4, 5, 6 };
+static int pl_stream[8] = { 0, 1, 2, 3, 4, 5, 6, -1 };
 
 // ---- null: the loop and the loads, nothing recorded ------------------------------------
 typedef struct { uint64_t acc; } null_t;
@@ -63,6 +68,8 @@ typedef struct {
     uint8_t *sets[2][FS_MAX_STREAMS];
     fs_block_t handed[2];
     int full[2], done;
+    uint64_t stalls;              // async: hand-overs that found the other set still held
+    double stall_ns;              // and the wall time they waited
     pthread_t thread;
     pthread_mutex_t mu;
     pthread_cond_t cv_full, cv_free;
@@ -125,7 +132,12 @@ static void base_emit(base_t *s, uint64_t end) {
             s->full[s->cur] = 1;
             pthread_cond_signal(&s->cv_full);
             s->cur ^= 1;
-            while (s->full[s->cur]) pthread_cond_wait(&s->cv_free, &s->mu);
+            if (s->full[s->cur]) {   // the simulation thread waits: a stall
+                const double w0 = fs_wall_ns();
+                s->stalls++;
+                while (s->full[s->cur]) pthread_cond_wait(&s->cv_free, &s->mu);
+                s->stall_ns += fs_wall_ns() - w0;
+            }
             pthread_mutex_unlock(&s->mu);
             base_point(s, s->cur);
             return;
@@ -171,7 +183,7 @@ static void planar_close(planar_t *w, uint64_t end) {
     const uint64_t cur = w->s.h.want;
     for (int k = 0; k < FS_GROUPS; k++) {
         uint8_t *p = w->s.p[k];
-        *p = (uint8_t)(cur >> (8 * k));
+        *p = (uint8_t)(cur >> (8 * pl_byte[k]));
         p += 1 + vgacap_leb128_put_inline(p + 1, end - w->start[k]);
         w->s.p[k] = p;
     }
@@ -183,15 +195,16 @@ static inline void planar_sample(planar_t *w, uint64_t s, uint64_t v) {
     uint64_t x = v ^ w->s.h.want;
     const uint64_t cur = w->s.h.want;
     while (x) {
-        const unsigned k = (unsigned)__builtin_ctzll(x) >> 3;
+        const unsigned b = (unsigned)__builtin_ctzll(x) >> 3;
+        const int k = pl_stream[b];
         if (s != w->start[k]) {   // a change at the block's first sample ends no run
             uint8_t *p = w->s.p[k];
-            *p = (uint8_t)(cur >> (8 * k));
+            *p = (uint8_t)(cur >> (8 * b));
             p += 1 + vgacap_leb128_put_inline(p + 1, s - w->start[k]);
             w->s.p[k] = p;
             w->start[k] = s;
         }
-        x &= ~(0xffull << (8 * k));
+        x &= ~(0xffull << (8 * b));
     }
     w->s.h.want = v;
 }
@@ -218,11 +231,14 @@ NOINLINE void fs_planar_slow(void *wv, uint64_t r0, uint64_t r1) {
     }
 }
 
+static void *planar_new(uint64_t bc, fs_block_fn f, void *c, int async) {
+    planar_t *w = calloc(1, sizeof *w);
+    base_init(&w->s, FS_GROUPS, STREAM_CAP, bc ? bc : (1ull << 24), f, c, async);
+    return w;
+}
 static void *planar_create(uint64_t bc, const char *out, fs_block_fn f, void *c) {
     (void)out;
-    planar_t *w = calloc(1, sizeof *w);
-    base_init(&w->s, FS_GROUPS, STREAM_CAP, bc ? bc : (1ull << 24), f, c, 0);
-    return w;
+    return planar_new(bc, f, c, 0);
 }
 
 static void planar_run(void *st, const uint64_t *raw, uint64_t clocks) {
@@ -516,7 +532,7 @@ void *fs_bg_new(const char *writer, const char *transform, const char *comp, con
 fs_block_fn fs_bg_fn(void);
 void fs_bg_close(void *bg);
 
-typedef struct { void *w, *bg; int raw; } sim_t;
+typedef struct { void *w, *bg; int raw; const char *kind; } sim_t;
 static sim_t *sim_of[64];   // writer -> its bg, for fs_sim_finish
 static int nsim;
 
@@ -527,13 +543,20 @@ void *fs_sim_create(const char *kind, const char *path, const int off[8]) {
 void *fs_sim_create_blocks(const char *kind, const char *path, const int off[8], uint64_t block_clocks) {
     for (int k = 0; k < 8; k++) fs_off[k] = off[k];
     clk_byte = off[7];
+    for (int k = 0; k < FS_GROUPS; k++) { pl_byte[k] = off[k]; pl_stream[off[k]] = k; }
+    pl_stream[off[7]] = -1;
     fs_clk_raw = 1ull << (8 * clk_byte);
     fs_noclk = ~(0xffull << (8 * clk_byte));
     const int raw = !strcmp(kind, "raw"), runs = !strcmp(kind, "runs"), clog = !strcmp(kind, "changelog");
-    if (!raw && !runs && !clog && strcmp(kind, "events")) return NULL;
-    void *bg = fs_bg_new(kind, raw ? "xor6" : clog ? "changelog-planar" : "identity", "zstd1", path);
+    const int planar = !strcmp(kind, "planar"), evplanar = !strcmp(kind, "events-planar");
+    if (!raw && !runs && !clog && !planar && !evplanar && strcmp(kind, "events")) return NULL;
+    // events-planar: the events writer, its stream converted to planar's
+    // streams on the background thread (codec.c fs_events_to_planar).
+    void *bg = fs_bg_new(evplanar ? "events" : kind,
+                         raw ? "xor6" : clog ? "changelog-planar" : evplanar ? "events-planar" : "identity", "zstd1", path);
     void *w;
     if (raw) w = raw_new(block_clocks, fs_bg_fn(), bg, 1);
+    else if (planar) w = planar_new(block_clocks, fs_bg_fn(), bg, 1);
     else if (clog) w = clog_new(block_clocks, fs_bg_fn(), bg, 1);
     else if (runs) {
         runs_t *r = calloc(1, sizeof *r);
@@ -541,7 +564,8 @@ void *fs_sim_create_blocks(const char *kind, const char *path, const int off[8],
         w = r;
     } else w = events_new(block_clocks, fs_bg_fn(), bg, 1);
     sim_t *s = calloc(1, sizeof *s);
-    s->w = w; s->bg = bg; s->raw = raw ? 1 : runs ? 2 : clog ? 3 : 0;
+    s->w = w; s->bg = bg; s->raw = raw ? 1 : runs ? 2 : clog ? 3 : planar ? 4 : 0;
+    s->kind = kind;
     if (nsim < 64) sim_of[nsim++] = s;
     return w;
 }
@@ -549,11 +573,17 @@ void *fs_sim_create_blocks(const char *kind, const char *path, const int off[8],
 void fs_sim_finish(void *w) {
     for (int i = 0; i < nsim; i++) {
         if (sim_of[i] && sim_of[i]->w == w) {
+            const base_t *b = w;   // every writer's state starts with its base_t
+            fprintf(stderr, "fs-sim: stalls %s: %llu hand-overs waited, %.6f s wall waiting\n", sim_of[i]->kind,
+                    (unsigned long long)b->stalls, b->stall_ns / 1e9);
+            const double f0 = fs_wall_ns();
             if (sim_of[i]->raw == 1) raw_finish(w);
+            else if (sim_of[i]->raw == 4) planar_finish(w);
             else if (sim_of[i]->raw == 2) runs_finish(w);
             else if (sim_of[i]->raw == 3) clog_finish(w);
             else events_finish(w);
             fs_bg_close(sim_of[i]->bg);
+            fprintf(stderr, "fs-sim: finish %s: %.3f s wall\n", sim_of[i]->kind, (fs_wall_ns() - f0) / 1e9);
             free(sim_of[i]);
             sim_of[i] = NULL;
             return;

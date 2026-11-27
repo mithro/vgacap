@@ -31,7 +31,7 @@ VERILATOR=${VERILATOR:-$TTVGA/tmp/dev-tools/oss-cad-suite/bin/verilator}
 SECONDS_SIM=${SIM_SECONDS:-10}
 ROUNDS=${ROUNDS:-5}
 read -r -a CPUS <<< "${CPUS:-24 25 26 27 28 29}"
-PROJECTS=${PROJECTS:-"ttihp25a_tt_um_rebeccargb_colorbars ttihp25a_tt_um_MichaelBell_rle_vga tt08_tt_um_a1k0n_nyancat"}
+PROJECTS=${PROJECTS:-"ttihp25a_tt_um_rebeccargb_colorbars ttihp25a_tt_um_MichaelBell_rle_vga tt08_tt_um_a1k0n_nyancat ttihp25a_tt_um_rejunity_atari2600 ttihp25a_tt_um_a1k0n_vgadonut"}
 S=$OUT/sim
 RES=$OUT/results/sim
 mkdir -p "$S" "$RES"
@@ -123,7 +123,10 @@ tick() {
         local hz; hz=$(grep -m1 -o -- '--clock-hz [^ ]*' "$SIMSRC/$p/sim.log" | cut -d' ' -f2)
         local qa=(); [ -n "$q" ] && qa=(--qspi "$q")
         # TICK_CPUS entries are a CPU, or "A,B": the simulation thread on A, the writers' threads on A or B.
-        ( cd "$SIMSRC/$p/repo/src" && taskset -c "${TCPUS[$i]}" "$S/$p/tick/Vtop" --out "$o" --clock-hz "$hz" --chunk 65536 --main-cpu "${TCPUS[$i]%%,*}" \
+        # TICK_SCOPE=1: unpinned instead, in a systemd scope with CPUQuota=200%, as a job runs (runqueue.py).
+        local pin=(taskset -c "${TCPUS[$i]}") mc=(--main-cpu "${TCPUS[$i]%%,*}")
+        if [ "${TICK_SCOPE:-0}" = 1 ]; then pin=(systemd-run --user --scope --quiet -p CPUQuota=200%); mc=(); fi
+        ( cd "$SIMSRC/$p/repo/src" && "${pin[@]}" "$S/$p/tick/Vtop" --out "$o" --clock-hz "$hz" --chunk 65536 "${mc[@]}" \
             --chunks "${TICK_CHUNKS:-4000}" --variants "${TICK_VARIANTS:-none,vgch2,runs,events,changelog,raw,raw_small}" "${qa[@]}" > "$RES/${TICK_TAG:-tick}-$p.csv" 2> "$o/stderr.log"; echo $? > "$o/exit" ) &
         pids+=($!)
         i=$((i + 1))

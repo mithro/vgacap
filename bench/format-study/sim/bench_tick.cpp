@@ -12,8 +12,13 @@
 // without the testbench's own frame decoding, which every variant would
 // pay alike: clk low eval, the raw load, clk high eval, the QSPI model,
 // the raw load and the trace step. The vgch2 variant's trace step is
-// tb.cpp's own code (raw compare, raw_slow, vgacap_trace_repeat2); events
-// and raw are the study's (w_mine.h), with their compressor threads.
+// tb.cpp's own code (raw compare, raw_slow, vgacap_trace_repeat2) into
+// vgacap's writer; lean is the same into the lean writer
+// (src/trace_write_lean.c, lean_api.h); the others are the study's
+// (w_mine.h), each with its background thread: events (zstd 1 of the
+// events stream), evplanar (events converted to planar streams, then
+// zstd 1), planar (planar written on the simulation thread, zstd 1 a
+// stream), changelog, runs, raw and raw_small.
 //
 //   bench_tick --out DIR [--variants none,vgch2,events,raw] [--chunk 65536]
 //              [--chunks 4000] [--qspi SPEC] [--clock-hz HZ] [--main-cpu N]
@@ -21,7 +26,11 @@
 // process's CPUs, given by taskset), the simulation thread alone moves to
 // CPU N, so that the background threads run beside it, as in a job's
 // two-CPU scope, not on its core.
-// CSV on stdout: chunk,round_slot,variant,ns,clocks.
+// CSV on stdout: chunk,round_slot,variant,ns,clocks,wall_ns: ns is the
+// chunk's simulation-thread CPU, wall_ns its wall time. The thread CPU
+// clock cannot see the simulation thread blocked on its writer (a stall);
+// wall time can. The study's writers also count their stalls (stderr,
+// "fs-sim: stalls"), and every writer's finish is timed (stderr).
 #include "Vtop.h"
 #include "Vtop___024root.h"
 #include "qspi.h"
@@ -29,6 +38,7 @@
 #include "vgacap/stream.h"
 #include "vgacap/trace.h"
 #include "w_mine.h"
+#include "lean_api.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -47,6 +57,11 @@ namespace {
 double thread_ns() {
     timespec ts;
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+    return ts.tv_sec * 1e9 + ts.tv_nsec;
+}
+double wall_ns() {
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec * 1e9 + ts.tv_nsec;
 }
 
@@ -95,7 +110,9 @@ __attribute__((noinline)) int raw_slow(vgacap_trace_writer_t* t, const RawPorts&
 
 struct Sim {
     std::string name;
-    int kind = 0;   // 0 none, 1 vgch2, 2 events, 3 raw, 4 raw with 2^15-clock blocks (512 KiB)
+    // 0 none, 1 vgch2, 2 events, 3 raw, 4 raw with 2^15-clock blocks (512 KiB), 5 runs, 6 changelog,
+    // 7 lean, 8 evplanar, 9 planar
+    int kind = 0;
     std::unique_ptr<VerilatedContext> ctx;
     std::unique_ptr<Vtop> top;
     ttvga::QspiBus qspi;
@@ -125,8 +142,20 @@ void run_chunk(Sim& s, uint64_t clocks) {
         }
         if (KIND) {
             const uint64_t r1 = load_raw(raw_base);
-            if (KIND == 2) {
+            if (KIND == 2 || KIND == 8) {
                 fs_events_clock(s.sw, r0, r1, clk_raw);
+            } else if (KIND == 9) {
+                fs_planar_clock(s.sw, r0, r1, clk_raw);
+            } else if (KIND == 7) {
+                // tb.cpp's step into the lean writer: vgacap_trace_repeat2 written out.
+                vgacap_trace_writer_t* t = s.tw;
+                if (__builtin_expect(((r0 ^ s.want_raw) | (r1 ^ s.want_raw ^ clk_raw)) != 0, 0)) {
+                    if (fs_lean_raw_slow(t, s.raw.off, clk_raw, r0, r1, &s.want_raw)) s.failed = 1;
+                } else if (t->limit - t->n < 2) {
+                    if (fs_lean_repeat2_slow(t)) s.failed = 1;
+                } else {
+                    t->run += 2; t->n += 2;
+                }
             } else if (KIND == 6) {
                 fs_clog_clock(s.sw, r0, r1, clk_raw);
             } else if (KIND == 5) {
@@ -149,6 +178,9 @@ void run(Sim& s, uint64_t clocks) {
     case 2: run_chunk<2>(s, clocks); break;
     case 5: run_chunk<5>(s, clocks); break;
     case 6: run_chunk<6>(s, clocks); break;
+    case 7: run_chunk<7>(s, clocks); break;
+    case 8: run_chunk<8>(s, clocks); break;
+    case 9: run_chunk<9>(s, clocks); break;
     default: run_chunk<3>(s, clocks); break;   // raw and raw_small: the same step
     }
 }
@@ -180,7 +212,8 @@ int main(int argc, char** argv) {
         if (v.empty()) continue;
         auto s = std::make_unique<Sim>();
         s->name = v;
-        s->kind = v == "none" ? 0 : v == "vgch2" ? 1 : v == "events" ? 2 : v == "raw" ? 3 : v == "raw_small" ? 4 : v == "runs" ? 5 : v == "changelog" ? 6 : -1;
+        s->kind = v == "none" ? 0 : v == "vgch2" ? 1 : v == "events" ? 2 : v == "raw" ? 3 : v == "raw_small" ? 4 : v == "runs" ? 5 : v == "changelog" ? 6 :
+                  v == "lean" ? 7 : v == "evplanar" ? 8 : v == "planar" ? 9 : -1;
         if (s->kind < 0) { std::fprintf(stderr, "bench_tick: no variant %s\n", v.c_str()); return 2; }
         s->ctx = std::make_unique<VerilatedContext>();
         s->ctx->threads(1);
@@ -209,18 +242,19 @@ int main(int argc, char** argv) {
         }
         if (s->kind && !s->raw.init(s->top->rootp)) { std::fprintf(stderr, "bench_tick: ports not contiguous\n"); return 2; }
         const std::string path = out + "/" + v + ".trace";
-        if (s->kind == 1) {
+        if (s->kind == 1 || s->kind == 7) {
             vgacap_header_t h;
             vgacap_header_init_v2(&h, 43, 2, 42, 0);
             h.mode = 2;
             h.clock_hz = clock_hz;
             char err[512];
-            s->tw = vgacap_trace_create(path.c_str(), &h,
-                                        "meta=open\nproject=bench_tick\ncalib_seconds=0\nseconds=0\nlayout=tt-um-43\n", 1,
-                                        err, sizeof err);
+            const char* om = "meta=open\nproject=bench_tick\ncalib_seconds=0\nseconds=0\nlayout=tt-um-43\n";
+            s->tw = s->kind == 1 ? vgacap_trace_create(path.c_str(), &h, om, 1, err, sizeof err)
+                                 : fs_lean_create(path.c_str(), &h, om, 1, err, sizeof err);
             if (!s->tw) { std::fprintf(stderr, "bench_tick: %s\n", err); return 2; }
         } else if (s->kind >= 2) {
-            s->sw = fs_sim_create_blocks(s->kind == 2 ? "events" : s->kind == 5 ? "runs" : s->kind == 6 ? "changelog" : "raw", path.c_str(), s->raw.off,
+            s->sw = fs_sim_create_blocks(s->kind == 2 ? "events" : s->kind == 5 ? "runs" : s->kind == 6 ? "changelog" :
+                                         s->kind == 8 ? "events-planar" : s->kind == 9 ? "planar" : "raw", path.c_str(), s->raw.off,
                                          s->kind == 4 ? (1u << 15) : 0);
         }
         // tb.cpp's reset: ena 1, rst_n 0 for 10 clocks.
@@ -238,16 +272,16 @@ int main(int argc, char** argv) {
     }
     for (auto& s : sims) run(*s, 10);
     for (auto& s : sims) s->top->rst_n = 1;
-    std::printf("chunk,slot,variant,ns,clocks\n");
+    std::printf("chunk,slot,variant,ns,clocks,wall_ns\n");
     const size_t n = sims.size();
     for (uint64_t k = 0; k < chunks; k++) {
         for (size_t j = 0; j < n; j++) {
             Sim& s = *sims[(j + k) % n];
-            const double t0 = thread_ns();
+            const double w0 = wall_ns(), t0 = thread_ns();
             run(s, chunk);
-            const double t1 = thread_ns();
-            std::printf("%llu,%zu,%s,%.0f,%llu\n", (unsigned long long)k, j, s.name.c_str(), t1 - t0,
-                        (unsigned long long)chunk);
+            const double t1 = thread_ns(), w1 = wall_ns();
+            std::printf("%llu,%zu,%s,%.0f,%llu,%.0f\n", (unsigned long long)k, j, s.name.c_str(), t1 - t0,
+                        (unsigned long long)chunk, w1 - w0);
         }
     }
     // The models must have stayed in step: compare their outputs.
@@ -257,8 +291,11 @@ int main(int argc, char** argv) {
     const double f0 = thread_ns();
     for (auto& s : sims) {
         char err[512];
-        if (s->tw && vgacap_trace_finish(s->tw, "meta=close\ncapture_after_clock=0\nstatus=ok\nframes=0\n", err, sizeof err))
+        const char* cm = "meta=close\ncapture_after_clock=0\nstatus=ok\nframes=0\n";
+        const double fw = wall_ns();
+        if (s->tw && (s->kind == 1 ? vgacap_trace_finish(s->tw, cm, err, sizeof err) : fs_lean_finish(s->tw, cm, err, sizeof err)))
             std::fprintf(stderr, "bench_tick: %s: %s\n", s->name.c_str(), err);
+        if (s->tw) std::fprintf(stderr, "bench_tick: finish %s: %.3f s wall\n", s->name.c_str(), (wall_ns() - fw) / 1e9);
         if (s->sw) fs_sim_finish(s->sw);
         if (s->failed) std::fprintf(stderr, "bench_tick: %s: a push failed\n", s->name.c_str());
     }
