@@ -185,13 +185,24 @@ class _StubStdout:
 
 
 class _FakeFileForWriting:
-    """A file `FakeBinaryBoard` opened with 'wb', truncated by the open."""
+    """A file `FakeBinaryBoard` opened with 'wb', committed only by `close()`.
+
+    As littlefs, which the rp2 port mounts at `/` (`ports/rp2/modules/
+    _boot.py` in MicroPython v1.24.0): a new file's entry is committed by the
+    open, empty (`lib/littlefs/lfs2.c:3059-3063`); truncating an existing one
+    only marks the handle dirty (`lfs2.c:3081-3084`); the data and size reach
+    the directory entry when the handle is synced or closed (`lfs2.c:
+    3182-3184,3367-3412`). Until then a reader sees the file as it was.
+    """
 
     def __init__(self, board: "FakeBinaryBoard", path: str) -> None:
         self._board = board
         self._path = path
         self._writes = 0
-        board.files[path] = b""
+        self._data = bytearray()
+        self.closed = False
+        board.files.setdefault(path, b"")
+        board.writers.append(self)
 
     def write(self, data) -> int:
         data = bytes(data)
@@ -200,11 +211,21 @@ class _FakeFileForWriting:
         else:
             stored = data
         self._writes += 1
-        self._board.files[self._path] += stored
+        self._data += stored
         return len(data)
 
     def close(self) -> None:
-        pass
+        # A second close is a no-op, as `vfs_lfsx_file.c:180-183` has it.
+        if self.closed:
+            return
+        self.closed = True
+        data = bytes(self._data)
+        if self._board.on_file_close is not None:
+            data = self._board.on_file_close(self._path, data)
+        if data is None:
+            self._board.files.pop(self._path, None)
+        else:
+            self._board.files[self._path] = data
 
 
 class FakeBinaryBoard:
@@ -222,21 +243,34 @@ class FakeBinaryBoard:
 
     `open()` in the script reaches `files` (path -> bytes), an in-memory
     stand-in for the board's filesystem, never the host's: modes 'rb' and
-    'wb' only, a missing file raising `OSError(ENOENT)` as on a board, 'wb'
-    truncating the file at once and each `write()` landing as it is made, so
-    an upload cut short leaves the part it wrote. `on_file_write`, if given, is
-    called as ``on_file_write(path, n, data)`` for the `n`-th `write()` (from
-    0) to a file opened for writing and returns the bytes really stored --
-    corruption between the REPL and the flash.
+    'wb' only, a missing file raising `OSError(ENOENT)` and a path in `dirs`
+    `OSError(EISDIR)` in either mode (`lfs2.c:3077-3079`), as on a board. A
+    file opened 'wb' changes only when it is closed (`_FakeFileForWriting`).
+    Every write handle stays in `writers`; `collect()` closes those the script
+    never closed, as the board's GC does when it finalises an unreachable
+    file (`__del__` is close, `extmod/vfs_lfsx_file.c:93-95,207`).
+
+    `on_file_write`, if given, is called as ``on_file_write(path, n, data)``
+    for the `n`-th `write()` (from 0) to a file opened for writing and
+    returns the bytes really stored -- corruption between the REPL and the
+    flash -- or raises. `on_file_close`, if given, is called as
+    ``on_file_close(path, data)`` when such a file is closed and returns what
+    is committed, or None for a file that is then gone.
     """
 
     def __init__(self, chunk_size: int = 8192, corrupt=None, modules=None,
-                 files: dict[str, bytes] | None = None, on_file_write=None) -> None:
+                 files: dict[str, bytes] | None = None, on_file_write=None,
+                 dirs=(), on_file_close=None) -> None:
         self.chunk_size = chunk_size
         self.corrupt = corrupt
         #: The board's filesystem, path -> contents.
         self.files: dict[str, bytes] = dict(files or {})
+        #: Paths that are directories.
+        self.dirs: set[str] = set(dirs)
         self.on_file_write = on_file_write
+        self.on_file_close = on_file_close
+        #: Every handle opened 'wb', closed or not, oldest first.
+        self.writers: list[_FakeFileForWriting] = []
         _install_ubinascii()
         self.closed = False
         self.commands: list[str] = []
@@ -268,7 +302,18 @@ class FakeBinaryBoard:
         self._builtins["open"] = self._open
         self._globals: dict = {"__builtins__": self._builtins}
 
+    def collect(self) -> None:
+        """Finalise every write handle never closed, as a board's GC would."""
+        for writer in self.writers:
+            writer.close()
+
+    def unclosed_writers(self) -> list[str]:
+        """The paths of write handles the script has not closed."""
+        return [w._path for w in self.writers if not w.closed]
+
     def _open(self, path: str, mode: str = "r"):
+        if mode in ("rb", "wb") and path in self.dirs:
+            raise OSError(errno.EISDIR, "EISDIR")
         if mode == "rb":
             if path not in self.files:
                 raise OSError(errno.ENOENT, "ENOENT")

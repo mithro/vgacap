@@ -245,3 +245,127 @@ def test_a_longer_file_with_the_same_crc32_is_replaced():
 
     assert _repl(board).upload(HELD, payload) is True
     assert board.files[HELD] == payload
+
+
+# -- fix round 1 ---------------------------------------------------------------
+
+
+def _fail_slice(index: int):
+    """A write hook whose `index`-th write fails, as a heap or link failure
+    would, without the handle itself erring."""
+
+    def hook(path, n, data):
+        if n == index:
+            raise MemoryError("memory allocation failed, allocating 2048 bytes")
+        return data
+
+    return hook
+
+
+def test_every_write_handle_is_closed():
+    # On littlefs the data and size reach the directory only at close
+    # (the fake models that), so a missing close is a short file there.
+    payload = _payload()
+    board = FakeBinaryBoard()
+
+    _repl(board).upload(HELD, payload)
+
+    assert board.unclosed_writers() == []
+    assert board.files[HELD] == payload
+
+
+def test_a_failed_slice_closes_its_handle_before_the_retry():
+    payload = _payload()
+    board = FakeBinaryBoard(on_file_write=_fail_slice(10))
+    repl = _repl(board)
+    with pytest.raises(RuntimeError, match="MemoryError"):
+        repl.upload(HELD, payload)
+    assert board.unclosed_writers() == []
+
+    board.on_file_write = None
+    assert repl.upload(HELD, payload) is True
+    # A handle left open by the failure, finalised by a GC after the retry,
+    # would commit its 10 stale slices over the retry's file.
+    board.collect()
+    assert board.files[HELD] == payload
+
+
+def test_a_handle_left_by_a_lost_host_is_closed_before_the_check():
+    # The host died mid-upload, so nobody sent the close: the board still
+    # holds the write handle under upload()'s documented name.
+    payload = _payload()
+    board = FakeBinaryBoard()
+    repl = _repl(board)
+    _out, err = repl.exec(
+        f"_ttcap_up_f=open({HELD!r},'wb')\n_ttcap_up_f.write(b'stale')"
+    )
+    assert err == ""
+
+    assert repl.upload(HELD, payload) is True
+    board.collect()
+    assert board.files[HELD] == payload
+
+
+def test_a_name_with_a_quote_and_a_backslash_lands_under_that_name():
+    name = "/_vgacap/it's\\x.bin"
+    board = FakeBinaryBoard()
+    repl = _repl(board)
+
+    assert repl.upload(name, b"held") is True
+    assert board.files == {name: b"held"}
+    assert repl.upload(name, b"held") is False
+
+
+def test_a_file_gone_after_the_write_is_refused():
+    board = FakeBinaryBoard(on_file_close=lambda path, data: None)
+
+    with pytest.raises(UploadError) as raised:
+        _repl(board).upload(HELD, b"abc")
+
+    assert f"host len=3 crc32=0x{zlib.crc32(b'abc'):08x}" in str(raised.value)
+    assert "board absent" in str(raised.value)
+
+
+def test_a_directory_as_the_target_fails_loudly_and_writes_nothing():
+    board = FakeBinaryBoard(dirs={HELD})
+
+    with pytest.raises(RuntimeError, match="OSError"):
+        _repl(board).upload(HELD, b"abc")
+
+    assert HELD not in board.files
+    assert not any("'wb'" in c for c in board.commands)
+
+
+def test_an_existing_empty_file_is_skipped_for_empty_data():
+    board = FakeBinaryBoard(files={"/e.bin": b""})
+
+    assert _repl(board).upload("/e.bin", b"") is False
+    assert board.writers == []
+
+
+def test_a_failed_slice_reports_a_short_head_of_the_command():
+    payload = _payload()
+    board = FakeBinaryBoard(on_file_write=_fail_slice(0))
+
+    with pytest.raises(RuntimeError) as raised:
+        _repl(board).upload(HELD, payload)
+
+    msg = str(raised.value)
+    assert "MemoryError" in msg
+    slice_b64 = base64.b64encode(payload[:2048]).decode("ascii")
+    assert slice_b64[:200] not in msg
+    assert "chars" in msg
+
+
+def test_upload_leaves_no_names_of_its_own_in_the_repl_globals():
+    board = FakeBinaryBoard()
+    repl = _repl(board)
+    before = set(board._globals) | {"ubinascii"}
+
+    repl.upload(HELD, _payload())
+    assert set(board._globals) <= before
+
+    board.on_file_write = _fail_slice(2)
+    with pytest.raises(RuntimeError):
+        repl.upload(HELD, _payload(seed=5))
+    assert set(board._globals) <= before
