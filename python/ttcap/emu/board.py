@@ -208,6 +208,18 @@ _WAIT, _IN, _JMP, _PULL, _PUSH, _MOV, _SET, _OUT, _IRQ = range(9)
 class _SM:
     """One state machine: registers, FIFOs and the interpreter."""
 
+    # Slots keep attribute access in the interpreter loop fast: CPython 3.13
+    # stops sharing an instance dict's keys past 30 attributes, and this
+    # class has more, which cost the capture tests about 10%.
+    __slots__ = (
+        "autopush", "block", "board", "code", "delays", "disable_at", "enabled",
+        "in_base", "in_count", "index", "irq_flags", "irq_waiting", "isr",
+        "isr_count", "now", "osr", "osr_count", "out_right", "pc", "program",
+        "push_thresh", "rx", "rx_depth", "shift_left", "shiftctrl", "side_last",
+        "sideset_gpios", "sidesets", "tx", "tx_depth", "wrap_target", "wrap_top",
+        "x", "y",
+    )
+
     def __init__(self, board: "Board", block: "_PioBlock", index: int) -> None:
         self.board = board
         self.block = block
