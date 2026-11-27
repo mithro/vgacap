@@ -186,6 +186,8 @@ if(VGACAP_HOST_EXTRAS)
   add_test(NAME test_trace_push_speed COMMAND test_trace_write --speed)
   set_tests_properties(test_trace_push_speed PROPERTIES
     LABELS perf WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+  add_test(NAME test_tbv1_speed COMMAND test_tbv1 --speed)
+  set_tests_properties(test_tbv1_speed PROPERTIES LABELS perf)
 else()
   # Without the host extras vgacap-dump cannot read a trace and must say so.
   # PASS_REGULAR_EXPRESSION replaces the exit-code check, so the wrapper
