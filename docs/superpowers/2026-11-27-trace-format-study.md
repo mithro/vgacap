@@ -105,19 +105,63 @@ Every candidate with a fast path keeps tb.cpp's raw compare. A clock whose two i
 
 `clk` is never stored, except in FST-with-clk and the sigrok-like layout. It is the sample's parity, as in VGCH v2.
 
-| Candidate | What is stored, per block | Simulation thread, per changed clock | Background thread | Code |
+| Candidate | Stored | Simulation thread, per changed clock | Background thread | Code |
 |---|---|---|---|---|
-| **vgch2** (current) | [VGCH v2](../trace-format.md). One `RUNS` chunk of pairs: a 6-byte tt-um-43 value (43 bits, clock bit cleared), then a LEB128 run in samples. The block has `BLKH` and `META`. It closes at 2^24 clocks or at 16 MiB − 64 KiB. | tb.cpp's `raw_slow`: pack both samples, then `vgacap_trace_push2`, which makes two pushes and writes a pair for each sample that changed | zstd level 1 with an XXH64 checksum, one zstd frame a block, a seek table at the end | vgacap's [`trace_write.c`](../../src/trace/trace_write.c), unchanged, compiled with its one `ZSTD_compress2` call renamed ([`vgch_hook.h`](../../bench/format-study/src/vgch_hook.h)). Its output is byte-identical to the published colorbars trace (`cmp`). |
-| **runs** | The same `RUNS` pair bytes. The study container adds its own block header and leaves out `BLKH` and the `RUNS` chunk header. | One out-of-line call: for each sample that differs from the last, pack it and write the pair | as vgch2 | [`w_mine.c`](../../bench/format-study/src/w_mine.c) `fs_runs_slow`. It exists to tell the cost of the RUNS format from the cost of vgacap's writer code. At zstd 1 on colorbars it is 552,706 bytes against vgch2's 554,921: the same data. |
-| **planar** | Seven streams, one a port. Each is (u8 value, LEB128 run in samples) pairs covering the block. Each stream is compressed on its own. | One call: for each port that changed, write that port's pair | zstd 1 per stream | `fs_planar_slow`. A per-signal value-change list with delta-coded times (FST's model) holds the same information as (Δt, value) pairs instead of (value, run), so planar stands for it too. |
-| **events** | One time-ordered stream. It starts with the 7 port bytes at the block's first sample. Each changed sample then adds a LEB128 Δ (samples since the last event), a mask byte (bit k: port k changed) and the changed ports' new bytes. This is VCD's ordering in binary. | One call: for each changed sample, write Δ, mask and the changed bytes | zstd 1 | `fs_events_slow` |
-| **changelog** | Planar's streams, converted from records on the background thread. | One call: store the clock's sample number and both raw images (24 bytes), with no encoding. | Convert the records to planar streams (`changelog-planar`), then zstd 1 per stream. The blocks hold up to 64 MiB of records. | `fs_clog_slow`; `fs_clog_to_planar` in `codec.c` |
-| **events, stored as planar** | Planar's streams. | as events | Convert the events stream to planar streams (`events-planar`), then zstd 1 per stream. | `fs_events_to_planar` in `codec.c` |
-| **raw** | Both raw images of every clock, 16 bytes, with no comparison at all. | Two 8-byte stores a clock, changed or not. There is no slow path, only the block end. | Pack and check the clock bit. Then apply a transform: `pack6` (the 42-bit value, 6 bytes), `xor6` (pack6 XOR the previous sample, a Gorilla-style delta), `byteplanes` (Blosc's byte shuffle: 7 planes), `xor-byteplanes`, or `xor-bitplanes` (Blosc's bitshuffle after the XOR: the bit planes of each port). Then compress with zstd −1, 1 or 3, or LZ4. Raw stored as planar (`planar-runs`) converts the images to planar's streams instead. The block is 2^21 clocks (32 MiB), and `raw_small` has 2^15 (512 KiB). | `fs_raw_clock`; [`codec.c`](../../bench/format-study/src/codec.c) |
-| **sigrok-like** | The spec's candidate 1, sigrok `.sr`: samples of 6 bytes with `clk`, deflated. It is measured as `pack6clk` deflated in 2^21-clock pieces, without the zip directory. | as raw | deflate levels 1 and 6 (zip's default is 6) | as raw |
-| **FST** | FST written directly through libfst, the copy vendored in vgacap, with the same calls as `vgacap-export`: LZ4 packing, parallel mode, times in ps, 7 signals. **FST-with-clk** adds `clk` as an eighth signal. | libfst's time change and value change, for each changed port | libfst's own, in its parallel mode | [`w_ext.c`](../../bench/format-study/src/w_ext.c) |
-| **LXT2** | GTKWave's `lxt2_write` with its defaults, the 7 ports, times in ps. | `lxt2_wr_set_time64` and `lxt2_wr_emit_value_int` | none: it compresses on the calling thread | [`third_party/lxt2`](../../bench/format-study/third_party/lxt2) at gtkwave `e40ba79` |
-| **VCD** | Text, `b` + 8 digits for vectors and one digit for scalars, as GTKWave writes it. It is compressed in 16 MiB pieces: a `.vcd.zst` or `.vcd.gz`. | A hand-written formatter: `#time` and the changed values | zstd 1, deflate 6, or none | `w_ext.c`. GTKWave's `fst2vcd` of the FST file gives a VCD within 79 bytes of this one's size (1,445,756,933 against 1,445,756,854 bytes, colorbars). |
+| **vgch2** (current) | `RUNS` pairs | two pushes | zstd 1 | [`trace_write.c`](../../src/trace/trace_write.c) |
+| **lean** | `RUNS` pairs, vgch2's file | one call | zstd 1 | [`trace_write_lean.c`](../../bench/format-study/src/trace_write_lean.c) |
+| **planar** | 7 run streams | one call, a pair per changed port | zstd 1 per stream | [`w_mine.c`](../../bench/format-study/src/w_mine.c) `fs_planar_slow` |
+| **events** | 1 change stream | one call | zstd 1 | `fs_events_slow` |
+| **events, stored as planar** (evplanar) | 7 run streams | as events | convert, then zstd 1 per stream | [`codec.c`](../../bench/format-study/src/codec.c) `fs_events_to_planar` |
+| **changelog** | 7 run streams | one call, 24 bytes stored | convert, then zstd 1 per stream | `fs_clog_slow`, `fs_clog_to_planar` |
+| **raw** | both raw images of every clock | none: two stores every clock | a transform, then a compressor | `fs_raw_clock`, `codec.c` |
+| **sigrok-like** | 6-byte samples with `clk` | as raw | deflate | as raw |
+| **FST** | libfst's | libfst's calls | libfst's | [`w_ext.c`](../../bench/format-study/src/w_ext.c) |
+| **LXT2** | GTKWave's | `lxt2_wr_*` calls | none | [`third_party/lxt2`](../../bench/format-study/third_party/lxt2) |
+| **VCD** | text | a formatter | zstd 1, deflate 6 or none | `w_ext.c` |
+
+The details of each:
+
+- **vgch2**, [VGCH v2](../trace-format.md).
+  - Each block holds one `RUNS` chunk of pairs: a 6-byte tt-um-43 value (43 bits, clock bit cleared), then a LEB128 run in samples. The block also has `BLKH` and `META`.
+  - A block closes at 2^24 clocks, or at 16 MiB − 64 KiB of payload.
+  - On a changed clock, tb.cpp's `raw_slow` packs both samples and calls `vgacap_trace_push2`. That makes two pushes, and writes a pair for each sample that changed.
+  - In the background: zstd level 1 with an XXH64 checksum, one zstd frame a block, and a seek table at the end.
+  - The code is vgacap's writer, unchanged, compiled with its one `ZSTD_compress2` call renamed ([`vgch_hook.h`](../../bench/format-study/src/vgch_hook.h)). Its output is byte-identical to all 11 published traces (`cmp`).
+- **lean**: vgacap's writer with `push2`'s slow path replaced by one call a changed clock ([The lean writer](#the-lean-writer)). Its file is vgch2's, byte for byte, on all 11 traces.
+- **planar**.
+  - Seven streams a block, one a port. Each is (u8 value, LEB128 run in samples) pairs covering the block, compressed on its own.
+  - On a changed clock, it writes a pair for each port that changed.
+  - A per-signal value-change list with delta-coded times (FST's model) holds the same information as (Δt, value) pairs instead of (value, run). So planar stands for it too.
+- **events**.
+  - One time-ordered stream a block. It starts with the 7 port bytes at the block's first sample.
+  - Each changed sample then adds a LEB128 Δ (samples since the last event), a mask byte (bit k: port k changed) and the changed ports' new bytes. This is VCD's ordering in binary.
+- **events, stored as planar**: the events writer on the simulation thread. The background thread converts each block's events to planar's streams, then compresses them.
+- **changelog**.
+  - On a changed clock, it stores the sample number and both raw images, 24 bytes, with no encoding.
+  - The background thread converts the records to planar's streams (`changelog-planar`), then compresses each stream.
+  - A block holds up to 64 MiB of records.
+- **raw**.
+  - Both raw images of every clock, 16 bytes, with no comparison at all. Two 8-byte stores a clock, changed or not. There is no slow path, only the block end.
+  - The background thread packs the images and checks the clock bit. Then it applies a transform:
+    - `pack6`: the 42-bit value, 6 bytes;
+    - `xor6`: pack6 XOR the previous sample, a Gorilla-style delta;
+    - `byteplanes`: Blosc's byte shuffle, 7 planes;
+    - `xor-byteplanes`;
+    - `xor-bitplanes`: Blosc's bitshuffle after the XOR, the bit planes of each port;
+    - `planar-runs`: planar's streams.
+  - Then it compresses with zstd −1, 1 or 3, or LZ4.
+  - A block is 2^21 clocks (32 MiB); `raw_small` has 2^15 (512 KiB).
+- **sigrok-like**: the spec's candidate 1, sigrok `.sr`. Samples of 6 bytes with `clk`, deflated. It is measured as `pack6clk` deflated in 2^21-clock pieces, without the zip directory. Deflate levels are 1 and 6; zip's default is 6.
+- **FST**: written directly through libfst, the copy vendored in vgacap, with the same calls as `vgacap-export`.
+  - LZ4 packing, parallel mode, times in ps, 7 signals.
+  - On a changed clock: libfst's time change, and a value change for each changed port.
+  - **FST-with-clk** adds `clk` as an eighth signal.
+- **LXT2**: GTKWave's `lxt2_write`, at gtkwave `e40ba79`, with its defaults, the 7 ports, times in ps. It compresses on the calling thread.
+- **VCD**.
+  - Text: `b` and 8 digits for vectors, one digit for scalars, as GTKWave writes it.
+  - On a changed clock, a hand-written formatter writes `#time` and the changed values.
+  - It is compressed in 16 MiB pieces, as a `.vcd.zst` or a `.vcd.gz`.
+  - GTKWave's `fst2vcd` of the FST file gives a VCD within 79 bytes of this one's size: 1,445,756,933 against 1,445,756,854 bytes, on colorbars.
 
 The compressors are measured on every byte stream above that has a background part:
 
@@ -128,7 +172,15 @@ The compressors are measured on every byte stream above that has a background pa
 - LZ4-HC at level 9, from [lz4 v1.10.0](https://github.com/lz4/lz4/tree/v1.10.0/lib), added for the study;
 - deflate at levels 1 and 6.
 
-The study container that the planar, events, changelog and raw candidates use is deliberately simple. Every planar-stored candidate writes the same streams, so the planar writer's file stands for all of them in the read benchmarks; each converted file holds the same canonical runs as vgacap's reader gives, on all 11 traces (Validation table). It has a file header, then for each block a header (magic, first sample, sample count, and the length of each stream), then the compressed streams. An index and a footer end the file. A reader with no footer walks the block headers. It has the same properties as VGCH v2's container (seekable, truncation-tolerant, streamable), so the comparison is about the payload.
+**The study container.** The planar, events, changelog and raw candidates are written in a container of the study's own.
+
+- It has a file header. Each block then has a header (magic, first sample, sample count, and the length of each stream), followed by its compressed streams. Each stream is a zstd frame of its own. An index and a footer end the file.
+- A reader with no footer walks the block headers.
+- It is seekable and survives truncation.
+- It is not VGCH v2's container:
+  - `zstd -d` cannot read it (the interop table);
+  - its index holds each block's first sample, which zstd's seek table cannot.
+- Every planar-stored candidate writes the same canonical runs, and each converted file matches vgacap's reader on all 11 traces (the validation table). The files are not byte-identical. Each writer ends a block when its own buffer fills, so the block boundaries differ: in the loop, nyancat's first 262 M clocks made 21 blocks from planar, 40 from events to planar and 72 from changelog. So atari2600 is 9.02 MB from the planar writer, 9.38 MB from events to planar and 9.83 MB from changelog to planar. The read benchmarks read each file.
 
 **Considered and not measured.**
 
@@ -145,7 +197,7 @@ The inputs are the 11 traces of the pilot, as published under `/srv/data.wafer.s
 
 The traces were written by vgacap at [`c7176da`](https://github.com/mithro/vgacap/commit/c7176da). In `src/trace` and `src/stream` that commit is identical to `f3f84ab`, apart from docs.
 
-They are replayed by reading them with vgacap's own reader. Their runs are expanded back into the two raw images a clock that the testbench had. Replayed through the vgch2 candidate, the colorbars trace gives back a file that is byte-identical to the published one. So the replay feeds the writers exactly what the simulation fed them.
+They are replayed by reading them with vgacap's own reader. Their runs are expanded back into the two raw images a clock that the testbench had. Replayed whole through vgacap's writer, every one of the 11 traces gives back a file that is byte-identical to the published one ([the lean writer's table](#the-lean-writer-writes-vgacaps-file), its vgch2 column). So the replay feeds the writers exactly what the simulation fed them.
 
 [Inputs: the 11 traces](#inputs-the-11-traces-and-the-code-paths-they-take) gives the share of clocks that take each of vgch2's code paths:
 
@@ -154,6 +206,23 @@ They are replayed by reading them with vgacap's own reader. Their runs are expan
 - the block boundary.
 
 Those shares range from 0.2% slow clocks (metaballs) to 100% (rle_vga, whose QSPI clock changes `uio_out` on every sample). The bench this replaces, [`bench_runs.c`](../../bench/bench_runs.c), replayed one synthetic frame, so it never had the expensive case at the rates the real designs have.
+
+### The lean writer
+
+The lean writer is [`trace_write_lean.c`](../../bench/format-study/src/trace_write_lean.c): vgacap's [`trace_write.c`](../../src/trace/trace_write.c), included unchanged, with one function replaced, `push2`'s slow path.
+
+- In vgacap, `push2`'s slow path is two `vgacap_trace_push` calls. A changed clock goes through it, then through `vgacap_trace_slow` once per changed sample.
+- In the lean writer, a changed clock is one out-of-line call that does both samples. It makes every check the two pushes make: the clock bits, the bits above `sample_bits`, a failed writer, and a block end.
+- Any case it does not handle goes to the original two pushes, so the block split is vgch2's own:
+  - a block end by clocks at sample n or n + 1;
+  - a block that could end by size inside the pair;
+  - sample 0;
+  - a bad sample;
+  - a failed writer.
+- [`test_lean.sh`](../../bench/format-study/test_lean.sh) (stage `lean`) writes each of the 11 published traces whole through the lean writer and through vgacap's, and compares each result with the published file by `cmp`. It fails on any difference.
+- In the Verilator loop the lean writer is called through tb.cpp's own glue ([`lean_api.h`](../../bench/format-study/src/lean_api.h)), as the vgch2 variant is.
+
+The first round's `runs` writer was the study's own writer of the same pairs. It split blocks by its own rule, so its files were not vgch2's on any trace whose blocks end by size. This round does not use it for any claim.
 
 ### The simulation thread: two measurements
 
@@ -164,14 +233,42 @@ Those shares range from 0.2% slow clocks (metaballs) to 100% (rle_vga, whose QSP
    - The 95% interval is a bootstrap over the chunks (2,000 resamples). The tables also give the spread of the 5 rounds.
    - The job is pinned with `taskset`, one job a physical core, and the load is logged with each chunk.
    - The background parts are off here. A block is handed over and dropped (vgch2's thread still runs, compressing nothing). So this measures the simulation thread alone, and runs 10-30 times faster than a real simulation.
-2. **The Verilator loop, in one process** ([`sim/bench_tick.cpp`](../../bench/format-study/sim/bench_tick.cpp)).
-   - This is the authoritative number for R1. For 3 projects (nyancat, rle_vga and colorbars) one process holds one Verilated model per variant. Each model is built with the pilot's own Verilator command, taken from the job's `build.log`, and runs from the project's `src` directory, as `job.py` runs it.
-   - All models start from reset. They are stepped in turn in 65,536-clock chunks with tb.cpp's own tick loop, raw compare and trace calls. 4,000 chunks make 262 million clocks a model, about 10 simulated seconds. Each chunk is timed by the thread CPU clock.
-   - The writers run with their real background threads, double-buffered: vgch2's compressor; zstd 1 of the events stream; the changelog's conversion to planar and zstd 1; raw's `xor6` and zstd 1.
+2. **The Verilator loop, in one process** ([`sim/bench_tick.cpp`](../../bench/format-study/sim/bench_tick.cpp)). This is the authoritative number for R1.
+   - One process holds one Verilated model per variant, for one project. Each model is built with the pilot's own Verilator command, taken from the job's `build.log`. It runs from the project's `src` directory, as `job.py` runs it.
+   - All models start from reset. They are stepped in turn in 65,536-clock chunks, with tb.cpp's own tick loop, raw compare and trace calls. 4,000 chunks make 262 million clocks a model, about 10 simulated seconds.
+   - Each chunk is timed twice: by the thread CPU clock, and by the wall clock.
+   - The writers run with their real background threads, double-buffered.
    - Every variant runs the same design state at the same moment on the same core, so host drift cancels in the paired difference to the untraced model.
-   - One process still has a layout of its own: where its models and buffers sit in memory, and which turn each takes. So the check was run as separate processes, each with the variants in another order. The tables give the median over the processes and the lowest and highest.
-   - **Two CPUs a process (4 processes, `tick2a` to `tick2d`) are the figures for R1.** The simulation thread is pinned to one CPU, and the writers' threads may also use a second. That is how a job runs, in a scope of two CPUs.
-   - **One CPU a process (7 processes, `tick` to `tickG`) came first.** There every background thread shared the simulation's core. That penalises the candidates with heavy background work: vgch2's compressor, raw's and changelog's converters. It is kept as a second view. Processes tick to tickD have no changelog variant.
+   - One process still has a layout of its own: where its models and buffers sit in memory, and which turn each takes. So each set is run as several processes, each with the variants in another order. The tables give the median over the processes, and the lowest and highest.
+
+The fix round's loop sets, run by [`sim/run_ticks.sh`](../../bench/format-study/sim/run_ticks.sh):
+
+| Set | Processes a project | Variants | CPUs a process |
+|---|---:|---|---|
+| main (`fx1a` to `fx1d`) | 4 | none, vgch2, lean, events, evplanar, planar, changelog | 2, pinned, the simulation thread on the first |
+| raw (`fx1ra` to `fx1rd`) | 4 | none, raw | 2, pinned |
+| scope (`fx1s`) | 1 | the main set's | not pinned: a systemd scope with `CPUQuota=200%`, as a job runs |
+
+- The projects are nyancat, rle_vga, colorbars, atari2600 and vgadonut.
+- In the main set, the variants' orders are:
+  - `fx1a`: none, vgch2, lean, events, evplanar, planar, changelog;
+  - `fx1b`: the reverse;
+  - `fx1c`: events, none, planar, vgch2, changelog, lean, evplanar;
+  - `fx1d`: lean, changelog, vgch2, evplanar, none, planar, events.
+- The variants' background threads:
+  - vgch2 and lean: vgacap's compressor;
+  - events: zstd 1 of the events stream;
+  - evplanar: the events stream converted to planar by the converter the encode stage uses, then zstd 1 of each stream;
+  - planar: planar written on the simulation thread, then zstd 1 of each stream;
+  - changelog: its records converted to planar, then zstd 1;
+  - raw: `xor6`, then zstd 1.
+- Raw has a set of its own. Its 32 MiB blocks and its background thread share no process, and so no L3 traffic, with another variant's. That removes the first round's bias (raw's background work fell partly on the other variants).
+- **Stalls.** A thread-CPU clock cannot see a simulation thread that waits for its writer's thread, since a waiting thread uses no CPU. So each chunk also has its wall time. For each variant, the stall measure is the wall time minus the thread CPU, over the untraced model's same difference. The study writers also count their own hand-overs that waited, and the wall time those took. vgacap's writer keeps no such count.
+- **Concurrency.** Two processes a project ran at once, `fx1a` with `fx1b` and then `fx1c` with `fx1d`: 10 processes on 20 CPUs of the second socket. The read and encode benchmarks of this round ran on the first socket at the same time. The paired design cancels most of this; the processes' spread shows what is left.
+- **The first round's sets are kept, as "first round".**
+  - Two CPUs a process: `tick2a` to `tick2d`, 4 processes on 3 projects, 12 processes at once.
+  - One CPU a process: `tick` to `tickG`, 7 processes. There every background thread shared the simulation's core. With a thread-CPU clock that time-sharing is charged to no one; only its cache effects are, and they fall on whichever variant is running.
+- **Per-process intervals.** The per-process 95% intervals are a bootstrap over chunks that follow each other, and so are correlated. They are too narrow. The range across the processes is the interval to use.
 
 A third method was tried and dropped. Six whole testbench runs started at once, side by side, each pinned to its own core, with the cores rotated by round ([`sim/run_sim.sh`](../../bench/format-study/sim/run_sim.sh) `run`). The same untraced binary took between 50.9 s and 103.5 s in the same rounds. That spread is ±35%, larger than every effect being measured. It confirms the pilot review's warning. Its raw results are kept (`results/sim/sim.csv`), but no conclusion rests on them.
 
@@ -183,7 +280,7 @@ A third method was tried and dropped. Six whole testbench runs started at once, 
 - each compressor of the matrix;
 - the file.
 
-The matrix is run on every block, except where measuring it all would take hours:
+The first round ran the matrix on every block, except where measuring it all would take hours:
 
 | Candidate | Blocks measured | Sizes and CPU |
 |---|---|---|
@@ -195,22 +292,56 @@ The matrix is run on every block, except where measuring it all would take hours
 
 Each candidate's main configuration is written whole as a real file: vgch2 by vgacap's writer, the others in the study container, FST with LZ4 by libfst. Those files are what the readers read.
 
+The first round measured each background figure once. This round adds three more measurements of the configurations R2 depends on (stage `encode2`): each alone, at zstd 1, every block, three times, apart in time. The R2 tables use encode2's median, and also the lowest figure of all four measurements.
+
+- **Spread.** The same compression work measured up to 2.8 times apart: vgch2 on rle_vga took 6.83 s in the first round and 14.5-17.2 s in encode2, for identical input and output bytes.
+- **Not the cache.** [`warm_cache.sh`](../../bench/format-study/warm_cache.sh) ran zstd1 alone, and after zstd-5 and zstd-1 had read the same block, as the first round's matrix did. Both took the same CPU, and both were close to the first round's figure. So the first round's matrix did not flatter it.
+- **What it tracks.** The spread follows what else ran on the socket. encode2 ran 20 whole-trace encodes at once on the first socket, the raw candidates' 16-bytes-a-clock passes among them, and the CPUs' hyperthread siblings were not reserved. A memory-bound compressor, such as zstd on rle_vga's 1,100-to-1 data, slows the most.
+- **A third estimate.** The loop's own background threads ran beside a real simulation. Scaled to the whole trace, they agree with the whole-trace runs to within about 30% on the busy traces ([three ways table](#background-cpu-three-ways-s-for-the-whole-trace-the-loops-scaled-against-the-whole-trace-runs)).
+- **Provenance.** Four of the first round's encode sets were run by hand, outside `run_pool`: the `runs`, changelog, events-to-planar and raw-to-planar encodes. `run_all.sh` contains them now, but those results were not produced by it. They have no `.done` files, and the events-to-planar `#pass` lines name their files by relative paths. encode2 was run by `run_all.sh`.
+
 Background CPU is compared with the pilot's untraced simulation CPU (`data/pilot_baseline.csv`, from the pilot's [`measurements.md`](https://github.com/mithro/tinytapeout-vga-videos/blob/t20-pilot/docs/reports/2026-11-pilot/measurements.md)). The simulation here ran 60 s per project.
 
 ### Reading
 
 `fsbench read` ([`rd.c`](../../bench/format-study/src/rd.c)) gives every reader the same output as vgacap's `vgacap_trace_read_runs`: runs of a 43-bit value, with the clock bit of their first sample, in batches of 1,024. The consumer only counts them. No sampler runs and no hash is taken, so SHA-256 does not appear in any read figure.
 
-The patterns are:
+The first round's patterns:
 
 | Pattern | What is timed |
 |---|---|
 | open | opening the file |
-| scan | every run of the trace: the samplers' pass, decode only |
+| scan | every run of the trace: a full decode |
 | port0 | the runs of `uo_out` alone, merged where `uo_out` did not change: an export of one pin group |
 | seek | 20 windows of 420,000 clocks (one 640x480 frame at 1 clock a pixel), at fixed pseudo-random clocks, each from a fresh open |
 
-Each project's files are read in 5 rounds, the formats in a rotated order within each round, pinned. Before any timing, a validate pass hashes every reader's canonical runs (adjacent equal values merged) and its `uo_out` runs. Every format has to match vgacap's reader on the real trace.
+Each project's files were read in 5 rounds, the formats in a rotated order within each round, pinned.
+
+A job reads its trace more than once. This round times each read the derive step makes ([`derive.py`](https://github.com/mithro/tinytapeout-vga-videos/blob/main/ttvga/harness/derive.py)), as a pattern of its own (stage `read2`, [`read2_rounds.sh`](../../bench/format-study/read2_rounds.sh)):
+
+| Pattern | The job's read | What it decodes |
+|---|---|---|
+| info | `tracetool info` (derive.py line 213), with each planar stream counted on its own | every port: the count of changes per port |
+| infoscan | `tracetool info` as it is today: one merged full scan | every port, merged |
+| sample | `vgacap-sample`'s one pass | `uo_out` and `rst_n` (`rst_n` for calibration, [`vgacap_sample.c`](../../src/tools/vgacap_sample.c) line 282) |
+| uohash | `tracetool uohash` | `uo_out`, over the first 2^25 clocks |
+| open | opening the file | |
+| seek | 10 windows, as above | every port |
+
+- Three rounds, the formats rotated within each round, one job a trace, pinned.
+- `vgacap-export` always reads all pins. Its cost is the full scan, which the first round's scan table gives.
+- **Formats.** The formats read are:
+  - vgch2;
+  - vgch2 with block starts read lazily;
+  - planar;
+  - events to planar;
+  - changelog to planar;
+  - raw to planar;
+  - events;
+  - raw `xor6`.
+- **Lazy block starts.** [`trace_read_lazy.c`](../../bench/format-study/src/trace_read_lazy.c) is vgacap's reader with one change. Its open reads only block 0's start; a seek's binary search reads the starts it needs, when it needs them. That needs no format change.
+- **Validation.** Before any timing, a validate pass hashes every reader's canonical runs (adjacent equal values merged) and its `uo_out` runs. Every format has to match vgacap's reader on the real trace. The `info` pattern's counts also have to match across the formats.
+- **The study's readers check less than vgacap's.** [`rd.c`](../../bench/format-study/src/rd.c) maps the file and decodes LEB128 without bounds checks. It checks that a stream's runs sum to the block only under `FS_CHECK_PLANAR`. vgacap's reader enforces every fault case of the spec. That flatters the study formats' scan figures somewhat. It does not touch the structural gain of reading `uo_out` alone.
 
 ### Robustness
 
@@ -219,7 +350,26 @@ Each project's files are read in 5 rounds, the formats in a rotated order within
 1. **Truncation.** Each format's complete file is cut to 10%, to 50%, and to all but its last 64 bytes, then read whole.
 2. **A crash.** Each writer is killed with SIGKILL halfway through the trace, by `fsbench encode --kill-after`, without its finish. What it left is then read.
 
-Both report the samples a reader recovers.
+Both report the samples a reader recovers. The checks have gaps:
+
+- They cover 3 projects.
+- The kill test runs the study writers synchronously, through `fsbench encode`. It never kills the double-buffered writer, nor the events-to-planar converter. So R6's "at most two blocks" is not tested for the converter.
+- No test corrupts a file, so the checksums' detection is not exercised.
+
+### Memory
+
+Memory was not measured. The writers allocate this much, from the code ([`w_mine.c`](../../bench/format-study/src/w_mine.c), [`bg.c`](../../bench/format-study/src/bg.c), [`trace_write.c`](../../src/trace/trace_write.c)):
+
+| Writer | Simulation side | Background side |
+|---|---:|---:|
+| vgch2, lean | 2 × 16 MiB | the zstd output bound, about 16 MiB |
+| planar on the simulation thread | 7 streams × 16 MiB × 2 | the zstd output bound |
+| events | 2 × 16 MiB | |
+| events to planar | 2 × 16 MiB | 8 streams × (4 × 16 MiB), for the converter |
+| changelog | 2 × 64 MiB | 8 streams × 64 MiB |
+| raw | 2 × 32 MiB | 8 streams × 32 MiB |
+
+These are allocations, not resident memory: a buffer's pages are resident only as far as it is filled. The converters' scratch is sized for the worst case the study allowed, not what a block needs. A production writer would size it to the block. At 22 jobs a host these figures matter, and they should be measured before a choice.
 
 ### Interop
 
@@ -233,7 +383,14 @@ The host is big-storage:
 - Debian 13, GCC 14.2;
 - Verilator 5.053 (`v5.052-80-g0bad0faca`), the pilot's.
 
-Load during the runs was 0.5 to 1.5 a CPU, which is normal for this host; `load.log` has it every 30 s. Everything is compiled `-O2 -g` with vgacap's `-Wa,-mbranches-within-32B-boundaries`. The Verilator models use the pilot's flags (`-O3`, `OPT_FAST=-O2`).
+Everything is compiled `-O2 -g` with vgacap's `-Wa,-mbranches-within-32B-boundaries`. The Verilator models use the pilot's flags (`-O3`, `OPT_FAST=-O2`).
+
+Other sessions shared the host throughout, and no stage ran on an idle machine. [Host load during each stage](#host-load-during-each-stage) gives the load as `load.log` recorded it. It ranged from 0.4 to 2.3 a CPU, with as little as 1% idle.
+
+- The first round's stages overlapped:
+  - `tick2a` to `tick2d` ran together, 12 processes;
+  - the last `writer2` run shared the first socket with three one-CPU loop processes and changelog encodes.
+- So did this round's: the loop sets ran on the second socket while encode2, read2 and warm_cache.sh ran on the first.
 
 ## Results
 
