@@ -56,6 +56,8 @@ static inline void fs_raw_clock(void *w, uint64_t r0, uint64_t r1) {
 // holding uo_out, uio_out, uio_oe, ui_in, uio_in, rst_n, ena, clk (tb.cpp's
 // RawPorts::off). Returns NULL on a bad kind.
 void *fs_sim_create(const char *kind, const char *path, const int off[8]);
+// The same with a block length in clocks (0: the writer's default).
+void *fs_sim_create_blocks(const char *kind, const char *path, const int off[8], uint64_t block_clocks);
 void fs_sim_finish(void *w);
 
 #ifdef __cplusplus

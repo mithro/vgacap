@@ -89,7 +89,7 @@ __attribute__((noinline)) int raw_slow(vgacap_trace_writer_t* t, const RawPorts&
 
 struct Sim {
     std::string name;
-    int kind = 0;   // 0 none, 1 vgch2, 2 events, 3 raw
+    int kind = 0;   // 0 none, 1 vgch2, 2 events, 3 raw, 4 raw with 2^15-clock blocks (512 KiB)
     std::unique_ptr<VerilatedContext> ctx;
     std::unique_ptr<Vtop> top;
     ttvga::QspiBus qspi;
@@ -121,7 +121,7 @@ void run_chunk(Sim& s, uint64_t clocks) {
             const uint64_t r1 = load_raw(raw_base);
             if (KIND == 2) {
                 fs_events_clock(s.sw, r0, r1, clk_raw);
-            } else if (KIND == 3) {
+            } else if (KIND == 3 || KIND == 4) {
                 fs_raw_clock(s.sw, r0, r1);
             } else if (__builtin_expect(((r0 ^ s.want_raw) | (r1 ^ s.want_raw ^ clk_raw)) != 0, 0)) {
                 if (raw_slow(s.tw, s.raw, r0, r1, &s.want_raw)) s.failed = 1;
@@ -137,7 +137,7 @@ void run(Sim& s, uint64_t clocks) {
     case 0: run_chunk<0>(s, clocks); break;
     case 1: run_chunk<1>(s, clocks); break;
     case 2: run_chunk<2>(s, clocks); break;
-    default: run_chunk<3>(s, clocks); break;
+    default: run_chunk<3>(s, clocks); break;   // raw and raw_small: the same step
     }
 }
 
@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
         if (v.empty()) continue;
         auto s = std::make_unique<Sim>();
         s->name = v;
-        s->kind = v == "none" ? 0 : v == "vgch2" ? 1 : v == "events" ? 2 : v == "raw" ? 3 : -1;
+        s->kind = v == "none" ? 0 : v == "vgch2" ? 1 : v == "events" ? 2 : v == "raw" ? 3 : v == "raw_small" ? 4 : -1;
         if (s->kind < 0) { std::fprintf(stderr, "bench_tick: no variant %s\n", v.c_str()); return 2; }
         s->ctx = std::make_unique<VerilatedContext>();
         s->ctx->threads(1);
@@ -206,7 +206,8 @@ int main(int argc, char** argv) {
                                         err, sizeof err);
             if (!s->tw) { std::fprintf(stderr, "bench_tick: %s\n", err); return 2; }
         } else if (s->kind >= 2) {
-            s->sw = fs_sim_create(s->kind == 2 ? "events" : "raw", path.c_str(), s->raw.off);
+            s->sw = fs_sim_create_blocks(s->kind == 2 ? "events" : "raw", path.c_str(), s->raw.off,
+                                         s->kind == 4 ? (1u << 15) : 0);
         }
         // tb.cpp's reset: ena 1, rst_n 0 for 10 clocks.
         Vtop& top = *s->top;

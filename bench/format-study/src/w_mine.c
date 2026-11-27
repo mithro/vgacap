@@ -377,6 +377,10 @@ static sim_t *sim_of[64];   // writer -> its bg, for fs_sim_finish
 static int nsim;
 
 void *fs_sim_create(const char *kind, const char *path, const int off[8]) {
+    return fs_sim_create_blocks(kind, path, off, 0);
+}
+
+void *fs_sim_create_blocks(const char *kind, const char *path, const int off[8], uint64_t block_clocks) {
     for (int k = 0; k < 8; k++) fs_off[k] = off[k];
     clk_byte = off[7];
     fs_clk_raw = 1ull << (8 * clk_byte);
@@ -384,7 +388,7 @@ void *fs_sim_create(const char *kind, const char *path, const int off[8]) {
     const int raw = !strcmp(kind, "raw");
     if (!raw && strcmp(kind, "events")) return NULL;
     void *bg = fs_bg_new(kind, raw ? "xor6" : "identity", "zstd1", path);
-    void *w = raw ? raw_new(0, fs_bg_fn(), bg, 1) : events_new(0, fs_bg_fn(), bg, 1);
+    void *w = raw ? raw_new(block_clocks, fs_bg_fn(), bg, 1) : events_new(block_clocks, fs_bg_fn(), bg, 1);
     sim_t *s = calloc(1, sizeof *s);
     s->w = w; s->bg = bg; s->raw = raw;
     if (nsim < 64) sim_of[nsim++] = s;

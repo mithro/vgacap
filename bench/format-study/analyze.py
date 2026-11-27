@@ -248,6 +248,57 @@ table(["project", "chunks", "clocks replayed (M)", "of the trace (%)", "changed 
        "changed clocks, whole trace (%)", "load per CPU during the run"], body)
 
 # ---- 3. the simulation check ---------------------------------------------------------------------
+# ---- 3a. the in-process simulation check (bench_tick) -------------------------------------------
+tick = {}
+for path in glob.glob(os.path.join(RES, "sim", "tick-*.csv")):
+    p = SHORT[os.path.basename(path)[5:-4]]
+    d = defaultdict(dict)
+    for c in rows(path):
+        if len(c) == 5 and c[0].isdigit() and c[3].isdigit() and c[4].isdigit():
+            d[c[2]][int(c[0])] = (float(c[3]), int(c[4]))
+    tick[p] = d
+tick_est = {}
+if tick:
+    print("## Simulation check: the Verilator loop, in one process\n")
+    print("Each variant's model in one process, stepped in turn by 65,536-clock chunks (bench_tick.cpp). "
+          "ns per clock over the untraced model, paired by chunk: estimate [95% bootstrap interval over chunks].\n")
+    body, bodyp = [], []
+    for p in [x for x in ORDER if x in tick]:
+        d = tick[p]
+        base_c = d.get("none", {})
+        row, rowp = [p, len(base_c), f"{sum(v[0] for v in base_c.values()) / max(1, sum(v[1] for v in base_c.values())):.1f}"], [p]
+        for v in ("vgch2", "events", "raw"):
+            ks = sorted(set(d.get(v, {})) & set(base_c))
+            if not ks:
+                row.append("-"); rowp.append("-")
+                continue
+            diff = [d[v][k][0] - base_c[k][0] for k in ks]
+            clk = [base_c[k][1] for k in ks]
+            est = sum(diff) / sum(clk)
+            boots = []
+            for _ in range(2000):
+                idx = [random.randrange(len(ks)) for _ in ks]
+                boots.append(sum(diff[i] for i in idx) / sum(clk[i] for i in idx))
+            boots.sort()
+            tick_est[(p, v)] = est
+            row.append(f"{est:.2f} [{boots[49]:.2f}, {boots[1949]:.2f}]")
+            b0 = sum(base_c[k][0] for k in ks)
+            rowp.append(f"{pct(sum(diff) / b0, 2)} [{pct(boots[49] * sum(clk) / b0, 2)}, {pct(boots[1949] * sum(clk) / b0, 2)}]")
+        body.append(row); bodyp.append(rowp)
+    table(["project", "chunks", "untraced ns per clock", "vgch2", "events", "raw"], body)
+    print("### The same as % of the untraced model's CPU\n")
+    table(["project", "vgch2", "events", "raw"], bodyp)
+    print("### Replay against the in-process check, ns per clock\n")
+    body = []
+    for p in [x for x in ORDER if x in tick]:
+        row = [p]
+        for w in ("vgch2", "events", "raw"):
+            r = est_cache.get((p, w))
+            row += ["-" if r is None else f"{r[0]:.2f}", "-" if (p, w) not in tick_est else f"{tick_est[(p, w)]:.2f}"]
+        body.append(row)
+    table(["project", "vgch2 replay", "vgch2 in-process", "events replay", "events in-process", "raw replay",
+           "raw in-process"], body)
+
 simcsv = os.path.join(RES, "sim", "sim.csv")
 if os.path.exists(simcsv):
     print("## Simulation check: the real Verilator loop\n")
