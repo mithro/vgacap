@@ -447,6 +447,13 @@ class FakeLoader:
     `fail_after` bytes have gone -- prints "Error accessing file: ..." and
     is swallowed, as the real one swallows it (`fabricfoxv2.py:169-170`).
 
+    `files` is copied, so a file written on the board after the loader was
+    made never reaches it. A loader that has to read what `RawRepl.upload()`
+    wrote takes `open` instead: the board's own `open()`
+    (`FakeBinaryBoard._open`), through which it reads the file as the real
+    one does (`with open(filepath, 'rb')`, `fabricfoxv2.py:110`). A
+    missing file or a directory is then that `open()`'s `OSError`.
+
     `drain_lines` is how many "Waiting for FIFO to drain, free slots: 1"
     lines it prints before "Transmission complete" (`fabricfoxv2.py:163-
     165`; `tx_fifo()` is the FIFO's level, `rp2_pio.c:891-893` in
@@ -472,10 +479,13 @@ class FakeLoader:
 
     def __init__(self, board=None, files: dict[str, bytes] | None = None, *,
                  fail: OSError | None = None, fail_after: int = 0,
-                 drain_lines: int = 0) -> None:
+                 drain_lines: int = 0, open=None) -> None:  # noqa: A002 - the board's open()
+        if files is not None and open is not None:
+            raise ValueError("give the loader files or open, not both")
         self.board = board
         self.drain_lines = drain_lines
         self.files = dict(files or {})
+        self.open = open
         self.fail = fail
         self.fail_after = fail_after
         #: The bytes each call fed the FPGA, a failed one included.
@@ -498,9 +508,13 @@ class FakeLoader:
         fed = bytearray()
         reset = False
         try:
-            if filepath not in self.files:
+            if self.open is not None:
+                with self.open(filepath, "rb") as f:
+                    data = f.read()
+            elif filepath not in self.files:
                 raise OSError(2, "ENOENT")
-            data = self.files[filepath]
+            else:
+                data = self.files[filepath]
             reset = True  # fpga_reset() comes after the open (fabricfoxv2.py:110-112)
             if pins:  # fpga_reset, then the dummy byte with SS high
                 pins["RESET"].low()

@@ -263,6 +263,15 @@ class FakeBinaryBoard:
     'wb' only, a missing file raising `OSError(ENOENT)` and a path in `dirs`
     `OSError(EISDIR)` in either mode (`lfs2.c:3077-3079`), as on a board. A
     file opened 'wb' changes only when it is closed (`_FakeFileForWriting`).
+    `import os` gets the board's `os`, never the host's: `mkdir` adds to
+    `dirs` (`OSError(EEXIST)` for a path already there, file or directory)
+    and `remove` deletes a file (`OSError(ENOENT)` for one that is not
+    there), as littlefs does (`lfs2_mkdir_` and `lfs2_remove_` in
+    MicroPython b006887db6's `lib/littlefs/lfs2.c`). With `parents` a
+    file opened 'wb', or a directory made, needs its parent directory in
+    `dirs`, or the root, else `OSError(ENOENT)`: `lfs2_dir_find` fails
+    on the missing parent in `lfs2_file_opencfg_` and `lfs2_mkdir_` alike.
+    Without it, as before, any path can be written.
     Every handle stays in `readers` or `writers`; `collect()` closes those the script
     never closed, as the board's GC does when it finalises an unreachable
     file (`__del__` is close, `extmod/vfs_lfsx_file.c:93-95,207`).
@@ -280,13 +289,16 @@ class FakeBinaryBoard:
 
     def __init__(self, chunk_size: int = 8192, corrupt=None, modules=None,
                  files: dict[str, bytes] | None = None, on_file_write=None,
-                 dirs=(), on_file_close=None, on_file_read=None) -> None:
+                 dirs=(), on_file_close=None, on_file_read=None,
+                 parents: bool = False) -> None:
         self.chunk_size = chunk_size
         self.corrupt = corrupt
         #: The board's filesystem, path -> contents.
         self.files: dict[str, bytes] = dict(files or {})
         #: Paths that are directories.
         self.dirs: set[str] = set(dirs)
+        #: Whether a new file or directory needs its parent directory.
+        self.parents = parents
         self.on_file_write = on_file_write
         self.on_file_close = on_file_close
         self.on_file_read = on_file_read
@@ -307,7 +319,7 @@ class FakeBinaryBoard:
             version="3.4.0",
             implementation=types.SimpleNamespace(name="micropython"),
         )
-        self._modules = {"sys": stub_sys}
+        self._modules = {"sys": stub_sys, "os": self._os_module()}
         if modules:
             self._modules.update(modules)
         real_import = builtins.__import__
@@ -338,9 +350,40 @@ class FakeBinaryBoard:
         """The paths of all handles, read or write, not closed."""
         return [f._path for f in self.readers + self.writers if not f.closed]
 
+    def _parent_missing(self, path: str) -> bool:
+        """With `parents`, whether `path`'s directory is not there."""
+        if not self.parents:
+            return False
+        parent = path.rpartition("/")[0]
+        return parent not in ("", "/") and parent not in self.dirs
+
+    def _os_module(self) -> types.ModuleType:
+        """The board's `os`, on `files` and `dirs` (see the class docstring)."""
+        module = types.ModuleType("os")
+
+        def mkdir(path: str) -> None:
+            if path in self.dirs or path in self.files:
+                raise OSError(errno.EEXIST, "EEXIST")
+            if self._parent_missing(path):
+                raise OSError(errno.ENOENT, "ENOENT")
+            self.dirs.add(path)
+
+        def remove(path: str) -> None:
+            if path in self.dirs:
+                raise ValueError("the fake board's os.remove() removes files only")
+            if path not in self.files:
+                raise OSError(errno.ENOENT, "ENOENT")
+            del self.files[path]
+
+        module.mkdir = mkdir
+        module.remove = remove
+        return module
+
     def _open(self, path: str, mode: str = "r"):
         if mode in ("rb", "wb") and path in self.dirs:
             raise OSError(errno.EISDIR, "EISDIR")
+        if mode == "wb" and path not in self.files and self._parent_missing(path):
+            raise OSError(errno.ENOENT, "ENOENT")
         if mode == "rb":
             if path not in self.files:
                 raise OSError(errno.ENOENT, "ENOENT")
