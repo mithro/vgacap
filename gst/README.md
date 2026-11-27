@@ -28,7 +28,7 @@ gst-launch-1.0 vgacapbin \
 
 `127.0.0.1:18034` is an SSH tunnel to fpga-1, which needs bench access;
 before running it, do the checks in
-[Reaching a Welland board](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed).
+[Reaching a Welland board](../python/ttcap/how-to-capture-welland-bridge.md).
 On quoting, see [`vgacapbin`](#vgacapbin-a-uri-in-video-out).
 
 ## `vgadecode`: a stream in, video out
