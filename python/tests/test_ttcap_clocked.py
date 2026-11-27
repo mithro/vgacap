@@ -109,10 +109,21 @@ def samples_of(data: bytes) -> list[int]:
 # -- the host's clock --------------------------------------------------------------
 
 
-def test_500_khz_at_150_mhz_is_490196_hz_with_h_and_l_15():
+@pytest.mark.parametrize("sysclk, hz, div, cycles", [
+    (150_000_000, 500_000, 10, 30),   # not div 9 x 34, 490,196 Hz
+    (125_000_000, 250_000, 20, 25),   # not 245,098 Hz
+    (150_000_000, 100_000, 50, 30),   # not 98,039 Hz
+])
+def test_a_round_rate_the_dividers_make_exactly_is_made_exactly(sysclk, hz, div, cycles):
+    # Review M6: the divider and H + L are searched together.
+    t = clocked_timing(sysclk, hz)
+    assert (t.pio_div, t.cycles_per_clock) == (div, cycles)
+    assert t.clock_hz == hz
+
+
+def test_500_khz_at_150_mhz_is_div_10_with_h_and_l_13():
     t = clocked_timing(150_000_000, 500_000)
-    assert (t.pio_div, t.high, t.low, t.cycles_per_clock) == (9, 15, 15, 34)
-    assert round(t.clock_hz, 3) == 490196.078
+    assert (t.pio_div, t.high, t.low) == (10, 13, 13)
 
 
 def test_500_khz_at_fpga_4s_132_mhz_is_exact():
@@ -129,9 +140,16 @@ def test_the_clock_is_never_faster_than_asked_and_the_read_at_least_40_ns_late(s
     assert t.clock_hz <= hz
     assert 0 <= t.high <= 15 and 0 <= t.low <= 15
     assert t.sample_ns >= 40
-    # As close as an integer divider allows: one PIO cycle more would be
-    # the next slower clock.
-    assert sysclk / (t.pio_div * (t.cycles_per_clock - 1)) > hz or t.cycles_per_clock == 4 + t.high
+    # Nearest not faster: no divider and cycle count that reads 40 ns late
+    # makes a clock between this one and the one asked for.
+    # For each divider its fastest such clock is the one to compare: the
+    # fewest cycles that are not faster, and no fewer than the read needs.
+    for div in range(1, 65536):
+        least = 4 + max(0, -(-40 * sysclk // (1_000_000_000 * div)) - 1)
+        cycles = max(least, -(-sysclk // (hz * div)))
+        if cycles <= 34:
+            rate = sysclk / (div * cycles)
+            assert not t.clock_hz < rate <= hz, (div, cycles, rate)
 
 
 def test_the_fastest_clock_at_150_mhz_reads_40_ns_after_the_edge():
@@ -150,12 +168,16 @@ def test_a_clock_below_the_largest_divider_is_refused():
         clocked_timing(150_000_000, 60)
 
 
-def test_a_chosen_h_keeps_the_period_and_moves_the_read():
+def test_a_chosen_h_moves_the_read_within_the_nearest_clock_it_fits():
     t = clocked_timing(SYSCLK, 7_000_000, high=0)
     assert (t.pio_div, t.high, t.low) == (1, 0, 15)
     assert clocked_timing(SYSCLK, 7_000_000, high=15).low == 0
-    with pytest.raises(ValueError, match="low"):
-        clocked_timing(SYSCLK, 5_000_000, high=0)  # L would be 23
+    # At div 1, H 0 would need L 23: div 3 with 9 cycles is as fast.
+    t = clocked_timing(SYSCLK, 5_000_000, high=0)
+    assert (t.pio_div, t.high, t.low) == (3, 0, 5)
+    assert t.clock_hz == SYSCLK / 27
+    with pytest.raises(ValueError, match="fastest"):
+        clocked_timing(SYSCLK, 10_000_000, high=15)  # 19 cycles at least
     with pytest.raises(ValueError, match="high"):
         clocked_timing(SYSCLK, 5_000_000, high=16)
 

@@ -1454,49 +1454,78 @@ class ClockedTiming:
                 "high": self.high, "low": self.low}
 
 
+def _least_high(sysclk_hz: int, pio_div: int) -> int:
+    """The smallest H whose read, H + 1 PIO cycles after the rising edge,
+    is at least `CLOCKED_SAMPLE_NS` after it."""
+    return max(0, -(-CLOCKED_SAMPLE_NS * sysclk_hz // (1_000_000_000 * pio_div)) - 1)
+
+
 def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> ClockedTiming:
     """The clock nearest `clock_hz` that is not faster, at `sysclk_hz`.
 
-    The smallest `pio_div` that fits a clock in at most 34 PIO cycles (H
-    and L 15 each), then the fewest cycles that are not faster than asked.
-    H is half the variable cycles, rounded up, so the read is late in the
-    high phase, and never less than puts the read `CLOCKED_SAMPLE_NS` after
-    the edge. 500 kHz at 150 MHz is pio_div 9, H = L = 15: 490,196 Hz.
+    Every integer `pio_div` is tried with the fewest cycles a clock (H + L +
+    4, H and L 0..15) may take at it that is not faster than asked, and the
+    fastest result wins, the smaller divider on a tie. 500 kHz at 150 MHz is
+    pio_div 10 with 30 cycles, exactly. H is then half the variable cycles,
+    rounded up, so the read is late in the high phase, and never less than
+    puts the read `CLOCKED_SAMPLE_NS` after the edge, which also bounds how
+    few cycles a divider may take.
 
-    `high` sets H instead, for a sweep of the sample point: the period is
-    the same, and L takes the rest. Refused (`ValueError`): a clock faster
-    than the fastest one that reads 40 ns late, a clock slower than the
-    largest divider makes, and an H that leaves L outside 0..15.
+    `high` sets H instead, for a sweep of the sample point: the clock is the
+    nearest not-faster one in which that H leaves L in 0..15, and the 40 ns
+    floor does not apply. Refused (`ValueError`): a clock faster than the fastest one
+    that reads 40 ns late, a clock slower than the largest divider makes,
+    and an H that fits no clock.
     """
     if sysclk_hz <= 0 or clock_hz <= 0:
         raise ValueError(f"sysclk_hz and clock_hz must be positive, got {sysclk_hz}, {clock_hz}")
+    if high is not None and not 0 <= high <= CLOCKED_MAX_PHASE:
+        raise ValueError(f"clock_high must be 0..{CLOCKED_MAX_PHASE}, got {high}")
     most = CLOCKED_FIXED_CYCLES + 2 * CLOCKED_MAX_PHASE
-    pio_div = max(1, -(-sysclk_hz // (clock_hz * most)))
-    if pio_div > CLOCKED_MAX_DIV:
+    first = max(1, -(-sysclk_hz // (clock_hz * most)))
+    if first > CLOCKED_MAX_DIV:
         raise ValueError(
             "%d Hz is below the slowest clocked rate at sysclk %d Hz, %.1f Hz"
             % (clock_hz, sysclk_hz, sysclk_hz / (CLOCKED_MAX_DIV * most)))
-    cycles = -(-sysclk_hz // (clock_hz * pio_div))
-    least_high = max(0, -(-CLOCKED_SAMPLE_NS * sysclk_hz // (1_000_000_000 * pio_div)) - 1)
+    # Divider 1 makes the fastest clock there is; a rate above it is
+    # refused rather than quietly slowed to it.
+    fewest = CLOCKED_FIXED_CYCLES + (_least_high(sysclk_hz, 1) if high is None else high)
+    if -(-sysclk_hz // clock_hz) < fewest:
+        raise ValueError(
+            "%d Hz is above the fastest clocked rate at sysclk %d Hz, %d Hz, the "
+            "fastest that reads uo_out %d ns after the rising edge"
+            % (clock_hz, sysclk_hz, sysclk_hz // fewest,
+               CLOCKED_SAMPLE_NS if high is None else
+               round((high + 1) * 1e9 / sysclk_hz)))
+    best = None  # (pio_div, cycles)
+    for pio_div in range(first, CLOCKED_MAX_DIV + 1):
+        if best is not None and pio_div * CLOCKED_FIXED_CYCLES > best[0] * best[1]:
+            break  # even the fewest cycles at this divider are slower than the best
+        cycles = -(-sysclk_hz // (clock_hz * pio_div))
+        if high is None:
+            cycles = max(cycles, CLOCKED_FIXED_CYCLES + _least_high(sysclk_hz, pio_div))
+        else:
+            cycles = max(cycles, CLOCKED_FIXED_CYCLES + high)
+            if cycles - CLOCKED_FIXED_CYCLES - high > CLOCKED_MAX_PHASE:
+                continue
+        if cycles > most:
+            continue
+        if best is None or pio_div * cycles < best[0] * best[1]:
+            best = (pio_div, cycles)
+            if sysclk_hz % (pio_div * cycles) == 0 and sysclk_hz // (pio_div * cycles) == clock_hz:
+                break  # exact, at the smallest divider that is
+    if best is None:
+        raise ValueError(
+            f"with H = {high}, no divider makes a clock of {clock_hz} Hz or slower "
+            f"with the low phase's L in 0..{CLOCKED_MAX_PHASE}")
+    pio_div, cycles = best
     if high is None:
-        if cycles < CLOCKED_FIXED_CYCLES + least_high:
+        high = max(_least_high(sysclk_hz, pio_div), (cycles - CLOCKED_FIXED_CYCLES + 1) // 2)
+        if high > CLOCKED_MAX_PHASE:
             raise ValueError(
-                "%d Hz is above the fastest clocked rate at sysclk %d Hz, %d Hz, the "
-                "fastest that reads uo_out %d ns after the rising edge"
-                % (clock_hz, sysclk_hz, sysclk_hz // (CLOCKED_FIXED_CYCLES + least_high),
-                   CLOCKED_SAMPLE_NS))
-        high = max(least_high, (cycles - CLOCKED_FIXED_CYCLES + 1) // 2)
-    elif not 0 <= high <= CLOCKED_MAX_PHASE:
-        raise ValueError(f"clock_high must be 0..{CLOCKED_MAX_PHASE}, got {high}")
-    if high > CLOCKED_MAX_PHASE:
-        raise ValueError(
-            f"reading uo_out {CLOCKED_SAMPLE_NS} ns late needs H = {high} at sysclk "
-            f"{sysclk_hz} Hz, more than {CLOCKED_MAX_PHASE}")
+                f"reading uo_out {CLOCKED_SAMPLE_NS} ns late needs H = {high} at sysclk "
+                f"{sysclk_hz} Hz, more than {CLOCKED_MAX_PHASE}")
     low = cycles - CLOCKED_FIXED_CYCLES - high
-    if not 0 <= low <= CLOCKED_MAX_PHASE:
-        raise ValueError(
-            f"with H = {high}, {clock_hz} Hz would need the low phase's L = {low}, "
-            f"outside 0..{CLOCKED_MAX_PHASE}")
     return ClockedTiming(sysclk_hz=sysclk_hz, pio_div=pio_div, high=high, low=low)
 
 
