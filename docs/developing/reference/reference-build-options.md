@@ -18,10 +18,14 @@ The table is made from the `option()` lines of every `CMakeLists.txt` when this 
 
 `VGACAP_HOST_EXTRAS` builds the [vendored libraries](../../../third_party/reference-vendored-libraries.md) and the simulation trace tools that need them. With it `OFF`, `vgacap-dump` reads plain streams only and refuses a zstd file with a message. `VGACAP_JCC_PAD` adds NOP padding only, so every output is the same with it on or off. It applies only to GCC or Clang on x86-64, where CMake checks that the assembler takes the flag.
 
+[`src/sample/centrev1.c`](../../../src/sample/centrev1.c) is compiled with `-O3` under GCC or Clang, in the `Release` and `RelWithDebInfo` build types. At `-O2` GCC does not vectorise its row loops.
+
 ## Test labels
 
 | Label | Tests | Run |
 |---|---|---|
+| `perf` | `test_centrev1_speed` | by hand: `ctest --test-dir build -L perf` |
+| `perf` | `test_hash_speed` | by hand: `ctest --test-dir build -L perf` |
 | `perf` | `test_trace_push_speed` | by hand: `ctest --test-dir build -L perf` |
 
 Every `ctest` command on these pages and in CI leaves the `perf` label out with `-LE perf`. A timing means something only on a known machine.

@@ -5,7 +5,9 @@
 // uo_out from clock 0, beside the shared calibration, the frame clock and
 // (for the numbering tests) tb-v1. python/tests/test_samplers.py compares
 // the window and pick with python/vgacap/centre.py and runs the playground
-// phase.
+// phase. With --speed only centre_speed runs (CTest label `perf`, kept out of
+// CI).
+#define _POSIX_C_SOURCE 200809L   // clock_gettime
 #include "harness.h"
 #include "synth.h"
 #include "vgacap/sample.h"
@@ -14,6 +16,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <time.h>
 
 #define HZ 25175000.0
 #define RESET 10u            // tb.cpp's reset: rst_n low for clocks 0-9
@@ -545,13 +548,201 @@ TEST(centre_bad_window) {
     }
 }
 
-int main(void) {
+// ---- speed (perf label; run by hand, not in CI) -----------------------------
+//
+// centre-v1's own work (centrev1_push_runs: libvgaframe's push and on_raw's
+// pick, activity map and colour-change count) on a 640x480@60 design at
+// cpp 1 whose every frame differs: a 208x96 logo of stripes 1 to 12 pixels
+// long bouncing 3 pixels across and 2 down a frame, changing colour at each
+// bounce; 96 one-pixel stars drifting left at 1 to 3 pixels a frame; and a
+// bottom bar showing the frame number as blocks. Runs are 1 clock (the
+// stars, the stripes' edges) up to whole blank lines. Only the centre-v1
+// calls are timed (thread CPU time), not the generator, the calibration,
+// the frame clock or the frame callback.
+
+#define SPEED_FRAMES 240u
+
+static uint8_t speed_px[480][640];
+static uint8_t speed_pix(void *user, uint16_t x, uint16_t y) { (void)user; return speed_px[y][x]; }
+
+static uint32_t speed_hash(uint32_t v) {
+    v ^= v >> 16; v *= 0x7feb352du; v ^= v >> 15; v *= 0x846ca68bu; v ^= v >> 16;
+    return v;
+}
+
+static int64_t bounce(int64_t t, int64_t span) {   // a triangle wave over [0, span]
+    int64_t p = t % (2 * span);
+    return p <= span ? p : 2 * span - p;
+}
+
+static void speed_draw(uint32_t k) {
+    memset(speed_px, 0, sizeof speed_px);
+    for (uint32_t i = 0; i < 96; i++) {
+        uint32_t h = speed_hash(i + 1);
+        uint32_t x = (h % 640u + 640u * 4u - k * (1u + i % 3u) % 640u) % 640u;
+        uint32_t y = (h >> 12) % 460u;
+        speed_px[y][x] = (uint8_t)(0x15 + (i % 3) * 0x15);
+    }
+    const int64_t lw = 208, lh = 96;
+    const int64_t lx = bounce(3 * (int64_t)k, 640 - lw), ly = bounce(2 * (int64_t)k, 460 - lh);
+    const int64_t hits = 3 * (int64_t)k / (640 - lw) + 2 * (int64_t)k / (460 - lh);
+    static const uint8_t pal[6] = { 0x30, 0x0C, 0x03, 0x3C, 0x33, 0x0F };
+    for (int64_t y = 0; y < lh; y++) {
+        int64_t x = 0;
+        int on = (int)(y & 1);
+        for (uint32_t j = 0; x < lw; j++) {
+            int64_t len = 1 + (int64_t)(speed_hash((uint32_t)y * 1000u + j) % 12u);
+            if (on)
+                for (int64_t i = x; i < x + len && i < lw; i++)
+                    speed_px[ly + y][lx + i] = (uint8_t)(pal[hits % 6] ^ (y % 24 < 12 ? 0 : 0x15));
+            on = !on; x += len;
+        }
+    }
+    for (uint32_t d = 0; d < 20; d++) {             // the frame number, one 32-pixel block a bit
+        uint8_t c = (k >> d) & 1u ? 0x3F : 0x2A;
+        for (uint32_t y = 464; y < 480; y++) memset(&speed_px[y][d * 32 + 1], c, 30);
+    }
+}
+
+typedef struct speed_out { uint64_t sum; uint64_t *h; size_t n, distinct; double cb_cpu; } speed_out_t;
+
+static double cpu_s(void);
+
+static void speed_frame(void *user, const vgasample_frame_t *f) {
+    speed_out_t *o = user;
+    const double t0 = cpu_s();             // the callback is not the sampler's time
+    uint64_t h = 0xcbf29ce484222325ull;
+    const size_t n = (size_t)f->width * f->height;
+    for (size_t i = 0; i < n; i++) { h ^= f->rgb6[i]; h *= 0x100000001b3ull; }
+    h ^= f->missing; h *= 0x100000001b3ull;
+    h ^= f->number; h *= 0x100000001b3ull;
+    if (o->n == 0 || o->h[o->n - 1] != h) o->distinct++;
+    o->h[o->n++] = h;
+    o->sum = o->sum * 0x100000001b3ull ^ h;
+    o->cb_cpu += cpu_s() - t0;
+}
+
+static double cpu_s(void) {
+    struct timespec ts; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+typedef struct speed_res {
+    speed_out_t o;
+    centrev1_diag_t d;
+    double cpu;                        // centrev1_push_runs' CPU, less the callback's
+    uint64_t timed_clocks, nruns;
+    int started;
+} speed_res_t;
+
+// The design's first `frames` frames through the calibration, the frame
+// clock and centre-v1; the caller frees r->o.h.
+static void speed_run(uint32_t frames, speed_res_t *r) {
+    memset(r, 0, sizeof *r);
+    const size_t fl = 800 * 525;
+    uint32_t *uo = malloc(fl * sizeof *uo);
+    vgasample_run_t *runs = malloc(fl * sizeof *runs);
+    r->o.h = calloc(frames, sizeof(uint64_t));
+    if (!uo || !runs || !r->o.h) abort();
+    vgacal_t cal; vgafc_t fc;
+    vgacal_init(&cal, HZ, 0.1);
+    memset(&fc, 0, sizeof fc);
+    centrev1_t *cs = centrev1_create(0, 0, speed_frame, &r->o);
+    centrev1_push(cs, 0, 0, RESET);                 // reset
+    vgacal_push(&cal, 0, 0, 0, RESET);
+    uint64_t c = RESET;
+    for (uint32_t k = 0; k < frames; k++) {
+        speed_draw(k);
+        synth_frame_hvsync(&mode640, speed_pix, NULL, uo, fl);
+        size_t n = 0;
+        for (size_t i = 0; i < fl; ) {
+            size_t j = i + 1;
+            while (j < fl && uo[j] == uo[i]) j++;
+            runs[n++] = (vgasample_run_t){ c + i, j - i, (uint8_t)uo[i] };
+            i = j;
+        }
+        c += fl;
+        size_t i0 = 0;
+        if (!r->started) {                           // run by run until calibration ends
+            for (; i0 < n && !r->started; i0++) {
+                const vgasample_run_t *q = &runs[i0];
+                uint64_t pre = vgacal_push(&cal, q->uo_out, 1, q->first, q->clocks);
+                if (pre) centrev1_push(cs, q->uo_out, q->first, pre);
+                if (cal.state == VGACAL_DONE) {
+                    vgafc_init(&fc, &cal);
+                    centrev1_calibrated(cs, &cal, &fc);
+                    r->started = 1;
+                    if (pre < q->clocks) {
+                        vgafc_push(&fc, q->uo_out, q->first + pre, q->clocks - pre);
+                        centrev1_push(cs, q->uo_out, q->first + pre, q->clocks - pre);
+                    }
+                }
+            }
+            if (!r->started) continue;
+        }
+        vgafc_push_runs(&fc, runs + i0, n - i0);
+        double t0 = cpu_s(), cb0 = r->o.cb_cpu;
+        centrev1_push_runs(cs, runs + i0, n - i0);
+        r->cpu += cpu_s() - t0 - (r->o.cb_cpu - cb0);
+        r->timed_clocks += runs[n - 1].first + runs[n - 1].clocks - runs[i0].first;
+        r->nruns += n - i0;
+    }
+    centrev1_finish(cs, &r->d);
+    fprintf(stderr, "  centre-v1: %zu frames (%zu differ from the one before), %.1f clocks a run, "
+            "%.3f s CPU, %.3f ms a frame, %.2f ns a clock; frames %016llx, changes %llu, off grid %llu, "
+            "outside %llu\n",
+            r->o.n, r->o.distinct, (double)r->timed_clocks / (double)r->nruns, r->cpu,
+            r->cpu * 1e3 / (double)r->o.n, r->cpu * 1e9 / (double)r->timed_clocks,
+            (unsigned long long)r->o.sum, (unsigned long long)r->d.colour_changes,
+            (unsigned long long)r->d.off_grid, (unsigned long long)r->d.outside);
+    centrev1_free(cs);
+    vgacal_free(&cal); vgafc_free(&fc);
+    free(uo); free(runs);
+}
+
+// The speed design's first 20 frames, untimed, for CI: the frames, the
+// colour changes and the off-grid count must be those centre-v1 gives at
+// ebd3b18, which pins every clock of on_raw's row loops (pick, activity map,
+// colour changes) on varied input.
+TEST(centre_speed_design_exact) {
+    speed_res_t r;
+    speed_run(20, &r);
+    ASSERT_TRUE(r.started);
+    ASSERT_EQ_U(r.o.n, 15);
+    ASSERT_EQ_U(r.o.distinct, r.o.n);
+    ASSERT_EQ_U(r.o.sum, 0x8fc1e6ac70abdc12ull);
+    ASSERT_EQ_U(r.d.colour_changes, 58239);
+    ASSERT_EQ_U(r.d.off_grid, 0);
+    ASSERT_EQ_U(r.d.outside, 0);
+    free(r.o.h);
+}
+
+TEST(centre_speed) {
+    speed_res_t r;
+    speed_run(SPEED_FRAMES, &r);
+    ASSERT_TRUE(r.started);
+    ASSERT_TRUE(r.o.n >= SPEED_FRAMES - 10);
+    ASSERT_EQ_U(r.o.distinct, r.o.n);
+    // The frames and counts as centre-v1 at ebd3b18 gives them.
+    ASSERT_EQ_U(r.o.sum, 0x63038bd2415ccdbcull);
+    ASSERT_EQ_U(r.d.colour_changes, 912600);
+    // On big-storage: 1.4 ms a frame with on_raw's loops not vectorised,
+    // 0.4 ms with them vectorised.
+    ASSERT_TRUE(r.cpu * 1e3 / (double)r.o.n <= 0.8);
+    free(r.o.h);
+}
+
+int main(int argc, char **argv) {
     size_t count;
     const vgaframe_mode_t *modes = vgaframe_modes(&count);
     mode640 = modes[0];
     if (vgaframe_mode_line_px(&mode640) != 800 || vgaframe_mode_frame_lines(&mode640) != 525) {
         fprintf(stderr, "mode table entry 0 is not 640x480@60\n");
         return 1;
+    }
+    if (argc > 1 && strcmp(argv[1], "--speed") == 0) {
+        RUN(centre_speed);
+        RUN_TESTS_END();
     }
     RUN(centre_cpp_rule);
     RUN(centre_pixel_exact);
@@ -566,6 +757,7 @@ int main(void) {
     RUN(centre_bad_timing);
     RUN(centre_bounds_bad_timing);
     RUN(centre_bad_window);
+    RUN(centre_speed_design_exact);
     free(frame_buf);
     RUN_TESTS_END();
 }
