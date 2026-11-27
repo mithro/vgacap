@@ -27,10 +27,12 @@ the host's re-serialisation.
 from __future__ import annotations
 
 import io
+import re
 import struct
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Iterator
 
 from vgacap.modes import MODES
@@ -1009,6 +1011,167 @@ def undo_selection(
                 first = exc
     if first is not None:
         raise first
+
+
+#: The directory `load_held` puts the bitstream in, which `RawRepl.upload()`
+#: does not make, and the file.
+HELD_DIR = "/_vgacap"
+HELD_PATH = HELD_DIR + "/held.bin"
+
+#: Seconds `load_held` gives the board body: the loader feeds the FPGA a
+#: byte at a time from MicroPython, so a 104 KB bitstream takes seconds.
+LOAD_HELD_TIMEOUT = 60.0
+
+#: Make a directory, an existing one being fine (MicroPython's EEXIST is 17).
+_MKDIR = """\
+def _ttcap_mkdir(p):
+    import os
+    try:
+        os.mkdir(p)
+    except OSError as e:
+        if e.errno != 17:
+            raise
+try:
+    _ttcap_mkdir({path!r})
+finally:
+    del _ttcap_mkdir
+"""
+
+#: Delete a file, leaving no name in the REPL's globals.
+_REMOVE = """\
+def _ttcap_remove(p):
+    import os
+    os.remove(p)
+try:
+    _ttcap_remove({path!r})
+finally:
+    del _ttcap_remove
+"""
+
+_LOAD_DONE = re.compile(r"Transmission complete, total bytes: (\d+)")
+_LOAD_ERROR = "Error accessing file:"
+
+
+def load_held_cfg(profile: BoardProfile) -> dict:
+    """The `CFG` dict for `load_held_rp2.py`: the prelude's keys (from
+    `capture_cfg`) and the bitstream's `path` on the board."""
+    return dict(capture_cfg(profile), path=HELD_PATH)
+
+
+def _check_load(stdout: str, stderr: str, want: int) -> int:
+    """The byte count of a held load whose body printed `stdout`, which
+    must be `want`, with `rst_n` and the clock pad reading 0 after it.
+
+    The loader catches its own `OSError` and only prints it
+    (`fabricfoxv2.py:169-170` in tt-micropython-firmware v3.1.1), so a
+    failed load is found in what it printed, not in `stderr`.
+    """
+    if stderr.strip():
+        raise CaptureError(f"the held load failed on the board:\n{stderr.strip()}")
+    if not stdout.strip():
+        raise CaptureError("the held load said nothing: the board body printed no line")
+    lines = [line.strip() for line in stdout.splitlines()]
+    errors = [line for line in lines if line.startswith(_LOAD_ERROR)]
+    if errors:
+        raise CaptureError(f"the loader failed and carried on: {errors[0]!r}")
+    counts = [m for m in (_LOAD_DONE.fullmatch(line) for line in lines) if m]
+    if not counts:
+        raise CaptureError(
+            "the loader printed no 'Transmission complete, total bytes: N' "
+            f"line, said {stdout.strip()!r}")
+    if len(counts) > 1:
+        raise CaptureError(
+            f"the loader printed {len(counts)} lines of 'Transmission "
+            "complete', for one load")
+    got = int(counts[0].group(1))
+    if got != want:
+        raise CaptureError(
+            f"the loader fed the FPGA {got} bytes of a {want}-byte bitstream "
+            f"({counts[0].group(0)!r})")
+    if _board_value(stdout, "rst_n") != 0:
+        raise CaptureError("rst_n reads 1 after the load: reset was not held through it")
+    if _board_value(stdout, "clk") != 0:
+        raise CaptureError(
+            "the clock pad reads 1 after the load: it was not held low through it")
+    return got
+
+
+def _put_back_after_load(repl: RawRepl, did: dict, exc: BaseException) -> None:
+    """After a failed held load the board answered: release reset, stop
+    the clock, and put the mode and monitor back, noting failures on `exc`."""
+    _release_reset(repl, exc)
+    undo_selection(repl, did, stop=True, error=exc)
+
+
+def load_held(repl: RawRepl, req: CaptureRequest, path_on_host) -> dict:
+    """Load the FPGA bitstream at `path_on_host` with the project clock held
+    low and the design held in reset, so no clock reaches it before clock 0.
+
+    In order:
+
+    1. make `HELD_DIR` on the board, an existing one being fine, and
+       `RawRepl.upload()` the bitstream to `HELD_PATH`, which checks its
+       length and crc32 there and skips the write if they already match;
+    2. `select_project`'s reset sequence up to its load: stop the clock,
+       set the mode, monitor and `ui_in` as it does, then `hold_reset`.
+       The clock is never started;
+    3. the board body, `load_held_rp2.py`: `tt.pins.safe_bidir()`,
+       `tt.clock_project_stop()`, drive the clock pad low, then the SDK's
+       `fabricfoxv2.spi_transferPIO(HELD_PATH)`;
+    4. check what it printed (`_check_load`): one "Transmission complete,
+       total bytes: N" line with N the bitstream's length, no "Error
+       accessing file" line, and `rst_n` and the clock pad reading 0;
+    5. delete `HELD_PATH`.
+
+    `req` gives the board profile, the clock and `ui_in`, and must name no
+    design: the load is the design. Returns `select_project`'s keys, with
+    `enable` "held" and one more, `bytes`, the loader's byte count. It has
+    no `rst_n_wait_ms`: reset is still held, and the clock pad low, for the
+    capture that follows to release. `restore_mode` (or `undo_selection`)
+    on the result puts the mode and monitor back afterwards.
+
+    The SDK does not know about the load: `tt.shuttle.enabled`, and the
+    fpgas.online daemon's idea of the design, still name the previous one.
+
+    Errors. An upload that does not verify raises `UploadError` and runs no
+    load. A load that fails where the board answered (step 4, or a
+    traceback) deletes the file, releases reset, stops the clock and puts
+    the mode and monitor back before raising `CaptureError`. A timeout (or
+    any failure to get the body's reply) sends nothing more, since the
+    loader may still be running: the caller must `repl.recover()`, as after
+    a timed-out `upload()`, and then put the board back.
+    """
+    if req.selection:
+        raise ValueError(
+            f"load_held loads its own bitstream, but the request names {req.selection!r}")
+    data = Path(path_on_host).read_bytes()
+    body = mp.build(load_held_cfg(req.profile), "load_held_rp2.py")
+    did: dict = {"project": None, "enable": "held", "clock_hz": req.clock_hz}
+    _exec_checked(repl, _MKDIR.format(path=HELD_DIR))
+    repl.upload(HELD_PATH, data)
+    _reset_sequence(repl, req, did, lambda: hold_reset(repl))
+    try:
+        stdout, stderr = repl.exec(body, timeout=LOAD_HELD_TIMEOUT)
+    except BaseException as exc:
+        exc.add_note(
+            "the held load got no reply and may still be running: call "
+            "recover() on the REPL, then release reset and put the board back")
+        raise
+    try:
+        did["bytes"] = _check_load(stdout, stderr, len(data))
+    except BaseException as exc:
+        try:
+            _exec_checked(repl, _REMOVE.format(path=HELD_PATH))
+        except Exception as again:  # noqa: BLE001 - reported on exc
+            exc.add_note(f"deleting {HELD_PATH} failed too: {again}")
+        _put_back_after_load(repl, did, exc)
+        raise
+    try:
+        _exec_checked(repl, _REMOVE.format(path=HELD_PATH))
+    except BaseException as exc:
+        _put_back_after_load(repl, did, exc)
+        raise
+    return did
 
 
 def _describe(req: CaptureRequest) -> str:
