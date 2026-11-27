@@ -341,3 +341,123 @@ def test_push_iffull_block_stalls_on_a_full_fifo_with_the_clock_held_low():
     assert len(pio_sm.rx) == 4
 
 
+# -- irq and the IRQ register -------------------------------------------------
+
+
+def test_irq_sets_a_flag_the_cpu_clears_by_writing_one():
+    board = _board()
+    rp2 = board.modules()["rp2"]
+    mem32 = board.modules()["machine"].mem32
+
+    @rp2.asm_pio()
+    def p():
+        irq(5)  # noqa: F821
+        label("end")  # noqa: F821
+        jmp("end")  # noqa: F821
+
+    sm, _ = _sm(board, p)
+    sm.active(1)
+    board.advance(2)
+    assert mem32[IRQ] == 1 << 5
+    mem32[IRQ] = 1 << 4  # write-1-to-clear: other bits untouched
+    assert mem32[IRQ] == 1 << 5
+    mem32[IRQ] = 1 << 5
+    assert mem32[IRQ] == 0
+
+
+def test_irq_clear_clears_the_flag():
+    board = _board()
+    rp2 = board.modules()["rp2"]
+    mem32 = board.modules()["machine"].mem32
+
+    @rp2.asm_pio()
+    def p():
+        irq(2)  # noqa: F821
+        irq(3)  # noqa: F821
+        irq(clear, 2)  # noqa: F821
+        label("end")  # noqa: F821
+        jmp("end")  # noqa: F821
+
+    sm, _ = _sm(board, p)
+    sm.active(1)
+    board.advance(4)
+    assert mem32[IRQ] == 1 << 3
+
+
+@pytest.mark.parametrize("chip", ["rp2040", "rp2350"])
+@pytest.mark.parametrize("sm_num, index, flag", [(0, 1, 1), (2, 1, 3), (3, 2, 1), (1, 7, 4)])
+def test_relative_irq_adds_the_state_machine_number_modulo_4(chip, sm_num, index, flag):
+    board = _board(chip)
+    rp2 = board.modules()["rp2"]
+    mem32 = board.modules()["machine"].mem32
+
+    @rp2.asm_pio()
+    def p():
+        irq(rel(index))  # noqa: F821
+        label("end")  # noqa: F821
+        jmp("end")  # noqa: F821
+
+    sm, _ = _sm(board, p, sm_num=sm_num)
+    sm.active(1)
+    board.advance(2)
+    assert mem32[IRQ] == 1 << flag
+
+
+def test_irq_to_another_pio_block_is_refused():
+    # RP2350 IdxMode 01 (PREV) / 11 (NEXT): index 8..15 without `rel`.
+    board = _board()
+    rp2 = board.modules()["rp2"]
+
+    @rp2.asm_pio()
+    def p():
+        irq(8)  # noqa: F821
+
+    with pytest.raises(BoardError, match="not emulated"):
+        _sm(board, p)
+
+
+@pytest.mark.parametrize("delay", [0, 7])
+def test_irq_wait_stalls_with_the_clock_low_until_a_w1c_write(delay):
+    board = _board()
+    rp2 = board.modules()["rp2"]
+    mem32 = board.modules()["machine"].mem32
+
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_HIGH)
+    def p():
+        irq(block, 0).side(0)[delay]  # noqa: F821
+        label("end")  # noqa: F821
+        jmp("end").side(1)  # noqa: F821
+
+    sm, pio_sm = _sm(board, p, sideset_base=CLK)
+    start = board.now
+    sm.active(1)
+    for _ in range(5):
+        board.advance(1000)
+        assert mem32[IRQ] == 1 and pio_sm.pc == 0
+    assert _pins(board, CLK, start, 5000) == [0] * 5000
+    cleared = board.now
+    mem32[IRQ] = 1
+    board.advance(20)
+    # Completes in the cycle it sees the flag clear; the delay runs after.
+    assert _pins(board, CLK, cleared, delay + 3) == [0] * (delay + 1) + [1, 1]
+    assert mem32[IRQ] == 0 and pio_sm.pc == 1
+
+
+def test_irq_wait_does_not_raise_the_flag_again_while_it_waits():
+    board = _board()
+    rp2 = board.modules()["rp2"]
+    mem32 = board.modules()["machine"].mem32
+
+    @rp2.asm_pio()
+    def p():
+        irq(block, 0)  # noqa: F821
+        irq(block, 1)  # noqa: F821
+
+    sm, pio_sm = _sm(board, p)
+    sm.active(1)
+    board.advance(10)
+    mem32[IRQ] = 1
+    board.advance(10)
+    assert mem32[IRQ] == 1 << 1 and pio_sm.pc == 1
+
+

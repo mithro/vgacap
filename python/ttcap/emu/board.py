@@ -24,6 +24,8 @@ PIO_STRIDE = 0x100000
 PIO_CTRL = 0x000
 PIO_FDEBUG = 0x008
 PIO_RXF0 = 0x020
+#: IRQ: the block's eight IRQ flags, write-1-to-clear (RP2040 3.7, RP2350 11.7).
+PIO_IRQ = 0x030
 #: SM0_SHIFTCTRL; each further state machine's registers are 0x18 on.
 PIO_SM0_SHIFTCTRL = 0x0D0
 PIO_SM_STRIDE = 0x18
@@ -180,7 +182,7 @@ class Waveform:
 
 
 #: Decoded instruction kinds.
-_WAIT, _IN, _JMP, _PULL, _PUSH, _MOV, _SET, _OUT = range(8)
+_WAIT, _IN, _JMP, _PULL, _PUSH, _MOV, _SET, _OUT, _IRQ = range(9)
 
 
 class _SM:
@@ -223,6 +225,8 @@ class _SM:
         self.osr_count = 32
         self.rx: list[int] = []
         self.tx: list[int] = []
+        #: An `irq wait` has raised its flag and is waiting for it to clear.
+        self.irq_waiting = False
 
     # -- configuration ----------------------------------------------------
 
@@ -370,12 +374,39 @@ class _SM:
             if dest in (0, 3, 4) or src in (4, 5):
                 raise BoardError("mov 0x%04x not emulated" % word)
             return (_MOV, dest, mov_op, src)
+        if op == 6:
+            return self._decode_irq(word)
         if op == 7:
             dest, data = (word >> 5) & 7, word & 0x1F
             if dest not in (1, 2):
                 raise BoardError("set destination %d not emulated" % dest)
             return (_SET, dest, data)
         raise BoardError("instruction 0x%04x (opcode %d) not emulated" % (word, op))
+
+    def _decode_irq(self, word: int) -> tuple:
+        """IRQ: bit 6 Clr, bit 5 Wait, bits 4:0 Index. RP2040: Index bit 4
+        is REL, bit 3 reserved. RP2350: bits 4:3 are IdxMode (00 this
+        block, 01 PREV, 10 REL, 11 NEXT), so MicroPython's `rel` (0x10) is
+        REL on both. REL adds the state machine number to the two LSBs,
+        modulo 4."""
+        if word & 0x80:
+            raise BoardError("irq 0x%04x: bit 7 is reserved" % word)
+        clr, wait, index = (word >> 6) & 1, (word >> 5) & 1, word & 0x1F
+        if self.board.chip == "rp2350":
+            mode = index >> 3
+            if mode in (1, 3):
+                raise BoardError(
+                    "irq to the %s PIO block not emulated" % ("previous", "next")[mode >> 1]
+                )
+            rel = mode == 2
+        else:
+            if index & 0x08:
+                raise BoardError("irq index 0x%02x not emulated (bit 3 is reserved)" % index)
+            rel = bool(index & 0x10)
+        flag = index & 7
+        if rel:
+            flag = (flag & 4) | ((flag + self.index) & 3)
+        return (_IRQ, clr, wait, flag)
 
     # -- running ----------------------------------------------------------
 
@@ -550,6 +581,26 @@ class _SM:
                     self.y = ins[2]
                 self.now += 1 + d
                 self._next_pc()
+            elif kind == _IRQ:
+                _, clr, wait, flag = ins
+                bit = 1 << flag
+                block = self.block
+                if clr:  # Clear: Wait has no effect
+                    block.irq &= ~bit
+                elif not wait:
+                    block.irq |= bit
+                else:
+                    # Raise the flag once, then stall until something else
+                    # clears it; the delay starts after the wait.
+                    if not self.irq_waiting:
+                        block.irq |= bit
+                        self.irq_waiting = True
+                    if block.irq & bit:
+                        self.now = limit
+                        continue
+                    self.irq_waiting = False
+                self.now += 1 + d
+                self._next_pc()
 
     def read_pins(self, cycle: int, bits: int = 32) -> int:
         """The IN pin group at `cycle`, as `in pins` and `mov x, pins` read
@@ -604,6 +655,8 @@ class _PioBlock:
         self.index = index
         self.base = 0
         self.fdebug = 0
+        #: The IRQ register's eight flags.
+        self.irq = 0
         self.programs: list[list] = []
         self.sms = [_SM(board, self, i) for i in range(4)]
 
@@ -850,6 +903,8 @@ class Board:
         for block in self.blocks:
             if addr == block.address(PIO_FDEBUG):
                 return block.fdebug
+            if addr == block.address(PIO_IRQ):
+                return block.irq
             if addr == block.address(PIO_CTRL):
                 return sum(1 << sm.index for sm in block.sms if sm.enabled)
             for sm in block.sms:
@@ -879,6 +934,9 @@ class Board:
         for block in self.blocks:
             if addr == block.address(PIO_FDEBUG):
                 block.fdebug &= ~value  # write-1-to-clear
+                return
+            if addr == block.address(PIO_IRQ):
+                block.irq &= ~value  # write-1-to-clear
                 return
             for sm in block.sms:
                 shiftctrl = block.address(PIO_SM0_SHIFTCTRL + PIO_SM_STRIDE * sm.index)
@@ -1283,6 +1341,7 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
             sm.pc = 0
             sm.isr = sm.isr_count = 0
             sm.osr_count = 32
+            sm.irq_waiting = False
             sm.disable_at = None
 
         def put(self, value, shift=0):

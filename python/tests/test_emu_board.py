@@ -291,7 +291,7 @@ def test_unsupported_instructions_are_refused_not_guessed():
     def program(rp2):
         @rp2.asm_pio()
         def p():
-            irq(0)  # noqa: F821
+            out(pindirs, 1)  # noqa: F821
 
         return p
 
