@@ -48,7 +48,7 @@ target_link_libraries(vgacap-frames PRIVATE vgacap_stream vgacap_frame)
 # --- gst: GStreamer plugin (gst/), built only when GStreamer is installed ---
 add_subdirectory(gst)
 
-# --- third_party: vendored zstd, zlib, libfst and SHA-256 for the host-only
+# --- third_party: vendored zstd, zlib, libfst and xxHash for the host-only
 # tools (simulation traces). Not used by the board builds. OFF skips them
 # and test_third_party.
 option(VGACAP_HOST_EXTRAS "Build the vendored host-only libraries" ON)
@@ -76,13 +76,18 @@ if(VGACAP_HOST_EXTRAS)
   target_link_libraries(trace-make PRIVATE vgacap_trace)
   # --- sample: the shared calibration and frame clock (src/sample), host only ---
   add_library(vgacap_sample STATIC src/sample/calib.c src/sample/frameclock.c src/sample/tbv1.c src/sample/centrev1.c src/sample/hashes.c src/sample/outputs.c)
-  target_link_libraries(vgacap_sample PUBLIC vgacap_frame vgacap_trace vgacap_stream vgacap_sha256 vgacap_zstd m)
+  target_link_libraries(vgacap_sample PUBLIC vgacap_frame vgacap_trace vgacap_stream vgacap_xxhash vgacap_zstd m)
   # vgacap-sample: a simulation trace to its samplers' stores (centre-v1 by default,
   # tb-v1 on request), frames.txt and hash files, in one pass. It reads the reader's stats (src/trace) for
   # VGACAP_SAMPLE_DEBUG.
   add_executable(vgacap-sample src/tools/vgacap_sample.c)
   target_include_directories(vgacap-sample PRIVATE src/trace)
   target_link_libraries(vgacap-sample PRIVATE vgacap_sample)
+  # centre-v1's row loops vectorise with GCC at -O3 only: -O2's very cheap
+  # cost model refuses a loop that needs a scalar epilogue or widens its sum.
+  # Not in Debug (-O0) or MinSizeRel (-Os), whose levels are the point.
+  set_source_files_properties(src/sample/centrev1.c PROPERTIES COMPILE_OPTIONS
+    "$<$<AND:$<C_COMPILER_ID:GNU,Clang,AppleClang>,$<NOT:$<CONFIG:Debug,MinSizeRel>>>:-O3>")
   # Test-only helper for python/tests/test_calib.py: calibration and frame
   # clock of a trace.
   add_executable(vgacap-calib-dump tests/calib_dump.c)
@@ -134,7 +139,7 @@ vgacap_add_test(test_stream_chunks)
 vgacap_add_test(test_stream_v2)
 if(VGACAP_HOST_EXTRAS)
   vgacap_add_test(test_third_party)
-  target_link_libraries(test_third_party PRIVATE vgacap_zstd vgacap_zlib vgacap_fst vgacap_sha256)
+  target_link_libraries(test_third_party PRIVATE vgacap_zstd vgacap_zlib vgacap_fst vgacap_xxhash)
   # The trace writer: a zstd seekable file of VGCH v2 blocks (src/trace).
   vgacap_add_test(test_trace_write)
   target_link_libraries(test_trace_write PRIVATE vgacap_trace)
@@ -161,9 +166,15 @@ if(VGACAP_HOST_EXTRAS)
   # tb-v1, the port of tb.cpp's frame decoding.
   vgacap_add_test(test_tbv1 tests/synth.c)
   target_link_libraries(test_tbv1 PRIVATE vgacap_sample)
+  # Its timing (label perf, run by hand like test_trace_push_speed below).
+  add_test(NAME test_tbv1_speed COMMAND test_tbv1 --speed)
+  set_tests_properties(test_tbv1_speed PROPERTIES LABELS perf)
   # centre-v1: libvgaframe's lines and frames, its own mid-pixel pick.
   vgacap_add_test(test_centrev1 tests/synth.c)
   target_link_libraries(test_centrev1 PRIVATE vgacap_sample)
+  # Its timing (label perf, run by hand like test_trace_push_speed below).
+  add_test(NAME test_centrev1_speed COMMAND test_centrev1 --speed)
+  set_tests_properties(test_centrev1_speed PROPERTIES LABELS perf)
   # frames.txt and the hash files.
   vgacap_add_test(test_outputs)
   target_link_libraries(test_outputs PRIVATE vgacap_sample)
@@ -186,6 +197,8 @@ if(VGACAP_HOST_EXTRAS)
   add_test(NAME test_trace_push_speed COMMAND test_trace_write --speed)
   set_tests_properties(test_trace_push_speed PROPERTIES
     LABELS perf WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+  add_test(NAME test_hash_speed COMMAND test_hashes --speed)
+  set_tests_properties(test_hash_speed PROPERTIES LABELS perf)
 else()
   # Without the host extras vgacap-dump cannot read a trace and must say so.
   # PASS_REGULAR_EXPRESSION replaces the exit-code check, so the wrapper

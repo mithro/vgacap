@@ -22,6 +22,8 @@ It is for someone who has run `ttcap capture` and wants to know what the board a
 
 The stock firmware runs MicroPython, and `ttcap` drives it through its raw REPL. For each capture, `ttcap` sends a short program from [`mp/`](mp/), with its settings prepended, and the board runs it. So the board needs no capture firmware, and a capture leaves nothing behind but the design it enabled. The program for a stream is [`mp/capture_rp2.py`](mp/capture_rp2.py), joined to the shared [`mp/prelude.py`](mp/prelude.py).
 
+Before every capture through MicroPython, with or without `--ui-in`, `ttcap` turns off the stock firmware's manual-clock monitor, where the board has one, and puts it back afterwards. It also reads `rst_n` back: 0 while it holds reset, then 1 after the release, or the capture fails ([ttcap exit codes and messages](reference-exit-codes.md)).
+
 ## The pins and the clock
 
 The design's eight `uo_out` pins reach the demo board's microcontroller, which also makes the project clock with one of its PWM outputs. The sampler is a slave to that clock: it waits for an edge, then reads the pins. A stream samples on the falling edge, by which time the outputs have settled. The pins differ between the two chips, as [Demo board GPIO maps for capture](reference-gpio-maps.md) lists.
@@ -36,7 +38,7 @@ The PIO pushes each full word into its RX FIFO, and two DMA channels move the wo
 
 The raw REPL ends its output with a 0x04 byte and does not escape it, so `ttcap` reads each chunk by its length instead. The board does not know the signal map or the project clock it is given, so `ttcap` writes the stream's `VGCH` header itself. It then copies the board's chunks after the header byte for byte. To stop, `ttcap` sends one byte, and the board finishes its chunk and sends a closing `TIME` chunk. That last chunk carries the board's count of overruns, its RX stall flag and its system clock.
 
-The link sets the fastest clock a stream keeps up with. An RP2350 demo board sends about 710 KB/s, one byte a sample. On TT SDK 3.1.1, a 4-second stream at 500 kHz on USB serial was clean, and 600 kHz and above overran ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). Through the bridge 500 kHz overran and 400 kHz was clean. How long a clock stays clean is open ([#52](https://github.com/mithro/vgacap/issues/52)).
+The link bounds the fastest clock a stream keeps up with. An RP2350 demo board sends about 710 KB/s, one byte a sample ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). On the stock firmware 3.1.1 its streams overran below that clock ([#52](https://github.com/mithro/vgacap/issues/52)). The fastest clean clock of each source is on [Capture sources compared](../../docs/reference-capture-sources.md).
 
 An RP2040 demo board takes two bytes a sample and kept up at 60 kHz ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-ttcap-capture-serial-tt07)). A faster clock is allowed, and the loss is reported.
 

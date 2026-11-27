@@ -57,7 +57,7 @@ That workflow also packs a filesystem image into its UF2. This page builds the f
    $ cp -r tt-fw/microcotb/src/microcotb/* micropython/ports/rp2/modules/microcotb/
    ```
 
-5. In the working directory, build `mpy-cross` and fetch the rp2 port's submodules.
+5. In the working directory, build `mpy-cross` and fetch the rp2 port's submodules, which gives `micropython/mpy-cross/build/mpy-cross` and `micropython/lib/pico-sdk`.
 
    ```console
    $ make -C micropython/mpy-cross -j"$(nproc)"
@@ -86,12 +86,12 @@ The UF2's blocks start at `0x10000000` and end below `0x100C8000`, where the boa
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| Both counts are 0 | step 4 did not run, or ran before step 2 | Run step 4, then step 6 again after `make -C micropython/ports/rp2 BOARD=tt_rp2350_board clean` |
-| The last command prints 0 | `USER_C_MODULES` is missing or names a wrong path | Run step 6 with `VGACAP` set to the checkout's absolute path |
-| A warning in a vgacap source stops step 6 | the module's sources build with `-Wall -Wextra -Werror` | Fix the warning |
-| `arm-none-eabi-gcc: not found` at step 6 | no ARM toolchain | Install it, as under What you need |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| Check | Both counts are 0 | step 4 did not run, or ran before step 2 | Run step 4, then step 6 again after `make -C micropython/ports/rp2 BOARD=tt_rp2350_board clean` |
+| Check | The last command prints 0 | `USER_C_MODULES` is missing or names a wrong path | Run step 6 with `VGACAP` set to the checkout's absolute path |
+| 6 | A warning in a vgacap source stops it | the module's sources build with `-Wall -Wextra -Werror` | Fix the warning |
+| 6 | `arm-none-eabi-gcc: not found` | no ARM toolchain | Install it, as under What you need |
 
 ## Next
 

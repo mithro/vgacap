@@ -48,16 +48,16 @@ Step 6 prints the chunks it read, with no samples dropped:
 wrote out.vgacap: 4 RAW chunks, 1024 samples, 0 dropped
 ```
 
-`out.vgacap` is then a vgacap stream that every vgacap reader takes, such as the [C tools](../src/tools/README.md).
+`out.vgacap` is then a vgacap stream that every vgacap reader takes, such as [the vgacap command-line tools](../src/tools/README.md).
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| `samples_per_chunk must be a positive multiple of 4` at step 2 | The chunk size cannot be packed into words | Give a multiple of 4 |
-| `fifo_words must hold at least one chunk` at step 2 | The FIFO is smaller than a chunk | Give at least `samples_per_chunk` ÷ 4 words |
-| `truncated chunk 'RAW '` at step 6 | Sampling stopped in the middle of a chunk | Stop after a multiple of 256 samples, as in step 4 |
-| More than `0 dropped` at step 6 | The link took bytes more slowly than samples arrived | Sample less often or use a faster link |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 2 | `samples_per_chunk must be a positive multiple of 4` | The chunk size cannot be packed into words | Give a multiple of 4 |
+| 2 | `fifo_words must hold at least one chunk` | The FIFO is smaller than a chunk | Give at least `samples_per_chunk` ÷ 4 words |
+| 6 | `truncated chunk 'RAW '` | Sampling stopped in the middle of a chunk | Stop after a multiple of 256 samples, as in step 4 |
+| 6 | More than `0 dropped` | The link took bytes more slowly than samples arrived | Sample less often or use a faster link |
 
 ## Next
 

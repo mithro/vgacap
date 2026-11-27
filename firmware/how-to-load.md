@@ -17,7 +17,7 @@ never written. A reboot, a reset or a power cycle brings the stock firmware back
 
 - One Tiny Tapeout demo board v3 (RP2350B), running the stock firmware, with a USB cable to a Linux machine.
 
-  <img src="../docs/diagrams/images/tt-etr-dbv3p2.jpg" alt="The Tiny Tapeout demo board v3, with a breakout plugged into its centre socket." width="240">
+  <img src="../docs/diagrams/images/tt-etr-dbv3p2.jpg" alt="The Tiny Tapeout demo board ETR v3.2, with its breakout connectors empty." width="240">
 
 - On that machine, a vgacap checkout set up to run `ttcap`, as on [How to run ttcap on a Raspberry Pi](../python/ttcap/how-to-run-on-raspberry-pi.md), and `sudo`.
 - `vgacap_fw.uf2`, built as on [How to build the vgacap firmware](how-to-build.md), copied to the checkout's root.
@@ -41,7 +41,7 @@ never written. A reboot, a reset or a power cycle brings the stock firmware back
    $ curl -s -X POST localhost:8765/designs/<name>/enable
    ```
 
-3. On the Welland bench, stop the bridge, which frees `/dev/ttboard`.
+3. On the Welland bench, stop the bridge as on [How to stop the fpgas-tt daemon and start it again](https://docs.fpgas.online/en/latest/boards/tt-fpga/setup/stop-daemon.html), which frees `/dev/ttboard`.
 
    ```console
    $ sudo systemctl stop fpgas-tt
@@ -68,7 +68,7 @@ never written. A reboot, a reset or a power cycle brings the stock firmware back
    $ FW=$(ls /dev/serial/by-id/usb-vgacap_vgacap_capture_firmware_*-if00)
    ```
 
-7. Capture with the firmware, as on [How to capture with the vgacap firmware](how-to-capture.md), using `serial:$FW` as the link.
+7. At the checkout's root, capture as on [How to capture with the vgacap firmware](how-to-capture.md) with `serial:$FW`, which writes that page's capture files.
 
 8. At the checkout's root, reboot the vgacap firmware, which brings the stock firmware back from flash.
 
@@ -99,16 +99,16 @@ ID 2e8a:0005 MicroPython Board in FS mode
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| `"clients":` above 0 at step 1 | someone is using the board through the bridge | Wait until the count is 0; do not stop the bridge under a client |
-| Step 2 prints nothing | the bridge is not listening | Wait until `curl -s localhost:8765/health` answers, then repeat step 2 |
-| Step 4 cannot open `<dev>` | something else holds the port | Close it, or stop the bridge as in step 3 |
-| No `RP2350` drive after step 4 | the board did not reach its bootloader | At the bench, hold BOOTSEL while resetting the board |
-| `umount` reports the drive already gone | the board rebooted when the copy ended | Nothing: the copy is complete |
-| No `usb-vgacap_*` port after step 5 | the UF2 is not the vgacap firmware, or the copy was cut short | Repeat steps 4 and 5 with a freshly built UF2 |
-| A udev rule or tool looks for `/dev/ttboard` and finds nothing | the vgacap firmware's port has its own name | Use the `/dev/serial/by-id/usb-vgacap_*` path from step 6 |
-| Step 8 cannot reach the firmware | the port is gone or held | Reset or power-cycle the board, which also brings back the stock firmware |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 1 | `"clients":` above 0 | someone is using the board through the bridge | Wait until the count is 0; do not stop the bridge under a client |
+| 2 | It prints nothing | the bridge is not listening | Wait until `curl -s localhost:8765/health` answers, then repeat step 2 |
+| 4 | It cannot open `<dev>` | something else holds the port | Close it, or stop the bridge as in step 3 |
+| 4 | No `RP2350` drive | the board did not reach its bootloader | At the bench, hold BOOTSEL while resetting the board |
+| 5 | `umount` reports the drive already gone | the board rebooted when the copy ended | Nothing: the copy is complete |
+| 5 | No `usb-vgacap_*` port | the UF2 is not the vgacap firmware, or the copy was cut short | Repeat steps 4 and 5 with a freshly built UF2 |
+| 6 | A udev rule or tool looks for `/dev/ttboard` and finds nothing | the vgacap firmware's port has its own name | Use the `/dev/serial/by-id/usb-vgacap_*` path from step 6 |
+| 8 | It cannot reach the firmware | the port is gone or held | Reset or power-cycle the board, which also brings back the stock firmware |
 
 ## Next
 

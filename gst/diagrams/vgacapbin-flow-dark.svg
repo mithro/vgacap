@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="612" viewBox="0 0 400 612" font-family="'DejaVu Sans', Verdana, Arial, sans-serif">
+<rect x="0" y="0" width="400" height="612" fill="#131722"/>
+<rect x="60.0" y="2" width="280" height="44" rx="8" fill="#182640" stroke="#34558f" stroke-width="1.5"/>
+<text x="200.0" y="30" font-size="15" fill="#e6e9ef" text-anchor="middle" font-weight="bold">Tiny Tapeout demo board</text>
+<rect x="2" y="100" width="396" height="396" rx="10" fill="#1b1e24" stroke="#5d6578" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="16" y="122" font-size="15" fill="#9aa3b5" text-anchor="start" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">vgacapbin</text>
+<text x="212.0" y="78" font-size="13" fill="#ff8c45" text-anchor="start" font-weight="normal">USB or bridge</text>
+<rect x="32" y="136" width="336" height="230" rx="8" fill="#1c2230" stroke="#5b6577" stroke-width="1.5"/>
+<text x="46" y="158" font-size="14" fill="#e6e9ef" text-anchor="start" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">vgacapttsrc</text>
+<path d="M200.0 46 V170" stroke="#ff8c45" stroke-width="3" fill="none"/>
+<path d="M200.0 170 L195.2 160.1 L204.8 160.1 Z" fill="#ff8c45"/>
+<rect x="80.0" y="172" width="240" height="48" rx="7" fill="#251d40" stroke="#5a47a0" stroke-width="1.5"/>
+<text x="200.0" y="193" font-size="13.5" fill="#a98bff" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">ttcap capture --out -</text>
+<text x="200.0" y="211" font-size="12" fill="#9aa3b5" text-anchor="middle" font-weight="normal">child process</text>
+<path d="M200.0 220 V290" stroke="#ff8c45" stroke-width="2.5" fill="none"/>
+<path d="M200.0 290 L195.7 281.0 L204.3 281.0 Z" fill="#ff8c45"/>
+<text x="212.0" y="260.0" font-size="13" fill="#ff8c45" text-anchor="start" font-weight="normal">stdout pipe</text>
+<rect x="80.0" y="292" width="240" height="48" rx="7" fill="#1c2230" stroke="#5b6577" stroke-width="1.5"/>
+<text x="200.0" y="321" font-size="14" fill="#e6e9ef" text-anchor="middle" font-weight="bold">64 KiB buffers</text>
+<path d="M200.0 366 V418" stroke="#ff8c45" stroke-width="3" fill="none"/>
+<path d="M200.0 418 L195.2 408.1 L204.8 408.1 Z" fill="#ff8c45"/>
+<text x="212.0" y="397.0" font-size="13" fill="#ff8c45" text-anchor="start" font-weight="normal">application/x-vgacap</text>
+<rect x="80.0" y="420" width="240" height="48" rx="8" fill="#1c2230" stroke="#5b6577" stroke-width="1.5"/>
+<text x="200.0" y="449" font-size="14" fill="#e6e9ef" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">vgadecode</text>
+<path d="M200.0 468 V564" stroke="#4cc38a" stroke-width="3" fill="none"/>
+<path d="M200.0 564 L195.2 554.1 L204.8 554.1 Z" fill="#4cc38a"/>
+<text x="212.0" y="521.0" font-size="13" fill="#4cc38a" text-anchor="start" font-weight="normal">video/x-raw, RGB</text>
+<rect x="60.0" y="566" width="280" height="44" rx="8" fill="#1c2230" stroke="#5b6577" stroke-width="1.5"/>
+<text x="200.0" y="593" font-size="13.5" fill="#e6e9ef" text-anchor="middle" font-weight="bold" font-family="ui-monospace, Menlo, Consolas, monospace">videoconvert ! autovideosink</text>
+</svg>

@@ -46,15 +46,15 @@ Step 7 prints the chunks it read, with no samples dropped:
 wrote out.vgacap: 4 RAW chunks, 1024 samples, 0 dropped
 ```
 
-`out.vgacap` is then a vgacap stream that every vgacap reader takes, such as the [C tools](../src/tools/README.md).
+`out.vgacap` is then a vgacap stream that every vgacap reader takes, such as [the vgacap command-line tools](../src/tools/README.md).
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| `truncated chunk 'RAW '` at step 7 | Sampling stopped in the middle of a chunk | Stop after a multiple of 256 samples, as in step 5 |
-| More than `0 dropped` at step 7 | The link took bytes more slowly than samples arrived | Sample less often or use a faster link |
-| `non-printable chunk tag` at step 7 | The host lost or added bytes | Check the link and repeat steps 6 and 7 |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 7 | `truncated chunk 'RAW '` | Sampling stopped in the middle of a chunk | Stop after a multiple of 256 samples, as in step 5 |
+| 7 | More than `0 dropped` | The link took bytes more slowly than samples arrived | Sample less often or use a faster link |
+| 7 | `non-printable chunk tag` | The host lost or added bytes | Check the link and repeat steps 6 and 7 |
 
 ## Next
 

@@ -37,30 +37,18 @@ Parameter is the argument of `VgacapRawFramer()`, and Default its value in the c
 | `samples_per_chunk` | 256 | a positive multiple of 4 | samples in every `RAW ` chunk |
 | `fifo_words` | 128 | at least `samples_per_chunk` ÷ 4 | 32-bit words the FIFO holds |
 
-## RAW chunk
+## Chunks it sends
 
-Offset is in bytes from the chunk's start, and every field is little-endian. The sizes are those of the default 256 samples a chunk.
+The framer sends a `RAW ` chunk for each `samples_per_chunk` samples, and a `TIME` chunk after it has dropped a chunk. Their layout is on [The vgacap stream format](../src/stream/reference-stream-format.md#raw-packed-samples) and [its `TIME` section](../src/stream/reference-stream-format.md#time-time-and-losses). Chunk and Field name a field there, and Value is what the framer puts in it.
 
-| Offset | Size | Field | Value |
-|---|---|---|---|
-| 0 | 4 | tag | `RAW ` |
-| 4 | 4 | length | 4 + `samples_per_chunk` |
-| 8 | 4 | sample count | `samples_per_chunk` |
-| 12 | `samples_per_chunk` | samples | four to a 32-bit word with the first in bits 31:24 |
-
-## TIME chunk
-
-The framer sends one after it has dropped a chunk. Offset is in bytes from the chunk's start, and every field is little-endian.
-
-| Offset | Size | Field | Value |
-|---|---|---|---|
-| 0 | 4 | tag | `TIME` |
-| 4 | 4 | length | 25 |
-| 8 | 8 | `host_time_ns` | 0 |
-| 16 | 4 | `clock_hz` | 0 |
-| 20 | 4 | `dropped_samples` | `dropped` as the chunk starts: the total since reset |
-| 24 | 2 | message length | 7 |
-| 26 | 7 | message | `overrun` |
+| Chunk | Field | Value |
+|---|---|---|
+| `RAW ` | length | 4 + `samples_per_chunk` |
+| `RAW ` | `sample_count` | `samples_per_chunk` |
+| `TIME` | `host_time_ns` | 0 |
+| `TIME` | `clock_hz` | 0 |
+| `TIME` | `dropped_samples` | `dropped` as the chunk starts: the total since reset |
+| `TIME` | `msg` | `overrun` |
 
 ## The header the host writes
 

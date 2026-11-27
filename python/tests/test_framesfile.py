@@ -15,10 +15,10 @@ from vgacap.timebase import fmt_double
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DUMP = ROOT / "build" / "vgacap-outputs-dump"
-METHODS = ["sha256-rgb6", "fnv1a64-tb2026-rgb888"]
+METHODS = ["xxh3-128-rgb6", "fnv1a64-tb2026-rgb888"]
 VARIANTS = ["tb", "centre", "centre-fraction", "nosync"]
 FC = 420000
-SHA = "0123456789abcdef" * 4
+XXH = "0123456789abcdef" * 2
 
 
 def c_files(tmp_path, variant) -> pathlib.Path:
@@ -87,7 +87,7 @@ def test_nosync_has_no_frames(tmp_path):
     d = c_files(tmp_path, "nosync")
     f = ff.read_frames_txt(d / "frames.txt")
     assert (f.status, f.sampler_status, f.frames, f.distinct) == ("ok", "no-sync", [], [])
-    assert ff.read_hash_file(hash_path(d, "sha256-rgb6")).hashes == []
+    assert ff.read_hash_file(hash_path(d, "xxh3-128-rgb6")).hashes == []
 
 
 def test_hash_values_and_layout(tmp_path):
@@ -95,13 +95,13 @@ def test_hash_values_and_layout(tmp_path):
     f = ff.read_frames_txt(d / "frames.txt")
     # The dump's distinct frame k is bytes (i * (k + 3) + k) & 63, i < 192.
     px = [bytes((i * (k + 3) + k) & 63 for i in range(192)) for k in range(3)]
-    sha = ff.read_hash_file(hash_path(d, "sha256-rgb6"))
+    xxh = ff.read_hash_file(hash_path(d, "xxh3-128-rgb6"))
     fnv = ff.read_hash_file(hash_path(d, "fnv1a64-tb2026-rgb888"))
-    for fr, hs, hf in zip(f.frames, sha.hashes, fnv.hashes):
+    for fr, hs, hf in zip(f.frames, xxh.hashes, fnv.hashes):
         if fr.distinct < 0:
             assert hs is None and hf is None
         else:
-            assert hs == hashes.sha256_rgb6(px[fr.distinct]) == f.distinct[fr.distinct]
+            assert hs == hashes.xxh3_128_rgb6(px[fr.distinct]) == f.distinct[fr.distinct]
             assert hf == f"{hashes.fnv1a64_tb2026_rgb888(px[fr.distinct]):016x}"
     lines = hash_path(d, "fnv1a64-tb2026-rgb888").read_text().split("\n")
     assert lines[0] == "hash_method: fnv1a64-tb2026-rgb888"
@@ -113,8 +113,9 @@ def test_hash_values_and_layout(tmp_path):
     assert lines[header + 11] == "" and len(lines) == header + 12
     # The published tt07 files' hash lines: lowercase hex, 16 digits.
     assert all(len(x) == 16 and x == x.lower() for x in lines[header:header + 5])
-    shalines = hash_path(d, "sha256-rgb6").read_text().split("\n")
-    assert not any(x.startswith("hash_offset_basis") for x in shalines)
+    xxhlines = hash_path(d, "xxh3-128-rgb6").read_text().split("\n")
+    assert not any(x.startswith("hash_offset_basis") for x in xxhlines)
+    assert all(len(x) == 32 for x in xxhlines[14:] if x not in ("", "-"))
 
 
 # ---- the grouping rules, Python side alone (the C side is test_outputs.c) ----
@@ -198,10 +199,10 @@ def test_hash_reader_refuses(tmp_path):
 
 
 def test_writer_refuses():
-    f = ff.FramesFile("i", "ok", "centre-v1", "ok", 1, 1, "m", 1, 1.0, 0, "s", 0, SHA)
+    f = ff.FramesFile("i", "ok", "centre-v1", "ok", 1, 1, "m", 1, 1.0, 0, "s", 0, XXH)
     with pytest.raises(ff.FormatError):
         ff.format_frames_txt(f)              # centre-v1 without its keys
-    f = ff.FramesFile("i", "ok", "tb-v1", "bad", 1, 1, "m", 1, 1.0, 0, "s", 0, SHA)
+    f = ff.FramesFile("i", "ok", "tb-v1", "bad", 1, 1, "m", 1, 1.0, 0, "s", 0, XXH)
     with pytest.raises(ff.FormatError):
         ff.format_frames_txt(f)              # unknown sampler_status
 
@@ -211,15 +212,15 @@ def test_fmt_double_is_the_shared_formatter():
 
 
 @pytest.mark.parametrize("kw", [
-    dict(store_sha256="x"), dict(store_sha256="AB" * 32), dict(store_sha256="ab" * 31),
-    dict(store_sha256="gg" * 32), dict(store=""), dict(store="a b"), dict(store="d/f.bin"),
+    dict(store_xxh3_128="x"), dict(store_xxh3_128="AB" * 16), dict(store_xxh3_128="ab" * 15),
+    dict(store_xxh3_128="gg" * 16), dict(store_xxh3_128="ab" * 32), dict(store=""), dict(store="a b"), dict(store="d/f.bin"),
     dict(store="d\\f.bin"), dict(store="a\nb"), dict(store_length=-1), dict(store_length="7"),
     dict(id=""), dict(mode="a\nb"),
 ])
 def test_writer_refuses_bad_store_and_strings(kw):
     args = dict(id="i", status="ok", sampler="tb-v1", sampler_status="ok", width=1, height=1, mode="m",
                 clock_hz=1, clocks_per_pixel=1.0, capture_after_clock=0, store="frames.bin", store_length=0,
-                store_sha256=SHA)
+                store_xxh3_128=XXH)
     ff.format_frames_txt(ff.FramesFile(**args))      # the unmodified one is fine
     args.update(kw)
     with pytest.raises(ff.FormatError):
@@ -227,8 +228,9 @@ def test_writer_refuses_bad_store_and_strings(kw):
 
 
 @pytest.mark.parametrize("key,new", [
-    ("store_sha256: " + "0123456789abcdef" * 4, "store_sha256: ab"),
-    ("store_sha256: " + "0123456789abcdef" * 4, "store_sha256: " + "0123456789ABCDEF" * 4),
+    ("store_xxh3_128: " + "0123456789abcdef" * 2, "store_xxh3_128: ab"),
+    ("store_xxh3_128: " + "0123456789abcdef" * 2, "store_xxh3_128: " + "0123456789ABCDEF" * 2),
+    ("store_xxh3_128: " + "0123456789abcdef" * 2, "store_sha256: " + "0123456789abcdef" * 4),
     ("store: frames.bin", "store: a/frames.bin"), ("store: frames.bin", "store: a frames.bin"),
     ("store_length: 1234567", "store_length: 01234567"), ("store_length: 1234567", "store_length: -1"),
 ])
@@ -236,3 +238,20 @@ def test_reader_refuses_bad_store(tmp_path, tb_text, key, new):
     assert key in tb_text
     with pytest.raises(ff.FormatError):
         read_text(tmp_path, tb_text.replace(key, new, 1))
+
+
+def test_reader_names_the_pre_xxh3_frames_txt(tmp_path, tb_text):
+    """A frames.txt from before vgacap #62 is refused with a message that says
+    what it is and what to do, not a generic key mismatch."""
+    old = tb_text.replace("store_xxh3_128: " + "0123456789abcdef" * 2, "store_sha256: " + "0123456789abcdef" * 4, 1)
+    with pytest.raises(ff.FormatError, match=r"pre-XXH3 frames format \(store_sha256\); re-derive with vgacap-sample"):
+        read_text(tmp_path, old)
+
+
+def test_reader_names_the_pre_xxh3_hash_file(tmp_path):
+    d = c_files(tmp_path, "tb")
+    text = hash_path(d, "xxh3-128-rgb6").read_text().replace("hash_method: xxh3-128-rgb6", "hash_method: sha256-rgb6", 1)
+    p = tmp_path / "old.txt"
+    p.write_text(text)
+    with pytest.raises(ff.FormatError, match=r"pre-XXH3 hash method \(sha256-rgb6\); re-derive with vgacap-sample"):
+        ff.read_hash_file(p)

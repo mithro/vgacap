@@ -106,6 +106,131 @@ def test_the_tunnel_hint_is_the_command_to_type():
     assert "ws://127.0.0.1:18007/serial" in hint
 
 
+#: What `gst-launch-1.0` prints on stderr when `vgacapttsrc` raises its
+#: error, ending with the lines `ttcap capture` wrote before it exited 1.
+#: The last line is what the case is about.
+LOSSY_ENDINGS = {
+    "overruns": "overruns: 3 buffers torn",
+    "rx-stall": "rx stall: the RX FIFO overflowed and samples were lost",
+}
+
+
+def failing_pipeline(tmp_path: pathlib.Path, last_line: str) -> list[str]:
+    """A stand-in for `gst-launch-1.0` that fails the way a bridge capture
+    does: the element's error on stderr, then exit 1."""
+    script = tmp_path / "failing_gst_launch.py"
+    script.write_text(
+        "import sys\n"
+        "sys.stderr.write(%r)\n"
+        "sys.exit(1)\n"
+        % ("ERROR: from element /GstPipeline:pipeline0/GstVgaCapTtSrc:"
+           "vgacapttsrc0: the capture failed (exit status 1): "
+           "bytes=1 samples=1 chunks=1 seconds=4.000 overruns=3 dropped=0 "
+           "rxstall=0\n%s\nAdditional debug info:\n" % last_line)
+    )
+    return [sys.executable, str(script)]
+
+
+def run_through_the_bridge(tmp_path: pathlib.Path, last_line: str) -> str:
+    """Run a failing pipeline on a bridge link; what the demo said."""
+    import io
+
+    link = demo_mod.Link(bridge_ws_url("fpga-1"), "test", through_bridge=True)
+    plan = demo_mod.DemoPlan(
+        link=link, argv=failing_pipeline(tmp_path, last_line),
+        outdir=tmp_path / "out", png=False, video=False, video_path=None,
+        window=False, serve_port=None,
+    )
+    said = io.StringIO()
+    returncode = demo_mod.run_demo(plan, progress=demo_mod.Progress(stream=said))
+    assert returncode == 1
+    return said.getvalue()
+
+
+@pytest.mark.parametrize("ending", sorted(LOSSY_ENDINGS))
+def test_a_lossy_bridge_capture_gets_no_tunnel_hint(tmp_path, capfd, ending):
+    # The link worked: the board sent samples, and only lost some. A hint
+    # to set up an SSH tunnel sends the reader the wrong way.
+    said = run_through_the_bridge(tmp_path, LOSSY_ENDINGS[ending])
+    assert "ssh -N -L" not in said, said
+    # The pipeline's own stderr still reaches the terminal, whole.
+    assert LOSSY_ENDINGS[ending] + "\n" in capfd.readouterr().err
+
+
+def test_a_bridge_capture_that_failed_otherwise_still_gets_the_hint(tmp_path):
+    said = run_through_the_bridge(tmp_path, "ttcap: capture failed: refused")
+    assert "ssh -N -L" in said, said
+
+
+#: More stderr than a Linux pipe holds (64 KiB), so a pipeline whose stderr
+#: is not drained blocks on it.
+FLOOD_LINES = 4000
+
+#: A run that drains its stderr ends in well under a second.
+DRAIN_BOUND_S = 30
+
+
+def run_demo_with_stderr(tmp_path: pathlib.Path, first: bytes,
+                         broken_terminal: bool) -> subprocess.CompletedProcess:
+    """`run_demo` in a process of its own, on a pipeline that writes
+    `first` and then more than a pipe's worth of stderr, and exits 1.
+
+    In a subprocess with a timeout, so a demo that hangs fails the test
+    rather than blocking the suite.
+    """
+    pipeline = tmp_path / "noisy_gst_launch.py"
+    pipeline.write_text(
+        "import sys\n"
+        "sys.stderr.buffer.write(%r)\n"
+        "for i in range(%d):\n"
+        "    sys.stderr.buffer.write(b'0:00:00.%%06d WARN noise noise noise noise\\n' %% i)\n"
+        "sys.stderr.buffer.flush()\n"
+        "sys.exit(1)\n" % (first, FLOOD_LINES)
+    )
+    runner = tmp_path / "run_noisy_demo.py"
+    runner.write_text(
+        "import pathlib, sys\n"
+        "from ttcap import demo\n"
+        "class Gone:\n"
+        "    def write(self, text):\n"
+        "        raise BrokenPipeError(32, 'Broken pipe')\n"
+        "    def flush(self):\n"
+        "        raise BrokenPipeError(32, 'Broken pipe')\n"
+        "out = pathlib.Path(sys.argv[2])\n"
+        "plan = demo.DemoPlan(\n"
+        "    link=demo.Link('serial:/dev/null', 'test'),\n"
+        "    argv=[sys.executable, sys.argv[1]], outdir=out, png=False,\n"
+        "    video=False, video_path=None, window=False, serve_port=None)\n"
+        "progress = demo.Progress(stream=sys.stdout)\n"
+        "if sys.argv[3] == 'broken':\n"
+        "    sys.stderr = Gone()\n"
+        "code = demo.run_demo(plan, progress=progress)\n"
+        "sys.stderr = sys.__stderr__  # or the shutdown flush makes it 120\n"
+        "sys.exit(code)\n"
+    )
+    return subprocess.run(
+        [sys.executable, str(runner), str(pipeline), str(tmp_path / "out"),
+         "broken" if broken_terminal else "terminal"],
+        capture_output=True, timeout=DRAIN_BOUND_S,
+    )
+
+
+def test_stderr_that_is_not_utf8_is_still_drained(tmp_path):
+    # A strict decode killed the pump on the first bad byte; nothing drained
+    # stderr after it, the pipeline blocked on a full pipe, and so did the
+    # demo, holding the board.
+    proc = run_demo_with_stderr(tmp_path, b"\xff\n", broken_terminal=False)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert b"WARN noise" in proc.stderr
+
+
+def test_stderr_is_still_drained_after_the_terminal_goes_away(tmp_path):
+    # A write to a closed terminal raised BrokenPipeError in the pump, with
+    # the same hang after it.
+    proc = run_demo_with_stderr(tmp_path, b"start\n", broken_terminal=True)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+
+
 @pytest.mark.parametrize("slug", sorted(WELLAND))
 def test_no_tunnel_hint_asks_for_a_privileged_port(slug):
     # Every Welland octet is 3-8 or 33-36, so using it as the local port made
@@ -275,10 +400,21 @@ def test_a_clock_above_the_boards_measured_ceiling_warns_but_is_allowed():
 
 def test_each_board_family_is_warned_at_its_own_ceiling():
     assert demo_mod.clock_ceiling("tt07")[0] == 60_000      # RP2040 demo board
-    assert demo_mod.clock_ceiling("fpga-1")[0] == 750_000   # RP2350
-    # 700 kHz is over one ceiling and under the other.
-    assert demo_mod.check_numbers(numbers(board="tt07", clock_hz=700_000))
-    assert demo_mod.check_numbers(numbers(board="fpga-1", clock_hz=700_000)) == []
+    assert demo_mod.clock_ceiling("fpga-1")[0] == 400_000   # RP2350
+    # 300 kHz is over one ceiling and under the other.
+    assert demo_mod.check_numbers(numbers(board="tt07", clock_hz=300_000))
+    assert demo_mod.check_numbers(numbers(board="fpga-1", clock_hz=300_000)) == []
+
+
+@pytest.mark.parametrize("clock_hz", [500_000, 700_000])
+def test_an_rp2350_demo_above_400_khz_warns(clock_hz):
+    # Issue #60: on the stock firmware 3.1.1, 500 kHz overran over USB
+    # serial and through the bridge; 400 kHz was clean through the bridge,
+    # and over USB serial in 5 of 5 captures:
+    # https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-stock-400k-usb
+    warnings = demo_mod.check_numbers(numbers(board="fpga-1", clock_hz=clock_hz))
+    assert len(warnings) == 1 and "400000" in warnings[0]
+    assert demo_mod.check_numbers(numbers(board="fpga-1", clock_hz=400_000)) == []
 
 
 @pytest.mark.parametrize("slug", sorted(WELLAND))
@@ -300,6 +436,15 @@ def test_the_ceiling_warning_names_the_demo_board_not_the_slug():
     assert "tt03p5 board has been measured" not in warning
     # And the ceiling is not a hard limit: --buf-words moves it.
     assert "default buffer size" in warning and "--buf-words" in warning
+
+
+def test_the_ceiling_warning_says_a_lossy_run_exits_1():
+    # Issue #59: a timed demo whose capture lost samples exits 1, and keeps
+    # what it wrote. The warning has to say so before the run starts.
+    warning = demo_mod.check_numbers(numbers(board="fpga-1", clock_hz=500_000))[0]
+    assert "exit 1" in warning
+    assert "frames and video are kept" in warning
+    assert "That is allowed" not in warning
 
 
 def test_no_ceiling_is_guessed_for_a_board_reached_by_link():

@@ -53,12 +53,12 @@ Test is the test, and Checks what it holds the firmware to.
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| `Failed to change working directory to .../build` at step 2 | step 1 did not run, or ran elsewhere | Run step 1 at the checkout's root |
-| Step 3 fails to start `build/vgacap-fw-sim` | step 1 did not build it | Run step 1 |
-| `test_trace_push_speed` fails when you run all of `ctest` | a speed test, labelled `perf`, on a busy machine | Leave out `perf` with `-LE perf`, as CI does; it does not test the firmware |
-| A `test_fw_core` case names a reply or a chunk | the firmware's output changed | Fix the firmware, or the protocol reference and the test together |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 2 | `Failed to change working directory to .../build` | step 1 did not run, or ran elsewhere | Run step 1 at the checkout's root |
+| 3 | It fails to start `build/vgacap-fw-sim` | step 1 did not build it | Run step 1 |
+| 2 | `test_trace_push_speed` fails when you run all of `ctest` | a speed test, labelled `perf`, on a busy machine | Leave out `perf` with `-LE perf`, as CI does; it does not test the firmware |
+| 2 | A `test_fw_core` case names a reply or a chunk | the firmware's output changed | Fix the firmware, or the protocol reference and the test together |
 
 ## Next
 

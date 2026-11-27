@@ -11,7 +11,7 @@ This page explains how vgacap is tested. For each kind of test, it says which pa
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="test-layers-dark.svg">
-  <img src="test-layers.svg" alt="For C tests, the emulated RP2, the simulated board and the HIL check: what each puts at the design, PIO and DMA, board code and link." width="100%">
+  <img src="test-layers.svg" alt="For C tests, the emulated RP2, the simulated board and the hardware-in-the-loop check: what each puts at the design, PIO and DMA, board code and link." width="100%">
 </picture>
 
 ## The capture path
@@ -32,7 +32,7 @@ The C tests in [`tests/`](../../tests) run under `ctest`. They check the stream 
 
 ## Continuous integration
 
-CI runs the three layers above on every push and pull request, in a configuration with GStreamer and one without. It also cross-builds the vgacap firmware and the MicroPython rp2 port, which no host test can run. In the GStreamer job, a skipped plugin, hardware-check or RTL test fails the job, because a skip would hide a check that did not run. The jobs and their steps are on [Continuous integration jobs](reference/reference-ci-jobs.md).
+CI runs the three layers above on every push and pull request, in a configuration with GStreamer and one without. It also cross-builds the vgacap firmware and the MicroPython rp2 port, which no host test can run. In the GStreamer job, a skipped plugin, hardware-check or RTL test fails the job, because a skip would hide a check that did not run. The sanitizers job runs the samplers' C tests, `test_tbv1` and `test_centrev1`, under AddressSanitizer and UndefinedBehaviorSanitizer. A write one byte past a frame buffer changes no output that a plain test can see, but the sanitizers stop on it. The jobs and their steps are on [Continuous integration jobs](reference/reference-ci-jobs.md).
 
 ## The hardware-in-the-loop check
 

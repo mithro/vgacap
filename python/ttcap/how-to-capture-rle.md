@@ -33,7 +33,7 @@ For one burst at the design's real clock, add `--rle-oneshot` and a large `--buf
 
 ## Check
 
-The run from step 1, on the tt09 chip, printed this:
+The run from step 1, on the tt09 board, printed this:
 
 ```text
 profile=rp2350-dbv3 project=tt_um_vga_clock enable=index

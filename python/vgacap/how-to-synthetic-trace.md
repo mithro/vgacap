@@ -61,11 +61,11 @@ mode: 640x480@60
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| `fewer clocks than reset clocks` at step 2 | The length is shorter than the reset | Give more clocks than `reset_clocks` |
-| `unknown sync phase` at step 2 | `phase` is misspelt | Give `"testpatterns"` or `"playground"` |
-| `sampler_status: no-sync` in the check | The trace ends before the sampler has seen enough frames | Make the trace longer than `calib_seconds` plus `seconds` |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 2 | `fewer clocks than reset clocks` | The length is shorter than the reset | Give more clocks than `reset_clocks` |
+| 2 | `unknown sync phase` | `phase` is misspelt | Give `"testpatterns"` or `"playground"` |
+| Check | `sampler_status: no-sync` | The trace ends before the sampler has seen enough frames | Make the trace longer than `calib_seconds` plus `seconds` |
 
 ## Next
 

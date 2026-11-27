@@ -285,6 +285,19 @@ def _tail(text: str, lines: int = 12) -> str:
     return "\n".join(kept)
 
 
+#: The line `ttcap capture` prints when the board lost samples (`lossy_capture()`
+#: in `python/ttcap/cli.py`). In a demo it reaches stderr inside the
+#: pipeline's error, on a line of its own or after the element's
+#: "the capture failed (exit status 1): ".
+LOSSY_RE = re.compile(r"overruns: \d+ buffers? torn|rx stall: the RX FIFO overflowed[^\n]*")
+
+
+def _lossy(text: str) -> str:
+    """The first overrun or RX-stall line in `text`, or ""."""
+    found = LOSSY_RE.search(text)
+    return found.group(0) if found else ""
+
+
 #: How long one write to the board may block while restarting it.
 RESTART_WRITE_TIMEOUT_S = 2.0
 
@@ -658,6 +671,10 @@ class Hil:
         pngs = sorted(outdir.glob("frame-*.png"))
         video = outdir / "capture.mkv"
         evidence = (shlex.join(ran.argv), _tail(ran.stderr, 20))
+        # A demo whose capture lost samples exits 1 (issue #59). Say so: "exit
+        # 1" alone sends the reader to the link, not to --clock-hz.
+        overran = _lossy(ran.stderr) if ran.returncode != 0 else ""
+        overran = "the demo's capture overran: %s; " % overran if overran else ""
 
         # Frames. With --fps the decoder re-pushes the last frame to hold a
         # wall-clock cadence, so the count follows the wall clock, not the
@@ -665,15 +682,15 @@ class Hil:
         wall_want = max(1, int(0.5 * self.args.fps_value * self.args.seconds))
         self.record("demo-frames",
                     ran.returncode == 0 and len(pngs) >= wall_want,
-                    "exit %d, %d png(s) in %.1fs, wanted >=%d at %s fps"
-                    % (ran.returncode, len(pngs), ran.seconds, wall_want,
+                    "%sexit %d, %d png(s) in %.1fs, wanted >=%d at %s fps"
+                    % (overran, ran.returncode, len(pngs), ran.seconds, wall_want,
                        self.args.fps),
                     *evidence)
 
         # Video: a file a player can open, at the rate that was asked for.
         if ran.returncode != 0:
-            self.record("video", False, "the demo exited %d, so its video "
-                        "proves nothing" % ran.returncode, *evidence)
+            self.record("video", False, "%sthe demo exited %d, so its video "
+                        "proves nothing" % (overran, ran.returncode), *evidence)
         elif not video.exists():
             self.record("video", False, "no %s was written" % video, *evidence)
         else:
