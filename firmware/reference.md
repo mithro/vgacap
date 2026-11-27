@@ -1,7 +1,7 @@
 ---
 type: landing
 owner: vgacap maintainers
-reader: someone looking up a fact about the vgacap firmware
+reader: someone looking up a fact about the vgacap firmware or the vgacap MicroPython module
 review: 2027-05-27
 ---
 

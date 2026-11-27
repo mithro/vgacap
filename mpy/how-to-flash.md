@@ -200,7 +200,7 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
     $ uv run --no-sync python tools/board_restart.py ws://127.0.0.1:8765/serial
     ```
 
-24. On the Welland bench, wait for the idle display, which read `loaded` after 67 seconds on fpga-1 on 2026-11-27.
+24. On the Welland bench, wait for the idle display, which reads `loaded` 66 to 73 seconds later ([bench result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1)).
 
     ```console
     $ timeout 300 sh -c "until curl -s localhost:8765/health | grep -q '\"state\": \"loaded\"'; do sleep 5; done" || echo "not loaded after 300 s"
