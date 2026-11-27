@@ -85,8 +85,9 @@ if(VGACAP_HOST_EXTRAS)
   target_link_libraries(vgacap-sample PRIVATE vgacap_sample)
   # centre-v1's row loops vectorise with GCC at -O3 only: -O2's very cheap
   # cost model refuses a loop that needs a scalar epilogue or widens its sum.
+  # Not in Debug (-O0) or MinSizeRel (-Os), whose levels are the point.
   set_source_files_properties(src/sample/centrev1.c PROPERTIES COMPILE_OPTIONS
-    "$<$<AND:$<C_COMPILER_ID:GNU,Clang,AppleClang>,$<NOT:$<CONFIG:Debug>>>:-O3>")
+    "$<$<AND:$<C_COMPILER_ID:GNU,Clang,AppleClang>,$<NOT:$<CONFIG:Debug,MinSizeRel>>>:-O3>")
   # Test-only helper for python/tests/test_calib.py: calibration and frame
   # clock of a trace.
   add_executable(vgacap-calib-dump tests/calib_dump.c)

@@ -293,8 +293,8 @@ static int64_t latest_end(const vgafc_t *fc, uint64_t lo, uint64_t hi) {
 // on_raw's row loops. Each takes its bounds by value and its rows as restrict
 // pointers: read through the sampler's struct, the bounds could alias the
 // uint8_t stores, and GCC then cannot count the iterations and does not
-// vectorise. Branch-free, so that they vectorise (the build gives this file
-// -O3; CMakeLists.txt).
+// vectorise. pick_row, map_row and changes_row are branch-free so that they
+// vectorise (the build gives this file -O3; CMakeLists.txt).
 
 // The pick at cpp 1, the window's clocks q[0..n) being consecutive: a clock
 // is written when its bit 7 is set (then its colour is the low six bits),
@@ -310,6 +310,7 @@ static uint32_t pick_row(uint8_t *restrict out, const uint8_t *restrict q, uint3
 }
 
 // The pick at any other cpp: pixel p is clock xs[p], or missing when -1.
+// A gather (src[xs[p]]), which GCC does not vectorise here: it stays scalar.
 static uint32_t pick_row_xs(uint8_t *restrict out, const uint8_t *restrict src,
                             const int64_t *restrict xs, uint32_t n) {
     uint32_t written = 0;

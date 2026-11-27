@@ -22,7 +22,7 @@ This page builds the host side with CMake and runs its C and Python tests, as th
 
 1. In the checkout, run `cmake -S . -B build` to configure the build, which prints a `vgacap:` line saying whether it builds the GStreamer plugin.
 2. In the checkout, run `cmake --build build -j` to build the libraries, the C tools and the C tests into `build/`.
-3. In the checkout, run `ctest --test-dir build --output-on-failure -LE perf` to run the C tests without the timing test labelled `perf`.
+3. In the checkout, run `ctest --test-dir build --output-on-failure -LE perf` to run the C tests without the timing tests labelled `perf`.
 4. In the checkout, fetch piolib at CI's commit into `build/utils` with these commands, so that the RP1 sampler's test runs instead of skipping:
 
    ```sh
