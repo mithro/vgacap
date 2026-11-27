@@ -627,23 +627,31 @@ static double cpu_s(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
-TEST(centre_speed) {
+typedef struct speed_res {
+    speed_out_t o;
+    centrev1_diag_t d;
+    double cpu;                        // centrev1_push_runs' CPU, less the callback's
+    uint64_t timed_clocks, nruns;
+    int started;
+} speed_res_t;
+
+// The design's first `frames` frames through the calibration, the frame
+// clock and centre-v1; the caller frees r->o.h.
+static void speed_run(uint32_t frames, speed_res_t *r) {
+    memset(r, 0, sizeof *r);
     const size_t fl = 800 * 525;
     uint32_t *uo = malloc(fl * sizeof *uo);
     vgasample_run_t *runs = malloc(fl * sizeof *runs);
-    speed_out_t o = { 0, calloc(SPEED_FRAMES, sizeof(uint64_t)), 0, 0, 0 };
-    ASSERT_TRUE(uo && runs && o.h);
+    r->o.h = calloc(frames, sizeof(uint64_t));
+    if (!uo || !runs || !r->o.h) abort();
     vgacal_t cal; vgafc_t fc;
     vgacal_init(&cal, HZ, 0.1);
     memset(&fc, 0, sizeof fc);
-    centrev1_t *cs = centrev1_create(0, 0, speed_frame, &o);
-    uint64_t c = 0, timed_clocks = 0, nruns = 0;
-    double cpu = 0;
-    int started = 0;
+    centrev1_t *cs = centrev1_create(0, 0, speed_frame, &r->o);
     centrev1_push(cs, 0, 0, RESET);                 // reset
     vgacal_push(&cal, 0, 0, 0, RESET);
-    c = RESET;
-    for (uint32_t k = 0; k < SPEED_FRAMES; k++) {
+    uint64_t c = RESET;
+    for (uint32_t k = 0; k < frames; k++) {
         speed_draw(k);
         synth_frame_hvsync(&mode640, speed_pix, NULL, uo, fl);
         size_t n = 0;
@@ -655,49 +663,73 @@ TEST(centre_speed) {
         }
         c += fl;
         size_t i0 = 0;
-        if (!started) {                              // run by run until calibration ends
-            for (; i0 < n && !started; i0++) {
-                const vgasample_run_t *r = &runs[i0];
-                uint64_t pre = vgacal_push(&cal, r->uo_out, 1, r->first, r->clocks);
-                if (pre) centrev1_push(cs, r->uo_out, r->first, pre);
+        if (!r->started) {                           // run by run until calibration ends
+            for (; i0 < n && !r->started; i0++) {
+                const vgasample_run_t *q = &runs[i0];
+                uint64_t pre = vgacal_push(&cal, q->uo_out, 1, q->first, q->clocks);
+                if (pre) centrev1_push(cs, q->uo_out, q->first, pre);
                 if (cal.state == VGACAL_DONE) {
                     vgafc_init(&fc, &cal);
                     centrev1_calibrated(cs, &cal, &fc);
-                    started = 1;
-                    if (pre < r->clocks) {
-                        vgafc_push(&fc, r->uo_out, r->first + pre, r->clocks - pre);
-                        centrev1_push(cs, r->uo_out, r->first + pre, r->clocks - pre);
+                    r->started = 1;
+                    if (pre < q->clocks) {
+                        vgafc_push(&fc, q->uo_out, q->first + pre, q->clocks - pre);
+                        centrev1_push(cs, q->uo_out, q->first + pre, q->clocks - pre);
                     }
                 }
             }
-            if (!started) continue;
+            if (!r->started) continue;
         }
         vgafc_push_runs(&fc, runs + i0, n - i0);
-        double t0 = cpu_s(), cb0 = o.cb_cpu;
+        double t0 = cpu_s(), cb0 = r->o.cb_cpu;
         centrev1_push_runs(cs, runs + i0, n - i0);
-        cpu += cpu_s() - t0 - (o.cb_cpu - cb0);
-        timed_clocks += runs[n - 1].first + runs[n - 1].clocks - runs[i0].first;
-        nruns += n - i0;
+        r->cpu += cpu_s() - t0 - (r->o.cb_cpu - cb0);
+        r->timed_clocks += runs[n - 1].first + runs[n - 1].clocks - runs[i0].first;
+        r->nruns += n - i0;
     }
-    ASSERT_TRUE(started);
-    centrev1_diag_t d;
-    centrev1_finish(cs, &d);
+    centrev1_finish(cs, &r->d);
     fprintf(stderr, "  centre-v1: %zu frames (%zu differ from the one before), %.1f clocks a run, "
-            "%.3f s CPU, %.3f ms a frame, %.2f ns a clock; frames %016llx, changes %llu, outside %llu\n",
-            o.n, o.distinct, (double)timed_clocks / (double)nruns, cpu, cpu * 1e3 / (double)o.n,
-            cpu * 1e9 / (double)timed_clocks, (unsigned long long)o.sum,
-            (unsigned long long)d.colour_changes, (unsigned long long)d.outside);
-    ASSERT_TRUE(o.n >= SPEED_FRAMES - 10);
-    ASSERT_EQ_U(o.distinct, o.n);
-    // The frames and counts as centre-v1 at ebd3b18 gives them.
-    ASSERT_EQ_U(o.sum, 0x63038bd2415ccdbcull);
-    ASSERT_EQ_U(d.colour_changes, 912600);
-    // On big-storage: 1.4 ms a frame with on_raw's loops not vectorised,
-    // 0.4 ms with them vectorised.
-    ASSERT_TRUE(cpu * 1e3 / (double)o.n <= 0.8);
+            "%.3f s CPU, %.3f ms a frame, %.2f ns a clock; frames %016llx, changes %llu, off grid %llu, "
+            "outside %llu\n",
+            r->o.n, r->o.distinct, (double)r->timed_clocks / (double)r->nruns, r->cpu,
+            r->cpu * 1e3 / (double)r->o.n, r->cpu * 1e9 / (double)r->timed_clocks,
+            (unsigned long long)r->o.sum, (unsigned long long)r->d.colour_changes,
+            (unsigned long long)r->d.off_grid, (unsigned long long)r->d.outside);
     centrev1_free(cs);
     vgacal_free(&cal); vgafc_free(&fc);
-    free(uo); free(runs); free(o.h);
+    free(uo); free(runs);
+}
+
+// The speed design's first 20 frames, untimed, for CI: the frames, the
+// colour changes and the off-grid count must be those centre-v1 gives at
+// ebd3b18, which pins every clock of on_raw's row loops (pick, activity map,
+// colour changes) on varied input.
+TEST(centre_speed_design_exact) {
+    speed_res_t r;
+    speed_run(20, &r);
+    ASSERT_TRUE(r.started);
+    ASSERT_EQ_U(r.o.n, 15);
+    ASSERT_EQ_U(r.o.distinct, r.o.n);
+    ASSERT_EQ_U(r.o.sum, 0x8fc1e6ac70abdc12ull);
+    ASSERT_EQ_U(r.d.colour_changes, 58239);
+    ASSERT_EQ_U(r.d.off_grid, 0);
+    ASSERT_EQ_U(r.d.outside, 0);
+    free(r.o.h);
+}
+
+TEST(centre_speed) {
+    speed_res_t r;
+    speed_run(SPEED_FRAMES, &r);
+    ASSERT_TRUE(r.started);
+    ASSERT_TRUE(r.o.n >= SPEED_FRAMES - 10);
+    ASSERT_EQ_U(r.o.distinct, r.o.n);
+    // The frames and counts as centre-v1 at ebd3b18 gives them.
+    ASSERT_EQ_U(r.o.sum, 0x63038bd2415ccdbcull);
+    ASSERT_EQ_U(r.d.colour_changes, 912600);
+    // On big-storage: 1.4 ms a frame with on_raw's loops not vectorised,
+    // 0.4 ms with them vectorised.
+    ASSERT_TRUE(r.cpu * 1e3 / (double)r.o.n <= 0.8);
+    free(r.o.h);
 }
 
 int main(int argc, char **argv) {
@@ -725,6 +757,7 @@ int main(int argc, char **argv) {
     RUN(centre_bad_timing);
     RUN(centre_bounds_bad_timing);
     RUN(centre_bad_window);
+    RUN(centre_speed_design_exact);
     free(frame_buf);
     RUN_TESTS_END();
 }
