@@ -1024,7 +1024,7 @@ if rd2:
     print("Background CPU plus `tracetool info`, `vgacap-sample`'s pass and `tracetool uohash`, and two more opens "
           "(each of the three opens the file; uohash's time includes its own). % of the pilot's untraced simulation "
           "CPU: the trace's own share, which leaves the rest of the 5% to the samplers, hashes and PNGs. The same "
-          "compression work measured 2-3 times apart from one run to another (the encode2 tables), so the share is "
+          "compression work measured up to 2.5 times apart from one run to another (the encode2 tables), so the share is "
           "given at encode2's median and at the lowest background figure measured (the first round's and encode2's "
           "three). The reads' part follows, in s.\n")
     for info_pat, title in (("info", "tracetool info counting each planar stream on its own"),
@@ -1200,9 +1200,9 @@ if os.path.exists(plog) and os.path.exists(llog):
         if m and m.group(1) in opened:
             wins.append((m.group(1), opened.pop(m.group(1)), t))
             continue
-        m = re.match(r"ticks (\S+?):\d+ (\S+?):\d+:", msg)
+        m = re.match(r"ticks ((?:\S+:\d+ )*\S+:\d+): \d+/\d+ chunks", msg)
         if m:
-            key = "loop " + m.group(1) + "+" + m.group(2)
+            key = "loop " + "+".join(x.rsplit(":", 1)[0] for x in m.group(1).split())
             if key not in opened:
                 opened[key] = t
             opened[key + "#end"] = t
