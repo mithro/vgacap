@@ -761,9 +761,9 @@ body = [
           f"{ROOT}/include/vgacap/trace.h", f"{ROOT}/src/stream/writer.c"])],
     ["vgch2 reader (vgacap src/trace/trace_read.c; stream reader)",
      loc([f"{ROOT}/src/trace/trace_read.c", f"{ROOT}/src/stream/reader.c"])],
-    ["planar + events + raw writers (study src/w_mine.c, w_mine.h)", loc([f"{S}/w_mine.c", f"{S}/w_mine.h"])],
+    ["the study writers: planar, events, runs, changelog, raw (study src/w_mine.c, w_mine.h)", loc([f"{S}/w_mine.c", f"{S}/w_mine.h"])],
     ["study container writer + transforms (study src/bg.c, codec.c)", loc([f"{S}/bg.c", f"{S}/codec.c"])],
-    ["study readers for planar, events, raw (study src/rd.c, stdy part)", loc([f"{S}/rd.c"])],
+    ["the study readers: planar, events, raw, and vgch2 and FST drivers (study src/rd.c)", loc([f"{S}/rd.c"])],
 ]
 table(["code", "non-comment lines"], body)
 print("Spec text, words: VGCH v2 trace " + str(words([f"{ROOT}/docs/trace-format.md",

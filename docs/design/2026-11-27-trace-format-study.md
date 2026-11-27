@@ -920,9 +920,9 @@ Exit 0 and a byte count: the tool read the whole file (its output's size). fst2v
 |---|---:|
 | vgch2 writer (vgacap src/trace/trace_write.c, blocks.c, trace.h; stream writer) | 633 |
 | vgch2 reader (vgacap src/trace/trace_read.c; stream reader) | 1082 |
-| planar + events + raw writers (study src/w_mine.c, w_mine.h) | 528 |
+| the study writers: planar, events, runs, changelog, raw (study src/w_mine.c, w_mine.h) | 528 |
 | study container writer + transforms (study src/bg.c, codec.c) | 657 |
-| study readers for planar, events, raw (study src/rd.c, stdy part) | 517 |
+| the study readers: planar, events, raw, and vgch2 and FST drivers (study src/rd.c) | 517 |
 
 Spec text, words: VGCH v2 trace 4056 (docs/trace-format.md + src/stream/reference-stream-format.md).
 
@@ -948,6 +948,24 @@ Each of VGCH v2's choices is judged the way the candidates are, by what it does 
 | **One chunk shared with the boards** (the format note's argument for `RUNS`) | It ties the simulation trace's layout to an 8-bit board capture, where one value is one port. | Nothing yet: no board writes `RUNS`. | It should not decide the simulation format. |
 
 In short, the container is sound: the seekable zstd frames, the per-block start, `META`, the checksums and the block length all hold up under measurement. The payload is the problem. So are the writer's push path and the open's scan of every block. All three can change without touching the container.
+
+**Complexity (R9).** The [Implementation size](#implementation-size) table counts non-comment lines:
+
+| Code | Lines |
+|---|---:|
+| vgch2's writer, with the stream writer | 633 |
+| vgch2's reader, with the stream reader | 1,082 |
+| The study's planar, events, changelog, runs and raw writers together | 528 |
+| The study's container writer and transforms | 657 |
+| The study's readers | 517 |
+
+The VGCH v2 spec ([`trace-format.md`](../trace-format.md) and [`reference-stream-format.md`](../../src/stream/reference-stream-format.md)) is 4,056 words. The format note lists:
+
+- 17 reader fault cases for the three new chunks (its "Reader rules" table);
+- 8 invalid-header cases;
+- 6 rules for a trace cut short.
+
+Most of those belong to the container (framing, `BLKH`, `META`, truncation), which the recommendation keeps. A planar payload replaces the `RUNS` rules: no adjacent-equal values in a stream, LEB128 minimal and non-zero, and runs that fill the block exactly. It adds one rule: one stream per port, each ending at the block's end. The study's prototypes are not production code. Their line counts bound how much code each layout needs, but they lack vgacap's error reporting.
 
 ## Pros and cons per candidate
 
