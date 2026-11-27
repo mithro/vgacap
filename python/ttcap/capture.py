@@ -1609,6 +1609,14 @@ def clocked_problems(req: CaptureRequest, timing: ClockedTiming,
     opening = next((m for m in stats.messages if m.startswith("clocked ")), None)
     if opening != want:
         problems.append(f"the opening record is {opening!r}, not {want!r}")
+    if opening is not None:
+        # The board reads SMn_CLKDIV back after writing it (review I1).
+        div = _keyed_str(opening, "pio_div")
+        frac = _keyed_str(opening, "pio_div_frac")
+        if div != str(timing.pio_div) or frac is not None:
+            problems.append(
+                "CLKDIV reads pio_div=%s%s, not the %d worked out"
+                % (div, "" if frac is None else " pio_div_frac=" + frac, timing.pio_div))
     if not any(_keyed_str(m, "status") is not None for m in stats.messages):
         problems.append("no closing record")
     elif stats.status != "ok":

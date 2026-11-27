@@ -54,8 +54,12 @@ OUTPUT, all `TIME` and `RAW ` chunks:
     samples=S stalled_buffers=B overruns=O status=ok|stopped|error
         sysclk_hz=F elapsed_ms=T                                    (last)
 
-`cycles_per_clock` is H + L + 4, in PIO cycles: the clock is
-sysclk / (pio_div * cycles_per_clock). `status=error` always follows an
+The opening record comes once the divider is written: `pio_div` is
+SMn_CLKDIV's INT read back (0 read as 65536), followed by
+`pio_div_frac=F` if its FRAC reads non-zero, and `below_floor=1` ends it
+when the host said so. A failure before that (the system clock, the
+PIO claim) has no opening record. `cycles_per_clock` is H + L + 4, in PIO
+cycles: the clock is sysclk / (pio_div * cycles_per_clock). `status=error` always follows an
 `error=` chunk. The SDK's loggers are silenced for the whole run, so that
 nothing the SDK prints can land inside the chunk stream; a host stop byte
 ends the run between buffers with `status=stopped`.
@@ -161,10 +165,6 @@ def wait_ms(done, ms):
 
 def main(out):
     """Clock and sample the design `CLOCKS` times; see the docstring."""
-    write_time_chunk(out, 0, (  # noqa: F821 - the prelude's
-        "clocked clocks=%d reset_clocks=%d pio_div=%d cycles_per_clock=%d%s"
-        % (CLOCKS, RESET_CLOCKS, PIO_DIV, CYCLES,
-           " below_floor=1" if CFG["below_floor"] else "")).encode())  # noqa: F821
     status = "error"
     samples = stalled = 0
     sm = prog = dma = bufs = poller = stdin = logs = None
@@ -196,6 +196,12 @@ def main(out):
                               in_base=machine.Pin(IN_BASE),  # noqa: F821
                               sideset_base=machine.Pin(CLK_GPIO))  # noqa: F821
         machine.mem32[CLKDIV_ADDR] = PIO_DIV << 16  # noqa: F821
+        div = machine.mem32[CLKDIV_ADDR]  # noqa: F821 - what the PIO will run at
+        write_time_chunk(out, 0, (  # noqa: F821 - the prelude's
+            "clocked clocks=%d reset_clocks=%d pio_div=%d cycles_per_clock=%d%s%s"
+            % (CLOCKS, RESET_CLOCKS, div >> 16 or 65536, CYCLES,
+               " pio_div_frac=%d" % (div >> 8 & 255) if div >> 8 & 255 else "",
+               " below_floor=1" if CFG["below_floor"] else "")).encode())  # noqa: F821
         machine.mem32[FDEBUG_ADDR] = RXSTALL_BIT  # noqa: F821 - a stale stall
         machine.mem32[IRQ_ADDR] = 1  # noqa: F821 - a stale flag 0 would release reset early
         dma = rp2.DMA()  # noqa: F821

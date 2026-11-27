@@ -9,8 +9,9 @@ rising edges really driven on its clock pad and resets synchronously while
 `rst_n` reads 0, so sample k must be 0 for k < reset_clocks and
 k - reset_clocks + 1 after: any edge lost, added or numbered wrong shows.
 
-The emulator runs state machines at the system clock (no divider), so
-these runs use clocks of 3.9 to 33 MHz at its 133 MHz: `pio_div` 1.
+Most runs use clocks of 3.9 to 33 MHz at the rig's 133 MHz, `pio_div` 1;
+the emulator models an integer SMn_CLKDIV too, and the runs at 500 kHz
+take `pio_div` 8 and 9 at other system clocks.
 """
 
 from __future__ import annotations
@@ -61,10 +62,10 @@ class Rig:
     """An emulator board with a counter design, and a REPL onto it."""
 
     def __init__(self, tmp_path, *, settle: int = 0, initial: int = 0, pulls=None,
-                 **link_kwargs) -> None:
+                 sysclk: int = SYSCLK, **link_kwargs) -> None:
         self.board = Board(ClockedDesign(UO, clk_gpio=CLK, rst_gpio=RST, settle=settle,
                                          initial=initial),
-                           sysclk_hz=SYSCLK, pulls={RST: 1} if pulls is None else pulls)
+                           sysclk_hz=sysclk, pulls={RST: 1} if pulls is None else pulls)
         self.link = EmuRepl(self.board, **link_kwargs)
         self.repl = RawRepl(self.link)
         self.repl.enter()
@@ -289,6 +290,53 @@ def test_the_stream_reads_back_as_selfclk_at_the_real_clock(tmp_path):
     assert times[-1].startswith("samples=64 stalled_buffers=")
     assert " overruns=0 status=ok sysclk_hz=133000000 elapsed_ms=" in times[-1]
     assert stats.chunks == 2 + 64 // 16  # two TIME records, 4-word buffers
+
+
+@pytest.mark.parametrize("sysclk, div, cycles", [
+    (132_000_000, 8, 33),  # H 15, L 14
+    (144_000_000, 9, 32),  # H 14, L 14
+])
+def test_a_divided_clock_is_made_and_sampled_exactly(tmp_path, sysclk, div, cycles):
+    # Review I1: the emulator steps the state machine every pio_div system
+    # cycles, so the CLKDIV write, HANDSHAKE_MS and the host's gap timeout
+    # all run at a pio_div above 1.
+    rig = Rig(tmp_path, sysclk=sysclk)
+    req = rig.request(clock_hz=500_000, clocks=64, reset_clocks=10)
+    stats, data = rig.run(req)
+    assert stats.clean, stats.format()
+    assert samples_of(data) == counter(64, 10)
+    header, items = read_stream(data)
+    assert header.clock_hz == 500_000
+    times = [item[-1] for item in items if item[0] == "time"]
+    assert times[0] == "clocked clocks=64 reset_clocks=10 pio_div=%d cycles_per_clock=%d" % (
+        div, cycles)
+    rises = rig.board.wave.clock_rises[rig.rises_before:]
+    gaps = [b - a for a, b in zip(rises, rises[1:])]
+    assert min(gaps) == div * cycles  # 2 us: the PIO only ever stalls it longer
+    # The high phase is (H + 2) * div system cycles wide.
+    first = rises[0]
+    high = sum(rig.board.pio_pin(CLK, c) for c in range(first, first + div * cycles))
+    assert high == (cycles - 4 - (cycles - 4) // 2 + 2) * div
+
+
+def test_a_divider_write_that_does_not_take_makes_the_run_not_clean(monkeypatch, tmp_path):
+    # Review I1: the board reads CLKDIV back into its opening record, and
+    # the host checks it against the pio_div it worked out.
+    real = mp.build
+
+    def ignored_divider(cfg, name):
+        script = real(cfg, name)
+        if name != "clocked_rp2.py":
+            return script
+        write = "machine.mem32[CLKDIV_ADDR] = PIO_DIV << 16"
+        assert script.count(write) == 1
+        return script.replace(write, "machine.mem32[CLKDIV_ADDR] = 1 << 16")
+
+    monkeypatch.setattr(mp, "build", ignored_divider)
+    rig = Rig(tmp_path, sysclk=132_000_000)
+    stats, _ = rig.run(clock_hz=500_000, clocks=64, reset_clocks=10)
+    assert not stats.clean
+    assert "CLKDIV reads pio_div=1, not the 8 worked out" in stats.error
 
 
 def test_the_header_names_the_bitstream_by_length_and_crc32(tmp_path):
