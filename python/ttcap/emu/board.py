@@ -443,7 +443,9 @@ class _SM:
         here can end (an empty TX FIFO, a full RX FIFO with no DMA)."""
         wave = self.board.wave
         code = self.code
-        sidesets = self.sidesets
+        # The side-set and PIO-driven-pin checks cost every instruction, so
+        # programs without side-set skip them.
+        sidesets = self.sidesets if self.sideset_gpios else None
         driven = self.board.pio_pins
         while self.enabled:
             limit = until
@@ -459,17 +461,19 @@ class _SM:
             d = self.delays[self.pc]
             # Side-set takes effect when the instruction issues, whether or
             # not it then stalls; a stalled one re-issues with the same value.
-            ss = sidesets[self.pc]
-            if ss is not None and ss != self.side_last:
-                self._side(ss)
+            if sidesets is not None:
+                ss = sidesets[self.pc]
+                if ss is not None and ss != self.side_last:
+                    self._side(ss)
             kind = ins[0]
             if kind == _WAIT:
-                if ins[2] in driven:
-                    raise BoardError(
-                        "GPIO %d is driven by PIO; waiting on it is not emulated" % ins[2]
-                    )
-                if ins[2] in wave.uo_bit and wave.clock_rises is not None:
-                    self._check_clock_owner(ins[2])
+                if driven:
+                    if ins[2] in driven:
+                        raise BoardError(
+                            "GPIO %d is driven by PIO; waiting on it is not emulated" % ins[2]
+                        )
+                    if ins[2] in wave.uo_bit and wave.clock_rises is not None:
+                        self._check_clock_owner(ins[2])
                 t = wave.next_time(ins[2], ins[1], self.now)
                 if t is None or t >= limit:
                     self.now = limit
@@ -655,15 +659,16 @@ class _SM:
         wave = self.board.wave
         base = self.block.base
         count = min(bits, self.in_count)  # only these bits can be nonzero
-        for gpio in self.board.pio_pins:
-            if base <= gpio < base + 32 and ((gpio - self.in_base) & 31) < count:
-                raise BoardError(
-                    "GPIO %d is driven by PIO; reading it back is not emulated" % gpio
-                )
-        if wave.clock_rises is not None:
-            for gpio in wave.uo_bit:
+        if self.board.pio_pins:
+            for gpio in self.board.pio_pins:
                 if base <= gpio < base + 32 and ((gpio - self.in_base) & 31) < count:
-                    self._check_clock_owner(gpio)
+                    raise BoardError(
+                        "GPIO %d is driven by PIO; reading it back is not emulated" % gpio
+                    )
+            if wave.clock_rises is not None:
+                for gpio in wave.uo_bit:
+                    if base <= gpio < base + 32 and ((gpio - self.in_base) & 31) < count:
+                        self._check_clock_owner(gpio)
         low = self.in_base - base  # in_base's index in the window
         first = 32 - low
         if count <= first:
