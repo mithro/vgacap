@@ -461,3 +461,66 @@ def test_irq_wait_does_not_raise_the_flag_again_while_it_waits():
     assert mem32[IRQ] == 1 << 1 and pio_sm.pc == 1
 
 
+# -- the clocked program of design note 4e ------------------------------------
+
+
+def _clocked(rp2, high, low):
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW, in_shiftdir=rp2.PIO.SHIFT_LEFT,
+                 autopush=False, push_thresh=32)
+    def clocked():
+        pull(block).side(0)  # noqa: F821
+        out(x, 32).side(0)  # noqa: F821
+        pull(block).side(0)  # noqa: F821
+        out(y, 32).side(0)  # noqa: F821
+        label("reset")  # noqa: F821
+        nop().side(1)[high]  # noqa: F821
+        in_(pins, 8).side(1)  # noqa: F821
+        push(iffull, block).side(0)[low]  # noqa: F821
+        jmp(x_dec, "reset").side(0)  # noqa: F821
+        irq(block, 0).side(0)  # noqa: F821
+        label("run")  # noqa: F821
+        nop().side(1)[high]  # noqa: F821
+        in_(pins, 8).side(1)  # noqa: F821
+        push(iffull, block).side(0)[low]  # noqa: F821
+        jmp(y_dec, "run").side(0)  # noqa: F821
+        label("done")  # noqa: F821
+        jmp("done").side(0)  # noqa: F821
+
+    return clocked
+
+
+@pytest.mark.parametrize("high, low", [(0, 0), (15, 15)])
+@pytest.mark.parametrize("clocks, reset_clocks", [(4, 1), (12, 10), (8, 3)])
+def test_the_clocked_program_drives_exactly_n_edges(high, low, clocks, reset_clocks):
+    board = _board()
+    rp2 = board.modules()["rp2"]
+    machine = board.modules()["machine"]
+    mem32 = board.modules()["machine"].mem32
+    sm, pio_sm = _sm(board, _clocked(rp2, high, low), sideset_base=CLK,
+                     in_base=machine.Pin(33))
+    start = board.now
+    sm.put(reset_clocks - 1)
+    sm.put(clocks - reset_clocks - 1)
+    sm.active(1)
+    words = []
+    while not mem32[IRQ] & 1:
+        board.advance(100)
+        while pio_sm.rx:
+            words.append(sm.get())
+    handshake = board.now
+    mem32[IRQ] = 1
+    while len(words) < clocks // 4:
+        words.append(sm.get())
+    board.advance(1000)
+    end = board.now
+
+    trace = _pins(board, CLK, start, end - start)
+    rises = [i for i in range(1, len(trace)) if trace[i - 1] == 0 and trace[i] == 1]
+    assert len(rises) == clocks
+    assert sum(1 for i in rises if start + i < handshake) == reset_clocks
+    assert trace[-1] == 0
+    # Unstalled, every clock is high H+2 cycles and low L+2.
+    period = high + low + 4
+    first = rises[0]
+    assert trace[first : first + period] == [1] * (high + 2) + [0] * (low + 2)
+    assert len(words) == clocks // 4 and pio_sm.rx == []

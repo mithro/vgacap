@@ -13,12 +13,16 @@ and writes the same chunk stream it would write over USB:
   `StateMachine` and `DMA`.
 * **PIO**: a cycle-level interpreter for the instructions these programs
   use (`wait gpio`, `in` from pins or a register, `out` to a register,
-  `jmp`, `set`, `mov`, `pull`, `push`, `nop`, wrap, delays), with
-  autopush, RX FIFO depth, `RXSTALL` (blocking and dropped nonblocking
-  pushes), pin reads that wrap round the 32-pin window, the RP2350's
-  SHIFTCTRL.IN_COUNT mask, and the RP2350 `wait gpio` index relocation
-  measured on fpga-1. `wait` fast-forwards to the next edge instead of
-  stepping every cycle.
+  `jmp`, `set`, `mov`, `pull`, `push` and `push iffull`, `irq` set, clear
+  and wait, `nop`, wrap, delays), with autopush, RX FIFO depth, `RXSTALL`
+  (blocking and dropped nonblocking pushes), pin reads that wrap round the
+  32-pin window, the RP2350's SHIFTCTRL.IN_COUNT mask, and the RP2350
+  `wait gpio` index relocation measured on fpga-1. `wait` fast-forwards to
+  the next edge instead of stepping every cycle. Side-set (plain or
+  optional, to pin values; not pindirs) drives its pins from the cycle an
+  instruction issues, stalled or not, and `Board.pio_pin()` reads them
+  back cycle by cycle. The PIO IRQ register (block + 0x030) is
+  write-1-to-clear from `mem32`.
 * **DMA**: channels with chaining, completion IRQs that call the script's
   own handlers, and the `mem32` register writes the scripts use (re-arming
   `WRITE_ADDR`/`TRANS_COUNT`, and the PIO `CTRL` atomic-clear alias).
@@ -32,9 +36,11 @@ and writes the same chunk stream it would write over USB:
   emulated time, so frames elapse while a frame is being sent, as they do
   on the board.
 
-What it does not model: side-set (no program here uses it), IRQ latency (handlers run at the completion cycle), DMA bus
-contention, and the input synchroniser (a fixed delay on every pin alike,
-so it moves nothing relative to anything else).
+What it does not model: IRQ latency (handlers run at the completion cycle), DMA bus
+contention, the input synchroniser (a fixed delay on every pin alike,
+so it moves nothing relative to anything else), the PIO clock divider
+(`freq` is ignored: state machines run at the system clock), and reading
+back a pin PIO drives (refused).
 """
 
 from ttcap.emu.board import Board, BoardError, Waveform
