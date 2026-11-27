@@ -300,6 +300,52 @@ def test_a_clock_state_machine_after_another_drove_rst_n_is_refused():
         board.advance(10)
 
 
+def _hold(rp2, level):
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_HIGH if level else rp2.PIO.OUT_LOW)
+    def hold():
+        label("top")  # noqa: F821
+        jmp("top").side(level)  # noqa: F821
+
+    return hold
+
+
+def test_rst_n_from_a_second_state_machine_is_refused_while_the_clock_has_a_pio_owner():
+    # A clock state machine built but never started still owns the clock
+    # pad: it may start later in the same advance as the rst_n drive.
+    design = ClockedDesign(UO, clk_gpio=CLK, rst_gpio=17)
+    board = Board(design)
+    mods = board.modules()
+    rp2, Pin = mods["rp2"], mods["machine"].Pin
+    rp2.PIO(1).gpio_base(16)
+    rp2.StateMachine(4, _free_running(rp2), sideset_base=Pin(CLK), in_base=Pin(33))
+    with pytest.raises(BoardError, match="rst_n and the clock would be driven by two state machines"):
+        rp2.StateMachine(5, _hold(rp2, 1), sideset_base=Pin(17)).active(1)
+        board.advance(10)
+
+
+def test_rst_n_from_a_second_state_machine_after_the_cpu_took_the_clock_back():
+    # Once a Pin init has taken the clock pad back, the CPU clocks the
+    # design between advances, so rst_n may come from any state machine.
+    design = ClockedDesign(UO, clk_gpio=CLK, rst_gpio=17)
+    board = Board(design)
+    mods = board.modules()
+    rp2, Pin = mods["rp2"], mods["machine"].Pin
+    rp2.PIO(1).gpio_base(16)
+    Pin(17, Pin.OUT, value=1)
+    clock = rp2.StateMachine(4, _free_running(rp2), sideset_base=Pin(CLK), in_base=Pin(33))
+    clock.active(1)
+    board.advance(30)
+    clock.active(0)
+    clk = Pin(CLK, Pin.OUT, value=0)
+    counted = design.count_at(board.now)
+    assert counted > 0
+    rp2.StateMachine(5, _hold(rp2, 0), sideset_base=Pin(17)).active(1)
+    board.advance(10)
+    clk.value(1)
+    assert design.count_at(board.now) == 0  # an edge while rst_n is low
+    assert design.count(len(design.clock_rises) - 1) == counted
+
+
 def test_rst_n_from_the_clock_state_machine_resets_its_own_samples():
     # One state machine side-sets both the clock (bit 0, GPIO16) and rst_n
     # (bit 1, GPIO17): 11 edges with rst_n high, then rst_n falls in the
