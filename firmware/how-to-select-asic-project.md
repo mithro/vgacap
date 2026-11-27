@@ -51,7 +51,9 @@ bytes=769803 samples=769600 chunks=4 seconds=4.039 overruns=0 dropped=0 rxstall=
 wrote frame.vgacap
 ```
 
-`ttcap png frame.vgacap frame` renders the project's picture.
+`ttcap png frame.vgacap frame` renders the project's picture, on a machine with `build/vgacap-frames` built
+(`cmake --build build --target vgacap-frames`). The Welland bench's Pis have no CMake, so copy the file to a
+workstation checkout. On tt09 that gave 2 frames with positive syncs and 0 glitches ([bench result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1)).
 
 ## If it fails
 

@@ -23,7 +23,9 @@ never written. A reboot, a reset or a power cycle brings the stock firmware back
 - `vgacap_fw.uf2`, built as on [How to build the vgacap firmware](how-to-build.md), copied to the checkout's root.
 - `<dev>`, the stock firmware's serial port. On the Welland bench it is `/dev/ttboard` on the board's own Pi.
 - With an FPGA breakout, the design you want to capture enabled under the stock firmware. The iCE40 keeps it
-  across the switch. An ASIC breakout loses its project, and
+  across the switch. On the Welland bench, enable it through the bridge before step 2, with
+  `curl -s -X POST localhost:8765/designs/<name>/enable`: `tt.shuttle` does not know uploaded designs. Without
+  a design, the captures fail with `board went quiet` ([dated result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1)). An ASIC breakout loses its project, and
   [How to select an ASIC project with the vgacap firmware](how-to-select-asic-project.md) selects it again.
 
 ## Steps

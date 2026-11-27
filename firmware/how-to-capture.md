@@ -18,7 +18,11 @@ how, and every other `ttcap capture` option is on [ttcap](../python/ttcap/README
 
 - A demo board running the vgacap firmware, and `FW`, its serial port, both from
   [How to run the vgacap firmware from RAM and go back to stock](how-to-load.md).
-- On that machine, a vgacap checkout set up to run `ttcap`, with `build/vgacap-frames` built for step 4.
+- On that machine, a vgacap checkout set up to run `ttcap`.
+- On a demo board with an FPGA breakout, the design enabled before the firmware was loaded, as on
+  [How to run the vgacap firmware from RAM and go back to stock](how-to-load.md). Without one, frame captures fail
+  with `board went quiet`.
+- For step 4, a machine with CMake and a C compiler.
 - The design's project clock in Hz: 25000000 for a 640x480@60 design at 25 MHz.
 - With an ASIC breakout, the project's mux index: [How to select an ASIC project with the vgacap firmware](how-to-select-asic-project.md).
 
@@ -42,11 +46,14 @@ how, and every other `ttcap capture` option is on [ttcap](../python/ttcap/README
    $ uv run --no-sync ttcap capture --firmware picosdk serial:$FW --clock-hz 750000 --seconds 4 --out stream.vgacap
    ```
 
-4. At the checkout's root, render a capture to PNG images, which writes `frame-0000.png` and on.
+4. On a machine with `build/vgacap-frames` built, render a capture to PNG images, which writes `frame-0000.png` and on.
 
    ```console
+   $ cmake -S . -B build && cmake --build build --target vgacap-frames
    $ uv run --no-sync ttcap png frame.vgacap frame
    ```
+
+   The Welland bench's Pis have no CMake, so copy the `.vgacap` file to a workstation checkout for this step.
 
 With an ASIC breakout, add `--asic-index N` to each capture command.
 
