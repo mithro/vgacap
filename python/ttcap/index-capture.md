@@ -12,4 +12,5 @@ review: 2027-05-27
 - [How to capture whole frames at the design's own clock](how-to-capture-frames.md): frame mode at the real pixel clock.
 - [How to capture a window of lines from each frame](how-to-capture-window.md): window mode, swept over frames.
 - [How to capture a run-length encoded stream](how-to-capture-rle.md): runs counted by the PIO.
+- [How to capture one sample per clock from reset](how-to-capture-clocked.md): clocked mode, a bitstream clocked by the board.
 - [How to set a design's inputs during a capture](how-to-set-ui-in.md): `ui_in` for one capture.

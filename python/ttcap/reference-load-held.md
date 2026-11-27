@@ -9,7 +9,7 @@ review: 2027-05-28
 
 **What `load_held(repl, req, path_on_host)` sends to a demo board, what it returns, the errors it raises, and how `RawRepl.upload()` behaves under it.**
 
-`load_held` is in [`capture.py`](capture.py), and its board script is [`mp/load_held_rp2.py`](mp/load_held_rp2.py). It loads the bitstream with the project clock held low and `rst_n` held low. It has no `ttcap` subcommand.
+`load_held` is in [`capture.py`](capture.py), and its board script is [`mp/load_held_rp2.py`](mp/load_held_rp2.py). It loads the bitstream with the project clock held low and `rst_n` held low. `ttcap capture --mode clocked` runs it, then its clocked capture ([How to capture one sample per clock from reset](how-to-capture-clocked.md)).
 
 ## What it refuses
 

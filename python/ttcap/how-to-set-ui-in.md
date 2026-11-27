@@ -32,12 +32,15 @@ review: 2027-05-27
 
 The switch comes before the reset, because every mode change rebuilds the firmware's pins and so releases reset ([#57](https://github.com/mithro/vgacap/issues/57)). The order is:
 
-1. switch the input mode;
-2. turn off the manual-clock monitor, where the board has one, which could otherwise stop the clock during the run;
-3. set `ui_in` and read it back;
-4. hold reset and check that `rst_n` reads 0;
-5. start the clock, and wait at least 16 clock periods and 1 ms;
-6. release reset and check that `rst_n` reads 1 ([#58](https://github.com/mithro/vgacap/issues/58)).
+1. stop the clock;
+2. switch the input mode;
+3. turn off the manual-clock monitor, where the board has one, which could otherwise stop the clock during the run;
+4. set `ui_in` and read it back;
+5. hold reset and check that `rst_n` reads 0;
+6. start the clock, and wait at least 16 clock periods and 1 ms;
+7. release reset and check that `rst_n` reads 1 ([#58](https://github.com/mithro/vgacap/issues/58)).
+
+With `--mode clocked`, step 6 loads the bitstream instead, with the clock held low ([The held-clock bitstream load](reference-load-held.md)). The capture then makes the reset clocks itself, `--reset-clocks` of them, before step 7 ([How to capture one sample per clock from reset](how-to-capture-clocked.md)).
 
 The input mode and the monitor are put back after the capture.
 

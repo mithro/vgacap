@@ -33,7 +33,7 @@ review: 2027-05-27
 
 ## Check
 
-`frame-0000.png` and the frames after it appear in the directory as the capture runs. On standard error, `ttcap` ends with its stats line, then `wrote stdout`, then `capture ended: the consumer closed the stream`, and exits 0. If the board reported overruns or an RX stall, an `overruns:` or `rx stall:` line follows, and the exit code is 1.
+`frame-0000.png` and the frames after it appear in the directory as the capture runs. On standard error, `ttcap` ends with its stats line, then `wrote stdout`, then `capture ended: the consumer closed the stream`, and exits 0. If the board reported overruns or an RX stall, an `overruns:` or `rx stall:` line follows, and the exit code is 1. A `--mode clocked` run that this stops short of `--clocks` exits 1 too, after a `not clean:` line.
 
 ## If it fails
 

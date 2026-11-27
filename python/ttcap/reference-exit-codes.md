@@ -18,8 +18,8 @@ Code is the exit status, Subcommands the subcommands that use it, and Meaning wh
 | Code | Subcommands | Meaning |
 |---|---|---|
 | 0 | all | the run did what it was asked |
-| 1 | all | a board error, a link error, a tool error, a refused request, or a capture that lost samples |
-| 2 | all | a usage error, reported by the argument parser |
+| 1 | all | a board error, a link error, a tool error, a refused request, a capture that lost samples, or a clocked capture that is not clean |
+| 2 | all | a usage error, reported by the argument parser, or a `capture` option its `--mode` does not take |
 | 3 | `capture` and `demo` | the run produced no samples or no frames, and the board reported no error |
 | 130 | `demo` | Ctrl-C arrived before the pipeline started or after it ended |
 | 128 + N | `demo` | the pipeline was ended by signal N |
@@ -50,8 +50,15 @@ Message is the start of what `ttcap capture` prints. Exit is the exit code. Caus
 | `pio 0 would have to move its pin window` | 1 | PIO block 0 holds the stock firmware's program | use `--pio 1` or `--pio 2` |
 | `unsupported link url` | 1 | the link is not `serial:` or `ws://` | write the link as `serial:/dev/ttyACM0` |
 | `capture ended: the consumer closed the stream` | 0 | the program reading `--out -` stopped | none: the capture ended cleanly |
+| `--mode clocked does not take` | 2 | an option clocked mode refuses | leave that option out |
+| `only --mode clocked takes` | 2 | `--bitstream`, `--clocks`, `--reset-clocks` or `--clock-high` in another mode | add `--mode clocked` or leave the option out |
+| `--mode clocked needs` | 2 | `--bitstream` or `--clocks` is missing | give both |
+| `--clocks must be a positive multiple of 4` | 2 | the board packs four samples to a word | round `--clocks` to a multiple of 4 |
+| `not clean:` | 1 | a clocked capture did not make and send every clock with `status=ok` | read the reasons after the colon |
+| `is above the fastest clocked rate` | 1 | `--clock-hz` would read `uo_out` under 40 ns after the edge | lower `--clock-hz` |
+| `is below the slowest clocked rate` | 1 | `--clock-hz` needs a larger PIO divider than there is | raise `--clock-hz` |
 
-The `overruns:` and `rx stall:` lines follow the board's closing report in every `--mode`, including after `capture ended:`. The stream written before them is kept and is still valid. A capture that lost no samples exits 0.
+The `overruns:` and `rx stall:` lines follow the board's closing report in every `--mode` but `clocked`, including after `capture ended:`. A clocked capture prints `not clean:` instead, with every reason, also after `capture ended:` ([How to capture one sample per clock from reset](how-to-capture-clocked.md)). The stream written before them is kept and is still valid. A capture that lost no samples exits 0.
 
 ## Throughput, probe and reboot
 
