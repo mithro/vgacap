@@ -24,7 +24,7 @@ The C tests in [`tests/`](../../tests) run under `ctest`. They check the stream 
 
 ## The emulated RP2
 
-[`ttcap.emu`](../../python/ttcap/emu/__init__.py) runs the exact MicroPython script that `ttcap capture` sends to a board, under CPython. Its PIO is a cycle-level interpreter, its DMA chains and raises interrupts, and its heap refuses blocks larger than a real board's largest free block. Each byte written to USB costs emulated time, as it does on a board. The script's stream then goes through `vgacap-frames` and is compared with the synthetic picture pixel for pixel. The emulator does not model side-set, interrupt latency, DMA bus contention or the input synchroniser.
+[`ttcap.emu`](../../python/ttcap/emu/__init__.py) runs the exact MicroPython script that `ttcap capture` sends to a board, under CPython. Its PIO is a cycle-level interpreter, its DMA chains and raises interrupts, and its heap refuses blocks larger than a real board's largest free block. Each byte written to USB costs emulated time, as it does on a board. The script's stream then goes through `vgacap-frames` and is compared with the synthetic picture pixel for pixel. The emulator does not model interrupt latency, DMA bus contention, the input synchroniser or the PIO clock divider: a `StateMachine` given a `freq=` is refused. It also refuses an IRQ flag shared by two running state machines.
 
 ## The simulated board
 
