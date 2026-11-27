@@ -363,11 +363,12 @@ class _SM:
     # stops sharing an instance dict's keys past 30 attributes, and this
     # class has more, which cost the capture tests about 10%.
     __slots__ = (
-        "autopush", "block", "board", "code", "delays", "disable_at", "enabled",
+        "autopush", "block", "board", "clkdiv", "code", "delays", "disable_at", "div",
+        "enabled",
         "in_base", "in_count", "index", "irq_flags", "irq_waiting", "isr",
         "isr_count", "now", "osr", "osr_count", "out_right", "pc", "program",
         "push_thresh", "rx", "rx_depth", "shift_left", "shiftctrl", "side_last",
-        "side_count", "side_en", "sideset_gpios", "sidesets", "tx", "tx_depth",
+        "side_count", "side_en", "sideset_gpios", "sidesets", "tick0", "tx", "tx_depth",
         "wrap_target", "wrap_top", "x", "y",
     )
 
@@ -403,6 +404,11 @@ class _SM:
         self.enabled = False
         self.disable_at: int | None = None
         self.now = 0
+        #: SMn_CLKDIV as written, and its INT: the machine steps on every
+        #: `div`-th system cycle from `tick0`, when it was enabled.
+        self.clkdiv = CLKDIV_ONE
+        self.div = 1
+        self.tick0 = 0
 
     def reset_state(self) -> None:
         self.pc = 0
@@ -635,11 +641,34 @@ class _SM:
     def _next_pc(self) -> None:
         self.pc = self.wrap_target if self.pc == self.wrap_top else self.pc + 1
 
+    def write_clkdiv(self, value: int) -> None:
+        """A CPU write to SMn_CLKDIV: an integer divider only, INT 0 being
+        65536, and not while the machine runs, whose phase would then need
+        the divider's internal count."""
+        if value & 0xFF:
+            raise BoardError("SM%d_CLKDIV 0x%08x: bits 7:0 are reserved" % (self.index, value))
+        if value & 0xFF00:
+            raise BoardError(
+                "SM%d_CLKDIV 0x%08x: a fractional divider (FRAC) is not emulated"
+                % (self.index, value))
+        if self.enabled and value != self.clkdiv:
+            raise BoardError(
+                "SM%d_CLKDIV 0x%08x: changing the divider of a running state machine "
+                "is not emulated" % (self.index, value))
+        self.clkdiv = value
+        self.div = (value >> 16) or 1 << 16
+
     def run(self, until: int) -> None:
         """Execute until `until`, the disable time, or a stall nothing in
-        here can end (an empty TX FIFO, a full RX FIFO with no DMA)."""
+        here can end (an empty TX FIFO, a full RX FIFO with no DMA).
+
+        Each instruction issues on a cycle of the divided clock, `div`
+        system cycles apart from `tick0`, and takes 1 + delay of them; a
+        stall ends, and a `wait` sees its pin, on one of those cycles."""
         wave = self.board.wave
         code = self.code
+        step = self.div
+        tick0 = self.tick0
         # The side-set and PIO-driven-pin checks cost every instruction, so
         # programs without side-set skip them.
         sidesets = self.sidesets if self.sideset_gpios else None
@@ -652,6 +681,10 @@ class _SM:
                     self.disable_at = None
                     return
                 limit = min(limit, self.disable_at)
+            if step != 1:
+                late = (self.now - tick0) % step
+                if late:
+                    self.now += step - late
             if self.now >= limit:
                 return
             ins = code[self.pc]
@@ -672,10 +705,17 @@ class _SM:
                     if ins[2] in wave.uo_bit and wave.clock_rises is not None:
                         self._check_clock_owner(ins[2])
                 t = wave.next_time(ins[2], ins[1], self.now)
+                if step != 1:
+                    # The first divided-clock cycle at which the pin reads it.
+                    while t is not None:
+                        late = (t - tick0) % step
+                        if not late:
+                            break
+                        t = wave.next_time(ins[2], ins[1], t + step - late)
                 if t is None or t >= limit:
                     self.now = limit
                     continue
-                self.now = t + 1 + d
+                self.now = t + (1 + d) * step
                 self._next_pc()
             elif kind == _IN:
                 bits, src = ins[1], ins[2]
@@ -696,12 +736,12 @@ class _SM:
                         self.now = limit
                         continue
                     self.isr, self.isr_count = 0, 0
-                    self.now += 1 + d
+                    self.now += (1 + d) * step
                     self._next_pc()
                     self._push(isr)
                 else:
                     self.isr, self.isr_count = isr, count
-                    self.now += 1 + d
+                    self.now += (1 + d) * step
                     self._next_pc()
             elif kind == _JMP:
                 cond, target = ins[1], ins[2]
@@ -721,7 +761,7 @@ class _SM:
                     take = self.x != self.y
                 else:
                     raise BoardError("jmp condition %d not emulated" % cond)
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 if take:
                     self.pc = target
                 else:
@@ -735,7 +775,7 @@ class _SM:
                 else:
                     self.osr = self.tx.pop(0)
                 self.osr_count = 0
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 self._next_pc()
             elif kind == _OUT:
                 bits, dest = ins[1], ins[2]
@@ -751,12 +791,12 @@ class _SM:
                     self.x = value
                 elif dest == 2:
                     self.y = value
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 self._next_pc()
             elif kind == _PUSH:
                 if ins[2] and self.isr_count < self.push_thresh:
                     # IfFull below the threshold: does nothing, in one cycle.
-                    self.now += 1 + d
+                    self.now += (1 + d) * step
                     self._next_pc()
                     continue
                 if len(self.rx) >= self.rx_depth:
@@ -773,12 +813,12 @@ class _SM:
                 else:
                     word = self.isr
                     self.isr, self.isr_count = 0, 0
-                    self.now += 1 + d
+                    self.now += (1 + d) * step
                     self._next_pc()
                     self._push(word)
                     continue
                 self.isr, self.isr_count = 0, 0
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 self._next_pc()
             elif kind == _MOV:
                 _, dest, mov_op, src = ins
@@ -797,7 +837,7 @@ class _SM:
                     self.isr, self.isr_count = value, 0
                 elif dest == 7:
                     self.osr, self.osr_count = value, 0
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 if dest == 5:
                     self.pc = value & 0x1F
                 else:
@@ -807,7 +847,7 @@ class _SM:
                     self.x = ins[2]
                 else:
                     self.y = ins[2]
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 self._next_pc()
             elif kind == _IRQ:
                 _, clr, wait, flag = ins
@@ -845,7 +885,7 @@ class _SM:
                         self.now = limit
                         continue
                     self.irq_waiting = False
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 self._next_pc()
 
     def read_pins(self, cycle: int, bits: int = 32) -> int:
@@ -1393,6 +1433,8 @@ class Board:
             for sm in block.sms:
                 if addr == block.address(PIO_SM0_SHIFTCTRL + PIO_SM_STRIDE * sm.index):
                     return sm.shiftctrl
+                if addr == block.address(PIO_SM0_CLKDIV + PIO_SM_STRIDE * sm.index):
+                    return sm.clkdiv
         ch, reg = self._dma_reg(addr)
         if ch is not None:
             if reg == DMA_WRITE_ADDR:
@@ -1444,11 +1486,7 @@ class Board:
                     sm.write_shiftctrl(sm.shiftctrl | value)
                     return
                 if addr == block.address(PIO_SM0_CLKDIV + PIO_SM_STRIDE * sm.index):
-                    if value != CLKDIV_ONE:
-                        raise BoardError(
-                            "SM%d_CLKDIV 0x%08x: the PIO clock divider is not emulated; "
-                            "state machines run at the system clock (0x%08x)"
-                            % (sm.index, value, CLKDIV_ONE))
+                    sm.write_clkdiv(value)
                     return
             if addr == block.address(PIO_CTRL | ALIAS_CLR):
                 for sm in block.sms:
@@ -1869,11 +1907,11 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
             if unsupported:
                 raise BoardError("StateMachine options not emulated: %s" % unsupported)
             if freq != -1:
-                # rp2_pio.c turns freq into CLKDIV; here every state machine
-                # runs at the system clock, so any freq would be wrong.
+                # rp2_pio.c turns freq into CLKDIV, often with a FRAC part,
+                # which is not emulated: write an integer SMn_CLKDIV instead.
                 raise BoardError(
-                    "StateMachine(freq=%r): the PIO clock divider is not emulated; "
-                    "state machines run at the system clock (freq=-1)" % (freq,)
+                    "StateMachine(freq=%r): turning freq into a clock divider is not "
+                    "emulated; write an integer SMn_CLKDIV instead (freq=-1)" % (freq,)
                 )
             block = board.blocks[id // 4]
             self._sm = block.sms[id % 4]
@@ -1883,6 +1921,8 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
                 side = sideset_base.gpio if isinstance(sideset_base, _Pin) else sideset_base
                 self._sm.load(prog, base, push_thresh, side)
                 self._sm.enabled = False
+                # rp2_pio.c's init sets CLKDIV from freq; -1 is 1.0.
+                self._sm.write_clkdiv(CLKDIV_ONE)
 
         def active(self, value=None):
             sm = self._sm
@@ -1891,7 +1931,7 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
             if value and not sm.enabled:
                 sm.enabled = True
                 sm.disable_at = None
-                sm.now = board.now
+                sm.now = sm.tick0 = board.now
             elif not value:
                 sm.enabled = False
             return sm.enabled

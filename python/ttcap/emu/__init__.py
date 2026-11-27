@@ -53,8 +53,9 @@ and writes the same chunk stream it would write over USB:
 What it does not model: IRQ and timer latency (handlers run at the
 completion cycle, timers at the end of an advance), DMA bus contention,
 the input synchroniser (a fixed delay on every pin alike, so it moves
-nothing relative to anything else), the PIO clock divider (state machines
-run at the system clock; any `freq`, and any `SMn_CLKDIV` but 1.0, is refused), and `irq` between state
+nothing relative to anything else), a fractional PIO clock divider (an
+integer `SMn_CLKDIV` is modelled, its FRAC and `StateMachine(freq=)` are
+refused), and `irq` between state
 machines (state machines run one after another within each step, so a
 flag that two running state machines share is refused). A state machine
 reading back a pin PIO drives, a floating input, and side-set onto a pad a

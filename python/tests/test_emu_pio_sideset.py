@@ -210,8 +210,8 @@ def test_reading_a_side_set_pin_back_from_a_state_machine_is_refused_not_guessed
 
 @pytest.mark.parametrize("freq", [1_000_000, 133_000_000, 0])
 def test_a_state_machine_clock_divider_is_refused(freq):
-    # The emulator runs every state machine at the system clock; a `freq`
-    # would make its pin timing wrong by the divider, silently.
+    # rp2_pio.c makes a `freq` into CLKDIV with a FRAC part the emulator
+    # does not model; only an integer SMn_CLKDIV written directly is.
     board = _board()
     rp2 = board.modules()["rp2"]
     with pytest.raises(BoardError, match="clock divider is not emulated"):
