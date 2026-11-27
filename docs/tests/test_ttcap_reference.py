@@ -108,6 +108,32 @@ def test_no_empty_or_repeated_default(tmp_path):
     assert "Default:" not in seconds
 
 
+def _definition(page, option):
+    """The definition of the term that is `option` on `page`, as text: the
+    first one, `ttcap capture`'s, since its section comes before `demo`'s."""
+    import html
+    import re
+    for term, body in re.findall(r"<dt[^>]*>(.*?)</dt>\s*<dd>(.*?)</dd>", page, re.S):
+        words = html.unescape(re.sub(r"<[^>]+>", "", term)).split()
+        if words and words[0] == option:
+            return re.sub(r"<[^>]+>", "", body)
+    raise AssertionError(f"no term {option} on the page")
+
+
+def test_the_options_a_mode_refuses_say_so(tmp_path):
+    # From ttcap.cli's own NOT_CLOCKED and CLOCKED_ONLY, so the page cannot
+    # drift from what `ttcap capture` refuses.
+    _, page = build(tmp_path, "```{ttcap-commands}\n```\n")
+    cli = ttcap().cli
+    for option in cli.NOT_CLOCKED.values():
+        assert "Not with --mode clocked." in _definition(page, option), option
+    for option in cli.CLOCKED_ONLY.values():
+        assert "Only with --mode clocked." in _definition(page, option), option
+    for option in ("--out", "--ui-in", "--pio", "--buf-words"):
+        entry = _definition(page, option)
+        assert "--mode clocked" not in entry, option
+
+
 def test_usage_is_plain_text(tmp_path):
     _, page = build(tmp_path, "```{ttcap-commands}\n```\n")
     assert 'highlight-text' in page

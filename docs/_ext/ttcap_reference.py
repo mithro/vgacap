@@ -164,6 +164,14 @@ def describe(parser, action):
     others = exclusive_with(parser, action)
     if others:
         out.append(joined("Not with ", others))
+    if parser.prog.split()[-1] == "capture":
+        # What `ttcap capture` refuses before it touches the board
+        # (`cli.mode_option_problem`), from the tables it refuses by.
+        cli = ttcap().cli
+        if cli.NOT_CLOCKED.get(action.dest) in action.option_strings:
+            out.append(joined("Not with ", ["--mode clocked"]))
+        if cli.CLOCKED_ONLY.get(action.dest) in action.option_strings:
+            out.append(joined("Only with ", ["--mode clocked"]))
     return out
 
 
