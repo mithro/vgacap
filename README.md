@@ -11,7 +11,7 @@ vgacap captures the VGA output of a [Tiny Tapeout](https://tinytapeout.com) desi
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/overview-dark.svg">
-  <img src="docs/diagrams/overview.svg" alt="A demo board or a simulator captures a design's uo_out into one vgacap stream, which is rebuilt into pictures, video and checks." width="100%">
+  <img src="docs/diagrams/overview.svg" alt="A demo board's RP2040 or RP2350, FPGA capture logic, or a simulator records uo_out as one vgacap stream, rebuilt into pictures, video and checks." width="100%">
 </picture>
 
 ## What it captures

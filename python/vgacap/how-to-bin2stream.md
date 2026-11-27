@@ -21,7 +21,7 @@ review: 2027-05-27
 
 1. In your testbench, open `dump.bin` for binary writing once, before the first clock.
 2. In your testbench, write `uo_out` to `dump.bin` as one byte once a clock, at the same point of every clock.
-3. Run the simulation for at least two whole frames, which fills `dump.bin`.
+3. In your simulator, run the simulation for at least two whole frames, which fills `dump.bin`.
 4. In the vgacap checkout, run `uv run vgacap-bin2stream /path/to/dump.bin out.vgacap --clock-hz 25175000 --mode 0`, with your dump's path and design's clock.
 
 In Icarus Verilog, steps 1 and 2 are these lines:
@@ -50,12 +50,12 @@ frame 0: 640x480 mode=640x480@60 cpl=800 lpf=525 hsync=neg vsync=neg partial=0 g
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| `frames=0` and exit status 2 from `vgacap-frames` | The dump holds less than two whole frames | Run the simulation longer, as in step 3 |
-| A torn picture | Bytes were not written exactly once a clock | Write one byte at one point of every clock, as in step 2 |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| Check | `frames=0` and exit status 2 from `vgacap-frames` | The dump holds less than two whole frames | Run the simulation longer, as in step 3 |
+| Check | A torn picture | Bytes were not written exactly once a clock | Write one byte at one point of every clock, as in step 2 |
 
 ## Next
 
-- [The C tools](../../src/tools/README.md)
+- [The vgacap command-line tools](../../src/tools/README.md)
 - [What a simulation trace records](../../src/trace/explanation-traces.md)

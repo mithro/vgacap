@@ -24,7 +24,7 @@ give byte-identical images, whose region hashes to `5dc230b2…`, the hash fpga-
 
 - One Tiny Tapeout demo board v3 (RP2350B), running the stock firmware, with a USB cable to a Linux machine.
 
-  <img src="../docs/diagrams/images/tt-etr-dbv3p2.jpg" alt="The Tiny Tapeout demo board v3, with a breakout plugged into its centre socket." width="240">
+  <img src="../docs/diagrams/images/tt-etr-dbv3p2.jpg" alt="The Tiny Tapeout demo board ETR v3.2, with its breakout connectors empty." width="240">
 
 - On that machine: `sudo`, Python 3, `curl`, `timeout` and [mpremote](https://docs.micropython.org/en/latest/reference/mpremote.html).
 - On that machine, a vgacap checkout set up to run `ttcap`, as on [How to run ttcap on a Raspberry Pi](../python/ttcap/how-to-run-on-raspberry-pi.md), for steps 14 and 23.
@@ -52,7 +52,7 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
    $ curl -s localhost:8765/health
    ```
 
-3. On the Welland bench, stop the bridge, which frees `/dev/ttboard`.
+3. On the Welland bench, stop the bridge as on [How to stop the fpgas-tt daemon and start it again](https://docs.fpgas.online/en/latest/boards/tt-fpga/setup/stop-daemon.html), which frees `/dev/ttboard`.
 
    ```console
    $ sudo systemctl stop fpgas-tt
@@ -134,7 +134,7 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
     $ mpremote connect $DEV exec "import vgacap; print(vgacap.API)"
     ```
 
-14. In the vgacap checkout, restart the SDK, which ends with `tt.sdk_version=` and a `>>>` prompt.
+14. In the vgacap checkout, restart the board to the stock firmware's start state, which ends with `tt.sdk_version=` and a `>>>` prompt.
 
     ```console
     $ uv run --no-sync python tools/board_restart.py serial:$DEV
@@ -164,7 +164,7 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
     $ sudo systemctl stop fpgas-tt
     ```
 
-18. Capture with the module, as on [How to capture with the vgacap MicroPython module](how-to-capture.md), for as long as you need it.
+18. In the vgacap checkout, capture as on [How to capture with the vgacap MicroPython module](how-to-capture.md), which writes that page's capture files.
 
 19. In the working directory, bring the board to its bootloader for the restore, which skips the reboot when the `RP2350` drive is already there.
 
@@ -194,13 +194,13 @@ The board's flash holds the firmware region, `0x10000000` to `0x100C8000`, then 
     $ timeout 30 sh -c 'until curl -s localhost:8765/health > /dev/null; do sleep 1; done' || echo "no bridge after 30 s"
     ```
 
-23. On the Welland bench, restart the SDK through the bridge, which brings the idle display back from `left: the SDK is not running`.
+23. On the Welland bench, restart the board to the stock firmware's start state through the bridge, which clears `left: the SDK is not running`.
 
     ```console
     $ uv run --no-sync python tools/board_restart.py ws://127.0.0.1:8765/serial
     ```
 
-24. On the Welland bench, wait for the idle display, which reads `loaded` 66 to 73 seconds later ([bench result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1)).
+24. On the Welland bench, wait for the idle display to read `loaded`, which took 66 to 73 seconds in the 2026-11-27 fpga-1 run.
 
     ```console
     $ timeout 300 sh -c "until curl -s localhost:8765/health | grep -q '\"state\": \"loaded\"'; do sleep 5; done" || echo "not loaded after 300 s"
@@ -226,27 +226,27 @@ gave the board's own hash back.
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| `"clients":` above 0 at step 2 | someone is using the board through the bridge | Wait until the count is 0 |
-| `MISMATCH` or `1 do not` at step 5 | a dump was cut short | Repeat step 4; never go on with a backup that does not match |
-| Two different hashes at step 7 | the restore image is wrong | Repeat step 7; write nothing until they match |
-| Step 8 shows no `0x100c8008` for a release UF2 | that image mounts its filesystem elsewhere | Nothing is written yet: run steps 22 to 24 and stop |
-| `no RP2350 drive after 60 s` at step 9 | the board did not reach its bootloader | If `$DEV` is still there, nothing is written: run steps 22 to 24 and stop; otherwise see the last row |
-| `no $DEV after 60 s`, with your port for `$DEV`, at step 10 | the module firmware did not start | If `/dev/disk/by-label/RP2350` exists, the bootrom fell back to it: go to step 20; otherwise see the last row |
-| `fw_sha256` at step 11 differs from `module.bin` | the copy was cut short | Go to step 19 and restore |
-| Step 12 prints a difference | the module firmware mounted its filesystem elsewhere | Restore with steps 19 to 21, then the files as below |
-| `ImportError` at step 13 | `IMAGE` has no module | Restore with steps 19 to 21, and start again with the right image |
-| A capture fails for want of `ttboard` | `IMAGE` is CI's rp2 compile check, which has no SDK | Restore with steps 19 to 21, and use the module firmware |
-| `no RP2350 drive after 60 s` at step 19 while `$DEV` is there | the module firmware is busy in a capture | Send the stop byte with `printf q > $DEV`, then repeat step 19 |
-| `no $DEV after 60 s`, with your port for `$DEV`, at step 20 | the restore image did not start | If the `RP2350` drive is still there, repeat step 20; otherwise see the last row |
-| The `fw_sha256` lines differ in Check | the restore copy was cut short | Repeat steps 19 to 21, then Check; if they still differ, stop and keep the backup |
-| The files differ in Check | the filesystem changed while the module firmware ran | Restore the files as below; if they still differ, stop and keep the backup |
-| Step 16 prints nothing | the bridge is not listening yet | Wait for `/health` as at the end of step 15, then repeat step 16 |
-| `no bridge after 30 s` at step 15 or 22 | the bridge did not start | Read `systemctl status fpgas-tt`, start the bridge again, and repeat the step |
-| `ConnectionRefusedError: [Errno 111] Connection refused` at step 23 | the bridge is not listening yet | Wait for `/health` as at the end of step 22, then repeat step 23 |
-| `not loaded after 300 s` at step 24 | the SDK restart did not reach the board | Repeat steps 23 and 24 |
-| Neither `$DEV` nor the `RP2350` drive appears | the board runs nothing that answers on USB | Stop; recovery needs someone at the Welland bench to hold BOOTSEL while resetting the board |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 2 | `"clients":` above 0 | someone is using the board through the bridge | Wait until the count is 0 |
+| 5 | `MISMATCH` or `1 do not` | a dump was cut short | Repeat step 4; never go on with a backup that does not match |
+| 7 | Two different hashes | the restore image is wrong | Repeat step 7; write nothing until they match |
+| 8 | It shows no `0x100c8008` for a release UF2 | that image mounts its filesystem elsewhere | Nothing is written yet: run steps 22 to 24 and stop |
+| 9 | `no RP2350 drive after 60 s` | the board did not reach its bootloader | If `$DEV` is still there, nothing is written: run steps 22 to 24 and stop; otherwise see the last row |
+| 10 | `no $DEV after 60 s`, with your port for `$DEV` | the module firmware did not start | If `/dev/disk/by-label/RP2350` exists, the bootrom fell back to it: go to step 20; otherwise see the last row |
+| 11 | `fw_sha256` differs from `module.bin` | the copy was cut short | Go to step 19 and restore |
+| 12 | It prints a difference | the module firmware mounted its filesystem elsewhere | Restore with steps 19 to 21, then the files as below |
+| 13 | `ImportError` | `IMAGE` has no module | Restore with steps 19 to 21, and start again with the right image |
+| 18 | A capture fails for want of `ttboard` | `IMAGE` is CI's rp2 compile check, which has no SDK | Restore with steps 19 to 21, and use the module firmware |
+| 19 | `no RP2350 drive after 60 s` while `$DEV` is there | the module firmware is busy in a capture | Send the stop byte with `printf q > $DEV`, then repeat step 19 |
+| 20 | `no $DEV after 60 s`, with your port for `$DEV` | the restore image did not start | If the `RP2350` drive is still there, repeat step 20; otherwise see the last row |
+| Check | The `fw_sha256` lines differ | the restore copy was cut short | Repeat steps 19 to 21, then Check; if they still differ, stop and keep the backup |
+| Check | The files differ | the filesystem changed while the module firmware ran | Restore the files as below; if they still differ, stop and keep the backup |
+| 16 | It prints nothing | the bridge is not listening yet | Wait for `/health` as at the end of step 15, then repeat step 16 |
+| 15 or 22 | `no bridge after 30 s` | the bridge did not start | Read `systemctl status fpgas-tt`, start the bridge again, and repeat the step |
+| 23 | `ConnectionRefusedError: [Errno 111] Connection refused` | the bridge is not listening yet | Wait for `/health` as at the end of step 22, then repeat step 23 |
+| 24 | `not loaded after 300 s` | the restart did not reach the board | Repeat steps 23 and 24 |
+| 9 to 21 | Neither `$DEV` nor the `RP2350` drive appears | the board runs nothing that answers on USB | Stop; recovery needs someone at the Welland bench to hold BOOTSEL while resetting the board |
 
 The fpgas-online broker's `power_cycle` switches the Pi's PoE port, so it restarts the Pi
 ([`power.py`](https://github.com/fpgas-online/fpgas.online-mcp/blob/fe16b5f/src/fpgas_online_mcp/power.py), [`power.md`](https://github.com/fpgas-online/fpgas.online-mcp/blob/fe16b5f/skills/fpgas-online/references/power.md)). A board that restarts with it boots the same flash again. So

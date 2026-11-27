@@ -22,7 +22,7 @@ review: 2027-05-27
 
    ```sh
    uv run ttcap demo --link serial:/dev/ttyACM0 --project tt_um_rejunity_vga \
-       --clock-hz 500000 --seconds 0 --fps 5 --outdir live --window --serve 8080
+       --clock-hz 400000 --seconds 0 --fps 5 --outdir live --window --serve 8080
    ```
 
 2. In a browser on the same machine, open `http://127.0.0.1:8080/`, which shows the stream as frames arrive.

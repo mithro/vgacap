@@ -27,7 +27,7 @@ from the stream header to the frame rebuilding.
 
 ## Where a sample goes
 
-Figure 1 is the path of a sample. The design drives `uo_out` on GPIO 33 to 40, and a PIO state machine samples
+The figure is the path of a sample. The design drives `uo_out` on GPIO 33 to 40, and a PIO state machine samples
 it. Two DMA channels move the samples from the state machine's RX FIFO into SRAM. The firmware sends full buffers
 over TinyUSB's serial port, and ttcap writes them after its own `VGCH` header.
 
@@ -36,7 +36,7 @@ over TinyUSB's serial port, and ttcap writes them after its own `VGCH` header.
   <img src="../docs/diagrams/firmware-datapath.svg" alt="uo_out enters PIO block 1 of the RP2350B, its RX FIFO and two DMA channels, a 440 KB arena, then USB to ttcap and a .vgacap file." width="100%">
 </picture>
 
-*Figure 1: the firmware's capture data path
+*The firmware's capture data path
 ([`docs/diagrams/firmware_datapath.py`](../docs/diagrams/firmware_datapath.py)).*
 
 The buffer is where the firmware differs most from the stock firmware's path. MicroPython's heap is fragmented,
@@ -77,8 +77,7 @@ that on its fragmented heap; the vgacap firmware always passes one.
 [`pio/vgacap_stream.pio`](pio/vgacap_stream.pio) and [`pio/vgacap_frame.pio`](pio/vgacap_frame.pio) are the
 programs' readable sources, at the board's default operands. A capture's edge, sync levels, sample delay and
 period are known only when it starts. So [`core/fw_pio.c`](core/fw_pio.c) builds the loaded words at run time,
-instruction for instruction in the `.pio` order. The comment in `core/fw_pio.h` names a single
-`vgacap_capture.pio`, which does not exist ([issue #45](https://github.com/mithro/vgacap/issues/45)).
+instruction for instruction in the `.pio` order.
 
 Two references hold the builder. The firmware build assembles the `.pio` files with pioasm and fails if the output
 differs from the checked-in `.hex`. The host tests compare the built words with that `.hex`. They also compare them
@@ -97,13 +96,13 @@ breakout the design is enabled under the stock firmware first. The iCE40 keeps i
 resets into its bootloader and then into this firmware. That held on fpga-4, where every capture after the switch
 was pixel-exact.
 
-On an ASIC breakout the project mux's lines float in the bootloader. On tt09 the mux came back with nothing
+On an ASIC breakout the project mux's lines float in the bootloader. On the tt09 board the mux came back with nothing
 selected. The `asic_select` command replays the stock firmware's mux sequence to select the project again.
 
 GPIO 1 erases an FPGA breakout's configuration when it is low, as [the GPIO table](reference-board.md#gpios) says.
 The stock firmware leaves it driven high, and the firmware drives it high first thing at boot. It sets the level
 before the direction, so the pin never glitches low. Only `asic_select` drives it low, which is why ttcap refuses
-`--asic-index` for an FPGA board.
+`--asic-index` for a demo board with an FPGA breakout.
 
 The project clock comes from the PWM on GPIO 16. The firmware sets the system clock the stock firmware picks for
 that project clock. Its search is the stock firmware's, ported to single-precision arithmetic as MicroPython runs

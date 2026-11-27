@@ -20,7 +20,7 @@ review: 2027-05-27
 1. In the checkout, run the demo with the options you want and `--dry-run`, which prints the pipeline on standard output:
 
    ```sh
-   uv run ttcap demo --link serial:/dev/ttyACM0 --clock-hz 500000 --outdir dry --dry-run
+   uv run ttcap demo --link serial:/dev/ttyACM0 --clock-hz 400000 --outdir dry --dry-run
    ```
 
 2. In the terminal, copy the printed command, edit it, and run it with `GST_PLUGIN_PATH` set, which runs your version of the pipeline.
@@ -32,7 +32,7 @@ Without the plugin, step 1 prints a `warning:` line on standard error first and 
 Step 1 prints one line for the source and decoder, then one for each output:
 
 ```text
-gst-launch-1.0 -e -m vgacapttsrc name=src link=serial:/dev/ttyACM0 clock-hz=500000 seconds=10 profile=auto 'ttcap-command=uv run --no-sync ttcap' ! vgadecode name=dec ! tee name=t \
+gst-launch-1.0 -e -m vgacapttsrc name=src link=serial:/dev/ttyACM0 clock-hz=400000 seconds=10 profile=auto 'ttcap-command=uv run --no-sync ttcap' ! vgadecode name=dec ! tee name=t \
     t. ! queue ! pngenc ! multifilesink post-messages=true location=dry/frame-%04d.png \
     t. ! queue ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast key-int-max=30 ! matroskamux ! filesink location=dry/capture.mkv
 ```

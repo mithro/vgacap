@@ -33,7 +33,7 @@ The cost follows the picture, not the clock. For a 640x480 frame, which a stream
 | `tt_um_vgacal_grid` | 138100 | 132% |
 | `tt_um_vgacal_prbs` | 597966 | 570% |
 
-So a picture of large areas streams at a clock the link could not carry sample by sample. A busy one is better streamed plainly. On the tt09 chip, 1.5 million samples of `tt_um_vga_clock` came in 82 KB, against 1.4 MB for a stream of about the same length ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-pio-rle-tt09)).
+So a picture of large areas streams at a clock the link could not carry sample by sample. A busy one is better streamed plainly. On the TT09 chip, 1.5 million samples of `tt_um_vga_clock` came in 82 KB, against 1.4 MB for a stream of about the same length ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-pio-rle-tt09)).
 
 ## Counting in the PIO
 

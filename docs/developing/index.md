@@ -9,8 +9,7 @@ review: 2027-05-27
 
 - [The test layers of vgacap](explanation-testing.md): what each kind of test runs as shipped code, and what it stands in for.
 - [How to build vgacap and run its tests](../development.md): CMake, `ctest` and `pytest`, with and without GStreamer.
-- [Build and CI references](reference/index.md): the build options, the CI jobs and where to make a change.
+- [Build, CI and vendored code](reference/index.md): the build options, the CI jobs, where to make a change and the vendored libraries.
 - [The board tools](../../tools/README.md): the hardware-in-the-loop check and the scripts for a real board.
-- [Developing the vgacap firmware](../../firmware/developing.md): building the vgacap firmware and testing it off hardware.
-- [Developing the vgacap module](../../mpy/developing.md): building the vgacap MicroPython module for its tests and for a board.
+- [Developing the capture code](capture-code.md): the vgacap firmware, the vgacap module and the raw framer.
 - [These pages](site/index.md): building the documentation, adding a page and the rules a page follows.
