@@ -437,3 +437,14 @@ def test_bench_distinct_profile_makes_every_frame_distinct(tmp_path):
         shown = [fr for fr in f.frames if fr.distinct >= 0]
         assert len(shown) >= 12, (s, len(shown))   # calibration takes the first few
         assert len(f.distinct) == len(shown) == len(set(f.distinct)), s
+
+
+def test_bench_distinct_profile_has_realistic_runs():
+    """A real trace holds runs of many clocks; a profile whose colour changes
+    every clock times the run-push overhead instead of the sampler."""
+    clocks = 8 * FRAME
+    p = subprocess.run([str(BUILD / "bench-runs"), "--clocks", str(clocks), "--profile", "distinct"],
+                       check=True, capture_output=True, text=True)
+    fields = dict(kv.split("=") for kv in p.stdout.split())
+    assert int(fields["clocks"]) == clocks
+    assert int(fields["clocks"]) >= 8 * int(fields["runs"]), p.stdout

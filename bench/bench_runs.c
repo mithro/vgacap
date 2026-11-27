@@ -6,9 +6,10 @@
 // [--write-trace PATH]
 //
 // busy, bars and static replay one frame, so every frame after the first is
-// the same picture. distinct makes every frame a new picture: frame k is
-// busy's pattern moved k pixels, with k in binary in the first 32 pixels of
-// line 0 (0x3F a one, 0 a zero), rebuilt before each frame. It is the profile
+// the same picture. distinct makes every frame a new picture, with runs of
+// the length a real design gives: frame k is bars with a 64x64 block moved
+// by k, and k in binary in the first 32 pixels of line 0 (0x3F a one, 0 a
+// zero), rebuilt before each frame. It is the profile
 // for timing vgacap-sample's per-frame work, the frame hash and the store,
 // which a repeated frame skips. Without --write-trace its timing includes
 // building each frame.
@@ -38,10 +39,16 @@
 static uint8_t px_busy(void *u, uint16_t x, uint16_t y) { (void)u; return (uint8_t)((x + y) & 0x3F); }
 static uint8_t px_bars(void *u, uint16_t x, uint16_t y) { (void)u; (void)y; return (uint8_t)((x / 10) & 0x3F); }
 static uint8_t px_static(void *u, uint16_t x, uint16_t y) { (void)u; (void)x; (void)y; return 0x2A; }
+// bars' still background, a 64x64 block that moves 3 pixels right and 2
+// lines down a frame (wrapping), and the frame number k in binary in line
+// 0's first 32 pixels, so no two frames are the same picture.
+#define BLOCK 64
 static uint8_t px_distinct(void *u, uint16_t x, uint16_t y) {
     uint32_t k = *(const uint32_t *)u;
     if (y == 0 && x < 32) return (k >> x) & 1u ? 0x3F : 0;
-    return (uint8_t)((x + y + k) & 0x3F);
+    uint32_t bx = (k * 3u) % (640u - BLOCK), by = 8u + (k * 2u) % (480u - 8u - BLOCK);
+    if (x >= bx && x < bx + BLOCK && y >= by && y < by + BLOCK) return 0x15;
+    return px_bars(u, x, y);
 }
 
 typedef struct frame_src {
