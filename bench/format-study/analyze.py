@@ -252,6 +252,19 @@ if os.path.isdir(os.path.join(RES, "writer2-run1")):
     table(["project"] + [f"{w}, {r}" for w in ("vgch2", "planar", "events", "raw", "vgch2 over events")
                          for r in ("first", "last")], body)
 
+print("### FST, VCD and LXT2 over vgch2, both from the same replay run (`writer`)\n")
+print("The tables above take vgch2 from `writer2` and FST, VCD and LXT2 from `writer`. These ratios divide within "
+      "the `writer` run alone, so a run's own drift cancels.\n")
+body = []
+for p in projects:
+    v = paired(odata, ometa, p, "vgch2")
+    row = [p]
+    for w in ("fst", "vcd", "lxt2"):
+        r = paired(odata, ometa, p, w)
+        row.append("-" if not (r and v) or v[0] <= 0 else f"{r[0] / v[0]:.2f}")
+    body.append(row)
+table(["project", "FST over vgch2", "VCD over vgch2", "LXT2 over vgch2"], body)
+
 print("### The replayed chunks against the whole trace\n")
 body = []
 for p in projects:
@@ -427,6 +440,19 @@ if fx_main:
             "(zstd 1 of the events stream), evplanar (events converted to planar by the real converter), planar "
             "(planar written on the simulation thread) and changelog (converted to planar).")
     fx_est = tick_tables("The main set: R1's figures", note, fx_main, TICKV=FX1V, out_pct=fx_pct)
+    print("### The lean writer against vgacap's, in the loop: lean over vgch2, each process's ratio, median [lowest, highest]\n")
+    print("Both write the same file (the lean writer's table). Each process's lean estimate over its vgch2 estimate, "
+          "ns per clock over the untraced model.\n")
+    body = []
+    for p in [x for x in ORDER if any(x in tickrep[t] for t in fx_main)]:
+        rs = []
+        for t in fx_main:
+            a, b = tick_one(tickrep[t].get(p, {}), "lean"), tick_one(tickrep[t].get(p, {}), "vgch2")
+            if a and b and b[0] > 0:
+                rs.append(a[0] / b[0])
+        rs.sort()
+        body.append([p, "-" if not rs else f"{statistics.median(rs):.2f} [{rs[0]:.2f}, {rs[-1]:.2f}]"])
+    table(["project", "lean over vgch2"], body)
 if fx_raw:
     tick_tables("Raw, in processes of its own", "Raw capture with the untraced model only, so that no other "
                 "variant shares its process, its L3 traffic or its turn.", fx_raw, TICKV=["raw"], out_pct=fx_pct)
@@ -1230,6 +1256,10 @@ body = [
     ["the study readers: planar, events, raw, and vgch2 and FST drivers (study src/rd.c)", loc([f"{S}/rd.c"])],
 ]
 table(["code", "non-comment lines"], body)
+print("Spec text, words: VGCH v2 trace " + str(words([f"{ROOT}/docs/trace-format.md",
+                                                      f"{ROOT}/src/stream/reference-stream-format.md"])) +
+      " (docs/trace-format.md + src/stream/reference-stream-format.md).\n")
+
 # R9's cost of change: what reads or writes the simulation trace's RUNS payload
 # today, and so changes with a planar payload (the format owner's list, and
 # the tests that hold RUNS bytes). tinytapeout-vga-videos from TTVGA.
@@ -1246,10 +1276,8 @@ for repo, base_dir, files in CHANGE:
     for fn in files:
         fp = os.path.join(base_dir, fn)
         body.append([repo, f"`{fn}`", str(loc([fp])) if os.path.exists(fp) else "not found"])
+body.append(["all", f"{len(body)} files", f"{sum(int(r[2]) for r in body if r[2].isdigit()):,}"])
 print("### What a planar payload changes (R9): the code that reads or writes RUNS today\n")
 print("Each file's non-comment lines, whole: the code to review, not the lines that change. The published "
       "traces are re-encoded as well (the re-encode table, under the encode2 tables).\n")
 table(["repository", "file", "non-comment lines"], body)
-print("Spec text, words: VGCH v2 trace " + str(words([f"{ROOT}/docs/trace-format.md",
-                                                      f"{ROOT}/src/stream/reference-stream-format.md"])) +
-      " (docs/trace-format.md + src/stream/reference-stream-format.md).\n")
