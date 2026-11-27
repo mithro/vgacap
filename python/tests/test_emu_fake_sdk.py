@@ -361,3 +361,93 @@ def test_tt_rst_n_reads_the_pin_and_costs_a_pin_read():
     before = board.now
     assert tt.rst_n() == 1
     assert board.now - before == board.pin_read_cycles
+
+
+def _edge(board: Board) -> int:
+    """One CPU clock edge; the counter just after it."""
+    clk = board.modules()["machine"].Pin(CLK)
+    clk.value(1)
+    value = board.wave.count_at(board.now)
+    clk.value(0)
+    return value
+
+
+def test_a_load_after_a_design_held_in_reset_counts_from_1_again():
+    # 4d's load after 4e-style reset edges: the new design's edges must not
+    # reuse the old configuration's counts (review #85 P1).
+    board = _design_board()
+    Pin = board.modules()["machine"].Pin
+    Pin(CLK, Pin.OUT, value=0)
+    rst = Pin(RST, Pin.OUT, value=0)
+    assert [_edge(board) for _ in range(3)] == [0, 0, 0]
+    rst.init(Pin.IN, pull=Pin.PULL_DOWN)  # released: the pull-up wins
+    assert [_edge(board) for _ in range(3)] == [1, 2, 3]
+    FakeLoader(board, {HELD: b"\x01" * 10}).spi_transferPIO(HELD)
+    assert [_edge(board) for _ in range(3)] == [1, 2, 3]
+
+
+def test_rst_n_falling_in_the_cycle_of_an_edge_after_a_load_resets_it():
+    # rst_changed must count edges from the load, not from the first edge.
+    board = _design_board()
+    Pin = board.modules()["machine"].Pin
+    clk = Pin(CLK, Pin.OUT, value=0)
+    _count_three(board)
+    FakeLoader(board, {HELD: b"\x01" * 10}).spi_transferPIO(HELD)
+    clk.value(1)
+    now = board.now
+    assert board.wave.count_at(now) == 1
+    Pin(RST, Pin.OUT, value=0)
+    assert board.now == now
+    assert board.wave.count_at(now) == 0
+
+
+def test_board_sdk_scripts_sleep_on_the_board_clock():
+    board = _design_board()
+    tt = board_sdk(board)
+    before = board.now
+    board.run_script("import time\ntime.sleep_ms(5)\n", globals={"tt": tt})
+    assert board.now - before == board.sysclk_hz * 5 // 1000
+
+
+def test_each_time_function_runs_on_the_board_clock():
+    board = Board(Waveform(b"\0", [], clk_gpio=CLK, period=2), sysclk_hz=150_000_000)
+    hz = board.sysclk_hz
+    for call, cycles in (("sleep_us(100)", hz * 100 // 1_000_000),
+                         ("sleep_ms(3)", hz * 3 // 1000),
+                         ("sleep(2)", 2 * hz)):
+        before = board.now
+        board.run_script("import time\ntime." + call + "\n")
+        assert board.now - before == cycles, call
+    board.advance(12_345)
+    now = board.now
+    start = len(board.output)
+    board.run_script("import time\nprint(time.ticks_us(), time.ticks_ms(), time.ticks_cpu())")
+    assert _text(board, start)[0] == "%d %d %d" % (now * 1_000_000 // hz, now * 1000 // hz, now)
+
+
+def test_two_manual_clock_presses_give_two_edges_and_leave_the_clock_low():
+    board = _design_board()
+    tt = board_sdk(board, mode=ASIC_RP_CONTROL)
+    period = board.sysclk_hz * 333 // 1000
+    for _ in range(2):
+        tt.manual_project_clock.pin_activated = True
+        board.advance(period)
+    assert len(board.pio_rises[CLK]) == 2
+    assert board.pad_level(CLK, board.now) == 0
+
+
+def test_the_manual_clock_timer_fires_every_333_ms():
+    board = _design_board()
+    tt = board_sdk(board, mode=ASIC_RP_CONTROL)
+    period = board.sysclk_hz * 333 // 1000
+    tt.manual_project_clock.pin_activated = True
+    board.advance(period - 1)
+    assert board.pio_rises[CLK] == []
+    board.advance(1)
+    assert len(board.pio_rises[CLK]) == 1
+
+
+def test_construction_leaves_the_clock_pad_to_the_boards_pwm():
+    board = Board(Waveform(b"\0", [], clk_gpio=CLK, period=2))
+    board_sdk(board)
+    assert not board.wave.clock_stopped and CLK not in board.pads
