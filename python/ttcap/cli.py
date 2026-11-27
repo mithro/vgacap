@@ -817,8 +817,8 @@ def _capture_clocked(driver, out_path: str, **fields) -> CaptureStats:
 
 #: `ttcap capture` options `--mode clocked` does not take, by `args` name:
 #: it loads its own bitstream (no `--project`/`--design`), runs exactly
-#: `--clocks` clocks (no other limit) and samples once per clock it makes
-#: (no edge, delay or VGA sampler options).
+#: `--clocks` clocks (no other limit), samples once per clock it makes (no
+#: edge, delay or VGA sampler options) and always stops the clock after.
 NOT_CLOCKED = {
     "seconds": "--seconds",
     "max_bytes": "--max-bytes",
@@ -830,7 +830,9 @@ NOT_CLOCKED = {
     "window_lines": "--window-lines",
     "sample_delay": "--sample-delay",
     "rle_mask": "--rle-mask",
+    "rle_oneshot": "--rle-oneshot",
     "asic_index": "--asic-index",
+    "stop_clock": "--no-stop-clock",
 }
 #: The options only `--mode clocked` takes, by `args` name.
 CLOCKED_ONLY = {
@@ -841,26 +843,35 @@ CLOCKED_ONLY = {
 }
 
 
-def mode_option_problem(args: argparse.Namespace) -> str | None:
+def typed_options(argv: Sequence[str]) -> set[str]:
+    """The `args` names `argv` itself set, whatever their defaults are.
+
+    `argv` parsed again with every default suppressed: argparse then leaves
+    out of the namespace each option that was not typed, so `--seconds 5`
+    counts as given although it is the default.
+    """
+    parser = build_parser()
+    sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    for action in sub.choices["capture"]._actions:
+        action.default = argparse.SUPPRESS
+    return set(vars(parser.parse_args(argv)))
+
+
+def mode_option_problem(args: argparse.Namespace, typed: set[str]) -> str | None:
     """Why `ttcap capture`'s options do not fit its `--mode`, or None.
 
-    Checked before the board is touched; `main` turns it into a usage error
-    (exit 2). Clocked mode refuses `NOT_CLOCKED`, `--rle-oneshot`,
-    `--no-stop-clock` (the clock is always stopped afterwards), any
-    firmware but the stock one and the RP2040 profile, and needs
-    `--bitstream` and `--clocks`, a positive multiple of 4; every other
-    mode refuses `CLOCKED_ONLY`.
+    `typed` is what was on the command line (`typed_options`). Checked
+    before the board is touched; `main` turns it into a usage error (exit
+    2). Clocked mode refuses `NOT_CLOCKED`, any firmware but the stock one
+    and the RP2040 profile, and needs `--bitstream` and `--clocks`, a
+    positive multiple of 4; every other mode refuses `CLOCKED_ONLY`.
     """
     if args.mode != "clocked":
-        given = [opt for name, opt in CLOCKED_ONLY.items() if getattr(args, name) is not None]
+        given = [opt for name, opt in CLOCKED_ONLY.items() if name in typed]
         if given:
             return "%s: only --mode clocked takes %s" % (args.mode, ", ".join(given))
         return None
-    given = [opt for name, opt in NOT_CLOCKED.items() if getattr(args, name) is not None]
-    if args.rle_oneshot:
-        given.append("--rle-oneshot")
-    if not args.stop_clock:
-        given.append("--no-stop-clock")
+    given = [opt for name, opt in NOT_CLOCKED.items() if name in typed]
     if args.firmware != "micropython":
         given.append("--firmware %s" % args.firmware)
     if args.profile == "rp2040":
@@ -1090,7 +1101,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_parser.add_argument(
         "--seconds",
         type=float,
-        default=None,
+        default=5.0,
         help="capture duration; 0 means run until --max-bytes/--frames, or "
         "until SIGINT when --out - is streaming (default 5)",
     )
@@ -1110,8 +1121,8 @@ def build_parser() -> argparse.ArgumentParser:
     capture_limit.add_argument(
         "--max-bytes",
         type=int,
-        default=None,
-        help="stop once the board has emitted this many bytes (0 = no limit; default 0)",
+        default=0,
+        help="stop once the board has emitted this many bytes (0 = no limit)",
     )
     capture_limit.add_argument(
         "--frames",
@@ -1157,7 +1168,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_parser.add_argument(
         "--vga-mode",
         choices=sorted(m.name for m in MODES.values() if not m.extended),
-        default=None,
+        default=DEFAULT_VGA_MODE,
         help=f"frame/window modes: the VGA timing to expect (default {DEFAULT_VGA_MODE})",
     )
     capture_parser.add_argument(
@@ -1190,7 +1201,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_parser.add_argument(
         "--sample-delay",
         type=int,
-        default=None,
+        default=0,
         help="frame/window/rle modes: system clocks to wait after --edge before "
         "reading uo_out, to sample where it is stable at a real VGA clock "
         "(default 0)",
@@ -1199,7 +1210,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--rle-mask",
         type=int,
         choices=[-1, 0, 1],
-        default=None,
+        default=-1,
         help="rle mode: 1 = one-instruction sample under SHIFTCTRL.IN_COUNT "
         "(RP2350), 0 = two instructions through the OSR (any RP2), -1 = the "
         "board picks (default -1)",
@@ -1214,7 +1225,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture_parser.add_argument(
         "--window-lines",
         type=int,
-        default=None,
+        default=0,
         help="frame/window modes: most lines per capture; 0 = as many as the "
         f"board's heap holds (window mode default {DEFAULT_WINDOW_LINES})",
     )
@@ -1248,9 +1259,8 @@ def build_parser() -> argparse.ArgumentParser:
     capture_parser.add_argument(
         "--reset-clocks",
         type=int,
-        default=None,
-        help="clocked mode: how many of the first --clocks come with rst_n low "
-        f"(default {CLOCKED_RESET_CLOCKS})",
+        default=CLOCKED_RESET_CLOCKS,
+        help="clocked mode: how many of the first --clocks come with rst_n low",
     )
     capture_parser.add_argument(
         "--clock-high",
@@ -1310,7 +1320,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _failed("throughput", exc)
         return 1 if (result.corrupt or result.short) else 0
     if args.command == "capture":
-        problem = mode_option_problem(args)
+        typed = typed_options(sys.argv[1:] if argv is None else argv)
+        problem = mode_option_problem(args, typed)
         if problem:
             parser.error(problem)
         try:
@@ -1321,8 +1332,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 project=args.project,
                 design=args.design,
                 clock_hz=args.clock_hz,
-                seconds=5.0 if args.seconds is None else args.seconds,
-                max_bytes=args.max_bytes or 0,
+                seconds=args.seconds,
+                max_bytes=args.max_bytes,
                 frames=args.frames,
                 buf_words=args.buf_words,
                 edge=args.edge,
@@ -1330,19 +1341,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 pio=args.pio,
                 stop_clock_after=args.stop_clock,
                 mode=args.mode,
-                vga_mode=args.vga_mode or DEFAULT_VGA_MODE,
-                window_lines=args.window_lines or 0,
-                sample_delay=args.sample_delay or 0,
+                vga_mode=args.vga_mode,
+                window_lines=args.window_lines,
+                sample_delay=args.sample_delay,
                 ui_in=args.ui_in,
-                rle_mask=-1 if args.rle_mask is None else args.rle_mask,
+                rle_mask=args.rle_mask,
                 rle_oneshot=args.rle_oneshot,
                 firmware=args.firmware,
                 asic_index=args.asic_index,
                 board=args.board,
                 bitstream=args.bitstream,
                 clocks=args.clocks or 0,
-                reset_clocks=(CLOCKED_RESET_CLOCKS if args.reset_clocks is None
-                              else args.reset_clocks),
+                reset_clocks=args.reset_clocks,
                 clock_high=args.clock_high,
             )
         except ConsumerClosed as closed:

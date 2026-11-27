@@ -240,6 +240,8 @@ CLOCKED = ["capture", "serial:/dev/null", "--profile", "rp2350", "--mode", "cloc
 @pytest.mark.parametrize("extra, option", [
     (["--seconds", "1"], "--seconds"),
     (["--seconds", "0"], "--seconds"),
+    (["--seconds", "5"], "--seconds"),  # typed, though it is the default
+    (["--max-bytes", "0"], "--max-bytes"),
     (["--max-bytes", "1000"], "--max-bytes"),
     (["--frames", "2"], "--frames"),
     (["--project", "tt_um_x"], "--project"),
@@ -280,6 +282,7 @@ def test_clocks_must_be_a_positive_multiple_of_4(monkeypatch, capsys, clocks):
     (["--bitstream", "x.bin"], "--bitstream"),
     (["--clocks", "64"], "--clocks"),
     (["--reset-clocks", "4"], "--reset-clocks"),
+    (["--reset-clocks", "10"], "--reset-clocks"),  # the default, typed
     (["--clock-high", "4"], "--clock-high"),
 ])
 @pytest.mark.parametrize("mode", ["stream", "frame", "window", "rle"])
@@ -289,6 +292,12 @@ def test_the_clocked_options_are_refused_in_every_other_mode(monkeypatch, capsys
             "--clock-hz", "500000", "--out", "o.vgacap", *extra]
     err = _refused(monkeypatch, capsys, args)
     assert option in err and "--mode clocked" in err
+
+
+def test_the_stock_firmware_and_rp2350_named_outright_are_accepted(monkeypatch, capsys,
+                                                                    tmp_path):
+    bench = Bench(monkeypatch, tmp_path)
+    assert cli.main(bench.args("--firmware", "micropython", "--reset-clocks", "10")) == 0
 
 
 def test_an_rp2040_found_by_auto_is_refused_before_the_load(monkeypatch, capsys, tmp_path):
