@@ -58,6 +58,7 @@ extensions = [
     "vgacap_landing",   # a landing page's lines -> its hidden toctree
     "vgacap_picture",   # <picture> light/dark twins -> the theme-switched pair
     "vgacap_rules",     # the docs.fpgas.online rules a machine can decide
+    "vgacap_vectors",   # the tb-v1 test vectors' tables, from the vectors
     "vgacap_generated", # reference tables built from their source (modes.c, argparse)
     "ttcap_reference",  # ttcap's options, pin maps and bench boards, from its source
 ]
@@ -90,9 +91,7 @@ include_patterns = [
 vgacap_rules_pending = {
     page: "split into typed pages (docs/superpowers/specs/2026-11-27-docs-site-design.md)"
     for page in (
-        "capture-rp1/README", "rtl/README",
-        "tools/README", "docs/development",
-        "docs/trace-format", "third_party/README",
+        "tools/README", "docs/development", "third_party/README",
     )
 }
 
