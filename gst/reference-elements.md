@@ -81,7 +81,7 @@ In a URI says whether a `vgacapbin` URI's query may set the property.
 | `link` | string | empty | -- | no | the board, as `ttcap capture` takes it; required |
 | `clock-hz` | unsigned | 0 | 0 to 200,000,000 | yes | the project clock to program, in Hz; required |
 | `project` | string | empty | -- | yes | the `tt.shuttle` project to enable; empty keeps the one selected |
-| `design` | string | empty | -- | yes | on an FPGA board, the bitstream to enable |
+| `design` | string | empty | -- | yes | on a demo board with an FPGA breakout, the bitstream to enable |
 | `profile` | string | `auto` | `ttcap capture --profile`'s choices | yes | the board profile; `auto` asks the board |
 | `pio` | integer | -1 | -1 to 7 | yes | the PIO block for the sampler; -1 leaves `ttcap`'s default |
 | `buf-words` | integer | -1 | -1 to 16,777,216 | yes | words a DMA buffer; -1 leaves `ttcap`'s default |

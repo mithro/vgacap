@@ -7,6 +7,7 @@ review: 2027-05-27
 
 # Capturing
 
+- [Your first capture from a demo board](../../python/ttcap/tutorial-first-capture.md): from a demo board on USB to one PNG of its picture.
 - [ttcap](../../python/ttcap/README.md): capturing from a demo board running the stock firmware.
 - [The vgacap firmware](../../firmware/README.md): a capture firmware for the RP2350 demo board.
 - [The vgacap MicroPython module](../../mpy/README.md): the same capture built into MicroPython.

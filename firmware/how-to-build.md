@@ -55,13 +55,13 @@ The UF2's family is `rp2350-arm-s` and its blocks load at `0x20000000`, into SRA
 
 ## If it fails
 
-| What you see | Likely cause | Fix |
-|---|---|---|
-| `this firmware is pinned to pico-sdk 2.2.0, found ...` at step 2 | `PICO_SDK_PATH` names another SDK | Clone 2.2.0 as in step 1 and point `-DPICO_SDK_PATH` at it |
-| `Files ... are different` after a `pioasm` line at step 3 | a `.pio` file changed and its `.hex` did not | Copy `firmware/build/<name>.hex` into `firmware/pio/`, and commit both |
-| A compiler warning stops step 3 | the firmware's own sources build with `-Wall -Wextra -Werror` | Fix the warning in the vgacap source |
-| `No installed picotool with version 2.1.1 found - building from source` at step 2 | no picotool on the machine | Nothing: this is a warning, and the build fetches one |
-| Each new build directory fetches picotool again | the fetched copy lives in the build directory | Add `-DPICOTOOL_FETCH_FROM_GIT_PATH=<dir>` at step 2 to share one copy |
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 2 | `this firmware is pinned to pico-sdk 2.2.0, found ...` | `PICO_SDK_PATH` names another SDK | Clone 2.2.0 as in step 1 and point `-DPICO_SDK_PATH` at it |
+| 3 | `Files ... are different` after a `pioasm` line | a `.pio` file changed and its `.hex` did not | Copy `firmware/build/<name>.hex` into `firmware/pio/`, and commit both |
+| 3 | A compiler warning stops it | the firmware's own sources build with `-Wall -Wextra -Werror` | Fix the warning in the vgacap source |
+| 2 | `No installed picotool with version 2.1.1 found - building from source` | no picotool on the machine | Nothing: this is a warning, and the build fetches one |
+| 2 | Each new build directory fetches picotool again | the fetched copy lives in the build directory | Add `-DPICOTOOL_FETCH_FROM_GIT_PATH=<dir>` at step 2 to share one copy |
 
 ## Next
 
