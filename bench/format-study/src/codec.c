@@ -1,0 +1,230 @@
+// SPDX-License-Identifier: Apache-2.0
+// The study's compressors and raw-block transforms (codec.h).
+#define ZSTD_STATIC_LINKING_ONLY
+#include "codec.h"
+#include "fs.h"
+#include "lz4.h"
+#include "lz4hc.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <zlib.h>
+#include <zstd.h>
+
+const char *const fs_comp_name[C_COUNT] = { "none", "zstd-5", "zstd-1", "zstd1", "zstd3", "zstd9", "zstd1-long27",
+                                            "lz4", "lz4hc9", "deflate1", "deflate6", "zstd1-nocheck" };
+const char *const fs_transform_name[T_COUNT] = { "pack6", "xor6", "byteplanes", "xor-byteplanes", "xor-bitplanes",
+                                                 "pack6clk" };
+
+int fs_comp_by_name(const char *name) {
+    for (int i = 0; i < C_COUNT; i++)
+        if (!strcmp(fs_comp_name[i], name)) return i;
+    return -1;
+}
+int fs_transform_by_name(const char *name) {
+    if (!strcmp(name, "identity")) return T_IDENTITY;
+    for (int i = 0; i < T_COUNT; i++)
+        if (!strcmp(fs_transform_name[i], name)) return i;
+    return -1;
+}
+
+// ---- compressors -----------------------------------------------------------------------
+static __thread ZSTD_CCtx *cctx[C_COUNT];
+static __thread ZSTD_DCtx *dctx;
+
+static ZSTD_CCtx *zctx(int comp) {
+    if (cctx[comp]) return cctx[comp];
+    ZSTD_CCtx *c = ZSTD_createCCtx();
+    int level = comp == C_ZSTD_M5 ? -5 : comp == C_ZSTD_M1 ? -1 : comp == C_ZSTD_3 ? 3 : comp == C_ZSTD_9 ? 9 : 1;
+    ZSTD_CCtx_setParameter(c, ZSTD_c_compressionLevel, level);
+    ZSTD_CCtx_setParameter(c, ZSTD_c_checksumFlag, comp == C_ZSTD_1_NOCHK ? 0 : 1);   // vgch2 sets it
+    if (comp == C_ZSTD_1_LONG) {
+        ZSTD_CCtx_setParameter(c, ZSTD_c_enableLongDistanceMatching, 1);
+        ZSTD_CCtx_setParameter(c, ZSTD_c_windowLog, 27);
+    }
+    return cctx[comp] = c;
+}
+
+size_t fs_comp_bound(size_t n) {
+    size_t a = ZSTD_compressBound(n), b = (size_t)LZ4_compressBound((int)(n < 0x7e000000u ? n : 0x7e000000u)),
+           c = (size_t)compressBound((uLong)n);
+    size_t m = a > b ? a : b;
+    return (m > c ? m : c) + 64;
+}
+
+size_t fs_compress(int comp, const uint8_t *src, size_t n, uint8_t *dst, size_t cap) {
+    switch (comp) {
+    case C_NONE: memcpy(dst, src, n); return n ? n : 0;
+    case C_LZ4: {
+        int r = LZ4_compress_default((const char *)src, (char *)dst, (int)n, (int)cap);
+        return r > 0 ? (size_t)r : 0;
+    }
+    case C_LZ4HC_9: {
+        int r = LZ4_compress_HC((const char *)src, (char *)dst, (int)n, (int)cap, 9);
+        return r > 0 ? (size_t)r : 0;
+    }
+    case C_DEFLATE_1:
+    case C_DEFLATE_6: {
+        uLongf d = (uLongf)cap;
+        int r = compress2(dst, &d, src, (uLong)n, comp == C_DEFLATE_1 ? 1 : 6);
+        return r == Z_OK ? (size_t)d : 0;
+    }
+    default: {
+        size_t r = ZSTD_compress2(zctx(comp), dst, cap, src, n);
+        if (ZSTD_isError(r)) { fprintf(stderr, "fs: zstd: %s\n", ZSTD_getErrorName(r)); return 0; }
+        return r;
+    }
+    }
+}
+
+int fs_decompress(int comp, const uint8_t *src, size_t csize, uint8_t *dst, size_t n) {
+    switch (comp) {
+    case C_NONE: if (csize != n) return -1; memcpy(dst, src, n); return 0;
+    case C_LZ4:
+    case C_LZ4HC_9: {
+        int r = LZ4_decompress_safe((const char *)src, (char *)dst, (int)csize, (int)n);
+        return r == (int)n ? 0 : -1;
+    }
+    case C_DEFLATE_1:
+    case C_DEFLATE_6: {
+        uLongf d = (uLongf)n;
+        int r = uncompress(dst, &d, src, (uLong)csize);
+        return r == Z_OK && d == n ? 0 : -1;
+    }
+    default: {
+        if (!dctx) dctx = ZSTD_createDCtx();
+        size_t r = ZSTD_decompressDCtx(dctx, dst, n, src, csize);
+        return !ZSTD_isError(r) && r == n ? 0 : -1;
+    }
+    }
+}
+
+// ---- transforms --------------------------------------------------------------------------
+static const int port_bits[FS_GROUPS] = { 8, 8, 8, 8, 8, 1, 1 };
+
+static inline uint64_t transpose8(uint64_t x) {
+    x = (x & 0xAA55AA55AA55AA55ull) | ((x & 0x00AA00AA00AA00AAull) << 7) | ((x >> 7) & 0x00AA00AA00AA00AAull);
+    x = (x & 0xCCCC3333CCCC3333ull) | ((x & 0x0000CCCC0000CCCCull) << 14) | ((x >> 14) & 0x0000CCCC0000CCCCull);
+    x = (x & 0xF0F0F0F00F0F0F0Full) | ((x & 0x00000000F0F0F0F0ull) << 28) | ((x >> 28) & 0x00000000F0F0F0F0ull);
+    return x;
+}
+
+int fs_transform(int t, const uint64_t *raw, uint64_t n, uint64_t first_sample, uint8_t **out, size_t *lens,
+                 uint64_t *clk_errors) {
+    uint64_t bad = 0;
+    for (uint64_t i = 0; i < n; i++) bad += ((raw[i] >> (8 * FS_CLK)) & 1) != ((first_sample + i) & 1);
+    *clk_errors += bad;
+    switch (t) {
+    case T_PACK6:
+    case T_XOR6:
+    case T_PACK6CLK: {
+        uint8_t *p = out[0];
+        uint64_t prev = 0;
+        const uint64_t keep = t == T_PACK6CLK ? ~0ull : ~(1ull << 42);
+        for (uint64_t i = 0; i < n; i++) {
+            const uint64_t v = fs_pack(raw[i]) & keep;
+            const uint64_t w = t == T_XOR6 ? v ^ prev : v;
+            prev = v;
+            memcpy(p, &w, 8);
+            p += 6;
+        }
+        lens[0] = (size_t)(p - out[0]);
+        return 1;
+    }
+    case T_BSHUF:
+    case T_XBSHUF: {
+        uint64_t prev = 0;
+        for (uint64_t i = 0; i < n; i++) {
+            const uint64_t v = raw[i] & FS_NOCLK_MASK;
+            const uint64_t w = t == T_XBSHUF ? v ^ prev : v;
+            prev = v;
+            for (int k = 0; k < FS_GROUPS; k++) out[k][i] = (uint8_t)(w >> (8 * k));
+        }
+        for (int k = 0; k < FS_GROUPS; k++) lens[k] = (size_t)n;
+        return FS_GROUPS;
+    }
+    case T_XBITSHUF: {
+        const uint64_t groups = (n + 7) / 8;
+        uint64_t prev = 0;
+        for (uint64_t g = 0; g < groups; g++) {
+            uint64_t x[FS_GROUPS] = { 0 };
+            for (int j = 0; j < 8; j++) {
+                const uint64_t i = 8 * g + (uint64_t)j;
+                uint64_t w = 0;
+                if (i < n) {
+                    const uint64_t v = raw[i] & FS_NOCLK_MASK;
+                    w = v ^ prev;
+                    prev = v;
+                }
+                for (int k = 0; k < FS_GROUPS; k++) x[k] |= ((w >> (8 * k)) & 0xff) << (8 * j);
+            }
+            for (int k = 0; k < FS_GROUPS; k++) {
+                const uint64_t y = transpose8(x[k]);
+                for (int b = 0; b < port_bits[k]; b++) out[k][(uint64_t)b * groups + g] = (uint8_t)(y >> (8 * b));
+            }
+        }
+        for (int k = 0; k < FS_GROUPS; k++) lens[k] = (size_t)(groups * (uint64_t)port_bits[k]);
+        return FS_GROUPS;
+    }
+    default: return -1;
+    }
+}
+
+static inline uint64_t clk_of(uint64_t s) { return (s & 1) ? FS_CLK_RAW : 0; }
+
+int fs_untransform(int t, uint8_t *const *in, uint64_t n, uint64_t first_sample, int port, uint64_t *raw) {
+    switch (t) {
+    case T_PACK6:
+    case T_XOR6:
+    case T_PACK6CLK: {
+        const uint8_t *p = in[0];
+        uint64_t prev = 0;
+        for (uint64_t i = 0; i < n; i++) {
+            uint64_t w = 0;
+            memcpy(&w, p, 6);
+            p += 6;
+            const uint64_t v = t == T_XOR6 ? w ^ prev : w;
+            prev = v;
+            raw[i] = fs_raw_from_sample(v & ~(1ull << 42)) | clk_of(first_sample + i);
+        }
+        return 0;
+    }
+    case T_BSHUF:
+    case T_XBSHUF: {
+        const int k0 = port < 0 ? 0 : port, k1 = port < 0 ? FS_GROUPS : port + 1;
+        for (uint64_t i = 0; i < n; i++) raw[i] = clk_of(first_sample + i);
+        for (int k = k0; k < k1; k++) {
+            uint8_t prev = 0;
+            const uint8_t *p = in[k];
+            for (uint64_t i = 0; i < n; i++) {
+                const uint8_t v = t == T_XBSHUF ? (uint8_t)(p[i] ^ prev) : p[i];
+                prev = v;
+                raw[i] |= (uint64_t)v << (8 * k);
+            }
+        }
+        return 0;
+    }
+    case T_XBITSHUF: {
+        const uint64_t groups = (n + 7) / 8;
+        const int k0 = port < 0 ? 0 : port, k1 = port < 0 ? FS_GROUPS : port + 1;
+        for (uint64_t i = 0; i < n; i++) raw[i] = clk_of(first_sample + i);
+        for (int k = k0; k < k1; k++) {
+            uint8_t prev = 0;
+            const uint8_t *p = in[k];
+            for (uint64_t g = 0; g < groups; g++) {
+                uint64_t y = 0;
+                for (int b = 0; b < port_bits[k]; b++) y |= (uint64_t)p[(uint64_t)b * groups + g] << (8 * b);
+                const uint64_t x = transpose8(y);
+                for (int j = 0; j < 8; j++) {
+                    const uint64_t i = 8 * g + (uint64_t)j;
+                    if (i >= n) break;
+                    prev ^= (uint8_t)(x >> (8 * j));
+                    raw[i] |= (uint64_t)prev << (8 * k);
+                }
+            }
+        }
+        return 0;
+    }
+    default: return -1;
+    }
+}
