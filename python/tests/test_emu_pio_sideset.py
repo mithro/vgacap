@@ -210,6 +210,18 @@ def test_reading_a_side_set_pin_back_is_refused_not_guessed():
         board.advance(4)
 
 
+@pytest.mark.parametrize("freq", [1_000_000, 133_000_000, 0])
+def test_a_state_machine_clock_divider_is_refused(freq):
+    # The emulator runs every state machine at the system clock; a `freq`
+    # would make its pin timing wrong by the divider, silently.
+    board = _board()
+    rp2 = board.modules()["rp2"]
+    with pytest.raises(BoardError, match="clock divider is not emulated"):
+        _sm(board, _toggle(rp2, 0, 0), freq=freq, sideset_base=CLK)
+    with pytest.raises(BoardError, match="clock divider is not emulated"):
+        rp2.StateMachine(5, _toggle(rp2, 0, 0), freq, sideset_base=CLK)
+
+
 def test_two_state_machines_driving_one_pin_are_refused():
     board = _board()
     rp2 = board.modules()["rp2"]

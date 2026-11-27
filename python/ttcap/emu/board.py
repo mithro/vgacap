@@ -1328,6 +1328,13 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
             unsupported = [k for k, v in kwargs.items() if v is not None]
             if unsupported:
                 raise BoardError("StateMachine options not emulated: %s" % unsupported)
+            if freq != -1:
+                # rp2_pio.c turns freq into CLKDIV; here every state machine
+                # runs at the system clock, so any freq would be wrong.
+                raise BoardError(
+                    "StateMachine(freq=%r): the PIO clock divider is not emulated; "
+                    "state machines run at the system clock (freq=-1)" % (freq,)
+                )
             block = board.blocks[id // 4]
             self._sm = block.sms[id % 4]
             if prog is not None:
