@@ -51,19 +51,19 @@ This is the study after its first round of review ("fix round 1"). The round mea
 
   | Plan | nyancat | rle_vga | atari2600 |
   |---|---:|---:|---:|
-  | vgch2 (current) | 18.2 | 26.2 | 11.0 |
-  | events, stored as planar | 7.4 | 8.3 | 3.3 |
-  | changelog, stored as planar | 8.8 | 8.0 | 4.1 |
+  | vgch2 (current) | 17.6 | 25.0 | 11.1 |
+  | events, stored as planar | 7.4 | 8.2 | 3.3 |
+  | changelog, stored as planar | 8.8 | 7.9 | 4.1 |
   | planar on the simulation thread | 4.5 | 2.5 | 1.3 |
 
   - The first round's recommendation, events stored as planar, is over the 1% bar on all three busy designs, and over the whole 5% on nyancat and rle_vga.
-  - Planar's gain needs `tracetool info` to count each stream on its own. As `tracetool info` is today, one merged scan of every port, planar's share on nyancat is 15.7% against vgch2's 18.2%, and most of the gain is gone.
+  - Planar's gain needs `tracetool info` to count each stream on its own. As `tracetool info` is today, one merged scan of every port, planar's share on nyancat is 15.7% against vgch2's 17.6%, and most of the gain is gone.
 - **Planar's size and `uo_out` gains stand.**
   - Planar is 54 MB against vgch2's 416 MB on nyancat, 9.0 against 597 on atari2600, and 0.62 against 18.4 on rle_vga.
-  - `vgacap-sample`'s pass, which reads `uo_out` and `rst_n`, takes 10.1 s on nyancat against vgch2's 20.2, and 0.04 s on rle_vga against 35.0.
-  - vgch2's merged full scan of every port is faster than planar's on 10 of the 11 traces, and ties on nyan: 27.5 s against 49.6 on nyancat.
-- **Background CPU is noisy, and the verdicts do not depend on it.** Identical compression work measured up to 2.8 times apart, with what else ran on the socket. R2 is given at each plan's lowest measured figure and at its median, and every pass or fail is the same at both.
-- **Opening a trace costs a quarter as much with lazy block starts, with no format change.** Reading block starts only when a seek needs them cuts vgch2's open from 107 to 29 ms on nyancat, and a one-frame seek from 137 to 50 ms.
+  - `vgacap-sample`'s pass, which reads `uo_out` and `rst_n`, takes 10.1 s on nyancat against vgch2's 18.3, and 0.04 s on rle_vga against 33.0.
+  - vgch2's merged full scan of every port is faster than planar's on 10 of the 11 traces, and ties on nyan: 28.3 s against 49.6 on nyancat.
+- **Background CPU is noisy, and the verdicts do not depend on it.** Identical compression work measured up to 2.5 times apart, with what else ran on the socket. R2 is given at each plan's lowest measured figure and at its median, and every pass or fail is the same at both.
+- **Lazy block starts cut the cost of opening a trace by more than half on the busy traces, with no format change.** Reading block starts only when a seek needs them cuts vgch2's open from 111 to 29 ms on nyancat and from 242 to 97 ms on rle_vga, and a one-frame seek on nyancat from 129 to 51 ms.
 - **The existing formats lose on the simulation thread.**
   - FST written directly costs 4.1-5.1 times vgch2 on the busy designs, measured in the same replay run. A one-frame seek takes 0.6-1.0 s.
   - A cut-short FST is fragile: files cut to 10% or 50% gave no samples, or crashed libfst's reader.
@@ -302,7 +302,7 @@ Each candidate's main configuration is written whole as a real file: vgch2 by vg
 
 The first round measured each background figure once. This round adds three more measurements of the configurations R2 depends on (stage `encode2`): each alone, at zstd 1, every block, three times, apart in time. The R2 tables use encode2's median, and also the lowest figure of all four measurements.
 
-- **Spread.** The same compression work measured up to 2.8 times apart: vgch2 on rle_vga took 6.83 s in the first round and 14.5-17.2 s in encode2, for identical input and output bytes.
+- **Spread.** The same compression work measured up to 2.5 times apart: vgch2 on rle_vga took 6.83 s in the first round and 14.5-17.2 s in encode2, for identical input and output bytes.
 - **Not the cache.** [`warm_cache.sh`](../../bench/format-study/warm_cache.sh) ran zstd1 alone, and after zstd-5 and zstd-1 had read the same block, as the first round's matrix did. Both took the same CPU, and both were close to the first round's figure. So the first round's matrix did not flatter it.
 - **What it tracks.** The spread follows what else ran on the socket. encode2 ran 20 whole-trace encodes at once on the first socket, the raw candidates' 16-bytes-a-clock passes among them, and the CPUs' hyperthread siblings were not reserved. A memory-bound compressor, such as zstd on rle_vga's 1,100-to-1 data, slows the most.
 - **A third estimate.** The loop's own background threads ran beside a real simulation. Scaled to the whole trace, they agree with the whole-trace runs to within about 30% on the busy traces ([three ways table](#background-cpu-three-ways-s-for-the-whole-trace-the-loops-scaled-against-the-whole-trace-runs)).
@@ -393,7 +393,7 @@ The host is big-storage:
 
 Everything is compiled `-O2 -g` with vgacap's `-Wa,-mbranches-within-32B-boundaries`. The Verilator models use the pilot's flags (`-O3`, `OPT_FAST=-O2`).
 
-Other sessions shared the host throughout, and no stage ran on an idle machine. [Host load during each stage](#host-load-during-each-stage) gives the load as `load.log` recorded it. It ranged from 0.4 to 2.3 a CPU, with as little as 1% idle.
+Other sessions shared the host throughout, and no stage ran on an idle machine. [Host load during each stage](#host-load-during-each-stage) gives the load as `load.log` recorded it. It ranged from 0.4 to 2.4 a CPU, with as little as 1% idle. The raw loop sets ran at the round's highest load, a median of 1.8 and 2.3 a CPU.
 
 - The first round's stages overlapped:
   - `tick2a` to `tick2d` ran together, 12 processes;
@@ -420,6 +420,7 @@ How to read each group of tables:
 - **The loop, first round.** Kept as it was, for the record. Its raw figures shared processes with the other variants.
 - **The loop, fix round 1.** These are R1's figures.
   - The main set has 4 processes a project. The raw set and the scope set follow.
+  - The scope set, one unpinned process a project, agrees with the main set to within 2.1 points on the busy designs (vgch2 on rle_vga: 22.6% against 20.5%). As in the main set, vgch2 and lean cost the most there and planar comes next; the order of the three cheapest varies.
   - The processes agree on the order but not on the offsets, so the median and the range are both given.
   - vgadonut's loop window is quieter than its whole trace (the window table), so its loop figures understate it.
   - The stall, finish, background and window tables follow the main set.
@@ -530,21 +531,39 @@ Source: `results/writer2` (vgch2, runs, planar, events, changelog, raw) and `res
 | metaballs | 210.9 | 1.17 | 0.58 | 0.55 | 0.55 | 0.55 | 1.04 | 0.37 | 0.39 | 2.18 | 115.17 |
 | tomkeddie_a | 243.4 | 0.83 | 0.39 | 0.43 | 0.38 | 0.40 | 0.80 | 0.73 | 0.54 | 6.22 | 106.20 |
 
-#### The replay run twice: ns per clock over null, first run (`writer2-run1`) and second (`writer2`)
+#### The replay run twice: ns per clock over null, first run (`writer2-run1`) and last (`writer2`)
 
-| project | vgch2 | planar | events | raw | vgch2 over events |
-|---|---:|---:|---:|---:|---:|
-| nyancat | 37.76 / 20.45 | 22.99 / 12.45 | 14.00 / 7.52 | 2.59 / 1.60 | 2.70 / 2.72 |
-| rle_vga | 64.99 / 35.96 | 30.69 / 17.55 | 21.14 / 11.40 | 2.27 / 1.43 | 3.07 / 3.15 |
-| dvd_screensaver | 1.82 / 1.53 | 0.82 / 0.69 | 0.88 / 0.67 | 2.57 / 1.85 | 2.07 / 2.28 |
-| colorbars | 3.11 / 1.96 | 1.55 / 1.00 | 1.29 / 0.82 | 3.02 / 1.85 | 2.40 / 2.38 |
-| mandelbrot | 1.63 / 1.72 | 0.77 / 0.79 | 0.72 / 0.76 | 2.44 / 1.95 | 2.27 / 2.27 |
-| atari2600 | 44.44 / 51.03 | 27.99 / 32.13 | 17.03 / 19.26 | 2.89 / 1.99 | 2.61 / 2.65 |
-| vgadonut | 9.18 / 5.30 | 4.86 / 2.80 | 3.20 / 1.93 | 3.54 / 1.75 | 2.86 / 2.74 |
-| cfib_demo | 1.99 / 2.47 | 0.96 / 1.35 | 0.85 / 1.15 | 3.32 / 1.96 | 2.34 / 2.14 |
-| nyan | 2.72 / 2.09 | 1.54 / 1.19 | 1.29 / 1.01 | 3.69 / 1.81 | 2.11 / 2.08 |
-| metaballs | 1.84 / 2.46 | 0.80 / 1.17 | 0.76 / 1.15 | 2.60 / 2.19 | 2.41 / 2.14 |
-| tomkeddie_a | 1.90 / 2.03 | 0.91 / 1.03 | 0.86 / 0.94 | 2.54 / 1.94 | 2.21 / 2.17 |
+| project | vgch2, first | vgch2, last | planar, first | planar, last | events, first | events, last | raw, first | raw, last | vgch2 over events, first | vgch2 over events, last |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 37.76 | 20.45 | 22.99 | 12.45 | 14.00 | 7.52 | 2.59 | 1.60 | 2.70 | 2.72 |
+| rle_vga | 64.99 | 35.96 | 30.69 | 17.55 | 21.14 | 11.40 | 2.27 | 1.43 | 3.07 | 3.15 |
+| dvd_screensaver | 1.82 | 1.53 | 0.82 | 0.69 | 0.88 | 0.67 | 2.57 | 1.85 | 2.07 | 2.28 |
+| colorbars | 3.11 | 1.96 | 1.55 | 1.00 | 1.29 | 0.82 | 3.02 | 1.85 | 2.40 | 2.38 |
+| mandelbrot | 1.63 | 1.72 | 0.77 | 0.79 | 0.72 | 0.76 | 2.44 | 1.95 | 2.27 | 2.27 |
+| atari2600 | 44.44 | 51.03 | 27.99 | 32.13 | 17.03 | 19.26 | 2.89 | 1.99 | 2.61 | 2.65 |
+| vgadonut | 9.18 | 5.30 | 4.86 | 2.80 | 3.20 | 1.93 | 3.54 | 1.75 | 2.86 | 2.74 |
+| cfib_demo | 1.99 | 2.47 | 0.96 | 1.35 | 0.85 | 1.15 | 3.32 | 1.96 | 2.34 | 2.14 |
+| nyan | 2.72 | 2.09 | 1.54 | 1.19 | 1.29 | 1.01 | 3.69 | 1.81 | 2.11 | 2.08 |
+| metaballs | 1.84 | 2.46 | 0.80 | 1.17 | 0.76 | 1.15 | 2.60 | 2.19 | 2.41 | 2.14 |
+| tomkeddie_a | 1.90 | 2.03 | 0.91 | 1.03 | 0.86 | 0.94 | 2.54 | 1.94 | 2.21 | 2.17 |
+
+#### FST, VCD and LXT2 over vgch2, both from the same replay run (`writer`)
+
+The tables above take vgch2 from `writer2` and FST, VCD and LXT2 from `writer`. These ratios divide within the `writer` run alone, so a run's own drift cancels.
+
+| project | FST over vgch2 | VCD over vgch2 | LXT2 over vgch2 |
+|---|---:|---:|---:|
+| nyancat | 4.05 | 2.91 | 36.40 |
+| rle_vga | 5.10 | 3.95 | 42.39 |
+| dvd_screensaver | 0.72 | 0.74 | 5.70 |
+| colorbars | 1.91 | 1.45 | 22.66 |
+| mandelbrot | 0.86 | 0.72 | 5.42 |
+| atari2600 | 4.14 | 2.96 | 40.83 |
+| vgadonut | 3.08 | 2.22 | 27.42 |
+| cfib_demo | 1.82 | 1.21 | 15.78 |
+| nyan | 1.71 | 1.19 | 17.41 |
+| metaballs | 0.61 | 0.63 | 3.56 |
+| tomkeddie_a | 1.11 | 0.82 | 9.47 |
 
 #### The replayed chunks against the whole trace
 
@@ -562,11 +581,29 @@ Source: `results/writer2` (vgch2, runs, planar, events, changelog, raw) and `res
 | metaballs | 99 | 104 | 3.5 | 0.234 | 0.235 | 0.57 to 0.59 |
 | tomkeddie_a | 97 | 102 | 6.7 | 0.647 | 0.647 | 0.57 to 0.58 |
 
+### The lean writer writes vgacap's file
+
+Each published trace replayed, whole and compressed, through the lean writer (vgacap's trace_write.c with push2's slow path replaced) and through vgacap's own (vgch2), then compared with the published file by `cmp` (test_lean.sh, run_all.sh stage lean). These runs check the bytes; their times are not a measurement (unpinned beside other work).
+
+| project | published bytes | lean bytes | lean against published | vgch2 bytes | vgch2 against published |
+|---|---:|---:|---:|---:|---:|
+| nyancat | 416,434,073 | 416,434,073 | identical | 416,434,073 | identical |
+| rle_vga | 18,388,738 | 18,388,738 | identical | 18,388,738 | identical |
+| dvd_screensaver | 1,306,540 | 1,306,540 | identical | 1,306,540 | identical |
+| colorbars | 556,030 | 556,030 | identical | 556,030 | identical |
+| mandelbrot | 14,719,301 | 14,719,301 | identical | 14,719,301 | identical |
+| atari2600 | 596,590,941 | 596,590,941 | identical | 596,590,941 | identical |
+| vgadonut | 167,330,036 | 167,330,036 | identical | 167,330,036 | identical |
+| cfib_demo | 20,589,332 | 20,589,332 | identical | 20,589,332 | identical |
+| nyan | 51,778,941 | 51,778,941 | identical | 51,778,941 | identical |
+| metaballs | 1,332,139 | 1,332,139 | identical | 1,332,139 | identical |
+| tomkeddie_a | 113,342 | 113,342 | identical | 113,342 | identical |
+
 ### Simulation check: the Verilator loop, in one process
 
-#### Two CPUs a process: the simulation thread on one, the writers' threads on either
+#### First round, two CPUs a process: the simulation thread on one, the writers' threads on either
 
-Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks (262 M clocks) a process (bench_tick.cpp). As in a job's two-CPU scope. 4 processes (tick2a, tick2b, tick2c, tick2d), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
+Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks (262 M clocks) a process (bench_tick.cpp). As in a job's two-CPU scope. Superseded for R1 by fix round 1's set below; its runs writer is the first prototype, whose blocks split differently from vgch2's. 4 processes (tick2a, tick2b, tick2c, tick2d), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
 
 ##### Across the processes: ns per clock, median of the processes' estimates [lowest, highest]
 
@@ -588,22 +625,22 @@ Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,0
 
 | project | process | untraced ns per clock | vgch2 | runs | events | changelog | raw | raw_small |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | tick2a | 228.8 | 31.1 [28.8, 33.4] | 16.3 [13.9, 18.8] | 13.2 [10.6, 15.7] | 16.3 [13.9, 18.9] | 9.7 [7.3, 12.0] | 7.8 [5.8, 9.8] |
-| nyancat | tick2b | 217.1 | 30.8 [29.0, 32.5] | 18.5 [16.7, 20.4] | 13.8 [12.3, 15.3] | 15.3 [13.7, 16.9] | 8.2 [6.8, 9.8] | 8.4 [6.8, 10.1] |
-| nyancat | tick2c | 189.6 | 26.1 [25.1, 27.3] | 14.7 [13.4, 15.8] | 12.6 [11.3, 13.9] | 20.9 [19.5, 22.1] | 6.5 [5.2, 7.8] | 9.3 [8.2, 10.4] |
-| nyancat | tick2d | 193.1 | 27.2 [25.8, 28.6] | 14.1 [12.6, 15.6] | 11.8 [10.6, 12.9] | 11.9 [10.4, 13.2] | 5.8 [4.7, 6.9] | 6.0 [4.6, 7.3] |
-| rle_vga | tick2a | 269.3 | 57.1 [55.4, 58.9] | 34.2 [32.2, 36.0] | 21.9 [19.9, 23.9] | 16.4 [14.5, 18.2] | 9.2 [7.6, 11.0] | 8.2 [6.5, 9.9] |
-| rle_vga | tick2b | 283.5 | 61.3 [59.4, 63.3] | 38.4 [36.4, 40.3] | 23.4 [22.0, 24.8] | 19.9 [18.2, 21.9] | 11.3 [9.8, 12.7] | 10.7 [9.1, 12.4] |
-| rle_vga | tick2c | 254.7 | 54.4 [53.0, 55.8] | 34.1 [32.5, 35.6] | 17.6 [16.0, 19.2] | 14.4 [12.6, 16.1] | 6.2 [4.5, 7.8] | 7.6 [6.4, 8.8] |
-| rle_vga | tick2d | 251.2 | 52.9 [50.9, 55.1] | 30.5 [28.2, 32.8] | 16.4 [14.8, 18.2] | 13.7 [11.8, 15.6] | 6.4 [4.8, 8.0] | 6.0 [3.7, 8.2] |
-| colorbars | tick2a | 176.3 | 6.5 [5.6, 7.3] | 3.8 [2.6, 4.9] | 3.6 [2.4, 4.7] | 2.9 [1.8, 4.2] | 7.4 [6.4, 8.5] | 8.6 [7.7, 9.6] |
-| colorbars | tick2b | 206.8 | 7.3 [5.2, 9.4] | 10.8 [8.9, 12.8] | 3.9 [2.0, 5.5] | 4.8 [2.7, 6.8] | 9.2 [7.4, 11.0] | 8.7 [6.6, 10.8] |
-| colorbars | tick2c | 173.9 | 6.8 [6.1, 7.6] | 4.7 [3.7, 5.8] | 5.0 [4.0, 6.0] | 4.8 [3.7, 5.9] | 9.2 [8.2, 10.3] | 8.7 [7.9, 9.5] |
-| colorbars | tick2d | 183.4 | 5.4 [3.8, 7.1] | 3.5 [1.8, 5.1] | 1.5 [0.3, 2.8] | 2.3 [0.7, 3.9] | 6.3 [5.0, 7.7] | 5.5 [3.9, 7.2] |
+| nyancat | tick2a | 228.8 | 31.1 [28.9, 33.3] | 16.3 [13.9, 18.8] | 13.2 [10.6, 15.7] | 16.3 [13.7, 18.8] | 9.7 [7.5, 12.0] | 7.8 [5.9, 9.9] |
+| nyancat | tick2b | 217.1 | 30.8 [28.9, 32.5] | 18.5 [16.7, 20.3] | 13.8 [12.3, 15.3] | 15.3 [13.6, 17.0] | 8.2 [6.8, 9.7] | 8.4 [6.8, 10.0] |
+| nyancat | tick2c | 189.6 | 26.1 [25.0, 27.3] | 14.7 [13.4, 15.9] | 12.6 [11.4, 13.8] | 20.9 [19.6, 22.1] | 6.5 [5.2, 7.8] | 9.3 [8.2, 10.4] |
+| nyancat | tick2d | 193.1 | 27.2 [25.8, 28.7] | 14.1 [12.7, 15.6] | 11.8 [10.6, 13.0] | 11.9 [10.4, 13.2] | 5.8 [4.7, 6.9] | 6.0 [4.6, 7.3] |
+| rle_vga | tick2a | 269.3 | 57.1 [55.3, 58.9] | 34.2 [32.4, 36.1] | 21.9 [19.8, 23.9] | 16.4 [14.5, 18.3] | 9.2 [7.5, 10.9] | 8.2 [6.6, 10.0] |
+| rle_vga | tick2b | 283.5 | 61.3 [59.4, 63.3] | 38.4 [36.4, 40.3] | 23.4 [22.0, 24.8] | 19.9 [18.1, 21.8] | 11.3 [10.0, 12.8] | 10.7 [9.0, 12.4] |
+| rle_vga | tick2c | 254.7 | 54.4 [53.2, 55.9] | 34.1 [32.5, 35.7] | 17.6 [16.0, 19.2] | 14.4 [12.6, 15.9] | 6.2 [4.3, 7.8] | 7.6 [6.5, 8.7] |
+| rle_vga | tick2d | 251.2 | 52.9 [50.8, 55.1] | 30.5 [28.3, 32.6] | 16.4 [14.9, 18.2] | 13.7 [11.8, 15.6] | 6.4 [4.8, 8.1] | 6.0 [3.8, 8.1] |
+| colorbars | tick2a | 176.3 | 6.5 [5.6, 7.4] | 3.8 [2.7, 4.9] | 3.6 [2.5, 4.8] | 2.9 [1.7, 3.9] | 7.4 [6.3, 8.5] | 8.6 [7.6, 9.5] |
+| colorbars | tick2b | 206.8 | 7.3 [5.2, 9.4] | 10.8 [8.9, 12.7] | 3.9 [2.3, 5.7] | 4.8 [2.8, 6.8] | 9.2 [7.5, 10.9] | 8.7 [6.4, 10.9] |
+| colorbars | tick2c | 173.9 | 6.8 [6.1, 7.6] | 4.7 [3.8, 5.7] | 5.0 [4.0, 6.0] | 4.8 [3.6, 5.9] | 9.2 [8.2, 10.2] | 8.7 [7.9, 9.5] |
+| colorbars | tick2d | 183.4 | 5.4 [3.7, 7.1] | 3.5 [1.9, 5.2] | 1.5 [0.2, 2.9] | 2.3 [0.6, 4.0] | 6.3 [5.0, 7.6] | 5.5 [4.0, 7.1] |
 
-#### One CPU a process: the writers' threads share the simulation's core
+#### First round, one CPU a process: the writers' threads share the simulation's core
 
-Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks (262 M clocks) a process (bench_tick.cpp). The background threads compete with the simulation on its core, so candidates with heavy background work (raw, changelog, vgch2) are penalised. 7 processes (tick, tickB, tickC, tickD, tickE, tickF, tickG), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
+Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks (262 M clocks) a process (bench_tick.cpp). The background threads share the simulation's core. The thread CPU clock does not charge their time to the simulation thread; their cache traffic falls on whichever variant is running. 7 processes (tick, tickB, tickC, tickD, tickE, tickF, tickG), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
 
 ##### Across the processes: ns per clock, median of the processes' estimates [lowest, highest]
 
@@ -625,27 +662,27 @@ Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,0
 
 | project | process | untraced ns per clock | vgch2 | runs | events | changelog | raw | raw_small |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | tick | 252.8 | 43.8 [41.6, 46.1] | 21.3 [18.7, 23.9] | 29.6 [27.0, 32.3] | - | 11.7 [9.1, 14.0] | 12.2 [10.1, 14.2] |
-| nyancat | tickB | 195.1 | 23.9 [22.8, 24.9] | 11.8 [10.7, 13.0] | 8.6 [7.3, 9.8] | - | 3.4 [2.3, 4.5] | 4.1 [3.1, 5.1] |
-| nyancat | tickC | 194.5 | 36.5 [35.1, 37.8] | 15.2 [14.0, 16.6] | 12.8 [11.8, 13.7] | - | 6.7 [5.7, 7.6] | 8.1 [6.9, 9.3] |
-| nyancat | tickD | 197.7 | 16.8 [15.6, 18.0] | 5.1 [3.9, 6.2] | 2.5 [1.6, 3.5] | - | -2.9 [-4.0, -1.7] | -2.5 [-3.5, -1.5] |
-| nyancat | tickE | 195.7 | 34.9 [33.3, 36.4] | 17.8 [16.0, 19.6] | 15.5 [13.8, 17.3] | 15.4 [13.8, 17.1] | 6.8 [5.2, 8.6] | 7.5 [6.2, 8.9] |
-| nyancat | tickF | 196.7 | 34.2 [32.5, 36.0] | 18.0 [16.2, 19.8] | 15.3 [13.8, 16.6] | 12.9 [11.3, 14.6] | 11.9 [10.5, 13.2] | 7.8 [6.2, 9.6] |
-| nyancat | tickG | 190.3 | 36.3 [34.8, 37.8] | 16.5 [14.9, 18.1] | 15.1 [13.4, 16.8] | 11.0 [9.3, 12.7] | 6.0 [4.2, 7.5] | 8.5 [7.1, 9.9] |
-| rle_vga | tick | 330.3 | 71.0 [68.5, 73.3] | 46.9 [44.5, 49.2] | 26.4 [23.9, 28.7] | - | 11.3 [9.0, 13.7] | 17.3 [15.3, 19.4] |
-| rle_vga | tickB | 254.3 | 54.7 [52.9, 56.4] | 34.8 [32.8, 36.7] | 19.6 [17.6, 21.5] | - | 14.3 [12.6, 16.0] | 6.8 [5.4, 8.3] |
-| rle_vga | tickC | 254.9 | 56.1 [54.3, 58.1] | 33.9 [31.9, 35.7] | 17.9 [16.5, 19.5] | - | 7.6 [6.1, 8.8] | 6.7 [4.9, 8.6] |
-| rle_vga | tickD | 256.9 | 52.0 [50.0, 54.0] | 31.6 [29.8, 33.4] | 15.8 [14.3, 17.3] | - | 5.0 [3.1, 6.9] | 6.0 [4.5, 7.4] |
-| rle_vga | tickE | 259.8 | 50.7 [48.6, 52.8] | 32.5 [30.1, 34.8] | 15.7 [13.0, 18.4] | 15.1 [12.4, 17.8] | 9.8 [7.4, 12.2] | 11.3 [9.3, 13.5] |
-| rle_vga | tickF | 250.9 | 48.1 [46.1, 50.1] | 30.2 [28.2, 32.2] | 15.6 [14.2, 17.0] | 13.5 [11.6, 15.3] | 5.9 [4.5, 7.3] | 7.9 [6.3, 9.7] |
-| rle_vga | tickG | 267.3 | 51.3 [49.6, 53.0] | 35.4 [33.4, 37.4] | 17.1 [15.1, 19.1] | 15.0 [12.9, 17.2] | 15.5 [13.3, 17.5] | 6.7 [4.9, 8.2] |
-| colorbars | tick | 264.3 | 5.0 [3.5, 6.7] | 3.4 [1.6, 5.3] | 2.3 [0.5, 4.2] | - | 11.1 [9.2, 13.1] | 11.0 [9.2, 12.9] |
-| colorbars | tickB | 178.7 | 3.7 [2.9, 4.5] | 2.9 [1.9, 3.9] | 2.0 [0.9, 3.1] | - | 7.2 [6.1, 8.3] | 8.8 [7.9, 9.7] |
-| colorbars | tickC | 176.4 | 4.0 [3.1, 5.0] | 2.0 [1.1, 2.9] | 1.9 [1.1, 2.7] | - | 6.3 [5.5, 7.0] | 7.2 [6.3, 8.1] |
-| colorbars | tickD | 190.6 | 10.1 [8.8, 11.3] | 2.2 [0.9, 3.6] | 2.1 [1.0, 3.3] | - | 11.3 [9.9, 12.5] | 6.8 [5.6, 7.9] |
-| colorbars | tickE | 203.7 | -13.4 [-14.8, -12.0] | -15.9 [-17.6, -14.2] | -16.3 [-18.1, -14.6] | -16.0 [-17.8, -14.2] | -13.8 [-15.6, -12.2] | -12.4 [-13.8, -11.0] |
-| colorbars | tickF | 181.2 | 6.1 [4.6, 7.5] | 3.3 [1.8, 4.8] | 3.4 [2.2, 4.5] | 2.0 [0.5, 3.5] | 7.0 [5.8, 8.3] | 6.9 [5.5, 8.1] |
-| colorbars | tickG | 205.2 | 9.8 [8.2, 11.2] | 6.3 [4.7, 8.1] | 9.4 [7.7, 11.0] | 5.1 [3.3, 6.9] | 10.1 [8.4, 11.9] | 10.5 [9.0, 11.9] |
+| nyancat | tick | 252.8 | 43.8 [41.6, 46.1] | 21.3 [18.9, 23.7] | 29.6 [27.2, 32.3] | - | 11.7 [9.2, 14.2] | 12.2 [10.0, 14.4] |
+| nyancat | tickB | 195.1 | 23.9 [23.0, 25.0] | 11.8 [10.7, 13.0] | 8.6 [7.2, 9.8] | - | 3.4 [2.3, 4.6] | 4.1 [3.2, 5.1] |
+| nyancat | tickC | 194.5 | 36.5 [35.1, 37.9] | 15.2 [14.0, 16.5] | 12.8 [11.9, 13.8] | - | 6.7 [5.8, 7.7] | 8.1 [6.9, 9.2] |
+| nyancat | tickD | 197.7 | 16.8 [15.7, 18.0] | 5.1 [3.8, 6.3] | 2.5 [1.5, 3.5] | - | -2.9 [-4.0, -1.7] | -2.5 [-3.5, -1.5] |
+| nyancat | tickE | 195.7 | 34.9 [33.3, 36.4] | 17.8 [16.1, 19.5] | 15.5 [13.8, 17.4] | 15.4 [13.8, 17.1] | 6.8 [5.0, 8.5] | 7.5 [6.2, 8.8] |
+| nyancat | tickF | 196.7 | 34.2 [32.6, 35.9] | 18.0 [16.2, 19.7] | 15.3 [13.9, 16.7] | 12.9 [11.2, 14.6] | 11.9 [10.5, 13.2] | 7.8 [6.3, 9.6] |
+| nyancat | tickG | 190.3 | 36.3 [34.9, 37.7] | 16.5 [15.0, 18.1] | 15.1 [13.6, 16.8] | 11.0 [9.3, 12.6] | 6.0 [4.4, 7.6] | 8.5 [7.2, 9.9] |
+| rle_vga | tick | 330.3 | 71.0 [68.6, 73.3] | 46.9 [44.5, 49.2] | 26.4 [23.9, 28.9] | - | 11.3 [9.0, 13.6] | 17.3 [15.1, 19.5] |
+| rle_vga | tickB | 254.3 | 54.7 [52.8, 56.5] | 34.8 [33.0, 36.7] | 19.6 [17.7, 21.7] | - | 14.3 [12.6, 15.9] | 6.8 [5.5, 8.1] |
+| rle_vga | tickC | 254.9 | 56.1 [54.2, 58.0] | 33.9 [32.0, 35.9] | 17.9 [16.3, 19.4] | - | 7.6 [6.2, 8.9] | 6.7 [4.9, 8.5] |
+| rle_vga | tickD | 256.9 | 52.0 [49.8, 53.8] | 31.6 [29.7, 33.5] | 15.8 [14.2, 17.4] | - | 5.0 [3.0, 6.8] | 6.0 [4.5, 7.5] |
+| rle_vga | tickE | 259.8 | 50.7 [48.5, 52.9] | 32.5 [30.0, 34.9] | 15.7 [13.0, 18.3] | 15.1 [12.5, 17.8] | 9.8 [7.2, 12.1] | 11.3 [9.3, 13.5] |
+| rle_vga | tickF | 250.9 | 48.1 [46.1, 50.0] | 30.2 [28.3, 32.0] | 15.6 [14.1, 16.9] | 13.5 [11.6, 15.4] | 5.9 [4.5, 7.2] | 7.9 [6.0, 9.7] |
+| rle_vga | tickG | 267.3 | 51.3 [49.7, 53.0] | 35.4 [33.6, 37.3] | 17.1 [15.2, 19.1] | 15.0 [13.1, 17.2] | 15.5 [13.6, 17.6] | 6.7 [5.1, 8.3] |
+| colorbars | tick | 264.3 | 5.0 [3.4, 6.6] | 3.4 [1.6, 5.2] | 2.3 [0.5, 4.1] | - | 11.1 [9.2, 13.1] | 11.0 [9.1, 12.8] |
+| colorbars | tickB | 178.7 | 3.7 [2.9, 4.6] | 2.9 [1.9, 3.9] | 2.0 [0.9, 3.1] | - | 7.2 [6.2, 8.3] | 8.8 [7.8, 9.6] |
+| colorbars | tickC | 176.4 | 4.0 [3.1, 5.0] | 2.0 [1.1, 2.9] | 1.9 [1.1, 2.7] | - | 6.3 [5.5, 7.1] | 7.2 [6.3, 8.1] |
+| colorbars | tickD | 190.6 | 10.1 [8.8, 11.3] | 2.2 [0.9, 3.6] | 2.1 [1.0, 3.2] | - | 11.3 [9.8, 12.6] | 6.8 [5.6, 8.0] |
+| colorbars | tickE | 203.7 | -13.4 [-14.8, -11.9] | -15.9 [-17.6, -14.3] | -16.3 [-18.1, -14.6] | -16.0 [-17.6, -14.2] | -13.8 [-15.5, -12.3] | -12.4 [-13.9, -11.0] |
+| colorbars | tickF | 181.2 | 6.1 [4.6, 7.6] | 3.3 [1.8, 4.7] | 3.4 [2.3, 4.6] | 2.0 [0.6, 3.5] | 7.0 [5.8, 8.2] | 6.9 [5.4, 8.3] |
+| colorbars | tickG | 205.2 | 9.8 [8.2, 11.3] | 6.3 [4.6, 8.0] | 9.4 [7.8, 11.2] | 5.1 [3.4, 6.7] | 10.1 [8.3, 11.9] | 10.5 [9.0, 11.9] |
 
 #### Replay against the in-process check, ns per clock
 
@@ -654,6 +691,210 @@ Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,0
 | nyancat | 20.45 | 29.00 | 10.69 | 15.50 | 7.52 | 12.90 | 4.67 | 15.80 | 1.60 | 7.37 |
 | rle_vga | 35.96 | 55.76 | 21.57 | 34.13 | 11.40 | 19.73 | 5.11 | 15.39 | 1.43 | 7.81 |
 | colorbars | 1.96 | 6.64 | 0.91 | 4.28 | 0.82 | 3.78 | 0.73 | 3.84 | 1.85 | 8.28 |
+| atari2600 | 51.03 | - | 27.47 | - | 19.26 | - | 10.84 | - | 1.99 | - |
+| vgadonut | 5.30 | - | 2.76 | - | 1.93 | - | 1.48 | - | 1.75 | - |
+
+### Simulation check, fix round 1: the Verilator loop, every candidate
+
+#### The main set: R1's figures
+
+Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks (262 M clocks) a process (bench_tick.cpp). Two CPUs a process, the simulation thread pinned to the first. Variants: vgch2 (vgacap's writer), lean (vgacap's writer with push2's slow path replaced), events (zstd 1 of the events stream), evplanar (events converted to planar by the real converter), planar (planar written on the simulation thread) and changelog (converted to planar). 4 processes (fx1a, fx1b, fx1c, fx1d), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
+
+##### Across the processes: ns per clock, median of the processes' estimates [lowest, highest]
+
+| project | vgch2 | lean | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|---:|
+| nyancat | 37.1 [33.8, 41.7] | 33.2 [30.2, 38.0] | 15.4 [13.2, 17.2] | 18.3 [13.2, 29.0] | 24.9 [22.7, 27.1] | 18.5 [15.7, 22.4] |
+| rle_vga | 60.9 [59.1, 63.6] | 54.5 [52.9, 58.3] | 23.2 [20.4, 24.8] | 24.7 [22.0, 29.6] | 34.0 [29.8, 36.8] | 17.9 [13.0, 22.1] |
+| colorbars | 6.1 [3.3, 9.3] | 7.2 [4.7, 10.7] | 4.0 [2.4, 6.8] | 3.8 [1.7, 7.2] | 5.7 [4.6, 7.0] | 4.9 [3.8, 7.0] |
+| atari2600 | 38.2 [35.2, 40.8] | 36.5 [33.1, 38.4] | 16.9 [15.4, 18.6] | 18.4 [16.1, 20.4] | 27.3 [24.4, 33.0] | 22.1 [17.2, 23.5] |
+| vgadonut | 1.1 [-3.5, 4.4] | 1.7 [-4.7, 4.6] | -0.2 [-7.1, 3.2] | -0.3 [-4.8, 10.4] | -1.8 [-5.5, 2.7] | -0.4 [-3.7, 1.6] |
+
+##### The same as % of the untraced model's CPU: median [lowest, highest]; the budget is 5%
+
+| project | vgch2 | lean | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|---:|
+| nyancat | 15.4 [15.0, 16.0] | 14.1 [12.8, 14.6] | 6.3 [5.5, 7.3] | 7.3 [5.3, 13.0] | 10.5 [9.1, 11.0] | 8.0 [6.3, 8.6] |
+| rle_vga | 20.5 [20.0, 20.9] | 18.5 [17.8, 19.0] | 7.9 [6.8, 8.1] | 8.3 [7.4, 9.9] | 11.5 [10.0, 12.0] | 6.1 [4.4, 7.2] |
+| colorbars | 2.7 [1.6, 3.6] | 3.2 [2.2, 4.2] | 1.8 [1.2, 2.6] | 1.7 [0.8, 2.8] | 2.4 [2.1, 3.2] | 2.2 [1.8, 2.7] |
+| atari2600 | 7.9 [7.5, 8.3] | 7.4 [7.3, 7.8] | 3.6 [3.0, 3.9] | 3.8 [3.4, 4.2] | 5.6 [5.2, 6.7] | 4.4 [3.6, 5.2] |
+| vgadonut | 0.4 [-1.1, 1.7] | 0.6 [-1.5, 1.8] | -0.1 [-2.2, 1.2] | -0.1 [-1.5, 3.9] | -0.6 [-1.7, 1.0] | -0.1 [-1.2, 0.6] |
+
+##### Each process: estimate [95% bootstrap interval over its chunks], ns per clock
+
+| project | process | untraced ns per clock | vgch2 | lean | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | fx1a | 248.4 | 37.1 [34.3, 39.9] | 31.9 [28.8, 34.8] | 13.7 [10.6, 16.5] | 13.2 [10.0, 16.3] | 22.7 [19.6, 25.8] | 15.7 [13.1, 18.1] |
+| nyancat | fx1b | 260.5 | 41.7 [38.5, 44.8] | 38.0 [34.7, 41.3] | 17.1 [13.7, 20.7] | 21.6 [17.9, 24.8] | 27.1 [23.7, 30.2] | 22.4 [19.6, 25.1] |
+| nyancat | fx1c | 222.6 | 33.8 [31.9, 35.7] | 30.2 [28.0, 32.2] | 13.2 [11.7, 15.0] | 29.0 [27.1, 30.8] | 23.8 [22.0, 25.5] | 16.7 [14.7, 18.6] |
+| nyancat | fx1d | 236.5 | 37.0 [34.4, 39.2] | 34.5 [32.2, 36.8] | 17.2 [15.0, 19.3] | 15.0 [13.1, 16.9] | 25.9 [23.8, 27.8] | 20.2 [17.9, 22.5] |
+| rle_vga | fx1a | 297.7 | 59.5 [56.8, 62.3] | 52.9 [49.6, 55.8] | 20.4 [17.4, 23.3] | 29.6 [26.4, 32.8] | 29.8 [26.5, 33.0] | 13.0 [10.2, 15.4] |
+| rle_vga | fx1b | 297.3 | 62.2 [59.0, 65.3] | 55.0 [51.3, 58.5] | 23.2 [19.9, 26.4] | 22.0 [18.6, 25.2] | 33.5 [30.4, 36.7] | 18.5 [15.9, 21.3] |
+| rle_vga | fx1c | 292.2 | 59.1 [56.5, 62.0] | 54.0 [50.9, 57.2] | 23.1 [20.6, 25.7] | 24.4 [21.9, 27.0] | 34.5 [32.3, 36.8] | 17.2 [14.6, 20.1] |
+| rle_vga | fx1d | 306.0 | 63.6 [61.1, 66.0] | 58.3 [55.8, 60.9] | 24.8 [22.4, 27.0] | 25.0 [22.9, 27.2] | 36.8 [34.8, 39.0] | 22.1 [19.6, 24.5] |
+| colorbars | fx1a | 220.8 | 4.7 [2.6, 6.8] | 6.8 [4.3, 9.3] | 5.3 [2.9, 7.9] | 5.6 [3.2, 8.3] | 7.0 [4.4, 9.6] | 5.6 [3.6, 7.6] |
+| colorbars | fx1b | 230.1 | 7.4 [5.2, 9.6] | 7.6 [4.5, 10.5] | 2.8 [-0.3, 5.8] | 1.9 [-1.5, 4.7] | 4.7 [1.6, 7.6] | 4.2 [1.7, 6.7] |
+| colorbars | fx1c | 256.0 | 9.3 [6.2, 12.0] | 10.7 [7.9, 13.3] | 6.8 [4.5, 9.1] | 7.2 [4.6, 10.0] | 6.6 [4.2, 8.9] | 7.0 [4.3, 9.9] |
+| colorbars | fx1d | 208.5 | 3.3 [1.5, 5.2] | 4.7 [3.0, 6.2] | 2.4 [0.7, 4.3] | 1.7 [0.2, 3.2] | 4.6 [2.9, 6.1] | 3.8 [1.9, 5.6] |
+| atari2600 | fx1a | 489.2 | 40.8 [37.5, 43.9] | 38.4 [34.8, 42.0] | 18.4 [14.7, 21.9] | 20.4 [16.9, 24.1] | 33.0 [29.3, 36.5] | 23.2 [20.0, 26.4] |
+| atari2600 | fx1b | 510.6 | 38.4 [34.7, 42.2] | 38.3 [34.0, 42.4] | 15.4 [11.3, 19.6] | 20.1 [16.2, 23.9] | 29.8 [25.8, 33.7] | 20.9 [17.2, 24.3] |
+| atari2600 | fx1c | 451.5 | 35.2 [32.8, 37.6] | 33.1 [30.5, 35.3] | 15.4 [13.2, 17.6] | 16.6 [14.3, 18.8] | 24.4 [22.3, 26.4] | 23.5 [21.1, 26.1] |
+| atari2600 | fx1d | 472.6 | 37.9 [34.9, 40.9] | 34.8 [31.8, 37.7] | 18.6 [15.6, 21.5] | 16.1 [13.4, 18.7] | 24.7 [22.2, 27.3] | 17.2 [14.1, 20.2] |
+| vgadonut | fx1a | 264.1 | 4.4 [2.1, 6.5] | 4.6 [1.8, 7.3] | 3.2 [0.2, 6.1] | 10.4 [7.6, 13.2] | 2.7 [-0.1, 5.5] | 1.6 [-0.6, 3.8] |
+| vgadonut | fx1b | 287.2 | 3.0 [0.6, 5.4] | 3.4 [0.6, 6.6] | 0.6 [-2.4, 3.4] | 0.7 [-2.5, 3.7] | -0.7 [-3.7, 2.1] | 0.7 [-1.6, 3.1] |
+| vgadonut | fx1c | 281.5 | -0.8 [-3.1, 1.5] | -0.1 [-2.6, 2.5] | -1.0 [-3.1, 1.0] | -1.4 [-3.9, 1.1] | -2.8 [-5.0, -0.7] | -1.5 [-4.1, 1.1] |
+| vgadonut | fx1d | 318.4 | -3.5 [-6.4, -0.7] | -4.7 [-7.6, -2.0] | -7.1 [-10.0, -4.3] | -4.8 [-7.7, -2.3] | -5.5 [-8.1, -2.9] | -3.7 [-6.5, -0.9] |
+
+#### The lean writer against vgacap's, in the loop: lean over vgch2, each process's ratio, median [lowest, highest]
+
+Both write the same file (the lean writer's table). Each process's lean estimate over its vgch2 estimate, ns per clock over the untraced model.
+
+| project | lean over vgch2 |
+|---|---:|
+| nyancat | 0.90 [0.86, 0.93] |
+| rle_vga | 0.90 [0.88, 0.92] |
+| colorbars | 1.28 [1.03, 1.43] |
+| atari2600 | 0.94 [0.92, 1.00] |
+| vgadonut | 1.10 [1.06, 1.15] |
+
+#### Raw, in processes of its own
+
+Raw capture with the untraced model only, so that no other variant shares its process, its L3 traffic or its turn. 4 processes (fx1ra, fx1rb, fx1rc, fx1rd), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
+
+##### Across the processes: ns per clock, median of the processes' estimates [lowest, highest]
+
+| project | raw |
+|---|---:|
+| nyancat | 15.0 [12.8, 19.9] |
+| rle_vga | 9.6 [6.6, 13.2] |
+| colorbars | 11.4 [10.8, 13.1] |
+| atari2600 | 13.6 [10.4, 19.4] |
+| vgadonut | 9.5 [8.9, 11.6] |
+
+##### The same as % of the untraced model's CPU: median [lowest, highest]; the budget is 5%
+
+| project | raw |
+|---|---:|
+| nyancat | 6.0 [4.5, 6.3] |
+| rle_vga | 3.0 [2.2, 3.4] |
+| colorbars | 4.8 [4.5, 5.2] |
+| atari2600 | 2.6 [1.9, 3.8] |
+| vgadonut | 3.2 [2.8, 3.7] |
+
+##### Each process: estimate [95% bootstrap interval over its chunks], ns per clock
+
+| project | process | untraced ns per clock | raw |
+|---|---:|---:|---:|
+| nyancat | fx1ra | 247.3 | 15.3 [13.3, 17.4] |
+| nyancat | fx1rb | 250.4 | 14.6 [13.4, 15.9] |
+| nyancat | fx1rc | 281.5 | 12.8 [10.1, 15.2] |
+| nyancat | fx1rd | 317.1 | 19.9 [17.3, 22.4] |
+| rle_vga | fx1ra | 312.6 | 9.2 [6.3, 12.0] |
+| rle_vga | fx1rb | 306.2 | 6.6 [4.1, 9.1] |
+| rle_vga | fx1rc | 384.8 | 13.2 [9.6, 17.3] |
+| rle_vga | fx1rd | 331.6 | 10.0 [7.3, 12.7] |
+| colorbars | fx1ra | 250.4 | 13.1 [10.5, 15.8] |
+| colorbars | fx1rb | 218.8 | 11.2 [9.4, 13.1] |
+| colorbars | fx1rc | 240.5 | 10.8 [8.8, 12.8] |
+| colorbars | fx1rd | 256.7 | 11.5 [9.1, 14.0] |
+| atari2600 | fx1ra | 520.2 | 11.1 [7.7, 14.4] |
+| atari2600 | fx1rb | 508.6 | 19.4 [16.5, 22.4] |
+| atari2600 | fx1rc | 542.7 | 16.2 [13.0, 19.3] |
+| atari2600 | fx1rd | 546.8 | 10.4 [7.3, 13.6] |
+| vgadonut | fx1ra | 287.8 | 8.9 [6.8, 10.9] |
+| vgadonut | fx1rb | 294.4 | 9.6 [7.6, 11.9] |
+| vgadonut | fx1rc | 339.6 | 9.4 [6.2, 12.7] |
+| vgadonut | fx1rd | 308.4 | 11.6 [9.5, 13.7] |
+
+#### Unpinned, in a systemd scope with CPUQuota=200%, as a job runs
+
+One process a project, the main set's variants, not pinned: the scheduler places its threads, as for a job. 1 processes (fx1s), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
+
+##### Across the processes: ns per clock, median of the processes' estimates [lowest, highest]
+
+| project | vgch2 | lean | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|---:|
+| nyancat | 31.7 [31.7, 31.7] | 28.5 [28.5, 28.5] | 13.6 [13.6, 13.6] | 13.0 [13.0, 13.0] | 22.1 [22.1, 22.1] | 17.3 [17.3, 17.3] |
+| rle_vga | 59.0 [59.0, 59.0] | 49.6 [49.6, 49.6] | 20.6 [20.6, 20.6] | 22.1 [22.1, 22.1] | 28.6 [28.6, 28.6] | 16.2 [16.2, 16.2] |
+| colorbars | 2.5 [2.5, 2.5] | 4.5 [4.5, 4.5] | 14.8 [14.8, 14.8] | 3.3 [3.3, 3.3] | 2.2 [2.2, 2.2] | 3.5 [3.5, 3.5] |
+| atari2600 | 34.0 [34.0, 34.0] | 33.6 [33.6, 33.6] | 16.9 [16.9, 16.9] | 17.1 [17.1, 17.1] | 23.9 [23.9, 23.9] | 13.7 [13.7, 13.7] |
+| vgadonut | 0.6 [0.6, 0.6] | 2.3 [2.3, 2.3] | 0.6 [0.6, 0.6] | 0.8 [0.8, 0.8] | -0.5 [-0.5, -0.5] | -0.5 [-0.5, -0.5] |
+
+##### The same as % of the untraced model's CPU: median [lowest, highest]; the budget is 5%
+
+| project | vgch2 | lean | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|---:|
+| nyancat | 15.3 [15.3, 15.3] | 13.7 [13.7, 13.7] | 6.5 [6.5, 6.5] | 6.3 [6.3, 6.3] | 10.6 [10.6, 10.6] | 8.4 [8.4, 8.4] |
+| rle_vga | 22.6 [22.6, 22.6] | 19.0 [19.0, 19.0] | 7.9 [7.9, 7.9] | 8.5 [8.5, 8.5] | 11.0 [11.0, 11.0] | 6.2 [6.2, 6.2] |
+| colorbars | 1.4 [1.4, 1.4] | 2.5 [2.5, 2.5] | 8.0 [8.0, 8.0] | 1.8 [1.8, 1.8] | 1.2 [1.2, 1.2] | 1.9 [1.9, 1.9] |
+| atari2600 | 8.1 [8.1, 8.1] | 7.9 [7.9, 7.9] | 4.0 [4.0, 4.0] | 4.0 [4.0, 4.0] | 5.7 [5.7, 5.7] | 3.3 [3.3, 3.3] |
+| vgadonut | 0.3 [0.3, 0.3] | 1.0 [1.0, 1.0] | 0.2 [0.2, 0.2] | 0.3 [0.3, 0.3] | -0.2 [-0.2, -0.2] | -0.2 [-0.2, -0.2] |
+
+##### Each process: estimate [95% bootstrap interval over its chunks], ns per clock
+
+| project | process | untraced ns per clock | vgch2 | lean | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | fx1s | 207.6 | 31.7 [29.9, 33.5] | 28.5 [26.9, 30.3] | 13.6 [11.4, 15.7] | 13.0 [11.0, 14.9] | 22.1 [19.9, 24.0] | 17.3 [15.3, 19.2] |
+| rle_vga | fx1s | 261.2 | 59.0 [57.1, 61.1] | 49.6 [47.6, 51.6] | 20.6 [18.2, 23.0] | 22.1 [20.0, 24.2] | 28.6 [26.4, 30.9] | 16.2 [13.9, 18.3] |
+| colorbars | fx1s | 184.2 | 2.5 [1.3, 3.8] | 4.5 [3.0, 6.0] | 14.8 [13.1, 16.5] | 3.3 [1.7, 5.0] | 2.2 [0.6, 3.9] | 3.5 [1.9, 5.1] |
+| atari2600 | fx1s | 422.1 | 34.0 [31.9, 36.4] | 33.6 [31.2, 35.9] | 16.9 [14.1, 19.9] | 17.1 [14.5, 19.9] | 23.9 [21.1, 26.7] | 13.7 [11.2, 16.4] |
+| vgadonut | fx1s | 239.8 | 0.6 [-1.2, 2.5] | 2.3 [0.4, 4.2] | 0.6 [-1.6, 2.9] | 0.8 [-1.3, 2.9] | -0.5 [-2.7, 1.7] | -0.5 [-2.7, 1.7] |
+
+#### Stalls: wall time the simulation thread spent not running, over the untraced model's
+
+Per process, the sum over chunks of (wall - thread CPU) for the variant minus the same for the untraced model, ns per clock: median of the processes [lowest, highest]. A stall (the simulation thread waiting for its writer's thread) shows here and nowhere in the CPU figures. The next table counts the waits themselves.
+
+| project | vgch2 | lean | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|---:|
+| nyancat | 2.00 [0.26, 2.98] | 1.47 [-0.07, 3.31] | 0.67 [-1.27, 3.19] | 2.16 [-2.19, 3.02] | -0.93 [-2.56, -0.39] | 0.88 [-0.92, 2.13] |
+| rle_vga | 2.84 [0.75, 3.92] | 1.94 [-0.07, 5.98] | 0.95 [-1.88, 5.82] | 1.33 [-1.52, 4.38] | -0.11 [-0.37, 4.34] | 0.76 [-0.60, 2.07] |
+| colorbars | 0.12 [-0.32, 0.21] | 0.11 [-0.26, 0.20] | 0.11 [-0.14, 0.65] | 0.11 [-0.19, 0.19] | 0.15 [-0.00, 0.32] | 0.17 [0.06, 0.35] |
+| atari2600 | 2.94 [0.87, 4.36] | 3.04 [1.09, 5.85] | 2.61 [-0.55, 3.87] | 1.97 [-2.07, 3.41] | -0.83 [-1.17, 0.45] | 1.75 [0.18, 3.34] |
+| vgadonut | 0.04 [-0.62, 0.43] | -0.01 [-0.66, 0.30] | 0.13 [-0.12, 0.52] | 0.01 [-0.53, 0.53] | 0.06 [-0.22, 0.44] | 0.04 [-0.63, 0.28] |
+
+#### Hand-overs that waited: the study writers' own count, summed over the processes
+
+A hand-over waits when the writer's thread still holds the other buffer. vgacap's writer (vgch2, lean) keeps no such count; the table above covers it. The wait's wall time, summed, is in the last column.
+
+| project | events | evplanar | planar | changelog | wall s waited, all |
+|---|---:|---:|---:|---:|---:|
+| nyancat | 0 | 0 | 0 | 0 | 0.000 |
+| rle_vga | 0 | 0 | 0 | 0 | 0.000 |
+| colorbars | 0 | 0 | 0 | 0 | 0.000 |
+| atari2600 | 0 | 0 | 0 | 0 | 0.000 |
+| vgadonut | 0 | 0 | 0 | 0 | 0.000 |
+
+#### Each writer's finish (last block, its thread joined), s wall: median of the processes
+
+| project | vgch2 | lean | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|---:|
+| nyancat | 0.036 | 0.036 | 0.007 | 0.012 | 0.024 | 0.040 |
+| rle_vga | 0.008 | 0.010 | 0.005 | 0.014 | 0.009 | 0.059 |
+| colorbars | 0.002 | 0.002 | 0.001 | 0.005 | 0.001 | 0.007 |
+| atari2600 | 0.023 | 0.024 | 0.022 | 0.054 | 0.014 | 0.021 |
+| vgadonut | 0.002 | 0.002 | 0.002 | 0.003 | 0.002 | 0.005 |
+
+#### Background threads in the loop: CPU s over the 262 M clocks, median of the processes
+
+| project | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|
+| nyancat | 1.10 | 3.18 | 0.67 | 3.57 |
+| rle_vga | 0.72 | 6.04 | 0.51 | 5.32 |
+| colorbars | 0.02 | 0.13 | 0.02 | 0.16 |
+| atari2600 | 1.34 | 3.32 | 0.36 | 3.96 |
+| vgadonut | 0.02 | 0.06 | 0.02 | 0.07 |
+
+#### The loop's window against the whole trace: events bytes per clock (zstd 1)
+
+The loop runs the first 262 M clocks from reset. Its events stream's compressed bytes per clock, against the whole trace's, show whether that window changes pins as the whole trace does.
+
+| project | loop window (B a clock) | whole trace (B a clock) | ratio |
+|---|---:|---:|---:|
+| nyancat | 0.102 | 0.102 | 1.00 |
+| rle_vga | 0.000741 | 0.000746 | 0.99 |
+| colorbars | 0.000137 | 0.000134 | 1.03 |
+| atari2600 | 0.155 | 0.151 | 1.02 |
+| vgadonut | 0.00207 | 0.0153 | 0.14 |
 
 ### Simulation check, side by side: whole testbench runs (too noisy, not used)
 
@@ -733,91 +974,261 @@ Load per CPU during the check: 0.53 to 1.54.
 | metaballs | 0.0004 | 0.0004 | 0.0002 | 0.0003 | 0.0002 | 0.0002 | 0.0111 | 0.0004 | 0.0302 | 0.0065 | 0.0003 | 0.0003 | 0.0122 | 0.0121 |
 | tomkeddie_a | 0.0001 | 0.0001 | 0.0001 | 0.0001 | 0.0001 | 0.0001 | 0.0203 | 0.0004 | 0.0398 | 0.0330 | 0.0004 | 0.0008 | 0.0351 | 0.0408 |
 
-#### Background CPU, s for the whole trace, and as % of the untraced simulation's CPU
+#### Background CPU, s for the whole trace
 
 | project | untraced CPU (s) | vgch2 (zstd 1) | runs (zstd 1) | planar (zstd 1) | events (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw xor6 (zstd 1) | raw to planar (zstd 1) | sigrok-like (deflate 6) | VCD (zstd 1) | FST (LZ4) | FST (zlib) | FST with clk (LZ4) | LXT2 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | 406 | 19.62 (4.84%) | 20.72 (5.11%) | 3.83 (0.95%) | 7.55 (1.86%) | 15.32 (3.78%) | 18.26 (4.50%) | 58.69 (14.47%) | 34.71 (8.56%) | 224.83 (55.42%) | 111.53 (27.49%) | 243.16 (59.94%) | 289.41 (71.34%) | 210.69 (51.93%) | - |
-| rle_vga | 453 | 6.83 (1.51%) | 8.25 (1.82%) | 2.39 (0.53%) | 4.43 (0.98%) | 24.14 (5.33%) | 25.23 (5.57%) | 36.21 (7.99%) | 47.01 (10.38%) | 166.46 (36.75%) | 158.92 (35.08%) | 128.86 (28.45%) | 215.15 (47.49%) | 170.31 (37.60%) | - |
-| dvd_screensaver | 357 | 0.05 (0.02%) | 0.09 (0.03%) | 0.05 (0.01%) | 0.04 (0.01%) | 0.10 (0.03%) | 0.17 (0.05%) | 40.63 (11.38%) | 14.34 (4.02%) | 162.85 (45.63%) | 0.58 (0.16%) | 1.53 (0.43%) | 1.95 (0.55%) | 151.06 (42.32%) | - |
-| colorbars | 356 | 0.13 (0.04%) | 0.23 (0.06%) | 0.08 (0.02%) | 0.09 (0.02%) | 0.89 (0.25%) | 0.72 (0.20%) | 41.59 (11.68%) | 13.09 (3.68%) | 142.80 (40.10%) | 8.41 (2.36%) | 8.16 (2.29%) | 9.55 (2.68%) | 182.84 (51.34%) | - |
-| mandelbrot | 1,887 | 0.47 (0.02%) | 0.57 (0.03%) | 0.23 (0.01%) | 0.23 (0.01%) | 0.60 (0.03%) | 0.66 (0.03%) | 120.77 (6.40%) | 44.56 (2.36%) | 649.24 (34.41%) | 4.11 (0.22%) | 11.87 (0.63%) | 24.12 (1.28%) | 384.17 (20.36%) | - |
-| atari2600 | 733 | 21.14 (2.88%) | 23.03 (3.14%) | 1.82 (0.25%) | 7.90 (1.08%) | 17.89 (2.44%) | 21.01 (2.87%) | 61.04 (8.32%) | 30.71 (4.19%) | 352.30 (48.05%) | 164.57 (22.45%) | 532.51 (72.63%) | 656.36 (89.52%) | 238.83 (32.57%) | - |
-| vgadonut | 760 | 7.01 (0.92%) | 9.76 (1.28%) | 1.28 (0.17%) | 2.04 (0.27%) | 6.45 (0.85%) | 7.26 (0.96%) | 78.31 (10.31%) | 26.62 (3.50%) | 408.28 (53.73%) | 29.33 (3.86%) | 71.91 (9.46%) | 89.21 (11.74%) | 191.92 (25.26%) | - |
-| cfib_demo | 624 | 0.63 (0.10%) | 1.06 (0.17%) | 0.14 (0.02%) | 0.38 (0.06%) | 0.85 (0.14%) | 1.13 (0.18%) | 75.16 (12.05%) | 23.04 (3.70%) | 428.08 (68.66%) | 6.35 (1.02%) | 9.58 (1.54%) | 11.05 (1.77%) | 207.48 (33.28%) | - |
-| nyan | 337 | 1.24 (0.37%) | 2.21 (0.66%) | 0.06 (0.02%) | 0.81 (0.24%) | 0.70 (0.21%) | 0.60 (0.18%) | 43.35 (12.88%) | 18.97 (5.63%) | 244.48 (72.61%) | 7.35 (2.18%) | 20.82 (6.18%) | 18.99 (5.64%) | 128.80 (38.25%) | - |
-| metaballs | 672 | 0.06 (0.01%) | 0.08 (0.01%) | 0.03 (0.00%) | 0.07 (0.01%) | 0.17 (0.02%) | 0.19 (0.03%) | 73.41 (10.92%) | 32.50 (4.83%) | 356.30 (53.00%) | 0.51 (0.08%) | 0.65 (0.10%) | 0.81 (0.12%) | 161.90 (24.08%) | - |
-| tomkeddie_a | 385 | 0.03 (0.01%) | 0.06 (0.02%) | 0.03 (0.01%) | 0.02 (0.00%) | 0.14 (0.04%) | 0.24 (0.06%) | 42.57 (11.06%) | 12.71 (3.30%) | 195.19 (50.69%) | 1.10 (0.29%) | 1.97 (0.51%) | 2.06 (0.53%) | 119.74 (31.09%) | - |
+| nyancat | 406 | 19.62 | 20.72 | 3.83 | 7.55 | 15.32 | 18.26 | 58.69 | 34.71 | 224.83 | 111.53 | 243.16 | 289.41 | 210.69 | - |
+| rle_vga | 453 | 6.83 | 8.25 | 2.39 | 4.43 | 24.14 | 25.23 | 36.21 | 47.01 | 166.46 | 158.92 | 128.86 | 215.15 | 170.31 | - |
+| dvd_screensaver | 357 | 0.05 | 0.09 | 0.05 | 0.04 | 0.10 | 0.17 | 40.63 | 14.34 | 162.85 | 0.58 | 1.53 | 1.95 | 151.06 | - |
+| colorbars | 356 | 0.13 | 0.23 | 0.08 | 0.09 | 0.89 | 0.72 | 41.59 | 13.09 | 142.80 | 8.41 | 8.16 | 9.55 | 182.84 | - |
+| mandelbrot | 1,887 | 0.47 | 0.57 | 0.23 | 0.23 | 0.60 | 0.66 | 120.77 | 44.56 | 649.24 | 4.11 | 11.87 | 24.12 | 384.17 | - |
+| atari2600 | 733 | 21.14 | 23.03 | 1.82 | 7.90 | 17.89 | 21.01 | 61.04 | 30.71 | 352.30 | 164.57 | 532.51 | 656.36 | 238.83 | - |
+| vgadonut | 760 | 7.01 | 9.76 | 1.28 | 2.04 | 6.45 | 7.26 | 78.31 | 26.62 | 408.28 | 29.33 | 71.91 | 89.21 | 191.92 | - |
+| cfib_demo | 624 | 0.63 | 1.06 | 0.14 | 0.38 | 0.85 | 1.13 | 75.16 | 23.04 | 428.08 | 6.35 | 9.58 | 11.05 | 207.48 | - |
+| nyan | 337 | 1.24 | 2.21 | 0.06 | 0.81 | 0.70 | 0.60 | 43.35 | 18.97 | 244.48 | 7.35 | 20.82 | 18.99 | 128.80 | - |
+| metaballs | 672 | 0.06 | 0.08 | 0.03 | 0.07 | 0.17 | 0.19 | 73.41 | 32.50 | 356.30 | 0.51 | 0.65 | 0.81 | 161.90 | - |
+| tomkeddie_a | 385 | 0.03 | 0.06 | 0.03 | 0.02 | 0.14 | 0.24 | 42.57 | 12.71 | 195.19 | 1.10 | 1.97 | 2.06 | 119.74 | - |
 
-#### Compressors on vgch2's blocks: MB, and background CPU s
+#### Background CPU, as % of the untraced simulation's CPU
+
+| project | untraced CPU (s) | vgch2 (zstd 1) | runs (zstd 1) | planar (zstd 1) | events (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw xor6 (zstd 1) | raw to planar (zstd 1) | sigrok-like (deflate 6) | VCD (zstd 1) | FST (LZ4) | FST (zlib) | FST with clk (LZ4) | LXT2 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 406 | 4.84 | 5.11 | 0.95 | 1.86 | 3.78 | 4.50 | 14.47 | 8.56 | 55.42 | 27.49 | 59.94 | 71.34 | 51.93 | - |
+| rle_vga | 453 | 1.51 | 1.82 | 0.53 | 0.98 | 5.33 | 5.57 | 7.99 | 10.38 | 36.75 | 35.08 | 28.45 | 47.49 | 37.60 | - |
+| dvd_screensaver | 357 | 0.02 | 0.03 | 0.01 | 0.01 | 0.03 | 0.05 | 11.38 | 4.02 | 45.63 | 0.16 | 0.43 | 0.55 | 42.32 | - |
+| colorbars | 356 | 0.04 | 0.06 | 0.02 | 0.02 | 0.25 | 0.20 | 11.68 | 3.68 | 40.10 | 2.36 | 2.29 | 2.68 | 51.34 | - |
+| mandelbrot | 1,887 | 0.02 | 0.03 | 0.01 | 0.01 | 0.03 | 0.03 | 6.40 | 2.36 | 34.41 | 0.22 | 0.63 | 1.28 | 20.36 | - |
+| atari2600 | 733 | 2.88 | 3.14 | 0.25 | 1.08 | 2.44 | 2.87 | 8.32 | 4.19 | 48.05 | 22.45 | 72.63 | 89.52 | 32.57 | - |
+| vgadonut | 760 | 0.92 | 1.28 | 0.17 | 0.27 | 0.85 | 0.96 | 10.31 | 3.50 | 53.73 | 3.86 | 9.46 | 11.74 | 25.26 | - |
+| cfib_demo | 624 | 0.10 | 0.17 | 0.02 | 0.06 | 0.14 | 0.18 | 12.05 | 3.70 | 68.66 | 1.02 | 1.54 | 1.77 | 33.28 | - |
+| nyan | 337 | 0.37 | 0.66 | 0.02 | 0.24 | 0.21 | 0.18 | 12.88 | 5.63 | 72.61 | 2.18 | 6.18 | 5.64 | 38.25 | - |
+| metaballs | 672 | 0.01 | 0.01 | 0.00 | 0.01 | 0.02 | 0.03 | 10.92 | 4.83 | 53.00 | 0.08 | 0.10 | 0.12 | 24.08 | - |
+| tomkeddie_a | 385 | 0.01 | 0.02 | 0.01 | 0.00 | 0.04 | 0.06 | 11.06 | 3.30 | 50.69 | 0.29 | 0.51 | 0.53 | 31.09 | - |
+
+#### Background CPU, measured again: three runs, s for the whole trace, median [lowest, highest]
+
+`results/encode2`: each candidate's configuration alone (zstd 1, every block, no compressor matrix beside it), three times, the runs apart in time. The R2 tables use these medians.
+
+| project | vgch2 (zstd 1) | planar (zstd 1) | events (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw to planar (zstd 1) | raw xor6 (zstd 1) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 22.07 [19.55, 22.75] | 4.07 [4.06, 4.18] | 6.27 [5.97, 6.53] | 15.99 [14.54, 16.05] | 22.52 [20.92, 23.13] | 36.62 [34.57, 38.60] | 53.35 [52.81, 54.54] |
+| rle_vga | 16.09 [14.52, 17.18] | 4.41 [4.38, 4.64] | 6.43 [6.34, 6.62] | 30.06 [28.06, 31.97] | 29.56 [27.50, 31.68] | 55.92 [48.37, 58.46] | 34.19 [32.89, 36.03] |
+| dvd_screensaver | 0.08 [0.07, 0.08] | 0.05 [0.05, 0.08] | 0.07 [0.05, 0.10] | 0.12 [0.10, 0.14] | 0.17 [0.14, 0.18] | 18.50 [18.21, 23.24] | 37.07 [36.80, 38.09] |
+| colorbars | 0.34 [0.31, 0.35] | 0.11 [0.10, 0.13] | 0.13 [0.12, 0.13] | 0.55 [0.54, 0.56] | 0.78 [0.71, 0.78] | 19.49 [16.01, 20.92] | 33.63 [26.81, 42.88] |
+| mandelbrot | 0.50 [0.44, 0.63] | 0.27 [0.22, 0.30] | 0.34 [0.27, 0.37] | 0.59 [0.49, 0.76] | 0.61 [0.60, 1.01] | 72.61 [69.77, 76.79] | 146.60 [134.87, 148.04] |
+| atari2600 | 23.55 [18.96, 25.44] | 2.86 [1.87, 3.16] | 7.74 [5.90, 9.51] | 16.74 [14.22, 17.72] | 23.07 [19.27, 23.48] | 37.19 [26.01, 37.73] | 53.37 [34.74, 55.08] |
+| vgadonut | 7.83 [7.68, 8.32] | 1.46 [1.44, 1.58] | 1.97 [1.95, 2.47] | 5.51 [5.44, 5.85] | 7.76 [6.99, 7.99] | 41.94 [38.52, 45.54] | 77.43 [64.50, 80.09] |
+| cfib_demo | 0.89 [0.86, 0.94] | 0.19 [0.16, 0.23] | 0.37 [0.37, 0.43] | 0.98 [0.79, 1.05] | 1.20 [1.15, 1.23] | 36.02 [31.05, 39.36] | 76.44 [60.99, 78.00] |
+| nyan | 1.29 [1.24, 1.31] | 0.08 [0.07, 0.09] | 0.61 [0.56, 0.77] | 0.47 [0.43, 0.48] | 0.62 [0.57, 0.73] | 17.37 [16.49, 18.12] | 35.56 [35.36, 37.74] |
+| metaballs | 0.09 [0.08, 0.09] | 0.04 [0.04, 0.06] | 0.06 [0.06, 0.07] | 0.13 [0.10, 0.14] | 0.18 [0.12, 0.23] | 35.29 [33.04, 37.28] | 68.22 [67.45, 69.21] |
+| tomkeddie_a | 0.05 [0.05, 0.07] | 0.05 [0.04, 0.05] | 0.03 [0.03, 0.05] | 0.16 [0.16, 0.20] | 0.26 [0.24, 0.26] | 19.51 [19.38, 19.63] | 41.49 [39.66, 41.90] |
+
+#### zstd1's CPU with the block cold and warm in cache, s for the whole trace
+
+`warm_cache.sh`: zstd1 alone on each block (cold, as encode2), and zstd1 after zstd-5 and zstd-1 have read the same block (warm, as the first round's matrix ran it). Run at once, each on its own CPU.
+
+| project | writer | cold | warm | cold over warm |
+|---|---:|---:|---:|---:|
+| nyancat | planar | 2.86 | 2.61 | 1.10 |
+| nyancat | vgch2 | 16.16 | 16.21 | 1.00 |
+| rle_vga | planar | 2.21 | 2.41 | 0.92 |
+| rle_vga | vgch2 | 5.80 | 5.71 | 1.02 |
+
+#### Background CPU three ways, s for the whole trace: the loop's, scaled, against the whole-trace runs
+
+The loop's figure is its background thread's CPU over its 262 M clocks, beside a running simulation, scaled to the trace's clocks (median of the processes); the window is representative (the loop's window table). The first round's and encode2's are the whole trace, in fsbench.
+
+| project | candidate | loop, scaled | first round | encode2 lowest | encode2 median | encode2 highest |
+|---|---:|---:|---:|---:|---:|---:|
+| nyancat | events | 6.33 | 7.55 | 5.97 | 6.27 | 6.53 |
+| nyancat | evplanar | 18.33 | 15.32 | 14.54 | 15.99 | 16.05 |
+| nyancat | planar | 3.86 | 3.83 | 4.06 | 4.07 | 4.18 |
+| nyancat | changelog | 20.58 | 18.26 | 20.92 | 22.52 | 23.13 |
+| rle_vga | events | 3.94 | 4.43 | 6.34 | 6.43 | 6.62 |
+| rle_vga | evplanar | 33.20 | 24.14 | 28.06 | 30.06 | 31.97 |
+| rle_vga | planar | 2.78 | 2.39 | 4.38 | 4.41 | 4.64 |
+| rle_vga | changelog | 29.27 | 25.23 | 27.50 | 29.56 | 31.68 |
+| colorbars | events | 0.10 | 0.09 | 0.12 | 0.13 | 0.13 |
+| colorbars | evplanar | 0.72 | 0.89 | 0.54 | 0.55 | 0.56 |
+| colorbars | planar | 0.10 | 0.08 | 0.10 | 0.11 | 0.13 |
+| colorbars | changelog | 0.90 | 0.72 | 0.71 | 0.78 | 0.78 |
+| atari2600 | events | 7.71 | 7.90 | 5.90 | 7.74 | 9.51 |
+| atari2600 | evplanar | 19.15 | 17.89 | 14.22 | 16.74 | 17.72 |
+| atari2600 | planar | 2.09 | 1.82 | 1.87 | 2.86 | 3.16 |
+| atari2600 | changelog | 22.86 | 21.01 | 19.27 | 23.07 | 23.48 |
+| vgadonut | events | 0.26 | 2.04 | 1.95 | 1.97 | 2.47 |
+| vgadonut | evplanar | 0.69 | 6.45 | 5.44 | 5.51 | 5.85 |
+| vgadonut | planar | 0.21 | 1.28 | 1.44 | 1.46 | 1.58 |
+| vgadonut | changelog | 0.76 | 7.26 | 6.99 | 7.76 | 7.99 |
+
+#### Re-encoding a published trace to planar: encode2's planar pass, wall s, median of 3
+
+The pass reads the published trace with vgacap's reader, expands it to the testbench's raw images and writes planar: a migration's re-encode, one CPU a trace.
+
+| project | wall s |
+|---|---:|
+| nyancat | 62 |
+| rle_vga | 86 |
+| dvd_screensaver | 18 |
+| colorbars | 20 |
+| mandelbrot | 73 |
+| atari2600 | 65 |
+| vgadonut | 60 |
+| cfib_demo | 39 |
+| nyan | 20 |
+| metaballs | 32 |
+| tomkeddie_a | 20 |
+
+#### The first round's single measurement of the same, s (the compressor matrix in the same pass)
+
+| project | vgch2 (zstd 1) | planar (zstd 1) | events (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw to planar (zstd 1) | raw xor6 (zstd 1) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 19.62 | 3.83 | 7.55 | 15.32 | 18.26 | 34.71 | 58.69 |
+| rle_vga | 6.83 | 2.39 | 4.43 | 24.14 | 25.23 | 47.01 | 36.21 |
+| dvd_screensaver | 0.05 | 0.05 | 0.04 | 0.10 | 0.17 | 14.34 | 40.63 |
+| colorbars | 0.13 | 0.08 | 0.09 | 0.89 | 0.72 | 13.09 | 41.59 |
+| mandelbrot | 0.47 | 0.23 | 0.23 | 0.60 | 0.66 | 44.56 | 120.77 |
+| atari2600 | 21.14 | 1.82 | 7.90 | 17.89 | 21.01 | 30.71 | 61.04 |
+| vgadonut | 7.01 | 1.28 | 2.04 | 6.45 | 7.26 | 26.62 | 78.31 |
+| cfib_demo | 0.63 | 0.14 | 0.38 | 0.85 | 1.13 | 23.04 | 75.16 |
+| nyan | 1.24 | 0.06 | 0.81 | 0.70 | 0.60 | 18.97 | 43.35 |
+| metaballs | 0.06 | 0.03 | 0.07 | 0.17 | 0.19 | 32.50 | 73.41 |
+| tomkeddie_a | 0.03 | 0.03 | 0.02 | 0.14 | 0.24 | 12.71 | 42.57 |
+
+#### Compressors on vgch2's blocks: MB
 
 | project | zstd-5 | zstd-1 | zstd1 | zstd1-nocheck | zstd3 | zstd9 | zstd1-long27 | lz4 | lz4hc9 | deflate1 | deflate6 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | 656.91 / 12.23 | 592.35 / 18.54 | 413.13 / 19.62 | 413.13 / 18.30 | 288.33 / 17.32 | 121.75 / 42.50 | 286.12 / 32.45 | 390.25 / 3.47 | 153.44 / 130.65 | 303.12 / 35.85 | 157.27 / 92.32 |
-| rle_vga | 16.52 / 6.96 | 69.76 / 8.52 | 18.37 / 6.83 | 18.37 / 3.70 | 26.82 / 10.85 | 4.77 / 19.91 | 4.84 / 57.45 | 102.95 / 3.20 | 79.35 / 34.91 | 135.12 / 57.45 | 46.19 / 128.68 |
-| dvd_screensaver | 4.95 / 0.05 | 1.51 / 0.05 | 1.31 / 0.05 | 1.31 / 0.05 | 1.31 / 0.07 | 1.47 / 0.36 | 1.49 / 0.11 | 4.73 / 0.03 | 2.77 / 1.18 | 3.54 / 0.25 | 2.34 / 0.59 |
-| colorbars | 0.62 / 0.14 | 0.83 / 0.14 | 0.55 / 0.13 | 0.55 / 0.09 | 0.64 / 0.20 | 0.22 / 0.50 | 0.23 / 0.28 | 19.01 / 0.13 | 10.18 / 2.18 | 19.66 / 1.81 | 11.39 / 5.81 |
-| mandelbrot | 17.99 / 0.39 | 17.28 / 0.45 | 14.71 / 0.47 | 14.71 / 0.44 | 12.05 / 0.55 | 7.92 / 2.26 | 12.42 / 0.65 | 22.34 / 0.18 | 10.08 / 7.59 | 24.19 / 1.59 | 15.35 / 4.90 |
-| atari2600 | 776.57 / 14.24 | 832.67 / 20.45 | 594.67 / 21.14 | 594.67 / 19.58 | 417.73 / 20.92 | 146.94 / 40.99 | 92.38 / 27.81 | 945.37 / 6.94 | 348.52 / 171.14 | 1006.85 / 66.58 | 366.10 / 188.07 |
-| vgadonut | 222.51 / 3.16 | 271.62 / 6.54 | 167.74 / 7.01 | 167.74 / 6.49 | 81.01 / 4.93 | 34.31 / 12.87 | 78.15 / 12.11 | 96.86 / 1.02 | 40.42 / 34.60 | 90.38 / 12.00 | 45.03 / 28.72 |
-| cfib_demo | 25.60 / 0.55 | 23.94 / 0.60 | 20.59 / 0.63 | 20.59 / 0.57 | 17.27 / 0.72 | 8.68 / 2.43 | 11.80 / 1.71 | 45.07 / 0.35 | 18.84 / 7.73 | 40.83 / 2.73 | 27.46 / 9.70 |
-| nyan | 58.12 / 1.10 | 55.81 / 1.22 | 51.78 / 1.24 | 51.78 / 1.17 | 41.58 / 1.64 | 35.81 / 6.92 | 47.69 / 1.57 | 83.71 / 0.54 | 48.89 / 13.63 | 64.09 / 3.94 | 45.60 / 18.07 |
-| metaballs | 3.36 / 0.06 | 1.60 / 0.05 | 1.33 / 0.06 | 1.33 / 0.06 | 1.03 / 0.07 | 0.64 / 0.25 | 1.01 / 0.25 | 1.65 / 0.02 | 1.08 / 1.19 | 1.39 / 0.21 | 0.91 / 0.48 |
-| tomkeddie_a | 0.19 / 0.03 | 0.12 / 0.03 | 0.11 / 0.03 | 0.11 / 0.02 | 0.09 / 0.04 | 0.13 / 0.14 | 0.11 / 0.14 | 0.45 / 0.01 | 0.37 / 0.22 | 1.09 / 0.27 | 0.61 / 0.59 |
+| nyancat | 656.91 | 592.35 | 413.13 | 413.13 | 288.33 | 121.75 | 286.12 | 390.25 | 153.44 | 303.12 | 157.27 |
+| rle_vga | 16.52 | 69.76 | 18.37 | 18.37 | 26.82 | 4.77 | 4.84 | 102.95 | 79.35 | 135.12 | 46.19 |
+| dvd_screensaver | 4.95 | 1.51 | 1.31 | 1.31 | 1.31 | 1.47 | 1.49 | 4.73 | 2.77 | 3.54 | 2.34 |
+| colorbars | 0.62 | 0.83 | 0.55 | 0.55 | 0.64 | 0.22 | 0.23 | 19.01 | 10.18 | 19.66 | 11.39 |
+| mandelbrot | 17.99 | 17.28 | 14.71 | 14.71 | 12.05 | 7.92 | 12.42 | 22.34 | 10.08 | 24.19 | 15.35 |
+| atari2600 | 776.57 | 832.67 | 594.67 | 594.67 | 417.73 | 146.94 | 92.38 | 945.37 | 348.52 | 1006.85 | 366.10 |
+| vgadonut | 222.51 | 271.62 | 167.74 | 167.74 | 81.01 | 34.31 | 78.15 | 96.86 | 40.42 | 90.38 | 45.03 |
+| cfib_demo | 25.60 | 23.94 | 20.59 | 20.59 | 17.27 | 8.68 | 11.80 | 45.07 | 18.84 | 40.83 | 27.46 |
+| nyan | 58.12 | 55.81 | 51.78 | 51.78 | 41.58 | 35.81 | 47.69 | 83.71 | 48.89 | 64.09 | 45.60 |
+| metaballs | 3.36 | 1.60 | 1.33 | 1.33 | 1.03 | 0.64 | 1.01 | 1.65 | 1.08 | 1.39 | 0.91 |
+| tomkeddie_a | 0.19 | 0.12 | 0.11 | 0.11 | 0.09 | 0.13 | 0.11 | 0.45 | 0.37 | 1.09 | 0.61 |
+
+#### Compressors on vgch2's blocks: background CPU s
+
+| project | zstd-5 | zstd-1 | zstd1 | zstd1-nocheck | zstd3 | zstd9 | zstd1-long27 | lz4 | lz4hc9 | deflate1 | deflate6 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 12.23 | 18.54 | 19.62 | 18.30 | 17.32 | 42.50 | 32.45 | 3.47 | 130.65 | 35.85 | 92.32 |
+| rle_vga | 6.96 | 8.52 | 6.83 | 3.70 | 10.85 | 19.91 | 57.45 | 3.20 | 34.91 | 57.45 | 128.68 |
+| dvd_screensaver | 0.05 | 0.05 | 0.05 | 0.05 | 0.07 | 0.36 | 0.11 | 0.03 | 1.18 | 0.25 | 0.59 |
+| colorbars | 0.14 | 0.14 | 0.13 | 0.09 | 0.20 | 0.50 | 0.28 | 0.13 | 2.18 | 1.81 | 5.81 |
+| mandelbrot | 0.39 | 0.45 | 0.47 | 0.44 | 0.55 | 2.26 | 0.65 | 0.18 | 7.59 | 1.59 | 4.90 |
+| atari2600 | 14.24 | 20.45 | 21.14 | 19.58 | 20.92 | 40.99 | 27.81 | 6.94 | 171.14 | 66.58 | 188.07 |
+| vgadonut | 3.16 | 6.54 | 7.01 | 6.49 | 4.93 | 12.87 | 12.11 | 1.02 | 34.60 | 12.00 | 28.72 |
+| cfib_demo | 0.55 | 0.60 | 0.63 | 0.57 | 0.72 | 2.43 | 1.71 | 0.35 | 7.73 | 2.73 | 9.70 |
+| nyan | 1.10 | 1.22 | 1.24 | 1.17 | 1.64 | 6.92 | 1.57 | 0.54 | 13.63 | 3.94 | 18.07 |
+| metaballs | 0.06 | 0.05 | 0.06 | 0.06 | 0.07 | 0.25 | 0.25 | 0.02 | 1.19 | 0.21 | 0.48 |
+| tomkeddie_a | 0.03 | 0.03 | 0.03 | 0.02 | 0.04 | 0.14 | 0.14 | 0.01 | 0.22 | 0.27 | 0.59 |
 
 Uncompressed, MB: nyancat 8,118.8, rle_vga 20,182.5, dvd_screensaver 46.7, colorbars 354.7, mandelbrot 187.2, atari2600 9,467.8, vgadonut 3,227.5, cfib_demo 508.6, nyan 264.6, metaballs 56.3, tomkeddie_a 73.2.
 
-#### Compressors on events's blocks: MB, and background CPU s
+#### Compressors on events's blocks: MB
 
 | project | zstd-5 | zstd-1 | zstd1 | zstd1-nocheck | zstd3 | zstd9 | zstd1-long27 | lz4 | lz4hc9 | deflate1 | deflate6 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | 176.22 / 6.65 | 171.20 / 7.36 | 153.32 / 7.55 | 153.32 / 6.42 | 150.18 / 10.43 | 96.14 / 38.31 | 129.47 / 23.35 | 231.66 / 2.71 | 123.83 / 95.18 | 180.56 / 22.15 | 105.76 / 56.93 |
-| rle_vga | 1.28 / 4.42 | 1.05 / 4.41 | 1.05 / 4.43 | 1.05 / 2.43 | 1.04 / 5.96 | 0.85 / 13.25 | 1.15 / 10.40 | 34.20 / 2.11 | 34.05 / 23.30 | 46.96 / 33.28 | 22.42 / 71.25 |
-| dvd_screensaver | 2.46 / 0.04 | 1.33 / 0.04 | 1.13 / 0.04 | 1.13 / 0.04 | 1.24 / 0.07 | 1.38 / 0.32 | 1.19 / 0.06 | 3.09 / 0.02 | 2.39 / 0.67 | 2.80 / 0.15 | 1.86 / 0.49 |
-| colorbars | 0.32 / 0.10 | 0.25 / 0.09 | 0.20 / 0.09 | 0.20 / 0.05 | 0.32 / 0.15 | 0.15 / 0.32 | 0.17 / 0.11 | 0.84 / 0.04 | 0.82 / 0.06 | 7.74 / 0.92 | 4.11 / 2.13 |
-| mandelbrot | 13.09 / 0.22 | 9.88 / 0.22 | 9.06 / 0.23 | 9.05 / 0.22 | 8.56 / 0.37 | 6.73 / 1.34 | 8.93 / 0.30 | 14.08 / 0.13 | 8.88 / 3.05 | 16.88 / 1.00 | 7.72 / 3.01 |
-| atari2600 | 418.25 / 8.24 | 283.63 / 8.42 | 228.55 / 7.90 | 228.55 / 6.82 | 169.47 / 9.46 | 66.28 / 26.80 | 59.13 / 18.22 | 500.47 / 4.52 | 206.96 / 123.00 | 507.95 / 42.91 | 223.06 / 117.93 |
-| vgadonut | 79.66 / 1.90 | 55.55 / 2.10 | 44.39 / 2.04 | 44.39 / 1.81 | 43.68 / 2.69 | 25.73 / 11.27 | 35.31 / 7.89 | 62.93 / 0.72 | 30.46 / 27.15 | 55.07 / 7.66 | 30.69 / 18.89 |
-| cfib_demo | 18.50 / 0.41 | 10.81 / 0.39 | 9.38 / 0.38 | 9.38 / 0.34 | 8.03 / 0.53 | 4.54 / 1.77 | 6.36 / 0.93 | 23.06 / 0.23 | 8.77 / 5.64 | 24.37 / 2.06 | 11.27 / 5.23 |
-| nyan | 52.81 / 0.71 | 45.62 / 0.77 | 36.26 / 0.81 | 36.26 / 0.81 | 31.21 / 1.88 | 26.39 / 6.94 | 35.91 / 1.00 | 53.73 / 0.48 | 36.62 / 7.29 | 45.60 / 2.88 | 33.61 / 15.69 |
-| metaballs | 1.31 / 0.06 | 1.07 / 0.06 | 0.95 / 0.07 | 0.95 / 0.07 | 0.96 / 0.14 | 0.62 / 0.30 | 0.84 / 0.17 | 1.33 / 0.02 | 0.96 / 1.01 | 1.11 / 0.17 | 0.69 / 0.42 |
-| tomkeddie_a | 0.12 / 0.03 | 0.08 / 0.01 | 0.08 / 0.02 | 0.08 / 0.01 | 0.08 / 0.02 | 0.07 / 0.05 | 0.09 / 0.05 | 0.34 / 0.01 | 0.24 / 0.12 | 0.74 / 0.13 | 0.51 / 0.29 |
+| nyancat | 176.22 | 171.20 | 153.32 | 153.32 | 150.18 | 96.14 | 129.47 | 231.66 | 123.83 | 180.56 | 105.76 |
+| rle_vga | 1.28 | 1.05 | 1.05 | 1.05 | 1.04 | 0.85 | 1.15 | 34.20 | 34.05 | 46.96 | 22.42 |
+| dvd_screensaver | 2.46 | 1.33 | 1.13 | 1.13 | 1.24 | 1.38 | 1.19 | 3.09 | 2.39 | 2.80 | 1.86 |
+| colorbars | 0.32 | 0.25 | 0.20 | 0.20 | 0.32 | 0.15 | 0.17 | 0.84 | 0.82 | 7.74 | 4.11 |
+| mandelbrot | 13.09 | 9.88 | 9.06 | 9.05 | 8.56 | 6.73 | 8.93 | 14.08 | 8.88 | 16.88 | 7.72 |
+| atari2600 | 418.25 | 283.63 | 228.55 | 228.55 | 169.47 | 66.28 | 59.13 | 500.47 | 206.96 | 507.95 | 223.06 |
+| vgadonut | 79.66 | 55.55 | 44.39 | 44.39 | 43.68 | 25.73 | 35.31 | 62.93 | 30.46 | 55.07 | 30.69 |
+| cfib_demo | 18.50 | 10.81 | 9.38 | 9.38 | 8.03 | 4.54 | 6.36 | 23.06 | 8.77 | 24.37 | 11.27 |
+| nyan | 52.81 | 45.62 | 36.26 | 36.26 | 31.21 | 26.39 | 35.91 | 53.73 | 36.62 | 45.60 | 33.61 |
+| metaballs | 1.31 | 1.07 | 0.95 | 0.95 | 0.96 | 0.62 | 0.84 | 1.33 | 0.96 | 1.11 | 0.69 |
+| tomkeddie_a | 0.12 | 0.08 | 0.08 | 0.08 | 0.08 | 0.07 | 0.09 | 0.34 | 0.24 | 0.74 | 0.51 |
+
+#### Compressors on events's blocks: background CPU s
+
+| project | zstd-5 | zstd-1 | zstd1 | zstd1-nocheck | zstd3 | zstd9 | zstd1-long27 | lz4 | lz4hc9 | deflate1 | deflate6 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 6.65 | 7.36 | 7.55 | 6.42 | 10.43 | 38.31 | 23.35 | 2.71 | 95.18 | 22.15 | 56.93 |
+| rle_vga | 4.42 | 4.41 | 4.43 | 2.43 | 5.96 | 13.25 | 10.40 | 2.11 | 23.30 | 33.28 | 71.25 |
+| dvd_screensaver | 0.04 | 0.04 | 0.04 | 0.04 | 0.07 | 0.32 | 0.06 | 0.02 | 0.67 | 0.15 | 0.49 |
+| colorbars | 0.10 | 0.09 | 0.09 | 0.05 | 0.15 | 0.32 | 0.11 | 0.04 | 0.06 | 0.92 | 2.13 |
+| mandelbrot | 0.22 | 0.22 | 0.23 | 0.22 | 0.37 | 1.34 | 0.30 | 0.13 | 3.05 | 1.00 | 3.01 |
+| atari2600 | 8.24 | 8.42 | 7.90 | 6.82 | 9.46 | 26.80 | 18.22 | 4.52 | 123.00 | 42.91 | 117.93 |
+| vgadonut | 1.90 | 2.10 | 2.04 | 1.81 | 2.69 | 11.27 | 7.89 | 0.72 | 27.15 | 7.66 | 18.89 |
+| cfib_demo | 0.41 | 0.39 | 0.38 | 0.34 | 0.53 | 1.77 | 0.93 | 0.23 | 5.64 | 2.06 | 5.23 |
+| nyan | 0.71 | 0.77 | 0.81 | 0.81 | 1.88 | 6.94 | 1.00 | 0.48 | 7.29 | 2.88 | 15.69 |
+| metaballs | 0.06 | 0.06 | 0.07 | 0.07 | 0.14 | 0.30 | 0.17 | 0.02 | 1.01 | 0.17 | 0.42 |
+| tomkeddie_a | 0.03 | 0.01 | 0.02 | 0.01 | 0.02 | 0.05 | 0.05 | 0.01 | 0.12 | 0.13 | 0.29 |
 
 Uncompressed, MB: nyancat 3,815.3, rle_vga 8,653.2, dvd_screensaver 22.5, colorbars 155.0, mandelbrot 88.4, atari2600 4,528.9, vgadonut 1,404.7, cfib_demo 225.0, nyan 118.9, metaballs 28.0, tomkeddie_a 40.2.
 
-#### Compressors on planar's blocks: MB, and background CPU s
+#### Compressors on planar's blocks: MB
 
 | project | zstd-5 | zstd-1 | zstd1 | zstd1-nocheck | zstd3 | zstd9 | zstd1-long27 | lz4 | lz4hc9 | deflate1 | deflate6 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | 126.17 / 3.15 | 61.57 / 3.60 | 53.43 / 3.83 | 53.43 / 3.08 | 48.22 / 4.35 | 22.89 / 10.93 | 32.67 / 9.17 | 68.58 / 1.01 | 37.53 / 37.31 | 58.77 / 13.12 | 30.28 / 30.26 |
-| rle_vga | 0.77 / 2.41 | 0.59 / 2.40 | 0.59 / 2.39 | 0.58 / 1.32 | 0.59 / 3.25 | 0.54 / 10.36 | 0.63 / 20.10 | 22.69 / 1.13 | 22.69 / 1.46 | 28.07 / 21.15 | 5.68 / 45.13 |
-| dvd_screensaver | 2.37 / 0.04 | 1.56 / 0.04 | 1.35 / 0.05 | 1.35 / 0.05 | 1.17 / 0.09 | 1.35 / 0.33 | 1.36 / 0.06 | 2.88 / 0.02 | 2.33 / 0.61 | 2.16 / 0.12 | 1.73 / 0.45 |
-| colorbars | 0.71 / 0.10 | 0.68 / 0.09 | 0.66 / 0.08 | 0.66 / 0.06 | 0.66 / 0.10 | 0.14 / 0.28 | 0.08 / 0.14 | 0.56 / 0.03 | 0.54 / 0.06 | 1.94 / 0.52 | 0.96 / 1.14 |
-| mandelbrot | 11.15 / 0.22 | 8.92 / 0.22 | 8.09 / 0.23 | 8.08 / 0.22 | 7.64 / 0.41 | 6.37 / 1.44 | 8.04 / 0.29 | 11.87 / 0.13 | 8.38 / 1.82 | 11.26 / 0.75 | 6.85 / 2.26 |
-| atari2600 | 10.24 / 1.82 | 9.59 / 1.84 | 9.04 / 1.82 | 9.04 / 1.13 | 4.26 / 2.34 | 2.34 / 6.57 | 2.83 / 7.12 | 47.85 / 1.04 | 22.19 / 22.52 | 107.70 / 17.19 | 32.90 / 35.34 |
-| vgadonut | 53.85 / 1.21 | 40.45 / 1.26 | 35.30 / 1.28 | 35.29 / 1.15 | 35.13 / 1.83 | 22.50 / 7.72 | 30.35 / 4.33 | 51.72 / 0.52 | 27.65 / 17.46 | 41.61 / 4.45 | 24.20 / 11.73 |
-| cfib_demo | 5.28 / 0.16 | 2.63 / 0.13 | 2.43 / 0.14 | 2.43 / 0.11 | 2.29 / 0.16 | 1.49 / 0.79 | 1.68 / 0.46 | 4.91 / 0.06 | 2.06 / 2.30 | 4.76 / 0.74 | 2.33 / 1.67 |
-| nyan | 2.69 / 0.08 | 0.57 / 0.06 | 0.50 / 0.06 | 0.50 / 0.04 | 0.50 / 0.07 | 0.39 / 0.22 | 0.51 / 0.15 | 3.91 / 0.04 | 1.04 / 0.47 | 3.53 / 0.47 | 1.27 / 0.89 |
-| metaballs | 1.35 / 0.03 | 0.95 / 0.03 | 0.70 / 0.03 | 0.70 / 0.03 | 0.90 / 0.07 | 0.60 / 0.17 | 0.68 / 0.05 | 1.25 / 0.01 | 0.93 / 0.51 | 0.95 / 0.09 | 0.67 / 0.25 |
-| tomkeddie_a | 0.22 / 0.03 | 0.17 / 0.02 | 0.15 / 0.03 | 0.15 / 0.02 | 0.14 / 0.03 | 0.13 / 0.09 | 0.16 / 0.13 | 0.43 / 0.01 | 0.32 / 0.22 | 1.01 / 0.18 | 0.47 / 0.40 |
+| nyancat | 126.17 | 61.57 | 53.43 | 53.43 | 48.22 | 22.89 | 32.67 | 68.58 | 37.53 | 58.77 | 30.28 |
+| rle_vga | 0.77 | 0.59 | 0.59 | 0.58 | 0.59 | 0.54 | 0.63 | 22.69 | 22.69 | 28.07 | 5.68 |
+| dvd_screensaver | 2.37 | 1.56 | 1.35 | 1.35 | 1.17 | 1.35 | 1.36 | 2.88 | 2.33 | 2.16 | 1.73 |
+| colorbars | 0.71 | 0.68 | 0.66 | 0.66 | 0.66 | 0.14 | 0.08 | 0.56 | 0.54 | 1.94 | 0.96 |
+| mandelbrot | 11.15 | 8.92 | 8.09 | 8.08 | 7.64 | 6.37 | 8.04 | 11.87 | 8.38 | 11.26 | 6.85 |
+| atari2600 | 10.24 | 9.59 | 9.04 | 9.04 | 4.26 | 2.34 | 2.83 | 47.85 | 22.19 | 107.70 | 32.90 |
+| vgadonut | 53.85 | 40.45 | 35.30 | 35.29 | 35.13 | 22.50 | 30.35 | 51.72 | 27.65 | 41.61 | 24.20 |
+| cfib_demo | 5.28 | 2.63 | 2.43 | 2.43 | 2.29 | 1.49 | 1.68 | 4.91 | 2.06 | 4.76 | 2.33 |
+| nyan | 2.69 | 0.57 | 0.50 | 0.50 | 0.50 | 0.39 | 0.51 | 3.91 | 1.04 | 3.53 | 1.27 |
+| metaballs | 1.35 | 0.95 | 0.70 | 0.70 | 0.90 | 0.60 | 0.68 | 1.25 | 0.93 | 0.95 | 0.67 |
+| tomkeddie_a | 0.22 | 0.17 | 0.15 | 0.15 | 0.14 | 0.13 | 0.16 | 0.43 | 0.32 | 1.01 | 0.47 |
+
+#### Compressors on planar's blocks: background CPU s
+
+| project | zstd-5 | zstd-1 | zstd1 | zstd1-nocheck | zstd3 | zstd9 | zstd1-long27 | lz4 | lz4hc9 | deflate1 | deflate6 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 3.15 | 3.60 | 3.83 | 3.08 | 4.35 | 10.93 | 9.17 | 1.01 | 37.31 | 13.12 | 30.26 |
+| rle_vga | 2.41 | 2.40 | 2.39 | 1.32 | 3.25 | 10.36 | 20.10 | 1.13 | 1.46 | 21.15 | 45.13 |
+| dvd_screensaver | 0.04 | 0.04 | 0.05 | 0.05 | 0.09 | 0.33 | 0.06 | 0.02 | 0.61 | 0.12 | 0.45 |
+| colorbars | 0.10 | 0.09 | 0.08 | 0.06 | 0.10 | 0.28 | 0.14 | 0.03 | 0.06 | 0.52 | 1.14 |
+| mandelbrot | 0.22 | 0.22 | 0.23 | 0.22 | 0.41 | 1.44 | 0.29 | 0.13 | 1.82 | 0.75 | 2.26 |
+| atari2600 | 1.82 | 1.84 | 1.82 | 1.13 | 2.34 | 6.57 | 7.12 | 1.04 | 22.52 | 17.19 | 35.34 |
+| vgadonut | 1.21 | 1.26 | 1.28 | 1.15 | 1.83 | 7.72 | 4.33 | 0.52 | 17.46 | 4.45 | 11.73 |
+| cfib_demo | 0.16 | 0.13 | 0.14 | 0.11 | 0.16 | 0.79 | 0.46 | 0.06 | 2.30 | 0.74 | 1.67 |
+| nyan | 0.08 | 0.06 | 0.06 | 0.04 | 0.07 | 0.22 | 0.15 | 0.04 | 0.47 | 0.47 | 0.89 |
+| metaballs | 0.03 | 0.03 | 0.03 | 0.03 | 0.07 | 0.17 | 0.05 | 0.01 | 0.51 | 0.09 | 0.25 |
+| tomkeddie_a | 0.03 | 0.02 | 0.03 | 0.02 | 0.03 | 0.09 | 0.13 | 0.01 | 0.22 | 0.18 | 0.40 |
 
 Uncompressed, MB: nyancat 3,007.0, rle_vga 5,777.2, dvd_screensaver 16.4, colorbars 120.3, mandelbrot 63.8, atari2600 3,620.1, vgadonut 944.8, cfib_demo 160.9, nyan 91.8, metaballs 20.9, tomkeddie_a 41.3.
 
-#### Raw candidate: transforms x compressors, MB / background CPU s (projected)
+#### Raw candidate: transforms x compressors, MB (projected)
 
 | project | pack6 zstd-1 | pack6 zstd1 | pack6 zstd3 | pack6 lz4 | xor6 zstd-1 | xor6 zstd1 | xor6 zstd3 | xor6 lz4 | xor-byteplanes zstd-1 | xor-byteplanes zstd1 | xor-byteplanes zstd3 | xor-byteplanes lz4 | xor-bitplanes zstd-1 | xor-bitplanes zstd1 | xor-bitplanes zstd3 | xor-bitplanes lz4 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | 1,076.5 / 80.6 | 685.7 / 78.0 | 463.6 / 66.0 | 6,183.7 / 53.9 | 689.5 / 57.9 | 409.4 / 58.7 | 303.1 / 57.2 | 1,013.8 / 34.0 | 67.5 / 53.1 | 62.5 / 52.9 | 62.1 / 55.6 | 242.5 / 41.2 | 72.3 / 110.0 | 59.1 / 110.2 | 53.2 / 112.8 | 177.7 / 102.1 |
-| rle_vga | 19.2 / 35.9 | 18.7 / 35.9 | 24.3 / 39.7 | 90.4 / 29.4 | 14.4 / 36.2 | 13.3 / 36.2 | 18.6 / 38.7 | 89.9 / 29.3 | 12.3 / 49.7 | 6.6 / 49.8 | 1.6 / 52.2 | 98.4 / 39.5 | 10.0 / 105.9 | 3.8 / 106.0 | 1.2 / 107.7 | 75.7 / 97.6 |
-| dvd_screensaver | 19.9 / 40.5 | 16.9 / 40.8 | 16.7 / 42.3 | 107.4 / 32.9 | 27.0 / 40.8 | 21.8 / 40.6 | 24.4 / 42.8 | 101.6 / 32.5 | 20.4 / 52.1 | 10.9 / 52.3 | 14.8 / 53.9 | 112.4 / 40.4 | 18.5 / 107.4 | 13.4 / 107.5 | 6.7 / 110.0 | 111.0 / 99.1 |
-| colorbars | 113.8 / 44.1 | 105.2 / 44.9 | 86.0 / 55.4 | 205.0 / 34.3 | 5.7 / 41.4 | 5.5 / 41.6 | 4.8 / 43.4 | 79.4 / 33.2 | 76.8 / 54.8 | 43.3 / 55.0 | 46.5 / 58.1 | 134.3 / 42.5 | 141.2 / 112.3 | 42.2 / 112.5 | 22.3 / 113.9 | 155.7 / 101.7 |
-| mandelbrot | 78.2 / 118.5 | 73.4 / 118.6 | 72.7 / 128.2 | 399.1 / 96.4 | 107.0 / 119.8 | 90.2 / 120.8 | 75.8 / 129.9 | 367.1 / 96.7 | 81.5 / 168.6 | 52.9 / 169.1 | 43.3 / 178.8 | 400.1 / 135.1 | 133.3 / 398.9 | 59.4 / 398.9 | 75.3 / 408.0 | 463.1 / 373.3 |
-| atari2600 | 2,076.5 / 95.1 | 1,352.8 / 92.4 | 911.4 / 99.5 | 2,431.1 / 43.4 | 765.0 / 58.9 | 515.0 / 61.0 | 454.3 / 63.9 | 1,355.6 / 36.4 | 100.6 / 52.8 | 51.8 / 53.0 | 33.4 / 54.7 | 166.8 / 41.7 | 126.9 / 111.8 | 61.4 / 111.8 | 40.9 / 112.7 | 107.1 / 101.3 |
-| vgadonut | 434.7 / 81.5 | 267.6 / 82.8 | 267.8 / 90.2 | 573.0 / 56.3 | 399.7 / 75.9 | 246.5 / 78.3 | 231.7 / 84.8 | 604.8 / 55.4 | 88.8 / 97.5 | 73.5 / 97.0 | 72.9 / 102.8 | 227.0 / 76.0 | 141.4 / 210.3 | 118.7 / 210.4 | 114.4 / 216.1 | 356.8 / 193.7 |
-| cfib_demo | 145.3 / 75.2 | 103.4 / 77.1 | 103.3 / 82.3 | 590.2 / 59.7 | 218.6 / 73.9 | 115.6 / 75.2 | 118.3 / 80.4 | 445.4 / 57.6 | 50.0 / 95.6 | 31.6 / 95.4 | 27.1 / 100.6 | 220.2 / 75.7 | 75.3 / 212.3 | 40.3 / 212.6 | 37.6 / 215.9 | 247.1 / 197.2 |
-| nyan | 95.5 / 45.4 | 68.1 / 45.9 | 75.5 / 48.2 | 281.7 / 35.2 | 107.1 / 42.6 | 75.0 / 43.4 | 80.5 / 47.3 | 255.2 / 33.1 | 47.5 / 56.0 | 27.5 / 56.3 | 26.4 / 59.0 | 204.3 / 44.6 | 56.5 / 121.0 | 35.5 / 121.4 | 33.0 / 123.2 | 222.6 / 111.8 |
-| metaballs | 25.4 / 72.8 | 25.3 / 72.8 | 25.2 / 78.9 | 186.1 / 59.7 | 36.9 / 72.8 | 33.1 / 73.4 | 34.3 / 80.0 | 176.8 / 59.3 | 22.2 / 102.3 | 13.8 / 102.5 | 15.9 / 109.1 | 199.3 / 81.5 | 14.8 / 227.6 | 9.5 / 227.9 | 10.5 / 232.5 | 184.8 / 212.6 |
-| tomkeddie_a | 35.4 / 41.9 | 26.5 / 42.0 | 13.2 / 44.7 | 76.7 / 33.6 | 33.5 / 42.1 | 30.9 / 42.6 | 36.1 / 44.9 | 123.7 / 33.8 | 47.8 / 55.0 | 25.5 / 55.1 | 12.6 / 57.0 | 159.0 / 43.4 | 17.4 / 114.5 | 14.7 / 114.0 | 10.4 / 116.2 | 156.6 / 105.7 |
+| nyancat | 1,076.5 | 685.7 | 463.6 | 6,183.7 | 689.5 | 409.4 | 303.1 | 1,013.8 | 67.5 | 62.5 | 62.1 | 242.5 | 72.3 | 59.1 | 53.2 | 177.7 |
+| rle_vga | 19.2 | 18.7 | 24.3 | 90.4 | 14.4 | 13.3 | 18.6 | 89.9 | 12.3 | 6.6 | 1.6 | 98.4 | 10.0 | 3.8 | 1.2 | 75.7 |
+| dvd_screensaver | 19.9 | 16.9 | 16.7 | 107.4 | 27.0 | 21.8 | 24.4 | 101.6 | 20.4 | 10.9 | 14.8 | 112.4 | 18.5 | 13.4 | 6.7 | 111.0 |
+| colorbars | 113.8 | 105.2 | 86.0 | 205.0 | 5.7 | 5.5 | 4.8 | 79.4 | 76.8 | 43.3 | 46.5 | 134.3 | 141.2 | 42.2 | 22.3 | 155.7 |
+| mandelbrot | 78.2 | 73.4 | 72.7 | 399.1 | 107.0 | 90.2 | 75.8 | 367.1 | 81.5 | 52.9 | 43.3 | 400.1 | 133.3 | 59.4 | 75.3 | 463.1 |
+| atari2600 | 2,076.5 | 1,352.8 | 911.4 | 2,431.1 | 765.0 | 515.0 | 454.3 | 1,355.6 | 100.6 | 51.8 | 33.4 | 166.8 | 126.9 | 61.4 | 40.9 | 107.1 |
+| vgadonut | 434.7 | 267.6 | 267.8 | 573.0 | 399.7 | 246.5 | 231.7 | 604.8 | 88.8 | 73.5 | 72.9 | 227.0 | 141.4 | 118.7 | 114.4 | 356.8 |
+| cfib_demo | 145.3 | 103.4 | 103.3 | 590.2 | 218.6 | 115.6 | 118.3 | 445.4 | 50.0 | 31.6 | 27.1 | 220.2 | 75.3 | 40.3 | 37.6 | 247.1 |
+| nyan | 95.5 | 68.1 | 75.5 | 281.7 | 107.1 | 75.0 | 80.5 | 255.2 | 47.5 | 27.5 | 26.4 | 204.3 | 56.5 | 35.5 | 33.0 | 222.6 |
+| metaballs | 25.4 | 25.3 | 25.2 | 186.1 | 36.9 | 33.1 | 34.3 | 176.8 | 22.2 | 13.8 | 15.9 | 199.3 | 14.8 | 9.5 | 10.5 | 184.8 |
+| tomkeddie_a | 35.4 | 26.5 | 13.2 | 76.7 | 33.5 | 30.9 | 36.1 | 123.7 | 47.8 | 25.5 | 12.6 | 159.0 | 17.4 | 14.7 | 10.4 | 156.6 |
+
+#### Raw candidate: transforms x compressors, background CPU s (projected)
+
+| project | pack6 zstd-1 | pack6 zstd1 | pack6 zstd3 | pack6 lz4 | xor6 zstd-1 | xor6 zstd1 | xor6 zstd3 | xor6 lz4 | xor-byteplanes zstd-1 | xor-byteplanes zstd1 | xor-byteplanes zstd3 | xor-byteplanes lz4 | xor-bitplanes zstd-1 | xor-bitplanes zstd1 | xor-bitplanes zstd3 | xor-bitplanes lz4 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 80.6 | 78.0 | 66.0 | 53.9 | 57.9 | 58.7 | 57.2 | 34.0 | 53.1 | 52.9 | 55.6 | 41.2 | 110.0 | 110.2 | 112.8 | 102.1 |
+| rle_vga | 35.9 | 35.9 | 39.7 | 29.4 | 36.2 | 36.2 | 38.7 | 29.3 | 49.7 | 49.8 | 52.2 | 39.5 | 105.9 | 106.0 | 107.7 | 97.6 |
+| dvd_screensaver | 40.5 | 40.8 | 42.3 | 32.9 | 40.8 | 40.6 | 42.8 | 32.5 | 52.1 | 52.3 | 53.9 | 40.4 | 107.4 | 107.5 | 110.0 | 99.1 |
+| colorbars | 44.1 | 44.9 | 55.4 | 34.3 | 41.4 | 41.6 | 43.4 | 33.2 | 54.8 | 55.0 | 58.1 | 42.5 | 112.3 | 112.5 | 113.9 | 101.7 |
+| mandelbrot | 118.5 | 118.6 | 128.2 | 96.4 | 119.8 | 120.8 | 129.9 | 96.7 | 168.6 | 169.1 | 178.8 | 135.1 | 398.9 | 398.9 | 408.0 | 373.3 |
+| atari2600 | 95.1 | 92.4 | 99.5 | 43.4 | 58.9 | 61.0 | 63.9 | 36.4 | 52.8 | 53.0 | 54.7 | 41.7 | 111.8 | 111.8 | 112.7 | 101.3 |
+| vgadonut | 81.5 | 82.8 | 90.2 | 56.3 | 75.9 | 78.3 | 84.8 | 55.4 | 97.5 | 97.0 | 102.8 | 76.0 | 210.3 | 210.4 | 216.1 | 193.7 |
+| cfib_demo | 75.2 | 77.1 | 82.3 | 59.7 | 73.9 | 75.2 | 80.4 | 57.6 | 95.6 | 95.4 | 100.6 | 75.7 | 212.3 | 212.6 | 215.9 | 197.2 |
+| nyan | 45.4 | 45.9 | 48.2 | 35.2 | 42.6 | 43.4 | 47.3 | 33.1 | 56.0 | 56.3 | 59.0 | 44.6 | 121.0 | 121.4 | 123.2 | 111.8 |
+| metaballs | 72.8 | 72.8 | 78.9 | 59.7 | 72.8 | 73.4 | 80.0 | 59.3 | 102.3 | 102.5 | 109.1 | 81.5 | 227.6 | 227.9 | 232.5 | 212.6 |
+| tomkeddie_a | 41.9 | 42.0 | 44.7 | 33.6 | 42.1 | 42.6 | 44.9 | 33.8 | 55.0 | 55.1 | 57.0 | 43.4 | 114.5 | 114.0 | 116.2 | 105.7 |
 
 #### Raw candidate: the transform's share of that CPU, s (projected)
 
@@ -917,23 +1328,249 @@ Uncompressed, MB: nyancat 3,007.0, rle_vga 5,777.2, dvd_screensaver 16.4, colorb
 | metaballs | 16.70 [13.67, 33.73] | 0.45 [0.17, 1.59] | 0.48 [0.24, 1.52] | 91.34 [67.36, 160.78] | 672.66 [588.97, 959.56] |
 | tomkeddie_a | 6.25 [5.64, 14.00] | 1.36 [0.27, 5.27] | 1.32 [0.23, 3.97] | 120.36 [61.53, 219.82] | 937.56 [446.72, 1587.85] |
 
-### The trace's share of R2: background CPU plus one decode pass for the samplers
+### The readers of a job
 
-Background CPU (File size table) plus the median read time of one pass: the full scan for vgch2, runs, events and raw xor6, which cannot read uo_out alone any faster; uo_out alone (port0) for the planar files, which the samplers' uo_out-only use allows. % of the untraced simulation CPU. Reads of the planar file stand for every planar-stored candidate (the same streams).
+A job's derive step (tinytapeout-vga-videos `ttvga/harness/derive.py`) reads the trace three times: `tracetool info` (every port's change count: a full scan), `vgacap-sample` (all samplers in one pass; it reads `uo_out` and `rst_n`) and `tracetool uohash` (`uo_out` over the first 2^25 clocks). `vgacap-export` reads every pin when it is run (the full scan table). `results/read2`: 3 rounds, the formats rotated, each file its candidate's own. info on a planar file reads each stream on its own; infoscan is the same count over a merged full scan, as tracetool's code does it today.
+
+#### Validation: the same counts and runs as vgacap's reader
+
+| project | vgch2, lazy open | planar | events to planar | changelog to planar | raw to planar | events | raw xor6 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | same | same | same | same | same | same | same |
+| rle_vga | same | same | same | same | same | same | same |
+| dvd_screensaver | same | same | same | same | same | same | same |
+| colorbars | same | same | same | same | same | same | same |
+| mandelbrot | same | same | same | same | same | same | same |
+| atari2600 | same | same | same | same | same | same | same |
+| vgadonut | same | same | same | same | same | same | same |
+| cfib_demo | same | same | same | same | same | same | same |
+| nyan | same | same | same | same | same | same | same |
+| metaballs | same | same | same | same | same | same | same |
+| tomkeddie_a | same | same | same | same | same | same | same |
+
+#### tracetool info, s: median of the rounds [min, max]
+
+| project | vgch2 | vgch2, lazy open | planar | events to planar | changelog to planar | raw to planar | events | raw xor6 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 30.23 [28.43, 33.01] | 28.25 [26.78, 32.63] | 4.01 [3.93, 4.60] | 4.34 [3.76, 4.73] | 3.84 [3.56, 4.27] | 4.54 [3.68, 4.61] | 38.94 [37.05, 44.54] | 77.19 [75.46, 78.02] |
+| rle_vga | 62.86 [54.20, 65.98] | 64.00 [56.35, 64.38] | 6.90 [5.75, 6.90] | 7.25 [6.45, 8.07] | 6.05 [5.69, 6.81] | 6.30 [6.13, 6.73] | 83.23 [79.29, 87.83] | 79.45 [73.38, 85.99] |
+| dvd_screensaver | 0.14 [0.13, 0.15] | 0.14 [0.13, 0.34] | 0.03 [0.03, 0.07] | 0.03 [0.03, 0.06] | 0.03 [0.03, 0.06] | 0.03 [0.03, 0.05] | 0.20 [0.20, 0.37] | 37.00 [35.05, 38.68] |
+| colorbars | 0.96 [0.96, 1.68] | 0.98 [0.96, 1.31] | 0.13 [0.13, 0.13] | 0.13 [0.12, 0.13] | 0.13 [0.12, 0.13] | 0.13 [0.13, 0.13] | 1.60 [1.56, 1.60] | 35.07 [34.82, 35.31] |
+| mandelbrot | 0.61 [0.60, 1.28] | 0.78 [0.64, 1.46] | 0.17 [0.14, 0.26] | 0.15 [0.14, 0.28] | 0.16 [0.15, 0.27] | 0.19 [0.18, 0.36] | 0.84 [0.80, 1.46] | 139.95 [131.64, 145.74] |
+| atari2600 | 37.87 [32.88, 39.02] | 32.41 [31.00, 33.07] | 3.54 [3.49, 3.82] | 3.90 [3.64, 4.21] | 3.96 [3.52, 4.18] | 3.62 [3.42, 4.51] | 50.46 [47.72, 50.87] | 80.03 [76.29, 82.45] |
+| vgadonut | 10.30 [10.03, 10.74] | 10.68 [10.05, 11.25] | 1.32 [1.22, 1.33] | 1.31 [1.26, 1.38] | 1.35 [1.23, 1.39] | 1.31 [1.24, 1.31] | 14.53 [13.64, 14.80] | 85.29 [82.17, 88.37] |
+| cfib_demo | 1.56 [1.54, 1.72] | 1.63 [1.38, 1.66] | 0.19 [0.19, 0.19] | 0.19 [0.18, 0.19] | 0.19 [0.19, 0.21] | 0.21 [0.20, 0.22] | 2.33 [2.32, 2.46] | 76.59 [74.87, 82.35] |
+| nyan | 1.51 [1.20, 1.68] | 1.20 [1.18, 1.30] | 0.10 [0.09, 0.10] | 0.09 [0.09, 0.09] | 0.10 [0.09, 0.10] | 0.11 [0.10, 0.13] | 1.39 [1.33, 1.68] | 36.39 [35.85, 40.39] |
+| metaballs | 0.16 [0.15, 0.17] | 0.15 [0.15, 0.16] | 0.03 [0.03, 0.03] | 0.03 [0.03, 0.03] | 0.03 [0.03, 0.03] | 0.03 [0.03, 0.06] | 0.26 [0.23, 0.35] | 69.68 [69.49, 71.61] |
+| tomkeddie_a | 0.27 [0.20, 0.43] | 0.19 [0.18, 0.43] | 0.04 [0.04, 0.04] | 0.04 [0.04, 0.04] | 0.04 [0.04, 0.05] | 0.04 [0.04, 0.04] | 0.32 [0.31, 0.33] | 34.16 [34.08, 38.38] |
+
+#### tracetool info as a merged full scan, s: median of the rounds [min, max]
+
+| project | vgch2 | vgch2, lazy open | planar | events to planar | changelog to planar | raw to planar | events | raw xor6 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 28.32 [26.66, 31.61] | 28.26 [26.41, 29.05] | 49.57 [37.96, 63.55] | 39.57 [38.55, 41.78] | 38.49 [38.05, 43.68] | 46.72 [38.07, 46.79] | 40.10 [38.95, 43.77] | 76.45 [76.18, 77.89] |
+| rle_vga | 61.77 [58.30, 63.13] | 61.82 [57.88, 62.97] | 107.48 [89.14, 111.74] | 91.46 [84.86, 98.82] | 94.58 [85.65, 97.07] | 94.00 [92.96, 100.74] | 84.13 [81.04, 85.74] | 79.72 [73.39, 86.83] |
+| dvd_screensaver | 0.13 [0.12, 0.13] | 0.13 [0.13, 0.34] | 0.21 [0.21, 0.48] | 0.21 [0.21, 0.40] | 0.21 [0.21, 0.40] | 0.22 [0.21, 0.45] | 0.20 [0.20, 0.40] | 34.68 [34.58, 35.06] |
+| colorbars | 1.03 [0.95, 1.10] | 0.95 [0.92, 1.58] | 1.71 [1.70, 1.74] | 1.69 [1.67, 1.71] | 1.70 [1.69, 1.76] | 1.69 [1.69, 1.71] | 1.60 [1.56, 1.72] | 35.23 [34.64, 37.41] |
+| mandelbrot | 0.60 [0.59, 1.32] | 0.70 [0.63, 1.47] | 1.12 [0.82, 1.77] | 0.95 [0.83, 1.84] | 0.88 [0.82, 1.82] | 1.12 [0.87, 1.89] | 0.84 [0.78, 1.55] | 139.95 [139.31, 149.35] |
+| atari2600 | 32.58 [31.55, 36.92] | 32.15 [30.89, 32.68] | 47.18 [44.78, 48.06] | 48.33 [45.44, 50.37] | 49.54 [46.09, 49.56] | 49.58 [46.62, 53.70] | 47.74 [45.22, 49.46] | 81.02 [76.31, 81.20] |
+| vgadonut | 10.73 [10.17, 17.28] | 10.78 [10.41, 10.81] | 15.24 [14.49, 15.32] | 15.29 [14.64, 16.38] | 15.27 [14.24, 15.62] | 15.15 [14.20, 15.31] | 14.37 [13.90, 14.62] | 87.13 [86.86, 87.53] |
+| cfib_demo | 1.58 [1.54, 1.61] | 1.59 [1.41, 1.62] | 2.44 [2.41, 2.53] | 2.54 [2.44, 2.57] | 2.45 [2.37, 2.48] | 2.43 [2.41, 2.44] | 2.48 [2.33, 2.56] | 77.19 [75.72, 78.45] |
+| nyan | 1.33 [1.23, 1.76] | 1.22 [1.18, 1.51] | 1.30 [1.29, 1.39] | 1.29 [1.27, 1.29] | 1.29 [1.28, 1.34] | 1.32 [1.29, 1.68] | 1.40 [1.36, 1.70] | 37.51 [36.11, 41.14] |
+| metaballs | 0.15 [0.14, 0.17] | 0.20 [0.16, 0.20] | 0.24 [0.24, 0.34] | 0.25 [0.24, 0.31] | 0.29 [0.24, 0.30] | 0.27 [0.25, 0.30] | 0.25 [0.23, 0.35] | 70.08 [69.60, 78.09] |
+| tomkeddie_a | 0.21 [0.19, 0.42] | 0.19 [0.18, 0.43] | 0.36 [0.35, 0.36] | 0.36 [0.35, 0.39] | 0.36 [0.35, 0.40] | 0.39 [0.35, 0.39] | 0.32 [0.31, 0.33] | 35.07 [34.73, 35.19] |
+
+#### vgacap-sample's pass (uo_out and rst_n), s: median of the rounds [min, max]
+
+| project | vgch2 | vgch2, lazy open | planar | events to planar | changelog to planar | raw to planar | events | raw xor6 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 18.25 [18.12, 22.21] | 17.04 [16.27, 17.96] | 10.07 [8.71, 10.78] | 9.40 [8.64, 10.06] | 9.01 [8.34, 11.89] | 9.01 [8.30, 9.96] | 31.33 [29.91, 31.74] | 63.09 [61.60, 71.00] |
+| rle_vga | 32.98 [31.07, 35.02] | 36.85 [32.09, 38.48] | 0.04 [0.03, 0.04] | 0.03 [0.03, 0.04] | 0.03 [0.03, 0.04] | 0.04 [0.03, 0.04] | 57.53 [55.38, 64.35] | 51.65 [48.19, 55.71] |
+| dvd_screensaver | 0.07 [0.07, 0.08] | 0.08 [0.08, 0.22] | 0.10 [0.07, 0.18] | 0.07 [0.07, 0.14] | 0.07 [0.07, 0.13] | 0.07 [0.07, 0.17] | 0.15 [0.15, 0.25] | 39.09 [35.16, 39.40] |
+| colorbars | 0.44 [0.43, 0.48] | 0.47 [0.43, 0.66] | 0.15 [0.15, 0.16] | 0.16 [0.15, 0.19] | 0.16 [0.15, 0.16] | 0.16 [0.16, 0.19] | 1.10 [1.08, 1.29] | 35.04 [33.69, 36.96] |
+| mandelbrot | 0.40 [0.38, 0.85] | 0.66 [0.43, 0.93] | 0.33 [0.30, 0.64] | 0.44 [0.30, 0.63] | 0.33 [0.30, 0.67] | 0.42 [0.40, 0.77] | 0.67 [0.60, 1.12] | 138.18 [129.60, 144.43] |
+| atari2600 | 18.81 [17.88, 21.40] | 18.99 [17.75, 19.06] | 3.15 [3.10, 3.54] | 3.32 [3.00, 3.89] | 3.14 [3.03, 3.52] | 3.25 [3.23, 4.22] | 33.77 [31.22, 34.58] | 65.73 [63.37, 65.76] |
+| vgadonut | 6.82 [6.55, 7.23] | 6.92 [6.89, 6.96] | 4.50 [4.25, 4.74] | 4.51 [4.39, 4.79] | 4.52 [4.14, 4.68] | 4.54 [4.24, 4.62] | 10.46 [10.11, 10.94] | 81.47 [80.82, 87.29] |
+| cfib_demo | 0.93 [0.92, 1.00] | 0.93 [0.90, 0.98] | 0.56 [0.56, 0.73] | 0.57 [0.55, 0.71] | 0.56 [0.56, 0.84] | 0.56 [0.55, 0.66] | 1.82 [1.68, 1.92] | 72.80 [69.42, 73.24] |
+| nyan | 0.82 [0.81, 0.88] | 0.84 [0.84, 0.85] | 0.13 [0.13, 0.13] | 0.13 [0.13, 0.13] | 0.13 [0.12, 0.13] | 0.15 [0.13, 0.17] | 1.26 [1.00, 1.49] | 37.33 [35.27, 39.17] |
+| metaballs | 0.09 [0.08, 0.10] | 0.10 [0.10, 0.10] | 0.08 [0.08, 0.09] | 0.08 [0.08, 0.10] | 0.08 [0.08, 0.09] | 0.11 [0.08, 0.11] | 0.19 [0.18, 0.22] | 69.76 [67.48, 78.69] |
+| tomkeddie_a | 0.10 [0.09, 0.24] | 0.11 [0.10, 0.26] | 0.09 [0.09, 0.09] | 0.09 [0.09, 0.10] | 0.10 [0.09, 0.11] | 0.10 [0.09, 0.12] | 0.23 [0.23, 0.25] | 38.56 [38.51, 39.12] |
+
+#### tracetool uohash (open + uo_out over 2^25 clocks), ms: median of the rounds [min, max]
+
+| project | vgch2 | vgch2, lazy open | planar | events to planar | changelog to planar | raw to planar | events | raw xor6 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 494.0 [459.0, 747.9] | 402.5 [370.1, 439.6] | 189.0 [185.3, 206.8] | 182.3 [182.1, 193.9] | 168.1 [166.3, 309.2] | 180.9 [169.3, 189.3] | 407.3 [401.3, 420.5] | 1112.1 [998.2, 1297.3] |
+| rle_vga | 941.6 [934.7, 1054.3] | 800.5 [800.5, 937.5] | 1.1 [0.9, 1.3] | 0.8 [0.7, 0.9] | 0.8 [0.7, 0.9] | 0.9 [0.8, 0.9] | 566.1 [562.1, 689.7] | 755.0 [680.3, 793.9] |
+| dvd_screensaver | 10.2 [10.0, 12.6] | 3.6 [2.8, 7.3] | 1.5 [1.5, 4.0] | 1.5 [1.5, 4.4] | 1.5 [1.5, 2.7] | 1.7 [1.4, 3.2] | 2.5 [2.4, 4.2] | 850.3 [841.2, 1382.9] |
+| colorbars | 23.6 [23.3, 23.9] | 15.0 [14.3, 19.1] | 3.2 [3.2, 3.4] | 3.3 [3.2, 3.5] | 3.4 [3.2, 3.5] | 3.1 [3.0, 3.5] | 13.1 [12.8, 22.1] | 903.3 [788.6, 921.6] |
+| mandelbrot | 57.5 [55.9, 131.4] | 5.3 [4.5, 7.7] | 2.4 [2.4, 2.8] | 2.4 [2.3, 5.3] | 2.4 [2.4, 2.8] | 3.3 [3.2, 3.4] | 5.7 [3.7, 8.2] | 788.2 [775.2, 904.8] |
+| atari2600 | 537.7 [532.1, 560.3] | 445.3 [428.2, 464.0] | 66.3 [65.9, 72.4] | 65.4 [59.9, 90.7] | 71.6 [59.8, 88.2] | 65.8 [61.3, 74.6] | 392.6 [384.1, 561.3] | 1025.4 [1016.9, 1065.0] |
+| vgadonut | 215.2 [210.7, 224.1] | 191.8 [189.0, 198.3] | 48.5 [44.6, 58.8] | 47.9 [45.5, 57.5] | 61.1 [53.7, 61.3] | 48.0 [46.9, 48.4] | 85.1 [83.0, 86.3] | 980.0 [958.1, 986.8] |
+| cfib_demo | 32.0 [29.2, 32.4] | 12.9 [12.1, 13.8] | 6.7 [6.2, 7.0] | 6.8 [6.7, 7.0] | 6.6 [6.3, 11.7] | 5.5 [5.5, 6.7] | 15.2 [14.5, 23.3] | 886.0 [818.6, 912.4] |
+| nyan | 55.7 [54.8, 58.9] | 34.3 [34.0, 34.6] | 2.7 [2.7, 2.8] | 2.7 [2.6, 2.7] | 2.6 [2.6, 2.6] | 2.7 [2.5, 3.1] | 23.8 [14.9, 24.8] | 884.8 [785.6, 937.6] |
+| metaballs | 16.9 [14.5, 17.5] | 1.7 [1.6, 1.7] | 0.8 [0.8, 0.9] | 0.8 [0.8, 1.1] | 0.8 [0.8, 1.5] | 0.9 [0.9, 1.6] | 1.5 [1.4, 1.8] | 791.4 [788.1, 852.9] |
+| tomkeddie_a | 8.8 [7.7, 17.5] | 3.4 [3.3, 7.7] | 1.9 [1.8, 1.9] | 1.8 [1.8, 1.9] | 1.9 [1.9, 3.4] | 1.9 [1.8, 2.3] | 3.7 [3.6, 3.7] | 894.6 [783.9, 895.6] |
+
+#### Open, ms: median of the rounds [min, max]
+
+| project | vgch2 | vgch2, lazy open | planar | events to planar | changelog to planar | raw to planar | events | raw xor6 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 111.4 [102.1, 123.6] | 29.3 [29.3, 30.2] | 0.7 [0.7, 0.7] | 1.7 [1.6, 1.7] | 2.8 [2.7, 3.3] | 5.0 [4.8, 7.3] | 1.4 [1.3, 1.5] | 4.5 [4.1, 5.7] |
+| rle_vga | 241.5 [241.4, 307.5] | 96.7 [82.2, 210.2] | 0.1 [0.1, 0.1] | 0.1 [0.1, 0.1] | 0.1 [0.1, 0.1] | 0.1 [0.1, 0.2] | 0.1 [0.1, 0.1] | 1.1 [1.0, 1.1] |
+| dvd_screensaver | 9.6 [9.4, 11.8] | 1.3 [1.0, 2.3] | 0.1 [0.1, 0.3] | 0.2 [0.1, 0.2] | 0.3 [0.1, 0.3] | 0.3 [0.3, 0.4] | 0.1 [0.1, 0.2] | 1.8 [1.7, 2.5] |
+| colorbars | 14.6 [14.3, 24.6] | 4.7 [4.6, 6.2] | 0.1 [0.1, 0.1] | 0.1 [0.1, 0.1] | 0.1 [0.1, 0.1] | 0.2 [0.2, 0.2] | 0.1 [0.0, 0.1] | 0.5 [0.5, 0.5] |
+| mandelbrot | 72.4 [55.2, 120.3] | 3.0 [2.3, 3.9] | 0.8 [0.6, 1.1] | 0.9 [0.8, 1.3] | 1.0 [1.0, 1.1] | 1.7 [1.5, 2.6] | 1.1 [1.0, 1.1] | 10.0 [7.3, 11.6] |
+| atari2600 | 179.7 [142.2, 261.2] | 55.4 [49.2, 57.0] | 0.8 [0.8, 1.0] | 0.9 [0.9, 1.0] | 1.2 [0.9, 1.3] | 1.2 [1.1, 1.2] | 1.8 [1.8, 1.8] | 4.9 [4.0, 5.5] |
+| vgadonut | 136.1 [131.5, 195.4] | 112.2 [101.6, 153.1] | 1.0 [0.9, 1.0] | 1.2 [1.1, 1.3] | 1.3 [1.2, 1.3] | 4.0 [3.9, 4.1] | 1.2 [1.2, 1.3] | 8.1 [7.2, 8.2] |
+| cfib_demo | 24.0 [21.0, 24.6] | 2.4 [2.0, 2.6] | 0.2 [0.2, 0.3] | 0.3 [0.3, 0.3] | 0.3 [0.3, 0.4] | 0.5 [0.4, 0.6] | 0.7 [0.7, 0.8] | 7.4 [7.1, 8.1] |
+| nyan | 67.3 [41.9, 85.5] | 15.6 [15.5, 15.8] | 0.1 [0.1, 0.1] | 0.1 [0.1, 0.1] | 0.1 [0.1, 0.1] | 0.2 [0.2, 0.3] | 0.5 [0.5, 0.6] | 3.8 [3.7, 4.7] |
+| metaballs | 14.4 [14.4, 16.9] | 0.6 [0.6, 0.6] | 0.1 [0.1, 0.1] | 0.1 [0.1, 0.2] | 0.1 [0.1, 0.1] | 0.3 [0.2, 0.3] | 0.1 [0.1, 0.2] | 2.6 [2.6, 2.9] |
+| tomkeddie_a | 6.2 [6.1, 12.6] | 1.3 [1.2, 2.7] | 0.0 [0.0, 0.0] | 0.0 [0.0, 0.1] | 0.0 [0.0, 0.1] | 0.1 [0.1, 0.1] | 0.0 [0.0, 0.0] | 2.4 [2.4, 2.5] |
+
+#### One window of 420,000 clocks from a fresh open, ms: median of the rounds [min, max]
+
+| project | vgch2 | vgch2, lazy open | planar | events to planar | changelog to planar | raw to planar | events | raw xor6 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 128.5 [116.8, 211.5] | 51.0 [42.3, 76.7] | 134.2 [68.4, 211.0] | 73.1 [28.6, 125.5] | 41.2 [21.8, 91.4] | 30.7 [20.2, 45.0] | 69.4 [32.9, 103.5] | 128.8 [94.5, 188.8] |
+| rle_vga | 240.5 [226.7, 296.8] | 97.8 [92.4, 137.4] | 81.1 [38.9, 175.3] | 49.6 [38.0, 98.4] | 57.1 [29.2, 110.3] | 54.7 [25.0, 81.1] | 51.9 [37.1, 115.6] | 109.4 [82.4, 193.3] |
+| dvd_screensaver | 9.1 [8.6, 16.7] | 1.8 [1.5, 5.0] | 1.1 [0.5, 3.0] | 1.0 [0.5, 2.6] | 0.9 [0.5, 1.9] | 0.3 [0.2, 0.7] | 0.9 [0.5, 1.7] | 137.2 [103.6, 253.7] |
+| colorbars | 15.8 [14.6, 18.4] | 7.2 [5.9, 12.2] | 5.4 [2.3, 8.1] | 5.4 [2.3, 8.3] | 5.7 [2.3, 8.4] | 0.8 [0.6, 1.4] | 5.1 [2.3, 10.5] | 111.9 [69.7, 209.5] |
+| mandelbrot | 54.8 [51.8, 126.2] | 6.2 [2.9, 9.8] | 1.6 [0.9, 4.0] | 1.6 [0.9, 4.5] | 1.4 [0.9, 3.4] | 1.6 [1.3, 3.0] | 1.9 [1.1, 3.2] | 119.1 [93.7, 168.2] |
+| atari2600 | 153.1 [137.4, 176.9] | 75.4 [67.9, 117.9] | 72.8 [39.9, 149.8] | 78.4 [33.9, 134.7] | 33.3 [20.2, 60.8] | 29.3 [15.8, 50.0] | 84.6 [47.5, 142.0] | 139.7 [103.6, 242.6] |
+| vgadonut | 149.9 [138.8, 176.4] | 125.2 [114.7, 148.6] | 25.0 [8.7, 40.5] | 25.3 [8.8, 43.2] | 23.6 [9.2, 43.7] | 8.2 [5.3, 13.2] | 25.8 [11.8, 38.5] | 116.9 [100.8, 194.4] |
+| cfib_demo | 23.9 [20.8, 27.7] | 5.2 [4.1, 6.7] | 3.4 [1.5, 5.4] | 3.4 [1.6, 5.4] | 3.9 [1.5, 9.2] | 1.0 [0.6, 1.3] | 4.1 [2.5, 7.1] | 123.9 [99.8, 190.0] |
+| nyan | 44.3 [42.0, 66.9] | 23.2 [22.0, 28.9] | 4.5 [2.5, 7.9] | 4.7 [2.6, 8.1] | 5.9 [2.6, 12.3] | 1.1 [0.5, 1.5] | 8.3 [4.8, 16.5] | 138.2 [84.3, 193.8] |
+| metaballs | 16.7 [13.7, 27.7] | 1.1 [1.0, 1.9] | 0.3 [0.2, 0.6] | 0.4 [0.2, 1.0] | 0.3 [0.2, 0.8] | 0.2 [0.2, 0.4] | 0.4 [0.2, 0.6] | 111.1 [68.3, 169.8] |
+| tomkeddie_a | 6.3 [5.5, 14.4] | 1.9 [1.3, 4.7] | 1.5 [0.3, 2.2] | 1.7 [0.3, 4.1] | 1.6 [0.3, 2.4] | 0.3 [0.2, 0.5] | 1.2 [0.2, 1.9] | 135.0 [81.5, 257.4] |
+
+### The trace's share of R2: background CPU and every read of a job
+
+Background CPU plus `tracetool info`, `vgacap-sample`'s pass and `tracetool uohash`, and two more opens (each of the three opens the file; uohash's time includes its own). % of the pilot's untraced simulation CPU: the trace's own share, which leaves the rest of the 5% to the samplers, hashes and PNGs. The same compression work measured up to 2.5 times apart from one run to another (the encode2 tables), so the share is given at encode2's median and at the lowest background figure measured (the first round's and encode2's three). The reads' part follows, in s.
+
+#### With tracetool info counting each planar stream on its own, background at its median: the trace's share of R2, %
 
 | project | vgch2 (zstd 1) | events (zstd 1) | raw xor6 (zstd 1) | planar (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw to planar (zstd 1) |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | 8.7 (19.6 + 15.7 s) | 8.3 (7.5 + 26.1 s) | 26.8 (58.7 + 50.2 s) | 2.9 (3.8 + 7.7 s) | 5.7 (15.3 + 7.7 s) | 6.4 (18.3 + 7.7 s) | 10.5 (34.7 + 7.7 s) |
-| rle_vga | 8.0 (6.8 + 29.6 s) | 13.7 (4.4 + 57.6 s) | 19.2 (36.2 + 50.8 s) | 0.5 (2.4 + 0.0 s) | 5.3 (24.1 + 0.0 s) | 5.6 (25.2 + 0.0 s) | 10.4 (47.0 + 0.0 s) |
-| dvd_screensaver | 0.0 (0.1 + 0.1 s) | 0.1 (0.0 + 0.1 s) | 21.7 (40.6 + 36.8 s) | 0.0 (0.0 + 0.1 s) | 0.0 (0.1 + 0.1 s) | 0.1 (0.2 + 0.1 s) | 4.0 (14.3 + 0.1 s) |
-| colorbars | 0.1 (0.1 + 0.4 s) | 0.3 (0.1 + 1.0 s) | 21.6 (41.6 + 35.5 s) | 0.1 (0.1 + 0.1 s) | 0.3 (0.9 + 0.1 s) | 0.2 (0.7 + 0.1 s) | 3.7 (13.1 + 0.1 s) |
-| mandelbrot | 0.0 (0.5 + 0.4 s) | 0.0 (0.2 + 0.6 s) | 14.1 (120.8 + 144.9 s) | 0.0 (0.2 + 0.3 s) | 0.0 (0.6 + 0.3 s) | 0.1 (0.7 + 0.3 s) | 2.4 (44.6 + 0.3 s) |
-| atari2600 | 5.1 (21.1 + 15.9 s) | 5.3 (7.9 + 30.7 s) | 15.1 (61.0 + 49.6 s) | 0.6 (1.8 + 2.9 s) | 2.8 (17.9 + 2.9 s) | 3.3 (21.0 + 2.9 s) | 4.6 (30.7 + 2.9 s) |
-| vgadonut | 1.7 (7.0 + 5.7 s) | 1.6 (2.0 + 9.8 s) | 20.5 (78.3 + 77.5 s) | 0.7 (1.3 + 4.1 s) | 1.4 (6.4 + 4.1 s) | 1.5 (7.3 + 4.1 s) | 4.0 (26.6 + 4.1 s) |
-| cfib_demo | 0.2 (0.6 + 0.7 s) | 0.3 (0.4 + 1.6 s) | 24.0 (75.2 + 74.6 s) | 0.1 (0.1 + 0.5 s) | 0.2 (0.8 + 0.5 s) | 0.3 (1.1 + 0.5 s) | 3.8 (23.0 + 0.5 s) |
-| nyan | 0.6 (1.2 + 0.7 s) | 0.5 (0.8 + 0.9 s) | 23.8 (43.4 + 36.9 s) | 0.1 (0.1 + 0.1 s) | 0.2 (0.7 + 0.1 s) | 0.2 (0.6 + 0.1 s) | 5.7 (19.0 + 0.1 s) |
-| metaballs | 0.0 (0.1 + 0.1 s) | 0.0 (0.1 + 0.2 s) | 21.4 (73.4 + 70.6 s) | 0.0 (0.0 + 0.1 s) | 0.0 (0.2 + 0.1 s) | 0.0 (0.2 + 0.1 s) | 4.8 (32.5 + 0.1 s) |
-| tomkeddie_a | 0.0 (0.0 + 0.1 s) | 0.1 (0.0 + 0.2 s) | 22.4 (42.6 + 43.8 s) | 0.0 (0.0 + 0.1 s) | 0.1 (0.1 + 0.1 s) | 0.1 (0.2 + 0.1 s) | 3.3 (12.7 + 0.1 s) |
+| nyancat | 17.6 | 19.0 | 48.0 | 4.5 | 7.4 | 8.8 | 12.4 |
+| rle_vga | 25.0 | 32.6 | 36.7 | 2.5 | 8.2 | 7.9 | 13.7 |
+| dvd_screensaver | 0.1 | 0.1 | 31.9 | 0.1 | 0.1 | 0.1 | 5.2 |
+| colorbars | 0.5 | 0.8 | 29.4 | 0.1 | 0.2 | 0.3 | 5.6 |
+| mandelbrot | 0.1 | 0.1 | 22.6 | 0.0 | 0.1 | 0.1 | 3.9 |
+| atari2600 | 11.1 | 12.6 | 27.3 | 1.3 | 3.3 | 4.1 | 6.0 |
+| vgadonut | 3.3 | 3.6 | 32.3 | 1.0 | 1.5 | 1.8 | 6.3 |
+| cfib_demo | 0.6 | 0.7 | 36.4 | 0.2 | 0.3 | 0.3 | 5.9 |
+| nyan | 1.1 | 1.0 | 32.7 | 0.1 | 0.2 | 0.3 | 5.2 |
+| metaballs | 0.1 | 0.1 | 31.0 | 0.0 | 0.0 | 0.0 | 5.3 |
+| tomkeddie_a | 0.1 | 0.2 | 29.9 | 0.0 | 0.1 | 0.1 | 5.1 |
+
+#### With tracetool info counting each planar stream on its own, background at its lowest: the trace's share of R2, %
+
+| project | vgch2 (zstd 1) | events (zstd 1) | raw xor6 (zstd 1) | planar (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw to planar (zstd 1) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 16.9 | 18.9 | 47.9 | 4.5 | 7.0 | 7.7 | 11.9 |
+| rle_vga | 23.0 | 32.2 | 36.4 | 2.1 | 6.9 | 6.9 | 11.8 |
+| dvd_screensaver | 0.1 | 0.1 | 31.9 | 0.0 | 0.1 | 0.1 | 4.0 |
+| colorbars | 0.4 | 0.8 | 27.5 | 0.1 | 0.2 | 0.3 | 3.8 |
+| mandelbrot | 0.1 | 0.1 | 21.2 | 0.0 | 0.1 | 0.1 | 2.4 |
+| atari2600 | 10.4 | 12.3 | 24.8 | 1.2 | 2.9 | 3.6 | 4.5 |
+| vgadonut | 3.2 | 3.6 | 30.6 | 0.9 | 1.5 | 1.7 | 4.3 |
+| cfib_demo | 0.5 | 0.7 | 33.9 | 0.1 | 0.2 | 0.3 | 3.8 |
+| nyan | 1.1 | 1.0 | 32.7 | 0.1 | 0.2 | 0.2 | 5.0 |
+| metaballs | 0.1 | 0.1 | 30.9 | 0.0 | 0.0 | 0.0 | 4.9 |
+| tomkeddie_a | 0.1 | 0.1 | 29.4 | 0.0 | 0.1 | 0.1 | 3.3 |
+
+#### With tracetool info counting each planar stream on its own: the reads alone, s for the whole trace
+
+| project | vgch2 (zstd 1) | events (zstd 1) | raw xor6 (zstd 1) | planar (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw to planar (zstd 1) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 49.2 | 70.7 | 141.4 | 14.3 | 13.9 | 13.0 | 13.7 |
+| rle_vga | 97.3 | 141.3 | 131.9 | 6.9 | 7.3 | 6.1 | 6.3 |
+| dvd_screensaver | 0.2 | 0.4 | 76.9 | 0.1 | 0.1 | 0.1 | 0.1 |
+| colorbars | 1.5 | 2.7 | 71.0 | 0.3 | 0.3 | 0.3 | 0.3 |
+| mandelbrot | 1.2 | 1.5 | 278.9 | 0.5 | 0.6 | 0.5 | 0.6 |
+| atari2600 | 57.6 | 84.6 | 146.8 | 6.8 | 7.3 | 7.2 | 6.9 |
+| vgadonut | 17.6 | 25.1 | 167.8 | 5.9 | 5.9 | 5.9 | 5.9 |
+| cfib_demo | 2.6 | 4.2 | 150.3 | 0.8 | 0.8 | 0.8 | 0.8 |
+| nyan | 2.5 | 2.7 | 74.6 | 0.2 | 0.2 | 0.2 | 0.3 |
+| metaballs | 0.3 | 0.5 | 140.2 | 0.1 | 0.1 | 0.1 | 0.1 |
+| tomkeddie_a | 0.4 | 0.6 | 73.6 | 0.1 | 0.1 | 0.1 | 0.1 |
+
+#### With tracetool info as it is: a merged full scan, background at its median: the trace's share of R2, %
+
+| project | vgch2 (zstd 1) | events (zstd 1) | raw xor6 (zstd 1) | planar (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw to planar (zstd 1) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 17.6 | 19.0 | 48.0 | 15.7 | 16.1 | 17.3 | 22.8 |
+| rle_vga | 25.0 | 32.6 | 36.7 | 24.7 | 26.8 | 27.4 | 33.1 |
+| dvd_screensaver | 0.1 | 0.1 | 31.9 | 0.1 | 0.1 | 0.1 | 5.3 |
+| colorbars | 0.5 | 0.8 | 29.4 | 0.6 | 0.7 | 0.7 | 6.0 |
+| mandelbrot | 0.1 | 0.1 | 22.6 | 0.1 | 0.1 | 0.1 | 3.9 |
+| atari2600 | 11.1 | 12.6 | 27.3 | 7.3 | 9.3 | 10.3 | 12.3 |
+| vgadonut | 3.3 | 3.6 | 32.3 | 2.8 | 3.3 | 3.6 | 8.1 |
+| cfib_demo | 0.6 | 0.7 | 36.4 | 0.5 | 0.7 | 0.7 | 6.3 |
+| nyan | 1.1 | 1.0 | 32.7 | 0.4 | 0.6 | 0.6 | 5.6 |
+| metaballs | 0.1 | 0.1 | 31.0 | 0.1 | 0.1 | 0.1 | 5.3 |
+| tomkeddie_a | 0.1 | 0.2 | 29.9 | 0.1 | 0.2 | 0.2 | 5.2 |
+
+#### With tracetool info as it is: a merged full scan, background at its lowest: the trace's share of R2, %
+
+| project | vgch2 (zstd 1) | events (zstd 1) | raw xor6 (zstd 1) | planar (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw to planar (zstd 1) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 16.9 | 18.9 | 47.9 | 15.7 | 15.7 | 16.3 | 22.3 |
+| rle_vga | 23.0 | 32.2 | 36.4 | 24.3 | 25.5 | 26.5 | 31.1 |
+| dvd_screensaver | 0.1 | 0.1 | 31.9 | 0.1 | 0.1 | 0.1 | 4.1 |
+| colorbars | 0.4 | 0.8 | 27.5 | 0.5 | 0.7 | 0.7 | 4.2 |
+| mandelbrot | 0.1 | 0.1 | 21.2 | 0.1 | 0.1 | 0.1 | 2.4 |
+| atari2600 | 10.4 | 12.3 | 24.8 | 7.1 | 9.0 | 9.8 | 10.8 |
+| vgadonut | 3.2 | 3.6 | 30.6 | 2.8 | 3.3 | 3.5 | 6.1 |
+| cfib_demo | 0.5 | 0.7 | 33.9 | 0.5 | 0.6 | 0.7 | 4.2 |
+| nyan | 1.1 | 1.0 | 32.7 | 0.4 | 0.5 | 0.6 | 5.3 |
+| metaballs | 0.1 | 0.1 | 30.9 | 0.1 | 0.1 | 0.1 | 4.9 |
+| tomkeddie_a | 0.1 | 0.1 | 29.4 | 0.1 | 0.2 | 0.2 | 3.4 |
+
+#### With tracetool info as it is: a merged full scan: the reads alone, s for the whole trace
+
+| project | vgch2 (zstd 1) | events (zstd 1) | raw xor6 (zstd 1) | planar (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw to planar (zstd 1) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 49.2 | 70.7 | 141.4 | 59.8 | 49.2 | 47.7 | 55.9 |
+| rle_vga | 97.3 | 141.3 | 131.9 | 107.5 | 91.5 | 94.6 | 94.0 |
+| dvd_screensaver | 0.2 | 0.4 | 76.9 | 0.3 | 0.3 | 0.3 | 0.3 |
+| colorbars | 1.5 | 2.7 | 71.0 | 1.9 | 1.9 | 1.9 | 1.9 |
+| mandelbrot | 1.2 | 1.5 | 278.9 | 1.5 | 1.4 | 1.2 | 1.6 |
+| atari2600 | 57.6 | 84.6 | 146.8 | 50.4 | 51.7 | 52.8 | 52.9 |
+| vgadonut | 17.6 | 25.1 | 167.8 | 19.8 | 19.9 | 19.9 | 19.7 |
+| cfib_demo | 2.6 | 4.2 | 150.3 | 3.0 | 3.1 | 3.0 | 3.0 |
+| nyan | 2.5 | 2.7 | 74.6 | 1.4 | 1.4 | 1.4 | 1.5 |
+| metaballs | 0.3 | 0.5 | 140.2 | 0.3 | 0.3 | 0.4 | 0.4 |
+| tomkeddie_a | 0.4 | 0.6 | 73.6 | 0.5 | 0.5 | 0.5 | 0.5 |
+
+### Every plan against R1 and R2 together
+
+R1: the simulation thread's cost in the loop (fix round 1, median of the processes), % of the untraced model; the budget is 5%. R2: the trace's share, with tracetool info counting planar streams on their own (the lower figure), background at encode2's median; this study's bar for the trace is 1%, the whole post-simulation budget 5%. Lean writes vgch2's file, so its R2 is vgch2's; raw is from its own processes.
+
+| plan | nyancat R1 (%) | nyancat R2 (%) | rle_vga R1 (%) | rle_vga R2 (%) | colorbars R1 (%) | colorbars R2 (%) | atari2600 R1 (%) | atari2600 R2 (%) | vgadonut R1 (%) | vgadonut R2 (%) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| vgch2 (current) | 15.4 | 17.6 | 20.5 | 25.0 | 2.7 | 0.5 | 7.9 | 11.1 | 0.4 | 3.3 |
+| lean (vgch2's file) | 14.1 | 17.6 | 18.5 | 25.0 | 3.2 | 0.5 | 7.4 | 11.1 | 0.6 | 3.3 |
+| events, stored as events | 6.3 | 19.0 | 7.9 | 32.6 | 1.8 | 0.8 | 3.6 | 12.6 | -0.1 | 3.6 |
+| events, stored as planar | 7.3 | 7.4 | 8.3 | 8.2 | 1.7 | 0.2 | 3.8 | 3.3 | -0.1 | 1.5 |
+| changelog, stored as planar | 8.0 | 8.8 | 6.1 | 7.9 | 2.2 | 0.3 | 4.4 | 4.1 | -0.1 | 1.8 |
+| planar written on the simulation thread | 10.5 | 4.5 | 11.5 | 2.5 | 2.4 | 0.1 | 5.6 | 1.3 | -0.6 | 1.0 |
+| raw, stored as planar | 6.0 | 12.4 | 3.0 | 13.7 | 4.8 | 5.6 | 2.6 | 6.0 | 3.2 | 6.3 |
+
+#### Pass or fail, per plan
+
+Busy: nyancat, rle_vga, atari2600. Quiet: colorbars, vgadonut. R2 is checked at the background figure most in its favour (the lowest measured) and at encode2's median; tracetool info counts planar streams on their own.
+
+| plan | R1 at most 5%, busy | R1 at most 5%, quiet | R2 at most 1%, busy, lowest | R2 at most 1%, busy, median | R2 at most 5%, busy, lowest | R2 at most 5%, busy, median | R1 and R2 (1%, lowest), busy |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| vgch2 (current) | no | yes | no | no | no | no | no |
+| lean (vgch2's file) | no | yes | no | no | no | no | no |
+| events, stored as events | no | yes | no | no | no | no | no |
+| events, stored as planar | no | yes | no | no | no | no | no |
+| changelog, stored as planar | no | yes | no | no | no | no | no |
+| planar written on the simulation thread | no | yes | no | no | yes | yes | no |
+| raw, stored as planar | no | yes | no | no | no | no | no |
 
 ### Truncation and a crash mid-write
 
@@ -1077,17 +1714,67 @@ Exit 0 and a byte count: the tool read the whole file (its output's size). fst2v
 | metaballs | 0.02 | 0.02 | 27.2 | 0.06 | 0.06 | 720 | 0.05 |
 | tomkeddie_a | 0.01 | 0.00 | 66.9 | 0.03 | 0.02 | 364 | 0.06 |
 
+### Host load during each stage
+
+From `load.log` (`/proc/loadavg` and `vmstat` every 30 s while a stage or a loop set runs) and `progress.log` (each stage's start and end). Load per CPU is the 1-minute load over 88; idle is vmstat's. Other sessions shared the host throughout; nothing here was run on an idle machine.
+
+| stage | start (UTC) | end | samples | load per CPU, min | median | max | idle %, min | median |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| info | 06:26 | 06:28 | 3 | 1.73 | 2.06 | 2.08 | 1 | 2 |
+| writer | 06:28 | 06:56 | 56 | 0.55 | 1.19 | 2.28 | 1 | 28 |
+| writer2 | 06:44 | 06:45 | 5 | 0.83 | 0.91 | 1.00 | 22 | 34 |
+| writer2 | 06:52 | 06:53 | 4 | 0.85 | 0.96 | 1.06 | 46 | 53 |
+| encode | 06:56 | 07:12 | 30 | 0.56 | 1.39 | 1.66 | 5 | 26 |
+| writer2 | 07:19 | 07:21 | 5 | 0.58 | 0.58 | 0.60 | 37 | 45 |
+| interop | 07:31 | 07:47 | 81 | 0.53 | 0.71 | 1.24 | 4 | 46 |
+| ctr | 07:37 | 07:47 | 58 | 0.59 | 0.72 | 1.16 | 4 | 44 |
+| robust | 07:37 | 07:59 | 103 | 0.39 | 0.69 | 1.16 | 4 | 49 |
+| validate | 08:29 | 08:33 | 8 | 0.91 | 1.11 | 1.45 | 50 | 54 |
+| lean | 09:05 | 09:09 | 6 | 0.98 | 1.19 | 1.52 | 37 | 58 |
+| loop fx1a+fx1b | 09:18 | 09:33 | 25 | 0.93 | 1.12 | 1.75 | 24 | 33 |
+| encode2 | 09:18 | 09:31 | 18 | 0.93 | 1.09 | 1.45 | 24 | 30 |
+| read2 | 09:31 | 10:30 | 195 | 0.66 | 1.46 | 2.43 | 9 | 47 |
+| loop fx1c+fx1d | 09:35 | 09:49 | 55 | 0.93 | 1.19 | 1.80 | 9 | 44 |
+| loop fx1ra+fx1rb | 09:50 | 09:53 | 11 | 1.27 | 1.80 | 2.09 | 24 | 43 |
+| loop fx1rc+fx1rd | 09:55 | 09:59 | 16 | 1.46 | 2.25 | 2.43 | 10 | 37 |
+| loop fx1s | 10:01 | 10:14 | 50 | 1.22 | 1.81 | 2.07 | 11 | 48 |
+
 ### Implementation size
 
 | code | non-comment lines |
 |---|---:|
 | vgch2 writer (vgacap src/trace/trace_write.c, blocks.c, trace.h; stream writer) | 633 |
 | vgch2 reader (vgacap src/trace/trace_read.c; stream reader) | 1082 |
-| the study writers: planar, events, runs, changelog, raw (study src/w_mine.c, w_mine.h) | 528 |
+| the study writers: planar, events, runs, changelog, raw (study src/w_mine.c, w_mine.h) | 553 |
 | study container writer + transforms (study src/bg.c, codec.c) | 657 |
-| the study readers: planar, events, raw, and vgch2 and FST drivers (study src/rd.c) | 517 |
+| the study readers: planar, events, raw, and vgch2 and FST drivers (study src/rd.c) | 619 |
 
 Spec text, words: VGCH v2 trace 4056 (docs/trace-format.md + src/stream/reference-stream-format.md).
+
+#### What a planar payload changes (R9): the code that reads or writes RUNS today
+
+Each file's non-comment lines, whole: the code to review, not the lines that change. The published traces are re-encoded as well (the re-encode table, under the encode2 tables).
+
+| repository | file | non-comment lines |
+|---|---:|---:|
+| vgacap | `src/trace/trace_write.c` | 282 |
+| vgacap | `src/trace/trace_read.c` | 607 |
+| vgacap | `src/trace/blocks.c` | 88 |
+| vgacap | `src/stream/reader.c` | 475 |
+| vgacap | `src/stream/writer.c` | 159 |
+| vgacap | `src/tools/vgacap_dump.c` | 254 |
+| vgacap | `python/vgacap/stream.py` | 370 |
+| vgacap | `python/vgacap/synthtrace.py` | 155 |
+| vgacap | `tests/test_trace_read.c` | 1104 |
+| vgacap | `tests/test_trace_write.c` | 861 |
+| vgacap | `tests/test_stream_v2.c` | 739 |
+| vgacap | `python/tests/test_stream_v2.py` | 304 |
+| vgacap | `python/tests/test_roundtrip_c.py` | 76 |
+| tinytapeout-vga-videos | `ttvga/harness/tb.cpp` | 699 |
+| tinytapeout-vga-videos | `ttvga/harness/tracetool.c` | 333 |
+| tinytapeout-vga-videos | `tests/sim/vgch.py` | 50 |
+| tinytapeout-vga-videos | `scripts/export_tbv1_vectors.py` | 104 |
+| all | 17 files | 6,660 |
 
 <!-- analyze.py tables: end -->
 
@@ -1144,9 +1831,9 @@ What each costs and buys:
   - Buys: size on quiet designs. Colorbars is 0.55 MB at 2^24 clocks, against 11.9 MB at 2^20 and 21.9 MB at 2^18, because zstd frames cannot refer to each other. On busy traces the 16 MiB limit ends the blocks first, so block length changes nothing (nyancat 415-416 MB at every length).
   - 2^26 would shrink colorbars to 0.17 MB, for 4.5 times the cost of a seek.
 - **`BLKH` at every block's start, read at open.**
-  - Cost: vgacap's open decompresses the start of every block: 107 ms on nyancat (489 blocks), 202 ms on atari2600 and 308 ms on rle_vga (1,208 blocks). A one-frame seek is mostly this open.
+  - Cost: vgacap's open decompresses the start of every block: 111 ms on nyancat (489 blocks), 180 ms on atari2600 and 242 ms on rle_vga (1,208 blocks). A one-frame seek is mostly this open.
   - Buys: a block names its own position, so a stream reader that reads the frames in order needs nothing else.
-  - Reading the starts lazily, only as a seek's binary search needs them, cuts the open to 29 ms on nyancat and 52 ms on atari2600, and a one-frame seek from 137 to 50 ms on nyancat. That is a reader change, with no format change.
+  - Reading the starts lazily, only as a seek's binary search needs them, cuts the open to 29 ms on nyancat and 55 ms on atari2600, and a one-frame seek from 129 to 51 ms on nyancat. That is a reader change, with no format change.
   - Putting each block's first sample in the index would make the open cheaper still, but zstd's seek table has no field for it. That needs a skippable frame or chunk of its own: a container change.
 - **`META` (open and close).**
   - Cost: under 1 KB a trace.
@@ -1202,7 +1889,7 @@ Every item rests on a table and a number, or on a concrete property.
 
 Pros:
 
-- The fastest merged scan of every port: `tracetool info` as it is takes 27.5 s on nyancat, against planar's 49.6.
+- The fastest merged scan of every port: `tracetool info` as it is takes 28.3 s on nyancat, against planar's 49.6.
 - One stream with one pair per run: the simplest reader to write against the spec.
 - Plain `zstd -d` gives the whole stream (R8, interop table). The container is zstd's own seekable format.
 - A truncated or killed trace keeps every finished block. A 50% cut kept 49.9% of the samples, and a kill kept 99.7-99.9% of what was written (robustness table).
@@ -1211,10 +1898,10 @@ Pros:
 Cons:
 
 - The most expensive on the simulation thread: 15.4% of the simulation on nyancat, 20.5% on rle_vga and 7.9% on atari2600.
-- Its R2 share is 18.2% (nyancat), 26.2% (rle_vga) and 11.0% (atari2600): its compressor plus three full decodes a job.
+- Its R2 share is 17.6% (nyancat), 25.0% (rle_vga) and 11.1% (atari2600): its compressor plus three full decodes a job.
 - The largest file on every busy design: 416 MB nyancat, 597 MB atari2600, 18.4 MB rle_vga. Planar is 54, 9.0 and 0.62 MB (Total bytes table).
-- Opening reads the start of every block: 107 ms on nyancat and 308 ms on rle_vga. Lazy reading of the starts fixes most of that without a format change.
-- `vgacap-sample`'s pass decodes every run: 20.2 s on nyancat and 35.0 s on rle_vga, against planar's 10.1 and 0.04.
+- Opening reads the start of every block: 111 ms on nyancat and 242 ms on rle_vga. Lazy reading of the starts fixes most of that without a format change.
+- `vgacap-sample`'s pass decodes every run: 18.3 s on nyancat and 33.0 s on rle_vga, against planar's 10.1 and 0.04.
 
 ### lean (vgch2's file, one call a changed clock)
 
@@ -1241,7 +1928,7 @@ Pros:
 Cons:
 
 - 10.5% (nyancat), 11.5% (rle_vga) and 5.6% (atari2600) of the simulation: over R1 on all three busy designs.
-- A merged scan of every port is 1.4-1.8 times vgch2's on the busy traces, because seven streams are merged. `tracetool info` has to count each stream on its own, or planar's R2 gain is mostly lost (15.7% against vgch2's 18.2% on nyancat).
+- A merged scan of every port is 1.4-1.8 times vgch2's on the busy traces, because seven streams are merged. `tracetool info` has to count each stream on its own, or planar's R2 gain is mostly lost (15.7% against vgch2's 17.6% on nyancat).
 - Seven streams a block, where `RUNS` has one chunk. Measured as seven zstd frames a block, which is a change of VGCH v2's container.
 - 7 streams × 16 MiB × 2 of buffers allocated on the simulation side (Memory).
 
@@ -1268,7 +1955,7 @@ Pros:
 Cons:
 
 - Over R1 on nyancat and rle_vga.
-- Its R2 share is 7.4% (nyancat), 8.3% (rle_vga) and 3.3% (atari2600): over this study's 1% bar on all three, and over the whole 5% on two.
+- Its R2 share is 7.4% (nyancat), 8.2% (rle_vga) and 3.3% (atari2600): over this study's 1% bar on all three, and over the whole 5% on two.
 - The converter, written plainly, costs 16-30 s of background CPU on the busy traces (encode2 median), against 2.9-4.4 s for compressing planar's streams.
 
 ### changelog (raw compare; a changed clock stored unencoded; planar written in the background)
@@ -1282,7 +1969,7 @@ Pros:
 Cons:
 
 - On nyancat it costs more than events (8.0% against 6.3%).
-- Its records are 24 bytes a changed clock, so converting them costs more than converting events: R2 8.8% (nyancat) and 8.0% (rle_vga).
+- Its records are 24 bytes a changed clock, so converting them costs more than converting events: R2 8.8% (nyancat) and 7.9% (rle_vga).
 - 2 × 64 MiB of records, and 8 × 64 MiB of converter scratch (Memory).
 
 ### raw (both raw images of every clock)
@@ -1296,7 +1983,7 @@ Cons:
 
 - 6.0% on nyancat, over R1, and 4.8% on colorbars, where events costs 1.8%. Its cost is the same whatever the design does.
 - In processes of its own it cost more on nyancat than the first round's shared processes suggested (3.6%).
-- Its background thread reads 16 bytes a clock. Converted to planar, its R2 share is 12.4% (nyancat), 13.8% (rle_vga), and 3.9-6.3% even on the quiet traces. Stored as `xor6`, it is 23-48%.
+- Its background thread reads 16 bytes a clock. Converted to planar, its R2 share is 12.4% (nyancat), 13.7% (rle_vga), and 3.9-6.3% even on the quiet traces. Stored as `xor6`, it is 23-48%.
 - Stored as `xor6`, it is 10-280 times vgch2 on quiet traces (30.7 MB tomkeddie_a against 0.11).
 - 2^21-clock blocks of 32 MiB, double-buffered: 64 MiB a writer.
 
@@ -1349,7 +2036,7 @@ Cons:
 **What the data now supports, in order.**
 
 1. **Read block starts lazily (no format change).**
-   - The open falls from 107 to 29 ms on nyancat and from 202 to 52 ms on atari2600. A one-frame seek falls from 137 to 50 ms on nyancat.
+   - The open falls from 111 to 29 ms on nyancat, from 180 to 55 ms on atari2600 and from 242 to 97 ms on rle_vga. A one-frame seek falls from 129 to 51 ms on nyancat.
    - It is a change to `trace_read.c` alone. The study's copy is [`trace_read_lazy.c`](../../bench/format-study/src/trace_read_lazy.c).
 2. **Choose the zstd level per measured set (no format change).**
    - Level 3 is smaller than level 1 on nyancat's and atari2600's `RUNS` data, for no more CPU. On rle_vga's it is larger and slower.
@@ -1358,13 +2045,13 @@ Cons:
    - It writes vgacap's file byte for byte and saves 6-10%.
    - Merge it only if its shape is wanted for itself, or once the gap to the study's prototype is understood.
 4. **If the format changes, store planar, and change it all at once.**
-   - Planar is the only change measured that cuts both the size (7.7-66 times on the busy traces) and the trace's R2 share. Across the three planar-stored plans the share falls to 1.3-8.8% on the busy designs, from vgch2's 11.0-26.2%.
+   - Planar is the only change measured that cuts both the size (7.7-66 times on the busy traces) and the trace's R2 share. Across the three planar-stored plans the share falls to 1.3-8.8% on the busy designs, from vgch2's 11.1-25.0%.
    - It is a new format version, not a variant of VGCH v2:
      - a new header version;
      - every published trace re-encoded, checked by canonical-run hashes;
      - one stored layout, with no dual `RUNS` and planar readers, and no "keep both streams" fallback;
      - every reader and writer listed under R9 updated in the same change.
-   - `tracetool info` has to count each stream on its own. Today's merged scan would keep most of vgch2's R2 cost: 15.7% against 18.2% on nyancat.
+   - `tracetool info` has to count each stream on its own. Today's merged scan would keep most of vgch2's R2 cost: 15.7% against 17.6% on nyancat.
    - The container that was measured stores each stream as a zstd frame of its own, seven a block. VGCH v2 stores one frame a block, so this is a container change too.
      - One frame a block, holding all seven streams, was not measured. It would keep the container, but every read would decompress all seven streams.
      - Seven frames a block keep the `uo_out` gain, at the cost of a reader that streams in time order holding a block's seven streams first.
@@ -1374,7 +2061,7 @@ Cons:
 
    | Capture | R1 nyancat (%) | R1 rle_vga (%) | R1 atari2600 (%) | R2 nyancat (%) | R2 rle_vga (%) | R2 atari2600 (%) |
    |---|---:|---:|---:|---:|---:|---:|
-   | events, converted in the background | 7.3 | 8.3 | 3.8 | 7.4 | 8.3 | 3.3 |
+   | events, converted in the background | 7.3 | 8.3 | 3.8 | 7.4 | 8.2 | 3.3 |
    | planar on the simulation thread | 10.5 | 11.5 | 5.6 | 4.5 | 2.5 | 1.3 |
 
    - The converter is the gap. It costs 16-30 s of background CPU on the busy traces, against 2.9-4.4 s for compressing planar's streams written directly.
@@ -1389,12 +2076,12 @@ Cons:
 - No measured plan keeps R1 within 5% on nyancat. On rle_vga only raw capture does.
 - No measured plan keeps the trace's R2 share within this study's 1% on any busy design. Only planar on the simulation thread stays within the whole 5%.
 - So on the busy designs, every measured plan breaks at least one of the two budgets with the trace alone, before any sampler or hash.
-- The background figures behind R2 vary up to 2.8 times with the host's other work. The verdicts hold at both ends of that range.
+- The background figures behind R2 vary up to 2.5 times with the host's other work. The verdicts hold at both ends of that range.
 - Memory was not measured, only read from the code.
 
 **What would change this recommendation.**
 
-- **The samplers come to need every pin, not `uo_out` and `rst_n`.** Then planar's merged scan, 1.4-1.8 times vgch2's on the busy traces, counts in full. `tracetool info` as it is shows the effect: planar's R2 share is 15.7% against vgch2's 18.2% on nyancat.
+- **The samplers come to need every pin, not `uo_out` and `rst_n`.** Then planar's merged scan, 1.4-1.8 times vgch2's on the busy traces, counts in full. `tracetool info` as it is shows the effect: planar's R2 share is 15.7% against vgch2's 17.6% on nyancat.
 - **A converter near the compressor's cost is measured.** Then events converted in the background is the capture to use.
 - **Opening the trace directly in GTKWave or Surfer becomes a must.** FST is the only format both read. It costs 4.1-5.1 times vgch2 on the simulation thread for busy designs (same replay run), seeks in 0.6-1.0 s, and a cut-short file gave no samples or crashed libfst's reader. Exporting is still the better route.
 - **The boards adopt `RUNS` as the format note planned.** Keep `RUNS` for the boards' 8- and 12-bit captures, where one value is one port. The simulation trace has no reason to share their chunk.
@@ -1434,14 +2121,14 @@ What the data says about each:
 
 - **"A few nanoseconds" a sample.** Busy designs rarely take the fast path: nyancat changes 77% of its clocks, rle_vga 100%. In the Verilator loop vgch2 costs 37-61 ns a clock on them, 15-21% of the simulation.
 - **About one run a clock.** nyancat makes 0.77 runs a clock, atari2600 0.90 and rle_vga 2.00.
-- **35-70 MB/s, 4-14% of a core.** rle_vga writes 20.2 GB of `RUNS` bytes for 1.44 G clocks, 14 bytes a clock. nyancat's 8.1 GB took 19.6 s to compress in the first round, 4.8% of its simulation CPU. With the job's three reads added, the trace's R2 share is 18.2%.
+- **35-70 MB/s, 4-14% of a core.** rle_vga writes 20.2 GB of `RUNS` bytes for 1.44 G clocks, 14 bytes a clock. nyancat's 8.1 GB took 19.6 s to compress in the first round, 4.8% of its simulation CPU. With the job's three reads added, the trace's R2 share is 17.6%.
 - **No raw fallback needed.** Raw `xor6` at zstd 1 is the same size as `RUNS` on nyancat (417 against 416 MB) and smaller on rle_vga (13.2 against 18.4 MB). On quiet designs it is 10-300 times larger. Raw's real advantage, the simulation thread on the busiest designs, was not considered.
 - **A 43-bit value a pair.** The value is rewritten whole when one port changes. Planar streams of each port are 7.7 times smaller on nyancat, 66 on atari2600 and 100 on nyan.
 - **zstd level 1.**
   - On `RUNS` data, level 3 is 30% smaller than level 1 on nyancat (288 against 413 MB) for less CPU (17.3 against 19.6 s).
   - On rle_vga, level 3 is larger and slower: 26.8 MB in 10.9 s, against 18.4 MB in 6.8 s.
   - The pilot tried only levels 1, −1, −3 and −5, by wall time.
-- **`BLKH` read at open.** vgacap's open decompresses the start of every block: 107 ms on nyancat, 308 ms on rle_vga. That is most of a one-frame seek. Reading the starts lazily removes most of it with no format change.
+- **`BLKH` read at open.** vgacap's open decompresses the start of every block: 111 ms on nyancat, 242 ms on rle_vga. That is most of a one-frame seek. Reading the starts lazily removes most of it with no format change.
 - **One chunk with the board.** No board writes `RUNS` today; the note's decision (b) put it off. Nothing in the simulation trace's performance depends on it, and it should not decide the simulation format.
 - **Viewing by export.** FST written directly costs 4.1-5.1 times vgch2 on busy designs (same replay run). Its seek takes 0.6-1.0 s a window, and a cut-short FST file gave no samples or crashed the reader (robustness table). Exporting stays the right way to interoperate.
 
@@ -1484,9 +2171,9 @@ Each review item, and what this round did about it:
 What the round found that the first round had wrong:
 
 - **The lean writer.** The first round's "about half" came from the study's own `runs` writer. vgacap's writer with one call a changed clock saves 6-10%.
-- **R2.** With the job's three reads, vgch2's R2 share is 18.2% on nyancat, not 8.7%. Events stored as planar is 7.4%, not 5.7%.
+- **R2.** With the job's three reads, vgch2's R2 share is 17.6% on nyancat, not 8.7%. Events stored as planar is 7.4%, not 5.7%.
 - **Raw.** In processes of its own, raw costs 6.0% on nyancat, not 3.6%.
-- **Background CPU.** It varies up to 2.8 times for identical work.
+- **Background CPU.** It varies up to 2.5 times for identical work.
 
 ## Reproducing
 
