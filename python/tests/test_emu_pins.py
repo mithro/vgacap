@@ -228,6 +228,7 @@ def test_writing_the_latch_of_a_pad_pio_drives_changes_nothing():
     # gpio_put reaches the pad only through SIO; PIO keeps it, and no edge.
     board = _board()
     Pin = _pin(board)
+    Pin(CLK, Pin.OUT, value=0)  # 4d holds it low before PIO takes it (4e)
     sm, _ = _clock_sm(board)
     sm.active(1)
     board.advance(3)  # high, high, low: PIO holds it low from here
