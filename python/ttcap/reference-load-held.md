@@ -13,7 +13,7 @@ review: 2027-05-28
 
 ## What it refuses
 
-Check is what `load_held` looks at before any board command, and Refused when the case it raises `ValueError` for.
+Check is what `load_held` looks at before it writes to the board, and Refused when the case it raises for.
 
 | Check | Refused when |
 |---|---|
@@ -21,9 +21,10 @@ Check is what `load_held` looks at before any board command, and Refused when th
 | The board profile | its chip is not the RP2350 |
 | The board profile's clock pin | it is not GPIO 16 |
 | The file | it is empty |
-| The file's first 1024 bytes | they hold no iCE40 sync word `7E AA 99 7E` |
+| The file's iCE40 sync word `7E AA 99 7E` | not starting in the first 1024 bytes |
+| `tt.shuttle` on the board | it is not the FPGA mux |
 
-The loader clears the FPGA before it sends a byte, and its count matches an empty or wrong file all the same. The window is `SYNC_WINDOW`. The [tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns) bitstreams have the sync word at byte 4, and 1024 bytes leaves room for a comment block before it.
+The last check is the board's, so it raises `CaptureError`; the others raise `ValueError` before any board command. The loader clears the FPGA before it sends a byte, and its count matches an empty or wrong file all the same. The window is `SYNC_WINDOW`. The [tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns) bitstreams have the sync word at byte 4, and 1024 bytes leaves room for a comment block before it.
 
 ## What it sends
 
@@ -31,22 +32,24 @@ Stage is the order, and When the requests or boards it applies to. Board command
 
 | Stage | When | Board command | Checked |
 |---|---|---|---|
-| 1 | always | `os.mkdir("/_vgacap")` | any error but `EEXIST` fails |
-| 2 | always | `RawRepl.upload()` to `/_vgacap/held.bin` | length and crc32 |
-| 3 | always | `tt.clock_project_stop()` | no traceback |
-| 4 | with `ui_in` | `tt.mode = RPMode.ASIC_RP_CONTROL` | no traceback |
-| 5 | on boards with a manual-clock monitor | `tt.manual_project_clock.monitoring = False` | no traceback |
-| 6 | with `ui_in` | `tt.ui_in.value = N` | `ui_in` reads N |
-| 7 | always | `tt.reset_project(True)` | `rst_n` reads 0 |
-| 8 | always | `tt.pins.safe_bidir()` | no traceback |
-| 9 | always | `tt.clock_project_stop()` | no traceback |
-| 10 | always | `Pin(16, Pin.OUT, value=0)` | no traceback |
-| 11 | always | `fabricfoxv2.spi_transferPIO("/_vgacap/held.bin")` | `Transmission complete, total bytes: N` once |
-| 12 | always | `tt.rst_n()` | 0 |
-| 13 | always | `Pin(16).value()` | 0 |
-| 14 | always | `os.remove("/_vgacap/held.bin")` | no traceback |
+| 1 | always | `tt.shuttle.run == 'FPGA'` | `ttcap fpga=1` |
+| 2 | always | `os.mkdir("/_vgacap")` | any error but `EEXIST` fails |
+| 3 | always | `RawRepl.upload()` to `/_vgacap/held.bin` | length and crc32 |
+| 4 | always | `tt.clock_project_stop()` | no traceback |
+| 5 | with `ui_in` | `tt.mode = RPMode.ASIC_RP_CONTROL` | no traceback |
+| 6 | on boards with a manual-clock monitor | `tt.manual_project_clock.monitoring = False` | no traceback |
+| 7 | with `ui_in` | `tt.ui_in.value = N` | `ui_in` reads N |
+| 8 | always | `tt.reset_project(True)` | `rst_n` reads 0 |
+| 9 | always | `tt.pins.safe_bidir()` | no traceback |
+| 10 | always | `tt.shuttle.reset()` | no traceback |
+| 11 | always | `tt.clock_project_stop()` | no traceback |
+| 12 | always | `Pin(16, Pin.OUT, value=0)` | no traceback |
+| 13 | always | `fabricfoxv2.spi_transferPIO("/_vgacap/held.bin")` | `Transmission complete, total bytes: N` once |
+| 14 | always | `tt.rst_n()` | 0 |
+| 15 | always | `Pin(16).value()` | 0 |
+| 16 | always | `os.remove("/_vgacap/held.bin")`, then `os.rmdir("/_vgacap")` | no traceback but `ENOTEMPTY` or `ENOENT` from the `rmdir` |
 
-Stages 3 to 7 are the reset sequence `select_project` uses, stopped before the clock starts ([#57](https://github.com/mithro/vgacap/issues/57)). Stages 8 to 13 are one command, the board script. The loader catches its own `OSError` and only prints it, so stage 11 is checked from what it printed.
+Stages 4 to 8 are the reset sequence `select_project` uses, stopped before the clock starts ([#57](https://github.com/mithro/vgacap/issues/57)). Stages 9 to 15 are one command, the board script. Stages 9 and 10 are the SDK's own [`FPGAMux.enable`](https://github.com/TinyTapeout/tt-micropython-firmware/blob/v3.1.1/src/ttboard/fpga/fpga_mux.py#L144-L160) steps before its load. The loader catches its own `OSError` and only prints it, so stage 13 is checked from what it printed.
 
 ## What it returns
 
@@ -57,8 +60,8 @@ Key is the key of the returned dict, and Value what it holds. The keys are those
 | `project` | `None` |
 | `enable` | `"held"` |
 | `clock_hz` | the request's `clock_hz` |
-| `mode_before` | the mode before stage 4 |
-| `monitoring_before` | the monitor before stage 5 |
+| `mode_before` | the mode before stage 5 |
+| `monitoring_before` | the monitor before stage 6 |
 | `ui_in` | the request's `ui_in` |
 | `bytes` | the loader's byte count |
 
@@ -71,11 +74,11 @@ Item is a part of the board's state, and State what `load_held` leaves it in.
 | The design | at its power-up value |
 | `rst_n` | held at 0 |
 | Project clock pad | driven at 0 by a `machine.Pin` |
-| Input mode | as stage 4 left it |
+| Input mode | as stage 5 left it |
 | Manual-clock monitor | off |
-| `/_vgacap` | kept |
+| `/_vgacap` | removed when empty |
 | `/_vgacap/held.bin` | deleted |
-| `tt.shuttle.enabled` | the design enabled before the load |
+| `tt.shuttle.enabled` | `None` (the SDK's own mid-load state) |
 | fpgas.online daemon's design | the design enabled before the load |
 
 The design has seen no clock edge since the load, so a design with a synchronous reset has not been reset. The clocked capture that follows must clock it with `rst_n` still low for its reset cycles, then release reset before clock 0.
@@ -88,7 +91,7 @@ Until that capture drives the clock pin, nothing may do any of these:
 
 Each one un-drives GPIO 16 and leaves it to the RP2's pull-down, and a mode write releases reset too. `mode_before` and `monitoring_before` are for putting the board back after the capture.
 
-`tt.shuttle.enabled` still names the design enabled before the load. A later `select_project` naming that design takes it as already enabled, and captures whatever the FPGA holds. [`restart_sdk`](repl.py) clears the stale name: the soft reset makes the SDK load its default project again. Recording the load against the board's claim belongs to the caller, not to `load_held`.
+`tt.shuttle.enabled` is `None`, as the SDK leaves it while it loads. A later `select_project` naming the design enabled before the load refuses it as not the enabled design, rather than capture what the FPGA holds. The fpgas.online daemon still names that design, so recording the load against the board's claim belongs to the caller, not to `load_held`.
 
 ## Errors
 
@@ -99,12 +102,13 @@ Message is the start of the error. Raised as is its type. Cause is what made it,
 | `load_held loads its own bitstream` | `ValueError` | the request names a design | untouched |
 | `load_held needs the FPGA breakout's demo board` | `ValueError` | the profile is not the RP2350 board with the clock on GPIO 16 | untouched |
 | `the bitstream is empty` | `ValueError` | the file has no bytes | untouched |
-| `no iCE40 sync word 7E AA 99 7E` | `ValueError` | the file is not an iCE40 bitstream | untouched |
-| `board rejected def _ttcap_mkdir` | `CaptureError` | stage 1 failed | untouched |
-| `remote error executing` | `RuntimeError` | the board refused a stage 2 write | file as far as written |
-| `timed out waiting for` | `TimeoutError` | stage 2 got no reply | file as far as written |
-| `upload of '/_vgacap/held.bin' did not verify` | `UploadError` | the file's length or crc32 differs | file kept |
-| `rst_n reads 1 while reset is held` | `CaptureError` | stage 7 failed | put back |
+| `no iCE40 sync word 7E AA 99 7E starting in` | `ValueError` | the file is not an iCE40 bitstream | untouched |
+| `load_held needs the FPGA breakout: tt.shuttle is not the FPGA mux` | `CaptureError` | the carrier holds an ASIC | untouched |
+| `board rejected def _ttcap_mkdir` | `CaptureError` | stage 2 failed | untouched |
+| `remote error executing` | `RuntimeError` | the board refused a stage 3 write | file deleted |
+| `timed out waiting for` | `TimeoutError` | stage 3 got no reply | file as far as written |
+| `upload of '/_vgacap/held.bin' did not verify` | `UploadError` | the file's length or crc32 differs | file deleted |
+| `rst_n reads 1 while reset is held` | `CaptureError` | stage 8 failed | put back |
 | `the loader failed and carried on` | `CaptureError` | the loader printed `Error accessing file` | put back |
 | `the loader printed no 'Transmission complete` | `CaptureError` | the loader printed no count | put back |
 | `the loader fed the FPGA N bytes` | `CaptureError` | the count is not the file's length | put back |
@@ -114,7 +118,7 @@ Message is the start of the error. Raised as is its type. Cause is what made it,
 | `the held load failed on the board` | `CaptureError` | the board script raised | put back |
 | `timed out waiting for` | `LoadHeldTimeout` | the board script ran past `LOAD_HELD_TIMEOUT` | mid-load |
 
-Put back means the file deleted, reset released, the clock stopped, and the mode and monitor restored. A stage 3 to 7 failure that is a timeout leaves the file on the board.
+Put back means the file deleted, reset released, the clock stopped, and the mode and monitor restored. A stage 3 timeout, or a stage 4 to 8 failure that is a timeout, leaves the file on the board: the caller calls `repl.recover()`, then deletes it. Whether `load_held` should do that itself is [#92](https://github.com/mithro/vgacap/issues/92).
 
 ## After a body timeout
 
@@ -122,10 +126,10 @@ Item is a part of the board's state, and State what a `LoadHeldTimeout` leaves i
 
 | Item | State |
 |---|---|
-| Input mode | as stage 4 left it |
+| Input mode | as stage 5 left it |
 | Manual-clock monitor | off |
 | `rst_n` | held at 0 |
-| Project clock pad | driven at 0 once stage 10 ran |
+| Project clock pad | driven at 0 once stage 12 ran |
 | FPGA | blank or partly configured |
 | `/_vgacap/held.bin` | kept |
 
