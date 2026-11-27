@@ -51,7 +51,7 @@ PANELS = [
     ("simulated board", "CI", [
         ("stand", "synthetic"), ("stand", "simulated"), ("real", "firmware"),
         ("stand", "pipe")]),
-    ("hardware-in-the-loop\ncheck", "bench board", [
+    ("hardware-in-\nthe-loop check", "bench board", [
         ("real", "real design"), ("real", "RP2 PIO + DMA"), ("real", "board code"),
         ("real", "USB + bridge")]),
 ]
@@ -78,7 +78,7 @@ def draw(p):
     legend_y = M + sum(heads) + 2 * grid_h + BAND_GAP + 14
     height = legend_y + LEGEND_H + M
 
-    def text(x, y, s, size=12, fill=None, anchor="middle", weight="normal"):
+    def text(x, y, s, size: float = 12, fill=None, anchor="middle", weight="normal"):
         add(f'<text x="{x}" y="{y}" font-size="{size}" fill="{fill or p["ink"]}" '
             f'text-anchor="{anchor}" font-weight="{weight}">{escape(s)}</text>')
 
