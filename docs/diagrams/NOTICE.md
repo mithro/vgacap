@@ -1,15 +1,15 @@
 ---
 type: reference
 owner: vgacap maintainers
-reader: someone reusing a picture from these pages who needs its source and license
+reader: someone reusing a third-party picture from these pages who needs its source and license
 review: 2027-05-27
 ---
 
-# Images and logos on these pages
+# Third-party images and logos
 
-**You want to know where each picture on these pages comes from, and under what terms it is used.**
+**You want to know where each third-party picture on these pages comes from, and under what terms it is used.**
 
-The overview figure, drawn by [`overview.py`](overview.py), embeds these files. The board photo is also on [How to run the vgacap firmware from RAM and go back to stock](../../firmware/how-to-load.md) and [How to flash the module firmware and restore the board's own](../../mpy/how-to-flash.md). The Tiny Tapeout logo is a trademark of its owner and is not covered by this repository's license. File is the file in this directory, Shows what it is, From where it was taken, and Terms its license.
+The overview figure, drawn by [`overview.py`](overview.py), embeds these files. The board render is also on [How to run the vgacap firmware from RAM and go back to stock](../../firmware/how-to-load.md) and [How to flash the module firmware and restore the board's own](../../mpy/how-to-flash.md). The Tiny Tapeout logo is a trademark of its owner and is not covered by this repository's license. File is the file in this directory, Shows what it is, From where it was taken, and Terms its license.
 
 | File | Shows | From | Terms |
 |---|---|---|---|
