@@ -2168,6 +2168,11 @@ class CaptureSession:
         the capture stops it again here.
         """
 
+    #: A board that goes quiet mid-stream is interrupted with `recover()`
+    #: and the run ends with `timed_out`. False: the `TimeoutError` is
+    #: raised as it is, with nothing more sent, for the caller to recover.
+    _recovers_a_quiet_board = True
+
     def _wind_up(self, error: BaseException | None) -> None:
         """Called once the stream is over, before the stats freeze, with the
         exception the stream is ending with, if any. Nothing to do here; a
@@ -2214,6 +2219,12 @@ class CaptureSession:
                     ):
                         self._send_stop()
             except TimeoutError as exc:
+                if not self._recovers_a_quiet_board:
+                    # The protocol's own caller recovers it (ClockedSession):
+                    # nothing more is sent from here.
+                    self._end_streaming()
+                    stream.close()
+                    raise
                 # The board went quiet mid-stream -- typically the state
                 # machine is stuck in its `wait` because the project clock
                 # is not running, or the cooperative stop byte never
@@ -2285,6 +2296,12 @@ class ClockedSession(CaptureSession):
     `timing` and `selection` (what `load_held` returned) are there once
     `_prepare()` has set them.
     """
+
+    #: A chunk timeout mid-stream is a no-reply failure like any other: the
+    #: body may still be running, and `recover()` may return "" without
+    #: proving otherwise (#94), so the put-back waits for the caller's
+    #: `recover_clocked` (review M3).
+    _recovers_a_quiet_board = False
 
     def __init__(self, repl: RawRepl, req: CaptureRequest,
                  chunk_timeout: float = DEFAULT_CHUNK_TIMEOUT) -> None:

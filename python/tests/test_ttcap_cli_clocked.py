@@ -336,3 +336,26 @@ def test_an_rp2040_found_by_auto_is_refused_before_the_load(monkeypatch, capsys,
     assert "RP2350" in capsys.readouterr().err
     assert not any("spi_transferPIO" in c for c in bench.link.commands)
     assert not bench.out.exists()
+
+
+def test_a_board_gone_quiet_mid_stream_is_recovered_by_the_cli(monkeypatch, capsys, tmp_path):
+    from ttcap.capture import ClockedSession
+
+    bench = Bench(monkeypatch, tmp_path)
+    original = ClockedSession._start_stream
+
+    def stream_then_quiet(self):
+        chunks = original(self)
+        yield next(chunks)
+        raise TimeoutError("timed out waiting for a chunk")
+
+    monkeypatch.setattr(ClockedSession, "_start_stream", stream_then_quiet)
+
+    assert cli.main(bench.args("--buf-words", "16", clocks=4000)) == 1
+
+    err = capsys.readouterr().err
+    assert "capture failed: TimeoutError: timed out waiting for a chunk" in err
+    assert bench.out.exists()  # the opening record was written, and is kept
+    assert bench.level(RST) == 1 and bench.level(CLK) == 0
+    body = next(i for i, c in enumerate(bench.link.commands) if "clocked clocks=" in c)
+    assert "tt.reset_project(False)" in bench.link.commands[body + 1:]

@@ -603,6 +603,35 @@ def test_a_no_reply_failure_after_the_load_sends_nothing_more(tmp_path):
     assert rig.level(RST) == 1 and rig.level(CLK) == 0
 
 
+def test_a_chunk_timeout_mid_stream_is_a_no_reply_failure(tmp_path, monkeypatch):
+    # Review M3: the board went quiet with the body running, so nothing
+    # more is sent -- no recover(), no put-back -- until the caller has
+    # recovered the REPL (#94: recover() can return "" and prove nothing).
+    rig = Rig(tmp_path)
+    original = ClockedSession._start_stream
+
+    def stream_then_quiet(self):
+        chunks = original(self)
+        yield next(chunks)
+        raise TimeoutError("timed out waiting for a chunk")
+
+    monkeypatch.setattr(ClockedSession, "_start_stream", stream_then_quiet)
+    recovers = []
+    monkeypatch.setattr(rig.repl, "recover", lambda *a, **k: recovers.append(1) or "")
+    with pytest.raises(TimeoutError) as info:
+        rig.run(clocks=4000, reset_clocks=10, buf_words=16)
+    sent = len(rig.link.commands)
+    body = next(i for i, c in enumerate(rig.link.commands) if "clocked clocks=" in c)
+    assert sent == body + 1  # nothing after the body
+    assert not recovers
+    assert info.value.selection["enable"] == "held" and "bytes" in info.value.selection
+    assert any("recover_clocked" in note for note in info.value.__notes__)
+    monkeypatch.undo()
+    assert recover_clocked(rig.repl, info.value)
+    assert rig.link.commands[sent:].count("tt.reset_project(False)") == 1
+    assert rig.level(RST) == 1 and rig.level(CLK) == 0
+
+
 def test_undo_clocked_tries_every_step_and_notes_failures(tmp_path):
     rig = Rig(tmp_path, mode=ASIC_RP_CONTROL)
     exec_ = rig.repl.exec
