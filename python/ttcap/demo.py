@@ -1141,6 +1141,16 @@ class StderrTail:
     The lines go on to this process's stderr unchanged, so the pipeline's
     errors still reach the terminal; the kept tail is what `run_demo` reads
     to tell a lossy capture from a link that failed.
+
+    The pump must outlive anything a line can do to it: if it stopped, no
+    one would drain the pipe, and after 64 KiB `gst-launch` would block on
+    its stderr and the demo on its stdout, holding the board. So the pipe
+    is decoded with `errors="replace"`, and a failed write to the terminal
+    stops the passing on but not the draining.
+
+    gst-launch's stderr is now a pipe, so GStreamer turns off its
+    `GST_DEBUG` colours. With heavy `GST_DEBUG`, lines written after the
+    error can push the `overruns:` line out of the 64-line tail.
     """
 
     def __init__(self, pipe, stream=None) -> None:
@@ -1154,10 +1164,17 @@ class StderrTail:
     def _pump(self) -> None:
         stream = sys.stderr if self.stream is None else self.stream
         for line in self.pipe:
-            stream.write(line)
-            stream.flush()
             self.lines.append(line.rstrip("\n"))
             del self.lines[:-STDERR_TAIL_LINES]
+            if stream is None:
+                continue
+            try:
+                stream.write(line)
+                stream.flush()
+            except (OSError, ValueError):
+                # The terminal went away. Keep draining, or the pipeline
+                # blocks on a full stderr pipe and holds the board.
+                stream = None
 
     def join(self, timeout: float = 10.0) -> None:
         """Wait for the pipe to close. Called after `stop_child_group`, so
@@ -1351,6 +1368,8 @@ def run_demo(
         # through `StderrTail`, which keeps the tail for the verdict below.
         stderr=subprocess.PIPE,
         text=True,
+        # Strict decoding would kill `StderrTail` on one stray byte.
+        errors="replace",
         bufsize=1,
         env=env,
         pass_fds=pass_fds,

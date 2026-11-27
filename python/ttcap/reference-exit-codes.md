@@ -24,7 +24,7 @@ Code is the exit status, Subcommands the subcommands that use it, and Meaning wh
 | 130 | `demo` | Ctrl-C arrived before the pipeline started or after it ended |
 | 128 + N | `demo` | the pipeline was ended by signal N |
 
-`ttcap demo` exits with the status of its `gst-launch-1.0` pipeline when that is not 0. A stop signal sent to the demo ends the pipeline cleanly, so a stopped run that captured exits 0. A timed run whose capture lost samples exits 1, and keeps its frames and video. A stopped run whose capture lost samples still exits 0 ([#64](https://github.com/mithro/vgacap/issues/64)).
+`ttcap demo` exits with the status of its `gst-launch-1.0` pipeline when that is not 0. A stop signal sent to the demo ends the pipeline cleanly, so a stopped run that captured exits 0. A timed run whose capture lost samples exits 1, and keeps its frames and video. A stopped run whose capture lost samples still exits 0, and prints nothing about the loss ([#64](https://github.com/mithro/vgacap/issues/64)).
 
 ## Capture
 
