@@ -36,10 +36,10 @@ Step 4 prints one `PASS` line for each of the ten checks, then these lines, and 
 report: tmp/hil/<date>-hil-fpga-1.md
 ```
 
-Step 5 prints the end of the board's boot, finishing with these lines and a `>>>` prompt. Then `status.json` shows `"state": "loaded"` under `idle_display` again, 66 to 73 s later in [the 2026-11-27 bench run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1).
+Step 5 prints the end of the board's boot, finishing with these lines, where `<n>` varies from boot to boot. Then `status.json` shows `"state": "loaded"` under `idle_display` again, about a minute later.
 
 ```text
-boot done: 2033
+boot done: <n>
 tt.sdk_revision=d485c7a9986336024e35d790568fca33be1c5665
 tt.sdk_version=3.1.1
 MicroPython 970468103d on 2026-09-08; TinyTapeout RP2350B Core with RP2350

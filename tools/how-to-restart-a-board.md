@@ -19,14 +19,14 @@ This page restarts the board with [`tools/board_restart.py`](board_restart.py). 
 ## Steps
 
 1. In the vgacap checkout, run `uv run python tools/board_restart.py ws://127.0.0.1:18034/serial` to restart the board, which prints what the board printed last.
-2. For a bench board, read its `status.json` again until the idle display is back at `"state": "loaded"`, which took 66 to 73 s on fpga-1.
+2. For a bench board, read its `status.json` again until the idle display is back at `"state": "loaded"`, which takes about a minute.
 
 ## Check
 
 Step 1 prints the end of the board's boot, from partway through, and exits with status 0. On fpga-1 in [the 2026-11-27 bench run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1) it ended with these lines:
 
 ```text
-boot done: 2036
+boot done: <n>
 tt.sdk_revision=d485c7a9986336024e35d790568fca33be1c5665
 tt.sdk_version=3.1.1
 MicroPython 970468103d on 2026-09-08; TinyTapeout RP2350B Core with RP2350
@@ -34,7 +34,7 @@ Type "help()" for more information.
 >>>
 ```
 
-Step 2 shows `"state": "loaded"` under `idle_display`.
+`<n>` varies from boot to boot. Step 2 shows `"state": "loaded"` under `idle_display`. On fpga-1 that took 61 s in [the 2026-11-26 bench run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) and 66 to 73 s in [the 2026-11-27 bench run](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1).
 
 ## If it fails
 
