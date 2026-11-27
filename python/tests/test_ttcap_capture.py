@@ -114,13 +114,13 @@ def test_sends_the_setup_commands_in_order():
         "tt.reset_project(True)",
         capture._READ_RST_N,
         "tt.clock_project_PWM(250000)",
-        "tt.reset_project(False)",
-        capture._AWAIT_RST_N,
+        capture.release_command(250_000),
     ]
     assert did == {
         "project": "tt_um_rejunity_vga",
         "enable": "index",
         "clock_hz": 250_000,
+        "rst_n_wait_ms": 0,
     }
 
 
@@ -193,8 +193,9 @@ def test_raises_capture_error_with_the_board_traceback():
 
     assert "tt.clock_project_PWM(100000)" in str(excinfo.value)
     assert "AttributeError: no clock" in str(excinfo.value)
-    # It stopped there: reset was never released on a half-set-up board.
-    assert "tt.reset_project(False)" not in board.commands
+    # It stopped there, then let the design out of reset and stopped the
+    # clock: a failed setup leaves no reset driven and no clock running.
+    assert board.commands[-2:] == ["tt.reset_project(False)", "tt.clock_project_stop()"]
 
 
 def test_both_failing_shuttle_spellings_raise():
@@ -233,7 +234,7 @@ def test_a_design_the_daemon_already_enabled_is_accepted():
     assert did["enable"] == "already enabled"
     assert board.commands[2] == check
     # And the clock is still set up and reset released.
-    assert "tt.reset_project(False)" in board.commands
+    assert any("tt.reset_project(False)" in c for c in board.commands)
 
 
 def test_an_unknown_design_that_is_not_enabled_says_how_to_load_it():
@@ -976,7 +977,7 @@ def test_frame_cfg_rejects_extended():
 def test_a_setup_failure_after_the_mode_switch_puts_the_mode_back():
     board = FakeChunkBoard(
         [],
-        replies={"print(int(tt.mode))": "2\r\n"},
+        replies={capture._READ_MODE: "ttcap mode=2\r\n"},
         errors={"tt.clock_project_PWM(100000)": "AttributeError: no clock\r\n"},
     )
     repl = connect(board)
@@ -984,8 +985,8 @@ def test_a_setup_failure_after_the_mode_switch_puts_the_mode_back():
     with pytest.raises(CaptureError, match="no clock"):
         select_project(repl, request(ui_in=3))
 
-    assert board.commands[-2:] == ["tt.clock_project_stop()", "tt.mode = 2"]
-    assert "tt.reset_project(False)" not in board.commands
+    assert board.commands[-3:] == [
+        "tt.reset_project(False)", "tt.clock_project_stop()", "tt.mode = 2"]
 
 
 def test_a_request_with_a_bad_cfg_is_refused_when_it_is_built():

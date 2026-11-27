@@ -443,9 +443,9 @@ class FakeChunkBoard:
             self._open = True
             self._terminate = self.terminate
             return
-        if code == "tt.reset_project(True)":
+        if "tt.reset_project(True)" in code:
             self.rst_held = True
-        elif code == "tt.reset_project(False)":
+        elif "tt.reset_project(False)" in code:
             self.rst_held = False
         if code in self.replies:
             reply = self.replies[code]
@@ -453,6 +453,8 @@ class FakeChunkBoard:
             # select_project's read-backs, answered as a sound board would:
             # rst_n follows the last reset_project, ui_in what was written.
             reply = "ttcap rst_n=%d\r\n" % (0 if self.rst_held else 1)
+            if "ttcap rst_n_wait_ms=" in code:
+                reply = "ttcap rst_n_wait_ms=0\r\n" + reply
         elif "print('ttcap monitoring=" in code:
             reply = "ttcap monitoring=-1\r\n"
         elif code.startswith("tt.ui_in.value = "):

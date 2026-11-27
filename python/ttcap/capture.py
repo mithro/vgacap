@@ -729,8 +729,8 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
         # boards sit in ASIC_MANUAL_INPUTS (2), where writing tt.ui_in changes
         # nothing -- measured on fpga-4. The mode it was in is returned so the
         # caller can put it back (`restore_mode`).
-        out = _exec_checked(repl, "print(int(tt.mode))")
-        did["mode_before"] = int(out.strip().splitlines()[-1])
+        out = _exec_checked(repl, _READ_MODE)
+        did["mode_before"] = _board_value(out, "mode")
     try:
         if req.ui_in is not None:
             # Before the reset: every tt.mode write rebuilds every pin, and
@@ -750,13 +750,13 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
                     "ASIC_RP_CONTROL, the stock firmware leaves undriven any "
                     "input that reads high, for fear of contention" % (got, req.ui_in))
             did["ui_in"] = req.ui_in
-        reset_design(repl, clock_command(req))
+        did["rst_n_wait_ms"] = reset_design(repl, clock_command(req), req.clock_hz)
     except BaseException as exc:
-        # The caller never sees `did`, so it cannot put the board back: a
-        # shared board must not be left in ASIC_RP_CONTROL, or without its
-        # manual-clock monitor, by a failed setup.
-        if "mode_before" in did or "monitoring_before" in did:
-            undo_selection(repl, did, stop=True, error=exc)
+        # The caller never sees `did`, and its teardown does not cover a
+        # setup that raised, so the board is put back here: the clock
+        # stopped, and the mode and monitor as they were. A shared board is
+        # not left clocked, in ASIC_RP_CONTROL or without its monitor.
+        undo_selection(repl, did, stop=True, error=exc)
         raise
     return did
 
@@ -766,18 +766,40 @@ def select_project(repl: RawRepl, req: CaptureRequest) -> dict:
 #: (#58). On fpga-4 rst_n read 1 at the first poll (2026-11-27).
 RST_N_RELEASE_TIMEOUT_MS = 100
 
+#: Fewest project clock edges `reset_design` holds reset for. The wait is
+#: on the board, between the clock starting and the release, so it does
+#: not depend on the link's latency.
+RESET_CLOCKS = 16
+
+_READ_MODE = "print('ttcap mode=%d' % int(tt.mode))"
 _READ_RST_N = "print('ttcap rst_n=%d' % tt.rst_n())"
 _READ_UI_IN = "print('ttcap ui_in=%d' % int(tt.ui_in.value))"
-#: Waits on the board itself, so the link's latency is not in the timeout.
-_AWAIT_RST_N = "\n".join([
-    "import time",
-    "_t = time.ticks_ms()",
-    "while not tt.rst_n() and time.ticks_diff(time.ticks_ms(), _t) < %d:" % RST_N_RELEASE_TIMEOUT_MS,
-    "    time.sleep_ms(1)",
-    "print('ttcap rst_n_wait_ms=%d' % time.ticks_diff(time.ticks_ms(), _t))",
-    "del _t",
-    _READ_RST_N,
-])
+
+
+def reset_hold_ms(clock_hz: float) -> int:
+    """Milliseconds that hold `RESET_CLOCKS` edges at `clock_hz`, at least 1."""
+    hz = max(1, int(clock_hz))
+    return max(1, -(-RESET_CLOCKS * 1000 // hz))
+
+
+def release_command(clock_hz: float) -> str:
+    """The board command that ends the reset: wait `reset_hold_ms` with the
+    clock running, release, then wait up to `RST_N_RELEASE_TIMEOUT_MS` for
+    `rst_n` to read 1, timed on the board, and print the time and the level."""
+    return "\n".join([
+        "import time",
+        "time.sleep_ms(%d)" % reset_hold_ms(clock_hz),
+        "tt.reset_project(False)",
+        "_t = time.ticks_ms()",
+        "while not tt.rst_n() and time.ticks_diff(time.ticks_ms(), _t) < %d:"
+        % RST_N_RELEASE_TIMEOUT_MS,
+        "    time.sleep_ms(1)",
+        "print('ttcap rst_n_wait_ms=%d' % time.ticks_diff(time.ticks_ms(), _t))",
+        "del _t",
+        _READ_RST_N,
+    ])
+
+
 #: Whether the manual-clock monitor is on (1), off (0) or absent (-1): SDK
 #: 3.1.1 makes one on TTDBv3.3 and later (`demoboard.py:146-150`), and
 #: fpga-4's `tt.manual_project_clock` was None (2026-11-27). Its
@@ -807,28 +829,42 @@ def _board_value(stdout: str, key: str) -> int:
     raise CaptureError(f"board did not report {key}, said {stdout.strip()!r}")
 
 
-def reset_design(repl: RawRepl, clock: str) -> None:
+def reset_design(repl: RawRepl, clock: str, clock_hz: float) -> int:
     """Reset the design with its clock running: the one reset sequence.
 
-    Holds reset, checks `rst_n` reads 0, starts the clock with `clock`
-    (a `clock_command()`), releases reset and waits up to
-    `RST_N_RELEASE_TIMEOUT_MS` for `rst_n` to read 1. A design with a
-    synchronous reset so sees clock edges while `rst_n` is low, and a
-    release the pull-up does not win is an error, not a capture of the
-    reset state. Nothing may write `tt.mode` after this: the write rebuilds
-    the pins and releases reset.
+    1. `tt.reset_project(True)`, and `rst_n` must read 0;
+    2. start the clock with `clock` (a `clock_command()` for `clock_hz`);
+    3. in one board command (`release_command`): wait `reset_hold_ms`, so
+       reset is held for at least `RESET_CLOCKS` clock edges and 1 ms,
+       release, and wait up to `RST_N_RELEASE_TIMEOUT_MS` for `rst_n` to
+       read 1.
+
+    Returns the milliseconds `rst_n` took to read 1, as the board timed it.
+    A release the pull-up does not win is an error, not a capture of the
+    reset state. If any step after the first fails, reset is released
+    before the error is raised, so a failed setup does not leave the design
+    held in reset with `rst_n` driven low. Nothing may write `tt.mode`
+    after this: the write rebuilds the pins and releases reset.
     """
     _exec_checked(repl, "tt.reset_project(True)")
-    if _board_value(_exec_checked(repl, _READ_RST_N), "rst_n") != 0:
-        raise CaptureError(
-            "rst_n reads 1 while reset is held: tt.reset_project(True) did not drive it low")
-    _exec_checked(repl, clock)
-    _exec_checked(repl, "tt.reset_project(False)")
-    out = _exec_checked(repl, _AWAIT_RST_N)
-    if _board_value(out, "rst_n") != 1:
-        raise CaptureError(
-            "rst_n stuck low after release: it read 0 for %d ms after "
-            "tt.reset_project(False)" % RST_N_RELEASE_TIMEOUT_MS)
+    try:
+        if _board_value(_exec_checked(repl, _READ_RST_N), "rst_n") != 0:
+            raise CaptureError(
+                "rst_n reads 1 while reset is held: tt.reset_project(True) did not drive it low")
+        _exec_checked(repl, clock)
+        out = _exec_checked(repl, release_command(clock_hz))
+        waited = _board_value(out, "rst_n_wait_ms")
+        if _board_value(out, "rst_n") != 1:
+            raise CaptureError(
+                "rst_n stuck low after release: it read 0 for %d ms after "
+                "tt.reset_project(False)" % waited)
+    except BaseException as exc:
+        try:
+            _exec_checked(repl, "tt.reset_project(False)")
+        except Exception as again:  # noqa: BLE001 - reported on exc
+            exc.add_note(f"releasing reset failed too: {again}")
+        raise
+    return waited
 
 
 def cleanup_names(cfg: dict) -> list[str]:
