@@ -26,12 +26,12 @@ the host's re-serialisation.
 
 from __future__ import annotations
 
-import hashlib
 import io
 import re
 import struct
 import threading
 import time
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator
@@ -1599,15 +1599,17 @@ def recover_clocked(repl: RawRepl, exc: BaseException) -> bool:
 def clocked_header_bytes(req: CaptureRequest, timing: ClockedTiming) -> bytes:
     """The `VGCH` header of a clocked capture: version 1, mode `SELFCLK`,
     and `clock_hz` the real clock, rounded to the hertz. `desc` names the
-    bitstream (its sha256) and the run's parameters."""
+    bitstream (its length and crc32, the upload's own check) and the run's
+    parameters."""
     data = Path(req.bitstream).read_bytes()
     parts = [req.desc] if req.desc else []
     if req.ui_in is not None:
         parts.append("ui_in=%d" % req.ui_in)
     parts.append(
-        "capture=clocked mode=selfclk profile=%s bitstream=%s bitstream_sha256=%s "
+        "capture=clocked mode=selfclk profile=%s bitstream=%s bitstream_len=%d "
+        "bitstream_crc32=%08x "
         "clocks=%d reset_clocks=%d sysclk=%d pio_div=%d high=%d low=%d"
-        % (req.profile.name, Path(req.bitstream).name, hashlib.sha256(data).hexdigest(),
+        % (req.profile.name, Path(req.bitstream).name, len(data), zlib.crc32(data),
            req.clocks, req.reset_clocks, timing.sysclk_hz, timing.pio_div, timing.high,
            timing.low))
     profile = req.profile

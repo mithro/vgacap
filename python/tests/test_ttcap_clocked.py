@@ -231,6 +231,17 @@ def test_the_stream_reads_back_as_selfclk_at_the_real_clock(tmp_path):
     assert stats.chunks == 2 + 64 // 16  # two TIME records, 4-word buffers
 
 
+def test_the_header_names_the_bitstream_by_length_and_crc32(tmp_path):
+    # The same check the upload makes (`RawRepl.upload`): no secure hash.
+    import zlib
+    rig = Rig(tmp_path)
+    _, data = rig.run()
+    header, _ = read_stream(data)
+    assert "bitstream=design.bin bitstream_len=%d bitstream_crc32=%08x" % (
+        len(BITSTREAM), zlib.crc32(BITSTREAM)) in header.desc
+    assert "sha256" not in header.desc
+
+
 def test_a_long_run_through_many_buffers_stalls_and_stays_exact(tmp_path):
     rig = Rig(tmp_path)
     stats, data = rig.run(clocks=4000, reset_clocks=10, buf_words=16)
