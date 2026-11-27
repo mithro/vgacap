@@ -686,3 +686,58 @@ def test_a_rise_driven_in_the_construction_cycle_is_an_edge():
     sm.active(1)
     board.advance(40)
     assert board.pio_rises[CLK] == [start + 4 * i for i in range(10)]
+
+
+def _delay_board(delay: int) -> Board:
+    wave = Waveform(bytes(range(256)), uo_gpios=list(range(33, 41)), clk_gpio=CLK,
+                    period=4, delay=delay)
+    return Board(wave)
+
+
+def test_uo_out_under_a_side_set_clock_follows_the_design_delay():
+    # One rising edge at r; uo_out takes uo[1] `delay` = 3 cycles later.
+    board = _delay_board(3)
+    rp2 = board.modules()["rp2"]
+    machine = board.modules()["machine"]
+
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW)
+    def p():
+        nop().side(0)[3]  # noqa: F821
+        nop().side(1)  # noqa: F821
+        wait(1, gpio, 1).side(1)  # noqa: F821  (GPIO 33, bit 0 of uo[1])
+        label("end")  # noqa: F821
+        jmp("end").side(1)  # noqa: F821
+
+    sm, pio_sm = _sm(board, p, sideset_base=CLK, in_base=machine.Pin(33))
+    r = board.now + 4
+    sm.active(1)
+    pcs = {}
+    for _ in range(20):
+        board.advance(1)
+        pcs[board.now] = pio_sm.pc
+    assert board.pio_rises[CLK] == [r]
+    # The wait issues at r + 1 and completes in cycle r + 3, so the jmp is
+    # the instruction due from r + 4.
+    assert [pcs[c] for c in range(r + 1, r + 6)] == [2, 2, 2, 3, 3]
+    assert pio_sm.read_pins(r + 2, 8) == 0  # uo[0]
+    assert pio_sm.read_pins(r + 3, 8) == 1  # uo[1]
+    assert board.wave.next_time(33, 1, r) == r + 3
+
+
+def test_with_no_design_delay_an_edge_shows_in_its_own_cycle():
+    # bisect_right: the edge at r already counts at r.
+    board = _delay_board(0)
+    rp2 = board.modules()["rp2"]
+
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW)
+    def p():
+        nop().side(0)[3]  # noqa: F821
+        label("end")  # noqa: F821
+        jmp("end").side(1)  # noqa: F821
+
+    sm, _ = _sm(board, p, sideset_base=CLK)
+    r = board.now + 4
+    sm.active(1)
+    board.advance(10)
+    assert board.pio_rises[CLK] == [r]
+    assert (board.wave.clock_index(r - 1), board.wave.clock_index(r)) == (0, 1)
