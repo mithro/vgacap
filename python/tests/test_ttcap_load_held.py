@@ -402,8 +402,10 @@ def test_a_sync_word_after_a_comment_block_is_accepted(tmp_path):
 
 @pytest.mark.parametrize("profile", [
     RP2040_TT06,
+    # A clock on GPIO 16 does not make an RP2040 board the FPGA breakout's.
+    dataclasses.replace(RP2040_TT06, clk_gpio=16),
     dataclasses.replace(RP2350_DBV3, clk_gpio=15),
-], ids=["rp2040", "rp2350-clock-on-15"])
+], ids=["rp2040", "rp2040-clock-on-16", "rp2350-clock-on-15"])
 def test_a_board_without_the_fpga_loader_or_its_clock_pin_is_refused(tmp_path, profile):
     rig = Rig(tmp_path)
     before = list(rig.link.commands)
