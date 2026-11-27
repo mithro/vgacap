@@ -281,9 +281,14 @@ def test_push_iffull_pushes_only_at_the_threshold(bits, pushed):
         jmp("end")  # noqa: F821
 
     sm, pio_sm = _sm(board, p)
+    start = board.now
     sm.active(1)
     board.advance(3)
-    assert pio_sm.pc == 3  # iffull with nothing to do still takes a cycle
+    # set, in, push: one cycle each, whether or not the push pushes, so the
+    # jmp is due at exactly start + 3 and has not issued yet.
+    assert (pio_sm.pc, pio_sm.now) == (3, start + 3)
+    board.advance(1)
+    assert (pio_sm.pc, pio_sm.now) == (3, start + 4)
     if pushed:
         assert pio_sm.rx == [0x1F] and pio_sm.isr_count == 0
     else:
@@ -519,8 +524,27 @@ def test_the_clocked_program_drives_exactly_n_edges(high, low, clocks, reset_clo
     assert len(rises) == clocks
     assert sum(1 for i in rises if start + i < handshake) == reset_clocks
     assert trace[-1] == 0
-    # Unstalled, every clock is high H+2 cycles and low L+2.
-    period = high + low + 4
+    # The FIFO never filled, so nothing stalled but the irq handshake.
+    assert not board.blocks[1].fdebug & 1
+    # Low for the two pulls and two outs, then every phase exactly: high
+    # H+2 (nop [H], in), low L+2 (push iffull [L], jmp) -- including the
+    # phases whose push is the one in four that pushes. The low phase
+    # holding the handshake (push [L], jmp, irq wait) is the only longer
+    # one; the last low phase runs to the end of the trace.
     first = rises[0]
-    assert trace[first : first + period] == [1] * (high + 2) + [0] * (low + 2)
+    assert trace[:first] == [0] * 4
+    phases = []
+    for value in trace[first:]:
+        if phases and phases[-1][0] == value:
+            phases[-1][1] += 1
+        else:
+            phases.append([value, 1])
+    highs = [n for v, n in phases if v == 1]
+    lows = [n for v, n in phases if v == 0]
+    assert len(highs) == len(lows) == clocks
+    assert highs == [high + 2] * clocks
+    between = lows[:-1]
+    handshake_low = between.pop(reset_clocks - 1)
+    assert between == [low + 2] * (clocks - 2)
+    assert handshake_low > low + 3
     assert len(words) == clocks // 4 and pio_sm.rx == []
