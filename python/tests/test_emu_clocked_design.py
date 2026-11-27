@@ -246,43 +246,91 @@ def test_each_edge_is_counted_once_however_long_the_advance(step, monkeypatch):
     assert board.wave.count_at(board.now) == edges % 256
 
 
-def test_rst_n_driven_by_a_later_state_machine_resets_edges_already_counted():
+def test_rst_n_driven_by_another_state_machine_than_the_clock_is_refused():
     # Within one advance the clock's state machine runs, and samples, before
-    # the one that drives rst_n low; the edges it counted after that drive
-    # must be counted again.
+    # the one that drives rst_n: its samples after that drive would be stale
+    # (the re-review's stale_samples.py), so the drive is refused.
     design = ClockedDesign(UO, clk_gpio=CLK, rst_gpio=17)
     board = Board(design)
     mods = board.modules()
     rp2, Pin = mods["rp2"], mods["machine"].Pin
     rp2.PIO(1).gpio_base(16)
     Pin(17, Pin.OUT, value=1)
-    clock = rp2.StateMachine(4, _free_running(rp2), sideset_base=Pin(CLK), in_base=Pin(33))
+
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW, in_shiftdir=rp2.PIO.SHIFT_LEFT,
+                 autopush=True, push_thresh=32)
+    def clocked():
+        nop().side(1)  # noqa: F821
+        in_(pins, 8).side(1)  # noqa: F821
+        nop().side(0)  # noqa: F821
 
     @rp2.asm_pio(sideset_init=rp2.PIO.OUT_HIGH)
-    def reset_at_100():  # low from 100 cycles after the start
-        nop().side(1)[15]  # noqa: F821
-        nop().side(1)[15]  # noqa: F821
-        nop().side(1)[15]  # noqa: F821
-        nop().side(1)[15]  # noqa: F821
-        nop().side(1)[15]  # noqa: F821
+    def reset_at_20():
         nop().side(1)[15]  # noqa: F821
         nop().side(1)[3]  # noqa: F821
         label("low")  # noqa: F821
         jmp("low").side(0)  # noqa: F821
 
-    reset = rp2.StateMachine(5, reset_at_100, sideset_base=Pin(17))
+    clock = rp2.StateMachine(4, clocked, sideset_base=Pin(CLK), in_base=Pin(33))
     clock.active(1)
-    reset.active(1)
-    board.advance(300)
-    rises = board.pio_rises[CLK]
-    low_from = board.pio_rises[CLK][0] + 100
-    # An edge every 3 cycles: one lands in the cycle before rst_n falls, and
-    # counts, since rst_n is read in the edge's own cycle.
-    assert low_from - 1 in rises
-    assert board.pio_pin(17, low_from) == 0 and board.pio_pin(17, low_from - 1) == 1
-    assert design.count_at(board.now) == 0
-    assert [design.count(i + 1) for i in range(len(rises))] == [
-        i + 1 if r < low_from else 0 for i, r in enumerate(rises)]
+    with pytest.raises(BoardError, match="rst_n and the clock would be driven by two state machines"):
+        reset = rp2.StateMachine(5, reset_at_20, sideset_base=Pin(17))
+        reset.active(1)
+        board.advance(200)
+
+
+def test_a_clock_state_machine_after_another_drove_rst_n_is_refused():
+    # The same refusal the other way round: rst_n's state machine first.
+    design = ClockedDesign(UO, clk_gpio=CLK, rst_gpio=17)
+    board = Board(design)
+    mods = board.modules()
+    rp2, Pin = mods["rp2"], mods["machine"].Pin
+    rp2.PIO(1).gpio_base(16)
+
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_HIGH)
+    def hold_high():
+        label("top")  # noqa: F821
+        jmp("top").side(1)  # noqa: F821
+
+    rp2.StateMachine(5, hold_high, sideset_base=Pin(17)).active(1)
+    board.advance(10)
+    with pytest.raises(BoardError, match="rst_n and the clock would be driven by two state machines"):
+        clock = rp2.StateMachine(4, _free_running(rp2), sideset_base=Pin(CLK), in_base=Pin(33))
+        clock.active(1)
+        board.advance(10)
+
+
+def test_rst_n_from_the_clock_state_machine_resets_its_own_samples():
+    # One state machine side-sets both the clock (bit 0, GPIO16) and rst_n
+    # (bit 1, GPIO17): 11 edges with rst_n high, then rst_n falls in the
+    # cycle of the 12th edge, which therefore resets. Every sample in the RX
+    # FIFO must be the counter's value for its edge.
+    design = ClockedDesign(UO, clk_gpio=CLK, rst_gpio=17)
+    board = Board(design)
+    mods = board.modules()
+    rp2, Pin = mods["rp2"], mods["machine"].Pin
+    rp2.PIO(1).gpio_base(16)
+
+    @rp2.asm_pio(sideset_init=(rp2.PIO.OUT_LOW, rp2.PIO.OUT_HIGH),
+                 in_shiftdir=rp2.PIO.SHIFT_LEFT, autopush=True, push_thresh=32)
+    def clock_then_reset():
+        set(x, 10).side(0b10)  # noqa: F821
+        label("high")  # noqa: F821
+        nop().side(0b11)  # noqa: F821
+        in_(pins, 8).side(0b11)  # noqa: F821
+        jmp(x_dec, "high").side(0b10)  # noqa: F821
+        label("low")  # noqa: F821
+        nop().side(0b01)  # noqa: F821
+        in_(pins, 8).side(0b01)  # noqa: F821
+        jmp("low").side(0b00)  # noqa: F821
+
+    sm = rp2.StateMachine(4, clock_then_reset, sideset_base=Pin(CLK), in_base=Pin(33))
+    sm.active(1)
+    board.advance(200)
+    words = [sm.get() for _ in range(4)]
+    sampled = [(w >> (8 * (3 - i))) & 0xFF for w in words for i in range(4)]
+    assert sampled == list(range(1, 12)) + [0] * 5
+    assert sampled == [design.count(k + 1) for k in range(16)]
 
 
 def test_a_design_with_no_board_is_refused_not_a_none_error():

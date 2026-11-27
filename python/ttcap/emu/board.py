@@ -1140,12 +1140,30 @@ class Board:
 
     # -- PIO-driven pins ----------------------------------------------------
 
+    def _check_rst_and_clock_owners(self, sm: _SM, other: int) -> None:
+        """Refuse `sm` driving one of the design's clock and rst_n pads while
+        another state machine drives the other: state machines run one after
+        another within each advance, so the clock's samples taken before the
+        other's rst_n drive in the same advance would be stale."""
+        owner = self.pio_pin_owner.get(other)
+        if owner is not None and owner is not sm and other not in self.released:
+            raise BoardError(
+                "rst_n and the clock would be driven by two state machines (the "
+                "other is PIO%d SM%d), which is not emulated; drive both from "
+                "one state machine, or rst_n from the CPU"
+                % (owner.block.index, owner.index)
+            )
+
     def pio_drive(self, sm: _SM, gpio: int, value: int, cycle: int) -> None:
         """`sm` drives `gpio` to `value` from `cycle` on."""
         if gpio in self.released:
             return  # FUNCSEL is SIO now: PIO's output no longer reaches the pad
-        if gpio == self.rst_watch:
-            self.wave.rst_changed(cycle)
+        if self.rst_watch is not None:
+            if gpio == self.rst_watch:
+                self._check_rst_and_clock_owners(sm, self.wave.clk_gpio)
+                self.wave.rst_changed(cycle)
+            elif gpio == self.wave.clk_gpio:
+                self._check_rst_and_clock_owners(sm, self.rst_watch)
         owner = self.pio_pin_owner.setdefault(gpio, sm)
         if owner is not sm:
             raise BoardError(
