@@ -21,7 +21,7 @@ This page uses `vgacapbin`. It builds a `vgacapttsrc` from a URI, and puts `vgad
 ## Steps
 
 1. In the vgacap checkout, run `export GST_PLUGIN_PATH=$PWD/build`, so that GStreamer finds the vgacap elements in this shell.
-2. In the same directory, run `gst-launch-1.0 vgacapbin 'uri="tt-serial:///dev/ttyACM0?project=tt_um_x&clock-hz=500000&seconds=10"' ! videoconvert ! autovideosink`, and a window shows the picture.
+2. In the same directory, run `gst-launch-1.0 vgacapbin 'uri="tt-serial:///dev/ttyACM0?project=tt_um_x&clock-hz=400000&seconds=10"' ! videoconvert ! autovideosink`, and a window shows the picture.
 3. In the same directory, for a bench board, run step 2 with `tt-ws://127.0.0.1:PORT/serial` in place of `tt-serial:///dev/ttyACM0`, which captures through the tunnel on PORT.
 4. In that directory, for a demo board with an FPGA breakout, run step 2 with `design=` in place of `project=`, which selects the design.
 5. In the same directory, to record instead, run step 2 with `-e` after `gst-launch-1.0`, and `! videoconvert ! video/x-raw,format=I420 ! x264enc ! matroskamux ! filesink location=live.mkv` as its end, which writes `live.mkv`.
@@ -30,7 +30,7 @@ Quote the URI twice, as step 2 does: the shell would otherwise stop at `&`.
 
 ## Check
 
-A window opens after a few seconds with the design's picture, and closes when the 10 seconds are up. The pipeline ends with `Got EOS from element "pipeline0".` and exits 0. In step 5, `live.mkv` plays at about 1.19 frames a second, the rate 500 kHz gives 640x480@60. A [bench run on fpga-1](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1) recorded 10 frames at 640x480 and 25/21 frames a second.
+A window opens after a few seconds with the design's picture, and closes when the 10 seconds are up. The pipeline ends with `Got EOS from element "pipeline0".` and exits 0. In step 5, `live.mkv` plays at about 0.95 frames a second, the rate 400 kHz gives 640x480@60: 400000 ÷ (800 × 525). At 500 kHz, a [bench run on fpga-1](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1) recorded 10 frames at 640x480 and 25/21 frames a second.
 
 ## If it fails
 

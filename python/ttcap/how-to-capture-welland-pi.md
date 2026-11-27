@@ -30,7 +30,7 @@ The fpgas.online bridge (`fpgas-tt`) holds the board's serial port, `/dev/ttboar
 4. In the checkout on the Pi, capture from the serial port, which runs with no bridge in between:
 
    ```sh
-   uv run --no-sync ttcap capture serial:/dev/ttboard --clock-hz 500000 --seconds 4 --out bench.vgacap
+   uv run --no-sync ttcap capture serial:/dev/ttboard --clock-hz 400000 --seconds 4 --out bench.vgacap
    ```
 
 5. In the checkout on the Pi, restart the board to the stock firmware's start state, whether or not step 4 succeeded:
@@ -44,11 +44,11 @@ The fpgas.online bridge (`fpgas-tt`) holds the board's serial port, `/dev/ttboar
 
 Steps 3 and 6 are those of [How to stop the fpgas-tt daemon and start it again](https://docs.fpgas.online/en/latest/boards/tt-fpga/setup/stop-daemon.html). Step 5 comes before step 6 because the bridge checks the board's state when it starts. On a demo board with an ASIC breakout, starting the bridge with the capture's project still enabled left it reporting `left:` and that project ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). That report is in `safe_start.state` in the bridge's health output ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). `ttcap demo --board fpga-4` run on this Pi picks `serial:/dev/ttboard` itself, and says to stop the bridge first.
 
-Step 4 captures the design already enabled. On an idle board that is the idle display, which has no VGA frames, so `ttcap png` prints `frames=0` for it. For pictures, enable a VGA design before step 3, while `/health` shows `"clients": 0`: `curl -s -X POST localhost:8765/designs/tt_um_vga_pattern/enable` did so on fpga-1 ([bench run of PR #56](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56), 2026-11-27). Render the capture on a workstation, as [How to run ttcap on a Raspberry Pi](how-to-run-on-raspberry-pi.md) explains.
+Step 4 captures the design already enabled. On an idle board that is the idle display, which has no VGA frames, so `ttcap png` prints `frames=0` for it. For pictures, enable a VGA design before step 3, while `/health` shows `"clients": 0`: `curl -s -X POST localhost:8765/designs/tt_um_vga_pattern/enable` did so on fpga-1 ([bench run of PR #56](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56), 2026-11-27). Render `bench.vgacap` on a workstation, as [How to run ttcap on a Raspberry Pi](how-to-run-on-raspberry-pi.md) explains: copy it as step 4 of [How to capture with the vgacap firmware](../../firmware/how-to-capture.md) copies `frame.vgacap`.
 
 ## Check
 
-Step 4 prints a stats line, which shows `overruns=0 dropped=0 rxstall=0` when no sample was lost, and ends with `wrote bench.vgacap`. 500 kHz was clean in one 4-second run on fpga-1's USB serial, and 750 kHz overran on fpga-4 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). How long 500 kHz stays clean is open ([#52](https://github.com/mithro/vgacap/issues/52)). After step 6, `systemctl is-active fpgas-tt` prints `active`, and `sudo fuser /dev/ttboard` shows the bridge's process again.
+Step 4 prints a stats line, which shows `overruns=0 dropped=0 rxstall=0` when no sample was lost, and ends with `wrote bench.vgacap`. On fpga-1 this step ran at 500 kHz: it was clean twice with the idle display, and overran in both 4-second captures of `tt_um_vga_pattern`, while a 2-second one was clean. That is why it runs at 400 kHz, which was clean with a VGA design ([Capture sources compared](../../docs/reference-capture-sources.md#the-stock-firmware-on-an-rp2350-demo-board), [#52](https://github.com/mithro/vgacap/issues/52)). After step 6, `systemctl is-active fpgas-tt` prints `active`, and `sudo fuser /dev/ttboard` shows the bridge's process again.
 
 On fpga-1, step 7 reached `"state": "loaded"` after 72 s. At about 67 s, one poll showed `"clients": 1`, and the next showed `"clients": 0` with `loaded`, in the same bench run of PR #56. Keep polling through it.
 

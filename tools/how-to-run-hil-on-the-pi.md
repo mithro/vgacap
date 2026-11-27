@@ -24,7 +24,7 @@ This page runs [`tools/hil.py`](hil.py) with `--stop-bridge` on fpga-1's Pi. The
 
 1. On the Pi, run `curl -s localhost:8765/health` and go on only if it shows `"clients": 0`, since stopping the bridge would cut a visitor off.
 2. In the vgacap checkout on the Pi, run `uvx --python /usr/bin/python3 --from cmake cmake -S . -B build && uvx --python /usr/bin/python3 --from cmake cmake --build build -j --target vgacap-frames` to build the frame rebuilder.
-3. In the same checkout, run `uv run --no-dev --python /usr/bin/python3 python tools/hil.py --board fpga-1 --link serial:/dev/ttboard --design tt_um_vgacal_bars --clock-hz 500000 --no-demo --stop-bridge --ttcap 'uv run --no-dev --no-sync ttcap' tmp/hil/` to run the checks.
+3. In the same checkout, run `uv run --no-dev --python /usr/bin/python3 python tools/hil.py --board fpga-1 --link serial:/dev/ttboard --design tt_um_vgacal_bars --clock-hz 400000 --no-demo --stop-bridge --ttcap 'uv run --no-dev --no-sync ttcap' tmp/hil/` to run the checks.
 4. On the Pi, run `systemctl is-active fpgas-tt` to confirm that the check started the bridge again.
 
 ## Check
@@ -40,7 +40,7 @@ SKIP  serve          --no-demo: the board checks only
 SKIP  stop           --no-demo: the board checks only
 ```
 
-On fpga-1, `capture` took 4898816 samples in 10.0 s with 0 overruns, and `reconstruct` made 11 frames with 0 glitches. The report, named on the last line, lists under Notes that `fpgas-tt` was stopped and started again, and that the board was restarted first. Step 4 prints `active`, and the board's `status.json` shows `"reachable": true`.
+At 500 kHz on fpga-1, `capture` took 4898816 samples in 10.0 s with 0 overruns, and `reconstruct` made 11 frames with 0 glitches. The report, named on the last line, lists under Notes that `fpgas-tt` was stopped and started again, and that the board was restarted first. Step 4 prints `active`, and the board's `status.json` shows `"reachable": true`.
 
 ## If it fails
 

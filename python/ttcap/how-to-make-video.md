@@ -24,7 +24,7 @@ review: 2027-05-27
 
    ```sh
    uv run ttcap demo --link serial:/dev/ttyACM0 --project tt_um_rejunity_vga \
-       --clock-hz 500000 --seconds 12 --fps 5 --outdir video
+       --clock-hz 400000 --seconds 12 --fps 5 --outdir video
    ```
 
 3. In the terminal, wait for the summary, which counts the PNGs and gives the size of `capture.mkv`.
@@ -33,7 +33,7 @@ Without `--fps`, each frame keeps the design's own time, which at a 60 kHz clock
 
 ## Check
 
-The demo prints the detected mode, the frames as they are written, and a summary that repeats the mode. This run used `--design tt_um_vgacal_bars` on an FPGA breakout, through the bridge ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
+The demo prints the detected mode, the frames as they are written, and a summary that repeats the mode. This run used `--design tt_um_vgacal_bars` at 500 kHz on an FPGA breakout, through the bridge ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)):
 
 ```text
   mode 640x480@60: 800 clocks/line, 525 lines/frame, hsync negative, vsync negative, glitches 0

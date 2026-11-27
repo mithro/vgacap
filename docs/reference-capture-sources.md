@@ -26,17 +26,19 @@ Source is the capture source, Runs on the chip that samples, and Code where it l
 
 ### The stock firmware on an RP2350 demo board
 
-Each row is one set of stream captures at one clock. Design is the design enabled, and Clean captures how many of the set had no overrun. The 400 kHz row is the only clean figure for a VGA design over the stock firmware 3.1.1.
+Each row is one set of stream captures at one clock and length. Design is the design enabled, Length each capture's length, and Clean captures how many of the set had no overrun. With a VGA design, every capture at 400 kHz was clean, and 500 kHz overran in some captures on each link.
 
-| Version | Link | Design | Stream clock | Clean captures | Result |
-|---|---|---|---|---|---|
-| 3.1.1 | bridge | `tt_um_vgacal_bars` | 400 kHz | 4 of 4 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-hil-400k) |
-| 3.1.1 | bridge | `tt_um_vgacal_bars` | 500 kHz | 0 of 3 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
-| 3.1.1 | USB serial | `tt_um_vga_pattern` | 500 kHz | 1 of 3 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56) and [#52](https://github.com/mithro/vgacap/issues/52) |
-| 3.1.1 | USB serial | the idle display | 500 kHz | 2 of 2 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56) |
-| 3.1.1 | USB serial | not recorded | 500 kHz | 1 of 1 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
-| 3.1.1 | USB serial | not recorded | 600 kHz | 0 of 1 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
-| 3.1.0 | USB serial | `tt_um_vgacal_bars` | 750 kHz | 1 of 1 | [2026-11-24](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4) |
+| Version | Link | Design | Stream clock | Length | Clean captures | Result |
+|---|---|---|---|---|---|---|
+| 3.1.1 | bridge | `tt_um_vgacal_bars` | 400 kHz | 10 s | 4 of 4 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-hil-400k) |
+| 3.1.1 | bridge | `tt_um_vgacal_bars` | 500 kHz | 10 s | 0 of 3 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| 3.1.1 | USB serial | `tt_um_vga_pattern` | 500 kHz | 4 s | 0 of 2 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56) and [#52](https://github.com/mithro/vgacap/issues/52) |
+| 3.1.1 | USB serial | `tt_um_vga_pattern` | 500 kHz | 2 s | 1 of 1 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56) |
+| 3.1.1 | USB serial | `tt_um_vgacal_bars` | 500 kHz | 10 s | 1 of 1 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-fpga1) |
+| 3.1.1 | USB serial | the idle display | 500 kHz | 4 s | 2 of 2 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56) |
+| 3.1.1 | USB serial | not recorded | 500 kHz | 4 s | 1 of 1 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| 3.1.1 | USB serial | not recorded | 600 kHz | 4 s | 0 of 1 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| 3.1.0 | USB serial | `tt_um_vgacal_bars` | 750 kHz | 4 s | 1 of 1 | [2026-11-24](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4) |
 
 ## Frame clock
 
