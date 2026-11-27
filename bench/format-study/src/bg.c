@@ -203,6 +203,8 @@ static int primary_open(bg_t *g, const char *pfile) {
     fwrite(FS_FILE_MAGIC, 1, 8, g->pf);
     uint8_t hdr[8] = { 0, (uint8_t)g->pt, (uint8_t)g->pc, 0, 0, 0, 0, 0 };
     hdr[0] = !strcmp(g->writer, "planar") ? 1 : !strcmp(g->writer, "events") ? 2 : !strcmp(g->writer, "raw") ? 3 : 4;
+    // Raw capture stored as planar runs is a planar file.
+    if (g->pt == T_PLANAR) { hdr[0] = 1; hdr[1] = T_IDENTITY; }
     fwrite(hdr, 1, 8, g->pf);
     g->pbytes = 16;
     return 0;

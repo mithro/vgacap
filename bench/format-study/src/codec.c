@@ -10,11 +10,12 @@
 #include <string.h>
 #include <zlib.h>
 #include <zstd.h>
+#include "vgacap/stream.h"   // vgacap_leb128_put_inline
 
 const char *const fs_comp_name[C_COUNT] = { "none", "zstd-5", "zstd-1", "zstd1", "zstd3", "zstd9", "zstd1-long27",
                                             "lz4", "lz4hc9", "deflate1", "deflate6", "zstd1-nocheck" };
 const char *const fs_transform_name[T_COUNT] = { "pack6", "xor6", "byteplanes", "xor-byteplanes", "xor-bitplanes",
-                                                 "pack6clk" };
+                                                 "pack6clk", "planar-runs" };
 
 int fs_comp_by_name(const char *name) {
     for (int i = 0; i < C_COUNT; i++)
@@ -188,6 +189,39 @@ int fs_transform(int t, const uint64_t *raw, uint64_t n, uint64_t first_sample, 
         }
         for (int k = 0; k < FS_GROUPS; k++)
             lens[k] = (size_t)(t == T_XBITSHUF ? groups * (uint64_t)port_bits[k] : 8 * groups);
+        return FS_GROUPS;
+    }
+    case T_PLANAR: {
+        // As the planar writer: byte k's runs, in samples, covering the block.
+        const uint64_t noclk = ~(0xffull << (8 * cb));
+        uint8_t *p[8];
+        uint64_t start[8];
+        int map[8], np = 0;   // stream j holds raw byte map[j]: every byte but the clk byte
+        for (int k = 0; k < 8; k++)
+            if (k != cb) { map[np] = k; p[np] = out[np]; start[np] = 0; np++; }
+        uint64_t prev = n ? raw[0] & noclk : 0;
+        for (uint64_t i = 1; i < n; i++) {
+            const uint64_t v = raw[i] & noclk;
+            uint64_t x = v ^ prev;
+            if (__builtin_expect(x != 0, 0)) {
+                for (int j = 0; j < np; j++) {
+                    const int k = map[j];
+                    if ((x >> (8 * k)) & 0xff) {
+                        *p[j] = (uint8_t)(prev >> (8 * k));
+                        p[j] += 1 + vgacap_leb128_put_inline(p[j] + 1, i - start[j]);
+                        start[j] = i;
+                    }
+                }
+                prev = v;
+            }
+        }
+        for (int j = 0; j < np; j++) {
+            if (n) {
+                *p[j] = (uint8_t)(prev >> (8 * map[j]));
+                p[j] += 1 + vgacap_leb128_put_inline(p[j] + 1, n - start[j]);
+            }
+            lens[j] = (size_t)(p[j] - out[j]);
+        }
         return FS_GROUPS;
     }
     default: return -1;

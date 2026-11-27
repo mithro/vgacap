@@ -20,7 +20,9 @@ size_t fs_comp_bound(size_t n);
 int fs_decompress(int comp, const uint8_t *src, size_t csize, uint8_t *dst, size_t n);
 
 // ---- transforms of the raw candidate's blocks (two raw images a clock) ---------------
-enum { T_PACK6, T_XOR6, T_BSHUF, T_XBSHUF, T_XBITSHUF, T_PACK6CLK, T_COUNT, T_IDENTITY = 100 };
+// T_PLANAR: the planar candidate's 7 streams of (u8 value, LEB128 run), made
+// from raw images on the background thread (raw capture, planar storage).
+enum { T_PACK6, T_XOR6, T_BSHUF, T_XBSHUF, T_XBITSHUF, T_PACK6CLK, T_PLANAR, T_COUNT, T_IDENTITY = 100 };
 extern const char *const fs_transform_name[T_COUNT];
 int fs_transform_by_name(const char *name);
 // raw[0, n) -> streams. Returns the number of streams (1 or 7); lens set.
