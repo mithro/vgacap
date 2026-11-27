@@ -34,4 +34,4 @@ The `overrun` chunks written then are still in the pipe when the pipeline stops.
 
 ## Failures reach the bus
 
-The child's stderr is read line by line, and logged at `INFO` in the `vgacapttsrc` debug category. A child that exits with an error raises a pipeline `ERROR` that quotes its last lines. So a missing board, a wrong project name or a board that never answers shows as an error. It does not look like a stream that ended early.
+The child's stderr is read line by line, and logged at `INFO` in the `vgacapttsrc` debug category. A child that exits with an error raises a pipeline `ERROR` that quotes its last lines. So a missing board, a wrong project name or a board that never answers shows as an error. `ttcap capture` also exits 1 when the board reports overruns or an RX stall, so a capture that lost samples and ended on its own shows as an error too. It does not look like a stream that ended early.
