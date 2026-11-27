@@ -33,7 +33,7 @@ board yet, so the pin assignment is a parameter, not a fact.
 `--gen FILE` adds a second state machine that drives FILE's samples (one
 byte each, looped) and a clock onto the same pins. `--gen-counter` drives a
 descending 8-bit counter instead, with no host involvement at all. Results
-on a Raspberry Pi 5 on the [Welland bench](../python/ttcap/README.md#reaching-a-welland-board-bench-access-needed) with nothing on its GPIO header,
+on a Raspberry Pi 5 on the [Welland bench](../python/ttcap/how-to-capture-welland-bridge.md) with nothing on its GPIO header,
 2026-11-24:
 
 | pattern | samples | rate (M samples/s) | samples lost per 32 KB buffer | check |

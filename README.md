@@ -74,7 +74,7 @@ design must run.
 | simulator | -- | -- | [clean](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-09-15-sim-tt_um_vga_pattern) | -- | -- |
 
 Run-length capture on the stock firmware
-([`ttcap capture --mode rle`](python/ttcap/README.md#run-length-capture)) was
+([`ttcap capture --mode rle`](python/ttcap/how-to-capture-rle.md)) was
 exact up to
 [25 MHz](https://github.com/mithro/tt-vga-capture/blob/main/docs/research/2026-11-24-pio-run-counting.md)
 in one-shot bursts (`--rle-oneshot`) with an FPGA breakout and
@@ -113,7 +113,7 @@ uv run ttcap demo --link serial:/dev/ttyACM0 --clock-hz 500000 --fps 5 --outdir 
 ```
 
 For a board on the Welland bench, see
-[Reaching a Welland board](python/ttcap/README.md#reaching-a-welland-board-bench-access-needed).
+[Reaching a Welland board](python/ttcap/how-to-capture-welland-bridge.md).
 
 ## Layout
 

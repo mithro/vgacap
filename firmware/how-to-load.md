@@ -19,7 +19,7 @@ never written. A reboot, a reset or a power cycle brings the stock firmware back
 
   <img src="../docs/diagrams/images/tt-etr-dbv3p2.jpg" alt="The Tiny Tapeout demo board v3, with a breakout plugged into its centre socket." width="240">
 
-- On that machine, a vgacap checkout set up to run `ttcap`, as on [ttcap](../python/ttcap/README.md), and `sudo`.
+- On that machine, a vgacap checkout set up to run `ttcap`, as on [How to run ttcap on a Raspberry Pi](../python/ttcap/how-to-run-on-raspberry-pi.md), and `sudo`.
 - `vgacap_fw.uf2`, built as on [How to build the vgacap firmware](how-to-build.md), copied to the checkout's root.
 - `<dev>`, the stock firmware's serial port. On the Welland bench it is `/dev/ttboard` on the board's own Pi.
 - With an FPGA breakout, the design you want to capture enabled under the stock firmware. The iCE40 keeps it

@@ -1,0 +1,70 @@
+---
+type: how-to
+owner: vgacap maintainers
+reader: someone with Welland bench access who wants to capture on a bench board's own Pi
+review: 2027-05-27
+---
+
+# How to capture on a Welland board's own Pi
+
+**You want to capture a Welland bench board on the Raspberry Pi it is plugged into, owning its serial port with no bridge in between.**
+
+The fpgas.online bridge (`fpgas-tt`) holds the board's serial port, `/dev/ttboard`, so the capture stops the bridge and starts it again. The board drops off [tinytapeout.fpgas.online](https://tinytapeout.fpgas.online) until the bridge is back. Through the bridge from your own machine is on [How to capture from a Welland board through the bridge](how-to-capture-welland-bridge.md).
+
+## What you need
+
+- SSH access to the board's Pi as `pi`, through the bench gateway `tweed.welland.mithis.com`, and `sudo` on the Pi.
+- A vgacap checkout on the Pi, set up as in [How to run ttcap on a Raspberry Pi](how-to-run-on-raspberry-pi.md).
+- The board's slug and Pi, from [Welland bench boards in ttcap](reference-welland-boards.md). This page uses fpga-4 on `pi-sw2-p35`.
+
+## Steps
+
+1. In a browser, open `https://tinytapeout.fpgas.online/board/fpga-4/status.json`, and go on only if it shows `"clients": 0` and `"reachable": true`.
+2. In the same `status.json`, check that `usb_serial` is the board you expect, since boards move between Pis.
+3. In a terminal, log in to the board's Pi through the bench gateway, which gives you a shell on `pi-sw2-p35`:
+
+   ```sh
+   ssh -J tweed.welland.mithis.com pi@10.21.2.35
+   ```
+
+4. On the Pi, run `sudo systemctl stop fpgas-tt`, which stops the bridge and frees `/dev/ttboard`.
+5. In the checkout on the Pi, capture from the serial port, which runs with no bridge in between:
+
+   ```sh
+   uv run --no-sync ttcap capture serial:/dev/ttboard --clock-hz 500000 --seconds 4 --out bench.vgacap
+   ```
+
+6. In the checkout on the Pi, restart the stock firmware's SDK, whether or not step 5 succeeded, which leaves no design of yours enabled:
+
+   ```sh
+   uv run --no-sync python tools/board_restart.py serial:/dev/ttboard
+   ```
+
+7. On the Pi, run `sudo systemctl start fpgas-tt`, whether or not steps 5 and 6 succeeded, which starts the bridge again.
+8. In the browser, reload `status.json` until it shows `"reachable": true` and `idle_display` shows `"state": "loaded"`.
+
+Step 6 comes before step 7 because the bridge checks the board's state when it starts. On an ASIC board, starting the bridge with the capture's project still enabled left it reporting `left:` and that project ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4)). That report is in `safe_start.state` in `status.json` ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). `ttcap demo --board fpga-4` run on this Pi picks `serial:/dev/ttboard` itself, and says to stop the bridge first.
+
+## Check
+
+Step 5 ends with `wrote bench.vgacap` and a stats line. It shows `overruns=0 dropped=0 rxstall=0` when no sample was lost. 500 kHz was clean in one 4-second run on fpga-1's USB serial, and 750 kHz overran on fpga-4 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap)). How long 500 kHz stays clean is open ([#52](https://github.com/mithro/vgacap/issues/52)). After step 7, `systemctl is-active fpgas-tt` prints `active`, and `sudo fuser /dev/ttboard` shows the bridge's process again.
+
+## If it fails
+
+| Step | What you see | Likely cause | Fix |
+|---|---|---|---|
+| 1 | `"clients"` above 0 | someone else is using the board | stop here: do not stop the bridge |
+| 1 | `"reachable": false` | the board's Pi is down or the board is not connected | use another board |
+| 2 | a different `usb_serial` | the board has moved to another Pi | find the board by its serial on the site |
+| 3 | `Permission denied (publickey)` | your key is not on the gateway or the Pi | ask for bench access |
+| 5 | `capture failed: TimeoutError:` | the bridge still holds the port | check step 4, then run step 5 again |
+| 5 | any other failure | see [ttcap exit codes and messages](reference-exit-codes.md) | do steps 6 and 7 before anything else |
+| 7 | `systemctl is-active fpgas-tt` prints `failed` | the bridge did not start | run step 7 again and read `journalctl -u fpgas-tt` |
+| 8 | `idle_display` `state` stays other than `loaded` | the SDK restart came after the bridge started | stop the bridge and repeat steps 6 and 7 |
+| 8 | `safe_start` `state` starts with `left:` on an ASIC breakout | the bridge started before the SDK restart | stop the bridge and repeat steps 6 and 7 |
+
+## Next
+
+- [How to capture from a Welland board through the bridge](how-to-capture-welland-bridge.md)
+- [How to run ttcap on a Raspberry Pi](how-to-run-on-raspberry-pi.md)
+- [Welland bench boards in ttcap](reference-welland-boards.md)

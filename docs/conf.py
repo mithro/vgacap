@@ -58,6 +58,7 @@ extensions = [
     "vgacap_landing",   # a landing page's lines -> its hidden toctree
     "vgacap_picture",   # <picture> light/dark twins -> the theme-switched pair
     "vgacap_rules",     # the docs.fpgas.online rules a machine can decide
+    "ttcap_reference",  # ttcap's options, pin maps and bench boards, from its source
 ]
 source_suffix = {".md": "markdown"}
 root_doc = "docs/index"
@@ -88,7 +89,7 @@ include_patterns = [
 vgacap_rules_pending = {
     page: "split into typed pages (docs/superpowers/specs/2026-11-27-docs-site-design.md)"
     for page in (
-        "README", "python/ttcap/README",
+        "README",
         "capture-rp1/README", "rtl/README", "gst/README",
         "src/tools/README", "tools/README", "docs/development", "docs/frames-format",
         "docs/trace-format", "third_party/README", "docs/diagrams/NOTICE",
