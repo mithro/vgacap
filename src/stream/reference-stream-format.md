@@ -245,32 +245,40 @@ Allowed means the chunk is read; skipped means it is skipped by its length and r
 
 ## What a reader does with a bad chunk
 
-The C reader reports a loss as a resync event, with the bytes lost and a reason, and goes on. Scan means it searches the input byte by byte for the next known tag with a plausible length. Skip means it steps over the chunk by its length.
+The C reader reports a loss as a resync event, with the bytes lost and a reason, and goes on. The Python reader raises `ValueError` and stops. In the table, C reason is the C reader's text and C action what it does. Scan means it searches the input byte by byte for the next known tag with a plausible length; skip means it steps over the chunk by its length. Python message is what the Python reader raises: the same text, the C text followed by detail, or its own text.
 
-| Fault | Reason reported | Action |
-|---|---|---|
-| a `version` other than 1 or 2 | `unsupported version` | stops: an error, not a resync |
-| a tag that is not printable | `non-printable chunk tag` | scan |
-| a length over 16 MiB | `chunk length too large` | scan |
-| a `VGCH` length under 20 or over 275 | `bad VGCH length` | scan |
-| `desc_len` that does not match the `VGCH` length | `VGCH desc length mismatch` | scan |
-| a `sample_bits` not allowed | `bad sample_bits` | scan |
-| a `samples_per_word` not allowed | `bad samples_per_word` | scan |
-| bad version 2 clock fields | `bad VGCH v2 clock fields` | scan |
-| a chunk before the first `VGCH` | `chunk before header` | scan |
-| a length under the tag's fixed part | `bad RAW length` (and so on for each tag) | scan |
-| a count that does not fill the length | `RAW sample count does not match chunk length` (and so on) | scan |
-| an `EVNT` clock that does not increase | `EVNT clock not increasing` | scan |
-| a `TIME` `msg_len` that does not fill the length | `TIME msg_len does not match chunk length` | scan |
-| a chunk the header does not allow | `chunk needs a version 2 header` (and the like) | skip |
-| a bad `RUNS` pair | `RUNS run is zero` (and the like) | skip |
-| a `RUNS` chunk while n is unknown | `RUNS discarded: sample position unknown until BLKH` | skip |
-| a `BLKH` length other than 8 | `bad BLKH length` | skip |
-| a `META` length of 0 or over 4096 | `bad META length` | skip |
-| `META` text that breaks its rules | `bad META text` | skip |
-| a `BLKH` that does not follow | `BLKH first_sample does not follow` | adopt its `first_sample` |
-| input that ends while scanning | none: the caller reports it | stop |
+| Fault | C reason | C action | Python message |
+|---|---|---|---|
+| a `version` other than 1 or 2 | `unsupported version` | stop: an error, not a resync | the C text, then detail |
+| a tag that is not printable | `non-printable chunk tag` | scan | the C text, then detail |
+| a length over 16 MiB | `chunk length too large` | scan | `chunk 'TAG' at offset N declares N bytes (max 16777216)` |
+| a `VGCH` length under 20 or over 275 | `bad VGCH length` | scan | the same text |
+| `desc_len` that does not match the `VGCH` length | `VGCH desc length mismatch` | scan | the C text, then detail |
+| a `sample_bits` not allowed | `bad sample_bits` | scan | the C text, then detail |
+| a `samples_per_word` not allowed | `bad samples_per_word` | scan | the C text, then detail |
+| bad version 2 clock fields | `bad VGCH v2 clock fields` | scan | the C text, then detail |
+| a chunk before the first `VGCH` | `chunk before header` | scan | the same text |
+| a length under the tag's fixed part | `bad RAW length` (and so on for each tag) | scan | the C text, then detail |
+| a `RAW ` or `FRAM` count that does not fill the length | `RAW sample count does not match chunk length` (or `FRAM`) | scan | `'RAW ' declares N samples but its length holds N words` (or `'FRAM'`) |
+| an `RLE ` length that is not whole pairs | `RLE pair count does not match chunk length` | scan | `'RLE ' payload is not a whole number of pairs` |
+| an `RLE ` count that does not fill the length | `RLE pair count does not match chunk length` | scan | `'RLE ' declares pair_count=N but its length holds N` |
+| an `EVNT` length that is not whole events | `EVNT event count does not match chunk length` | scan | `'EVNT' payload is not a whole number of events` |
+| an `EVNT` count that does not fill the length | `EVNT event count does not match chunk length` | scan | `'EVNT' declares event_count=N but its length holds N` |
+| an `EVNT` clock that does not increase | `EVNT clock not increasing` | scan | `event clock not increasing` |
+| a `TIME` `msg_len` over 255 | `TIME msg_len does not match chunk length` | scan | `'TIME' msg_len N exceeds 255` |
+| a `TIME` `msg_len` that does not fill the length | `TIME msg_len does not match chunk length` | scan | `'TIME' declares msg_len=N but its length holds N` |
+| a chunk the header does not allow | `chunk needs a version 2 header` (and the like) | skip | the same text |
+| a bad `RUNS` pair | `RUNS run is zero` (and the like) | skip | the same text |
+| a `RUNS` chunk while n is unknown | `RUNS discarded: sample position unknown until BLKH` | skip | none: the Python reader never loses n |
+| a `BLKH` length other than 8 | `bad BLKH length` | skip | the same text |
+| a `BLKH` that does not follow | `BLKH first_sample does not follow` | adopt its `first_sample` and go on | the C text, then detail, and stop |
+| a `META` length of 0 or over 4096 | `bad META length` | skip | the same text |
+| `META` text that breaks its rules | `bad META text` | skip | the same text |
+| input that ends inside a chunk's 8-byte head | none | wait for more input | none: the bytes are ignored |
+| input that ends inside a chunk's payload | none | wait for more input | `truncated chunk 'TAG'` |
+| input that ends while scanning | none: the caller reports it | stop | none |
+| input with no complete chunk | none | none | `no header` |
 
 Under a header with a clock bit, n becomes unknown after any loss that could have carried samples. Until the next `BLKH`, every `RUNS` chunk is skipped. A lost `META`, or a scan that lost exactly one `TIME` chunk, leaves n known.
 
-[`vgacap-dump`](../tools/reference-options.md#vgacap-dump) prints each resync as a `resync skipped=N reason=...` line. The Python reader raises `ValueError` instead of going on. Its message matches the C reason for a chunk the header forbids, a bad `RUNS` pair, and a bad `BLKH` or `META`. For every other fault, a non-following `BLKH` included, its wording differs.
+[`vgacap-dump`](../tools/reference-options.md#vgacap-dump) prints each resync as a `resync skipped=N reason=...` line.

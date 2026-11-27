@@ -9,7 +9,7 @@ review: 2027-05-27
 
 **You want to know that every pixel of a calibration design's capture is right.**
 
-The calibration designs in [tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns) each come with a renderer that draws what the design should show. This page simulates `tt_um_vgacal_bars`, rebuilds a frame, and compares it with that render. The simulation is tt-vga-testpatterns' [`tools/dump_uo_out.py`](https://github.com/mithro/tt-vga-testpatterns/blob/main/tools/dump_uo_out.py), and the comparison its [`tools/compare_capture.py`](https://github.com/mithro/tt-vga-testpatterns/blob/main/tools/compare_capture.py). With a capture from a board, start at step 3.
+The calibration designs in [tt-vga-testpatterns](https://github.com/mithro/tt-vga-testpatterns) each come with a renderer that draws what the design should show. This page simulates `tt_um_vgacal_bars`, rebuilds a frame, and compares it with that render. The simulation is tt-vga-testpatterns' [`tools/dump_uo_out.py`](https://github.com/mithro/tt-vga-testpatterns/blob/main/tools/dump_uo_out.py), and the comparison its [`tools/compare_capture.py`](https://github.com/mithro/tt-vga-testpatterns/blob/main/tools/compare_capture.py). With a capture from a board, start at step 3, and give step 4 its design's name. For a `tt_um_vgacal_modes` capture, add `--ui-in N` to step 4, N being the `ui_in` it ran with.
 
 ## What you need
 
@@ -23,7 +23,6 @@ The calibration designs in [tt-vga-testpatterns](https://github.com/mithro/tt-vg
 2. In the vgacap checkout, run `uv run vgacap-bin2stream ../tt-vga-testpatterns/tmp/bars.bin capture.vgacap --clock-hz 25175000`, which writes the capture.
 3. In the vgacap checkout, run `mkdir -p frames && build/vgacap-frames capture.vgacap frames/frame`, which writes the frames as `frames/frame-NNNN.ppm`.
 4. In `../tt-vga-testpatterns`, run `uv run --no-project --with numpy --with pillow python tools/compare_capture.py tt_um_vgacal_bars ../vgacap/frames/frame-0001.ppm`, and it compares the frame with the render.
-5. In `../tt-vga-testpatterns`, for `tt_um_vgacal_modes`, run step 4's command with `--ui-in N` added, and it compares against the render for that `ui_in`.
 
 ## Check
 

@@ -13,3 +13,4 @@ review: 2027-05-27
 - [The simulation trace format](../trace-format.md): the trace a simulated design writes.
 - [Vendored third-party code](../../third_party/README.md): the libraries built into vgacap, with their versions and licenses.
 - [Images and logos in the overview figure](../diagrams/NOTICE.md): where each picture comes from, and its license.
+- [ttcap reference](../../python/ttcap/index-reference.md): the `ttcap` commands, exit codes, pin maps and bench boards.

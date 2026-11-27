@@ -11,7 +11,7 @@ This page explains why vgacap has one capture format, the vgacap stream, and wha
 
 ## One format for every source
 
-Each capture source records a design's `uo_out` pins, at its own rate. A demo board's microcontroller records them once a project clock. The FPGA capture logic records a sample each time its harness marks one valid, which was every other clock in the [fpga-4 test](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-rtl-framer-fpga4). A simulation trace records all 43 pins of the design, twice a clock. Each source writes a vgacap stream, so everything that reads a capture is written once.
+Each capture source records a design's `uo_out` pins, at its own rate. A demo board's microcontroller records them once a project clock. The FPGA capture logic records a sample each time its harness marks one valid, which was every other clock in the [fpga-4 test](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-rtl-framer-fpga4). A simulation trace records a 43-bit sample of the design's pins, twice a clock. Each source writes a vgacap stream, so everything that reads a capture is written once.
 
 ## A header that describes the wiring
 

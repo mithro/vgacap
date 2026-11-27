@@ -140,17 +140,26 @@ class ModesDirective(SphinxDirective):
         return [table(headers, rows)]
 
 
+def suppressed(value):
+    """argparse.SUPPRESS is a string; compare by value, as argparse does."""
+    return isinstance(value, str) and value == argparse.SUPPRESS
+
+
 def help_text(ap, action):
-    """The help as argparse prints it: %(default)s and the like filled in."""
-    if not action.help or action.help is argparse.SUPPRESS:
+    """The help as argparse prints it: %(default)s and the like filled in.
+    A help whose % is not a placeholder is shown as written."""
+    if not action.help or suppressed(action.help):
         return ""
     params = dict(vars(action), prog=ap.prog)
     for name in list(params):
-        if params[name] is argparse.SUPPRESS:
+        if suppressed(params[name]):
             del params[name]
     if params.get("choices") is not None:
         params["choices"] = ", ".join(str(c) for c in params["choices"])
-    return action.help % params
+    try:
+        return action.help % params
+    except (KeyError, ValueError, TypeError):
+        return action.help
 
 
 def value_text(action):
@@ -173,31 +182,48 @@ def default_text(action):
         return "required"
     if not action.option_strings and action.nargs not in ("?", "*"):
         return "required"
-    if action.nargs == 0 or action.default in (None, argparse.SUPPRESS):
+    if action.nargs == 0 or action.default is None or suppressed(action.default):
         return ""
     return repr(action.default)
 
 
+# More choices than this are one row: their range, not a row each.
+CHOICES_MAX = 10
+
+
+def choice_rows(action):
+    """The Choice cells: one a choice, or one for a long run of them."""
+    if not action.choices:
+        return []
+    choices = list(action.choices)
+    if len(choices) <= CHOICES_MAX:
+        return [str(c) for c in choices]
+    if isinstance(action.choices, range) and action.choices.step == 1:
+        return [f"{choices[0]} to {choices[-1]}"]
+    return [f"{len(choices)} values, {choices[0]} to {choices[-1]}"]
+
+
 def argparse_rows(ap, prefix=""):
-    """One row an argument, then the rows of each subcommand, prefixed by its name."""
+    """One row an argument, then a row for each of its choices; then each
+    subcommand, a row with its help and the rows of its own arguments."""
     rows, subs = [], []
     for action in ap._actions:
-        if isinstance(action, argparse._HelpAction) or action.help is argparse.SUPPRESS:
+        if isinstance(action, argparse._HelpAction) or suppressed(action.help):
             continue
         if isinstance(action, argparse._SubParsersAction):
-            subs.extend(action.choices.items())
+            helps = {a.dest: a.help or "" for a in action._choices_actions}
+            subs.extend((name, sub, helps.get(name, "")) for name, sub in action.choices.items())
             continue
         name = ", ".join(action.option_strings) if action.option_strings else (
             action.metavar if isinstance(action.metavar, str) else action.dest)
         value = value_text(action) if action.option_strings else ""
         default = default_text(action)
-        choices = [str(c) for c in action.choices] if action.choices else [""]
-        for i, choice in enumerate(choices):
-            first = i == 0
-            rows.append([code(prefix + name) if first else "", code(value) if first and value else "",
-                         code(default) if first and default else "", code(choice) if choice else "",
-                         help_text(ap, action) if first else ""])
-    for sub_name, sub in subs:
+        rows.append([code(prefix + name), code(value) if value else "",
+                     code(default) if default else "", "", help_text(ap, action)])
+        for choice in choice_rows(action):
+            rows.append(["", "", "", code(choice), ""])
+    for sub_name, sub, sub_help in subs:
+        rows.append([code(prefix + sub_name), "", "", "", sub_help])
         rows.extend(argparse_rows(sub, prefix + sub_name + " "))
     return rows
 
