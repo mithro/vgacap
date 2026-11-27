@@ -69,6 +69,11 @@ class Waveform:
     sampler is meant to read it. Pins that are neither the clock nor a
     `uo_out` bit read `constants.get(gpio, 0)` -- e.g. the RP2040's `ui_in`
     pads inside its 12-bit window.
+
+    Once PIO side-set drives the clock pin, the design is clocked by those
+    edges alone: `clock_rises` is then the cycles of its rising edges, and
+    `uo_out` is `uo[n]` from `delay` cycles after the n-th of them (`uo[0]`
+    before the first), however long PIO holds the clock between edges.
     """
 
     def __init__(
@@ -98,6 +103,9 @@ class Waveform:
         #: Set when a script takes the clock pad (machine.Pin(clk, Pin.IN)):
         #: the PWM loses the pad and the clock stops, as measured on fpga-1.
         self.clock_stopped = False
+        #: The PIO-driven clock's rising edges (Board.pio_rises), once PIO
+        #: side-set has taken the clock pin; None while the clock free-runs.
+        self.clock_rises: list[int] | None = None
         self._changes: dict[int, list[int]] = {}
         self._tables: dict[tuple[int, int], tuple[list[int], int]] = {}
 
@@ -105,6 +113,9 @@ class Waveform:
 
     def clock_index(self, cycle: int) -> int:
         """The project clock whose `uo_out` is on the pins at `cycle`."""
+        rises = self.clock_rises
+        if rises is not None:
+            return bisect.bisect_right(rises, cycle - self.delay)
         return (cycle - self.delay) // self.period
 
     def value(self, gpio: int, cycle: int) -> int:
@@ -139,6 +150,15 @@ class Waveform:
             return cycle - phase + self.high  # high now: low at `high`
         bit = self.uo_bit.get(gpio)
         if bit is None:
+            return None
+        rises = self.clock_rises
+        if rises is not None:
+            # Only the edges PIO has driven so far are known; past the last
+            # of them the clock is held, so the pin holds too.
+            uo, n, delay = self.uo, self.n, self.delay
+            for i in range(bisect.bisect_right(rises, cycle - delay), len(rises)):
+                if (uo[(i + 1) % n] >> bit) & 1 == want:
+                    return rises[i] + delay
             return None
         changes = self._change_list(bit)
         if not changes:
@@ -292,8 +312,10 @@ class _SM:
             # takes the clock pad from the firmware's PWM.
             self.now = self.board.now
             self._side(init)
-            if self.board.wave.clk_gpio in gpios:
-                self.board.wave.clock_stopped = True
+            wave = self.board.wave
+            if wave.clk_gpio in gpios:
+                wave.clock_stopped = True
+                wave.clock_rises = self.board.pio_rises[wave.clk_gpio]
 
     def _sideset_config(self, prog: list, execctrl: int, sideset_base: int | None):
         """(data bits, SIDE_EN, GPIOs, initial value) as rp2_pio.c sets
@@ -446,6 +468,8 @@ class _SM:
                     raise BoardError(
                         "GPIO %d is driven by PIO; waiting on it is not emulated" % ins[2]
                     )
+                if ins[2] in wave.uo_bit and wave.clock_rises is not None:
+                    self._check_clock_owner(ins[2])
                 t = wave.next_time(ins[2], ins[1], self.now)
                 if t is None or t >= limit:
                     self.now = limit
@@ -636,12 +660,30 @@ class _SM:
                 raise BoardError(
                     "GPIO %d is driven by PIO; reading it back is not emulated" % gpio
                 )
+        if wave.clock_rises is not None:
+            for gpio in wave.uo_bit:
+                if base <= gpio < base + 32 and ((gpio - self.in_base) & 31) < count:
+                    self._check_clock_owner(gpio)
         low = self.in_base - base  # in_base's index in the window
         first = 32 - low
         if count <= first:
             return wave.window(self.in_base, count, cycle)
         value = wave.window(self.in_base, first, cycle)
         return value | (wave.window(base, count - first, cycle) << first)
+
+    def _check_clock_owner(self, gpio: int) -> None:
+        """Refuse reading `uo_out` pin `gpio` from a state machine other than
+        the one whose side-set clocks the design: state machines run one
+        after another within each Board.advance(), so this one could run
+        ahead of edges the other has not driven yet."""
+        wave = self.board.wave
+        owner = self.board.pio_pin_owner[wave.clk_gpio]
+        if owner is not self:
+            raise BoardError(
+                "GPIO %d is uo_out, clocked by another state machine's side-set "
+                "(PIO%d SM%d); reading it from this one is not emulated"
+                % (gpio, owner.block.index, owner.index)
+            )
 
     def write_shiftctrl(self, value: int) -> None:
         """A CPU write to SMn_SHIFTCTRL. Only IN_COUNT (bits 4:0, RP2350)
@@ -839,6 +881,9 @@ class Board:
         #: in time order, and the state machine that drives it.
         self.pio_pins: dict[int, list[tuple[int, int]]] = {}
         self.pio_pin_owner: dict[int, _SM] = {}
+        #: The cycles at which each of those pins rises (0 to 1); the value
+        #: it was first driven to is not an edge.
+        self.pio_rises: dict[int, list[int]] = {}
         gpio = wave.clk_gpio
         slice_num = (gpio >> 1) & 7 if gpio < 32 else 8 + ((gpio >> 1) & 3)
         self.pwm_base = PWM_BASE[chip] + PWM_SLICE_STRIDE * slice_num
@@ -877,6 +922,7 @@ class Board:
                 % (gpio, owner.block.index, owner.index)
             )
         trace = self.pio_pins.setdefault(gpio, [])
+        rises = self.pio_rises.setdefault(gpio, [])
         if trace:
             last_cycle, last_value = trace[-1]
             if cycle < last_cycle:
@@ -884,11 +930,17 @@ class Board:
             if cycle == last_cycle:
                 # Two values in one cycle: the later one is what the pin shows.
                 trace.pop()
+                if rises and rises[-1] == cycle:
+                    rises.pop()
                 if not trace or trace[-1][1] != value:
+                    if value and trace:
+                        rises.append(cycle)
                     trace.append((cycle, value))
                 return
             if last_value == value:
                 return
+            if value:
+                rises.append(cycle)
         trace.append((cycle, value))
 
     def pio_pin(self, gpio: int, cycle: int) -> int:

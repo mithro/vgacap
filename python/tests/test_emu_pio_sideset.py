@@ -555,9 +555,10 @@ def _clocked(rp2, high, low):
     return clocked
 
 
+@pytest.mark.parametrize("hold", [0, 10_000])
 @pytest.mark.parametrize("high, low", [(0, 0), (15, 15)])
 @pytest.mark.parametrize("clocks, reset_clocks", [(4, 1), (12, 10), (8, 3)])
-def test_the_clocked_program_drives_exactly_n_edges(high, low, clocks, reset_clocks):
+def test_the_clocked_program_drives_exactly_n_edges(high, low, clocks, reset_clocks, hold):
     board = _board()
     rp2 = board.modules()["rp2"]
     machine = board.modules()["machine"]
@@ -573,6 +574,8 @@ def test_the_clocked_program_drives_exactly_n_edges(high, low, clocks, reset_clo
         board.advance(100)
         while pio_sm.rx:
             words.append(sm.get())
+    # Hold the clock at the handshake, as Python releasing rst_n would.
+    board.advance(hold)
     handshake = board.now
     mem32[IRQ] = 1
     while len(words) < clocks // 4:
@@ -609,3 +612,57 @@ def test_the_clocked_program_drives_exactly_n_edges(high, low, clocks, reset_clo
     assert between == [low + 2] * (clocks - 2)
     assert handshake_low > low + 3
     assert len(words) == clocks // 4 and pio_sm.rx == []
+    # The design sees only the side-set clock: uo_out (0, 1, 2, ... one
+    # value per rising edge) has taken edge n's value once n rising edges
+    # have reached it. Sample k is the `in pins` in the high phase after
+    # rising edge k (counting from 0), so after k + 1 edges: uo[k + 1],
+    # whatever the phase lengths and however long the handshake holds the
+    # clock low. Each word holds four samples, the first in its top byte.
+    samples = [(w >> (8 * (3 - i))) & 0xFF for w in words for i in range(4)]
+    assert samples == [k + 1 for k in range(clocks)]
+
+
+def test_wait_on_uo_out_follows_the_side_set_clock():
+    # uo[1] = 1 sets bit 0 (GPIO 33) after the first rising edge; bit 1
+    # (GPIO 34) waits for uo[2], an edge this program never drives, so that
+    # wait holds however long the board runs.
+    board = _board()
+    rp2 = board.modules()["rp2"]
+    mem32 = board.modules()["machine"].mem32
+
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW)
+    def p():
+        nop().side(0)[3]  # noqa: F821
+        nop().side(1)[3]  # noqa: F821
+        wait(1, gpio, 1).side(0)  # noqa: F821  (GPIO 33 in the window at 16)
+        irq(0).side(0)  # noqa: F821
+        wait(1, gpio, 2).side(0)  # noqa: F821  (GPIO 34)
+        irq(1).side(0)  # noqa: F821
+        label("end")  # noqa: F821
+        jmp("end").side(0)  # noqa: F821
+
+    sm, pio_sm = _sm(board, p, sideset_base=CLK)
+    start = board.now
+    sm.active(1)
+    board.advance(10_000)
+    assert board.pio_rises[CLK] == [start + 4]
+    assert mem32[IRQ] == 1 << 0 and pio_sm.pc == 4
+
+
+def test_reading_uo_out_from_a_state_machine_the_clock_is_not_on_is_refused():
+    # The other state machine runs after the clock's within each advance,
+    # so it could read uo_out ahead of edges not yet driven.
+    board = _board()
+    rp2 = board.modules()["rp2"]
+    machine = board.modules()["machine"]
+
+    @rp2.asm_pio()
+    def reader():
+        in_(pins, 8)  # noqa: F821
+
+    clock, _ = _sm(board, _toggle(rp2, 0, 0), sideset_base=CLK)
+    sm2, _ = _sm(board, reader, sm_num=1, in_base=machine.Pin(33))
+    clock.active(1)
+    sm2.active(1)
+    with pytest.raises(BoardError, match="clocked by another state machine"):
+        board.advance(4)

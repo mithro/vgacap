@@ -21,7 +21,9 @@ and writes the same chunk stream it would write over USB:
   the next edge instead of stepping every cycle. Side-set (plain or
   optional, to pin values; not pindirs) drives its pins from the cycle an
   instruction issues, stalled or not, and `Board.pio_pin()` reads them
-  back cycle by cycle. The PIO IRQ register (block + 0x030) is
+  back cycle by cycle. Once side-set drives the design's clock pin,
+  `uo_out` advances one value per rising edge it drives, and only
+  then. The PIO IRQ register (block + 0x030) is
   write-1-to-clear from `mem32`.
 * **DMA**: channels with chaining, completion IRQs that call the script's
   own handlers, and the `mem32` register writes the scripts use (re-arming
