@@ -204,3 +204,79 @@ def test_the_in_window_shows_the_clock_pad_the_cpu_drives():
     assert board.wave.window(CLK, 1, board.now) & 1 == 1
     clk.value(0)
     assert board.wave.window(CLK, 1, board.now) & 1 == 0
+
+
+def _free_running(rp2):
+    # Samples uo_out every clock and never stalls (push noblock).
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW, in_shiftdir=rp2.PIO.SHIFT_LEFT,
+                 autopush=False, push_thresh=32)
+    def p():
+        nop().side(1)  # noqa: F821
+        in_(pins, 8).side(1)  # noqa: F821
+        push(noblock).side(0)  # noqa: F821
+
+    return p
+
+
+@pytest.mark.parametrize("step", [24_000, 100])
+def test_each_edge_is_counted_once_however_long_the_advance(step, monkeypatch):
+    # 8,000 edges in one advance cost what they cost in advances of 100
+    # cycles: the design looks rst_n up once per edge, not once per edge
+    # per sample (which was 32 million lookups in one advance).
+    board = _board()
+    mods = board.modules()
+    rp2, Pin = mods["rp2"], mods["machine"].Pin
+    rp2.PIO(1).gpio_base(16)
+    sm = rp2.StateMachine(4, _free_running(rp2), sideset_base=Pin(CLK), in_base=Pin(33))
+    lookups = []
+    real = board.pad_level
+
+    def counting(gpio, cycle):
+        if gpio == RST:
+            lookups.append(cycle)
+        return real(gpio, cycle)
+
+    monkeypatch.setattr(board, "pad_level", counting)
+    sm.active(1)
+    for _ in range(24_000 // step):
+        board.advance(step)
+    edges = len(board.pio_rises[CLK])
+    assert edges == 8_000
+    assert len(lookups) <= edges + 2
+    assert board.wave.count_at(board.now) == edges % 256
+
+
+def test_rst_n_driven_by_a_later_state_machine_resets_edges_already_counted():
+    # Within one advance the clock's state machine runs, and samples, before
+    # the one that drives rst_n low; the edges it counted after that drive
+    # must be counted again.
+    design = ClockedDesign(UO, clk_gpio=CLK, rst_gpio=17)
+    board = Board(design)
+    mods = board.modules()
+    rp2, Pin = mods["rp2"], mods["machine"].Pin
+    rp2.PIO(1).gpio_base(16)
+    Pin(17, Pin.OUT, value=1)
+    clock = rp2.StateMachine(4, _free_running(rp2), sideset_base=Pin(CLK), in_base=Pin(33))
+
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_HIGH)
+    def reset_at_100():
+        nop().side(1)[15]  # noqa: F821
+        nop().side(1)[15]  # noqa: F821
+        nop().side(1)[15]  # noqa: F821
+        nop().side(1)[15]  # noqa: F821
+        nop().side(1)[15]  # noqa: F821
+        nop().side(1)[15]  # noqa: F821
+        nop().side(1)[2]  # noqa: F821
+        label("low")  # noqa: F821
+        jmp("low").side(0)  # noqa: F821
+
+    reset = rp2.StateMachine(5, reset_at_100, sideset_base=Pin(17))
+    clock.active(1)
+    reset.active(1)
+    board.advance(300)
+    rises = board.pio_rises[CLK]
+    low_from = board.pio_rises[CLK][0] + 99
+    assert board.pio_pin(17, low_from) == 0 and board.pio_pin(17, low_from - 1) == 1
+    assert design.count_at(board.now) == 0
+    assert [design.count(i + 1) for i in range(len(rises))] == [
+        i + 1 if r < low_from else 0 for i, r in enumerate(rises)]

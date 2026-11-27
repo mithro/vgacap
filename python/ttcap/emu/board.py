@@ -243,13 +243,21 @@ class ClockedDesign(Waveform):
         self.board: Board | None = None
         #: Edges before this index were clocked into an earlier configuration.
         self._first = 0
-        #: The value after edge `_first + i`, for edges before board.now
-        #: (later ones could still see a CPU write to rst_n in their cycle).
+        #: The value after edge `_first + i`; rst_changed() drops the values
+        #: a later change to the rst_n pad makes stale.
         self._after: list[int] = []
 
     def attach(self, board: "Board") -> None:
         self.board = board
         board.pio_rises[self.clk_gpio] = self.clock_rises
+        board.rst_watch = self.rst_gpio
+
+    def rst_changed(self, cycle: int) -> None:
+        """The rst_n pad may read differently from `cycle` on: forget the
+        values of the edges at or after it."""
+        keep = bisect.bisect_left(self.clock_rises, cycle) - self._first
+        if keep < len(self._after):
+            del self._after[max(keep, 0):]
 
     def configure(self) -> None:
         """A bitstream load: the registers start again from `initial`."""
@@ -264,17 +272,11 @@ class ClockedDesign(Waveform):
         after = self._after
         if n - first <= len(after):
             return after[n - first - 1]
-        board = self.board
-        now, rst, rises = board.now, self.rst_gpio, self.clock_rises
+        level, rst, rises = self.board.pad_level, self.rst_gpio, self.clock_rises
         value = after[-1] if after else self.initial
-        cache = True
         for i in range(first + len(after), n):
-            r = rises[i]
-            value = (value + 1) & 0xFF if board.pad_level(rst, r) else 0
-            if cache and r < now:
-                after.append(value)
-            else:
-                cache = False
+            value = (value + 1) & 0xFF if level(rst, rises[i]) else 0
+            after.append(value)
         return value
 
     def count_at(self, cycle: int) -> int:
@@ -1049,6 +1051,9 @@ class Board:
         #: The level SIO gives each configured pad, as (cycle, level) in
         #: time order; -1 is floating.
         self.pad_trace: dict[int, list[tuple[int, int]]] = {}
+        #: The design's rst_n GPIO, whose changes it must hear of
+        #: (ClockedDesign.rst_changed), or None.
+        self.rst_watch: int | None = None
         #: Pads a Pin re-init took back from PIO, and the cycle it did.
         self.released: dict[int, int] = {}
         #: Periodic timers (add_timer), as [due cycle, period, callback].
@@ -1112,6 +1117,8 @@ class Board:
         """`sm` drives `gpio` to `value` from `cycle` on."""
         if gpio in self.released:
             return  # FUNCSEL is SIO now: PIO's output no longer reaches the pad
+        if gpio == self.rst_watch:
+            self.wave.rst_changed(cycle)
         owner = self.pio_pin_owner.setdefault(gpio, sm)
         if owner is not sm:
             raise BoardError(
@@ -1221,6 +1228,8 @@ class Board:
         wave = self.wave
         if gpio == wave.clk_gpio and wave.clock_rises is not None and before == 0 and level == 1:
             wave.clock_rises.append(now)
+        if gpio == self.rst_watch:
+            wave.rst_changed(now)
 
     def _level_before(self, gpio: int) -> int | None:
         """The clock pad's level just before a CPU change, when that matters."""
