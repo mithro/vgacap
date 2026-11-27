@@ -213,14 +213,65 @@ def test_cpu_edges_on_a_clock_pio_released_clock_the_design():
     assert board.wave.clock_rises is board.pio_rises[CLK]
 
 
-def test_side_set_onto_a_pad_taken_back_from_pio_is_refused():
+FUNCSEL = 0x40028000 + 8 * CLK + 4  # RP2350 GPIO16_CTRL
+
+
+def test_side_set_takes_back_a_pad_a_pin_init_took():
+    # Review M7: a second clocked run builds its StateMachine on the clock
+    # pad the first run's put-back made an SIO pin.
+    board = _board()
+    Pin = _pin(board)
+    mem32 = board.modules()["machine"].mem32
+    sm, _ = _clock_sm(board)
+    sm.active(1)
+    board.advance(40)
+    old = board.now - 1
+    sm.active(0)
+    Pin(CLK, Pin.OUT, value=0)
+    released = board.now
+    board.advance(100)
+    n = len(board.pio_rises[CLK])
+    rp2 = board.modules()["rp2"]
+    sm = rp2.StateMachine(4, _toggle(rp2), sideset_base=CLK)
+    taken = board.now
+    assert mem32[FUNCSEL] & 0x1F == 7  # PIO1 again
+    sm.active(1)
+    board.advance(40)
+    # The pad: PIO's before the release, SIO's low until the retake, PIO's
+    # after, and its rises the ones the new run drove.
+    assert board.pad_level(CLK, old) == board.pio_pin(CLK, old)
+    assert [board.pad_level(CLK, c) for c in range(released, taken)] == [0] * (taken - released)
+    pad = [board.pad_level(CLK, c) for c in range(taken - 1, board.now)]
+    assert pad[1:] == [board.pio_pin(CLK, c) for c in range(taken, board.now)]
+    # The first rise is in the retake's own cycle, from SIO's low.
+    assert board.pio_rises[CLK][n:] == [c for c in range(taken, board.now)
+                                        if pad[c - taken + 1] and not pad[c - taken]]
+    assert board.pio_rises[CLK][n] == taken
+    assert len(board.pio_rises[CLK]) - n == 10
+    # And a Pin init takes it back again.
+    sm.active(0)
+    Pin(CLK, Pin.OUT, value=0)
+    assert mem32[FUNCSEL] & 0x1F == 5
+
+
+@pytest.mark.parametrize("sio, rises", [(0, 1), (1, 0)])
+def test_a_high_sideset_init_on_a_retaken_pad_is_an_edge_only_from_low(sio, rises):
     board = _board()
     Pin = _pin(board)
     sm, _ = _clock_sm(board)
-    Pin(CLK, Pin.OUT, value=0)
+    Pin(CLK, Pin.OUT, value=sio)
+    board.advance(10)
+    n = len(board.pio_rises[CLK])
     rp2 = board.modules()["rp2"]
-    with pytest.raises(BoardError, match="taken back"):
-        rp2.StateMachine(4, _toggle(rp2), sideset_base=CLK)
+
+    @rp2.asm_pio(sideset_init=rp2.PIO.OUT_HIGH)
+    def high():
+        label("top")  # noqa: F821
+        jmp("top").side(1)  # noqa: F821
+
+    rp2.StateMachine(4, high, sideset_base=CLK)
+    assert len(board.pio_rises[CLK]) - n == rises
+    assert board.pad_level(CLK, board.now) == 1
 
 
 

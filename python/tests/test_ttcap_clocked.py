@@ -339,6 +339,32 @@ def test_a_divider_write_that_does_not_take_makes_the_run_not_clean(monkeypatch,
     assert "CLKDIV reads pio_div=1, not the 8 worked out" in stats.error
 
 
+def test_back_to_back_runs_on_one_board_give_the_same_stream(monkeypatch, tmp_path):
+    # Review M7: a run, a run that fails with the PIO clocking, then two
+    # more on the same board: the three clean ones are byte for byte alike.
+    rig = Rig(tmp_path)
+    streams = [rig.run(clocks=64, reset_clocks=10)]
+    real = mp.build
+
+    def failing(cfg, name):
+        script = real(cfg, name)
+        if name == "clocked_rp2.py":
+            assert script.count("tt.reset_project(False)") == 1
+            script = script.replace("tt.reset_project(False)", "1 // 0")
+        return script
+
+    monkeypatch.setattr(mp, "build", failing)
+    failed, _ = rig.run(clocks=64, reset_clocks=10)
+    assert not failed.clean, failed.messages
+    assert any("ZeroDivisionError" in m for m in failed.messages), failed.messages
+    monkeypatch.setattr(mp, "build", real)
+    streams += [rig.run(clocks=64, reset_clocks=10) for _ in range(2)]
+    for stats, _ in streams:
+        assert stats.clean, stats.format()
+    assert streams[0][1] == streams[1][1] == streams[2][1]
+    assert samples_of(streams[2][1]) == counter(64, 10)
+
+
 def test_the_header_names_the_bitstream_by_length_and_crc32(tmp_path):
     # The same check the upload makes (`RawRepl.upload`): no secure hash.
     import zlib

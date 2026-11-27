@@ -482,8 +482,12 @@ class _SM:
         if gpios:
             # MicroPython's asm_pio_init_gpio(): each pin's value and
             # direction from sideset_init, then FUNCSEL to this PIO -- which
-            # takes the clock pad from the firmware's PWM.
+            # takes the clock pad from the firmware's PWM, or from the SIO
+            # pin an earlier run's put-back made it.
             self.now = self.board.now
+            for gpio in gpios:
+                if gpio in self.board.released:
+                    self.board.pio_retake(self, gpio)
             wave = self.board.wave
             clk = wave.clk_gpio
             takes_clock = clk in gpios and clk not in self.board.pio_pins
@@ -518,12 +522,6 @@ class _SM:
             raise ValueError("sideset_base not within gpio_base range")
         if init is None:
             return 0, 0, [], 0
-        for i in range(len([init] if isinstance(init, int) else init)):
-            gpio = base + ((sideset_base - base + i) & 31)
-            if gpio in self.board.released:
-                raise BoardError(
-                    "GPIO %d was taken back from PIO by a Pin init; side-set onto it "
-                    "again is not emulated" % gpio)
         inits = [init] if isinstance(init, int) else list(init)
         if len(inits) + side_en > 5:
             raise BoardError("SIDESET_COUNT %d is more than 5" % (len(inits) + side_en))
@@ -1162,6 +1160,9 @@ class Board:
         self.rst_watch: int | None = None
         #: Pads a Pin re-init took back from PIO, and the cycle it did.
         self.released: dict[int, int] = {}
+        #: Earlier stretches, (released, retaken), in which a pad PIO had
+        #: driven was SIO's until a side-set config took it back.
+        self.pio_gaps: dict[int, list[tuple[int, int]]] = {}
         #: Periodic timers (add_timer), in the order they were added.
         self.timers: list[_Timer] = []
         #: More importable modules for run_script, by dotted name (the fake
@@ -1274,6 +1275,25 @@ class Board:
                 rises.append(cycle)
         trace.append((cycle, value))
 
+    def pio_retake(self, sm: _SM, gpio: int) -> None:
+        """`sm`'s side-set config takes back `gpio`, a pad a Pin init took
+        from PIO: FUNCSEL is PIO's again from now. The pad's SIO level now
+        goes into the trace first, so the sideset_init that follows in the
+        same cycle is a rising edge only if it raises the pad."""
+        now = self.now
+        level = self.pad_level(gpio, now)
+        self.pio_gaps.setdefault(gpio, []).append((self.released.pop(gpio), now))
+        trace = self.pio_pins[gpio]
+        if trace[-1][0] > now:
+            raise BoardError(
+                "GPIO %d was driven by PIO at cycle %d, after it was taken back at %d"
+                % (gpio, trace[-1][0], now))
+        if trace[-1][0] == now:
+            trace[-1] = (now, level)
+        else:
+            trace.append((now, level))
+        self.pio_pin_owner[gpio] = sm
+
     def pio_pin(self, gpio: int, cycle: int) -> int:
         """The value PIO drives on `gpio` at `cycle`."""
         trace = self.pio_pins.get(gpio, [])
@@ -1290,7 +1310,12 @@ class Board:
         if not trace or trace[0][0] > cycle:
             return False
         released = self.released.get(gpio)
-        return released is None or cycle < released
+        if released is not None and cycle >= released:
+            return False
+        for since, until in self.pio_gaps.get(gpio, ()):
+            if since <= cycle < until:
+                return False
+        return True
 
     def pad_level(self, gpio: int, cycle: int) -> int:
         """The level on a pad the design does not drive, at `cycle`: PIO's
