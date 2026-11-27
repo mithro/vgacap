@@ -55,7 +55,7 @@ how, and every other `ttcap capture` option is on [ttcap commands and options](.
    $ uv run ttcap png frame.vgacap frame
    ```
 
-With an ASIC breakout, add `--asic-index N` to each capture command. Step 4 copies `frame.vgacap`, the file step 1 wrote; `window.vgacap` and `stream.vgacap` render the same way.
+With an ASIC breakout, add `--asic-index N` to each capture command. In step 4, `<pi>` is the Pi's address on the bench network, such as `10.21.2.35` for fpga-4's Pi. Step 4 copies `frame.vgacap`, the file step 1 wrote; `window.vgacap` and `stream.vgacap` render the same way.
 
 ## Check
 

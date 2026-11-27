@@ -56,7 +56,7 @@ option is on [ttcap commands and options](../python/ttcap/reference-commands.md)
    $ uv run ttcap png frame.vgacap frame
    ```
 
-Add `--project <name>` to a capture to enable a design first, as with the stock firmware. Step 4 copies `frame.vgacap`, the file step 1 wrote; `window.vgacap` and `stream.vgacap` render the same way.
+Add `--project <name>` to a capture to enable a design first, as with the stock firmware. In step 4, `<pi>` is the Pi's address on the bench network, such as `10.21.2.35` for fpga-4's Pi. Step 4 copies `frame.vgacap`, the file step 1 wrote; `window.vgacap` and `stream.vgacap` render the same way.
 
 ## Check
 

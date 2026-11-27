@@ -31,6 +31,7 @@ Each row is one set of stream captures at one clock and length. Design is the de
 | Version | Link | Design | Stream clock | Length | Clean captures | Result |
 |---|---|---|---|---|---|---|
 | 3.1.1 | bridge | `tt_um_vgacal_bars` | 400 kHz | 10 s | 4 of 4 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-hil-400k) |
+| 3.1.1 | bridge | `tt_um_vgacal_bars` | 400 kHz | 10 s | 1 of 1 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
 | 3.1.1 | bridge | `tt_um_vgacal_bars` | 500 kHz | 10 s | 0 of 3 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
 | 3.1.1 | USB serial | `tt_um_vga_pattern` | 500 kHz | 4 s | 0 of 2 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56) and [#52](https://github.com/mithro/vgacap/issues/52) |
 | 3.1.1 | USB serial | `tt_um_vga_pattern` | 500 kHz | 2 s | 1 of 1 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56) |
@@ -38,6 +39,9 @@ Each row is one set of stream captures at one clock and length. Design is the de
 | 3.1.1 | USB serial | the idle display | 500 kHz | 4 s | 2 of 2 | [2026-11-27](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-27-docs-bench-56) |
 | 3.1.1 | USB serial | not recorded | 500 kHz | 4 s | 1 of 1 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
 | 3.1.1 | USB serial | not recorded | 600 kHz | 4 s | 0 of 1 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| 3.1.1 | USB serial | not recorded | 650 kHz | 4 s | 0 of 1 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| 3.1.1 | USB serial | not recorded | 700 kHz | 4 s | 0 of 1 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
+| 3.1.1 | USB serial | not recorded | 750 kHz | 4 s | 0 of 4 | [2026-11-26](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-26-docs-bench-ttcap) |
 | 3.1.0 | USB serial | `tt_um_vgacal_bars` | 750 kHz | 4 s | 1 of 1 | [2026-11-24](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-24-direct-serial-fpga4) |
 
 ## Frame clock
