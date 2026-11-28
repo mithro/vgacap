@@ -25,9 +25,9 @@ The 80 ns floor was measured on one design and one board: `tt_um_vga_ca` on fpga
 | 6 | 52.6 ns | 37.6 ns | wrong |
 | 7-15 | 60.2-120.3 ns | 45.1-105.3 ns | exact |
 
-The threshold there is between 52.6 and 60.2 ns in read time, and between 37.6 and 45.1 ns in pin time. The 80 ns floor is H 10 at 133 MHz, a read at 82.7 ns, about 68 ns in pin time. The margin is kept because only one design on one board was measured.
+For this design on this board, the output starts changing after 37.6 ns of read time and is complete by 60.2 ns. In pin time, that is 22.6 to 45.1 ns. The last wholly wrong read is H 4, and the first exact one is H 7. The 80 ns floor is H 10 at 133 MHz, a read at 82.7 ns, about 68 ns in pin time. The margin is kept because only one design on one board was measured.
 
-The 40 ns floor before it was a design-note choice, never measured. The 25 ns it built on came from frame mode on a different design: a tt09 bars design with a 25 MHz PWM clock at a 100 MHz system clock. There a read 20 ns after the edge failed, and reads at 30 ns and 40 ns were exact; that threshold includes the input synchroniser ([result](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-frame-capture-fpga4/README.md)).
+The 40 ns floor before it was a design-note choice, never measured. The 25 ns it built on came from frame mode on a different design: `tt_um_vgacal_bars` on fpga-4, with a 25 MHz project clock at a 100 MHz system clock. That page puts the output change at about 25 ns after the rising edge, input synchroniser included: falling+0 was wrong, and falling+1 and rising+0 were exact ([result](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-frame-capture-fpga4/README.md)).
 
 The read point a design needs depends on its clock-to-output path. A design with a slower path can read the previous clock's value at the default H and still report a clean run, because every sample arrives, one clock late. Only a sweep of H against the design's reference shows it. To sweep, run once with each `--clock-high` from 0 to 15 at a rate that is divider 1, such as 7 MHz at a 133 MHz system clock, and compare each capture with the reference.
 
