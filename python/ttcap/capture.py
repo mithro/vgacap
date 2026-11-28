@@ -1585,8 +1585,10 @@ def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> Cl
         if high is None:
             raise ValueError(rate + "the fastest whose read sees uo_out's pin at least "
                              "%d ns after the rising edge" % CLOCKED_PIN_NS)
-        raise ValueError(rate + "the fastest that reads uo_out %d ns after the rising edge"
-                         % round((high + 1) * 1e9 / sysclk_hz))
+        at = ClockedTiming(sysclk_hz=sysclk_hz, pio_div=fastest[0] if fastest else 1,
+                           high=high, low=0)
+        raise ValueError(rate + "the fastest that reads uo_out %d ns after the rising edge, "
+                         "which sees the pin at %d ns" % (round(at.sample_ns), round(at.pin_ns)))
     best = None  # (pio_div, cycles)
     for pio_div in range(first, CLOCKED_MAX_DIV + 1):
         if best is not None and pio_div * CLOCKED_FIXED_CYCLES > best[0] * best[1]:

@@ -188,6 +188,15 @@ def test_the_too_fast_message_gives_the_floor_in_pin_time():
         clocked_timing(133_000_000, 9_500_001)
 
 
+def test_the_too_fast_message_with_a_clock_high_gives_read_and_pin_time():
+    # Re-review R7-A: H 4 at 133 MHz reads at 37.6 ns and sees the pin at
+    # 22.6 ns; F is 133 MHz / 8.
+    with pytest.raises(ValueError, match=r"16625000\.00 Hz: ask for --clock-hz 16625000 to get "
+                                         r"it, the fastest that reads uo_out 38 ns after the "
+                                         r"rising edge, which sees the pin at 23 ns$"):
+        clocked_timing(133_000_000, 20_000_000, high=4)
+
+
 def test_at_7_mhz_and_133_mhz_only_h_10_and_up_are_references():
     # The b2 sweep's clock: 19 cycles. H 7..9 read right on fpga-4 but are
     # under the margin; H 5 and 6, which read wrong, are no longer clean
