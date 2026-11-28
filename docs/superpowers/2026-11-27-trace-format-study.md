@@ -2437,7 +2437,7 @@ The independent re-review's items:
 
 The format owner's items:
 
-- **The compact results.** The inputs `analyze.py` reads are about 102 MB, about 29 MB compressed: too large for the branch, so not committed ([Reproducing](#reproducing)).
+- **The compact results.** The inputs `analyze.py` reads are about 102 MB, about 29 MB compressed: too large for the branch, so not committed. They are kept outside the repository, location to follow ([Reproducing](#reproducing)).
 - **28.3 s, not 27.5 s,** for vgch2's merged full scan on nyancat.
 - **The third background estimate.** The loop's scaled figure is not "within about 30%" of encode2's median. Method now gives the measured range, 0.50-1.04 of it on the busy traces.
 - **The lean writer is "small, safe and not urgent".** The owner's `block_pair` inline result (0.88 nyancat, 0.77 rle_vga, one replay run) is noted as a direction only. The capture session takes it as its own PR.
@@ -2482,7 +2482,7 @@ Each process's order is in its CSV, `results/sim/<tag>-<project>.csv`, in the va
 Where things go:
 
 - Output goes to `tmp/format-study/`, about 60 GB.
-- The raw results are not in the branch. The inputs `analyze.py` reads (`results/`, `progress.log`, `load.log` and the loop's `stderr.log` files, without the traces) are about 102 MB as files, about 29 MB compressed, so they were left out rather than committed; they stay in the worktree's `tmp/format-study/`, to be published beside the traces if wanted.
+- The raw results are not in the branch. The inputs `analyze.py` reads (`results/`, `progress.log`, `load.log` and the loop's `stderr.log` files, without the traces) are about 102 MB as files, about 29 MB compressed, so they were left out rather than committed. They are kept outside the repository; the location is to follow. The published trace archive is public, so it is not the place for them.
 - Raw results go to `tmp/format-study/results/<stage>/`.
 - The tables go to `tmp/format-study/results/tables.md`, and into this document.
 - Progress, with an ETA, goes to `progress.log`.
