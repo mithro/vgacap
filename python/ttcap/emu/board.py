@@ -43,6 +43,15 @@ DMA_AL1_CTRL = 0x10
 PWM_BASE = {"rp2040": 0x40050000, "rp2350": 0x400A8000}
 PWM_SLICE_STRIDE = 0x14
 PWM_CSR, PWM_DIV, PWM_TOP = 0x00, 0x04, 0x10
+#: IO_BANK0 (pico-sdk addressmap.h): GPIOn_CTRL is at + 8 n + 4, FUNCSEL
+#: its bits 4:0 (hardware/regs/io_bank0.h).
+IO_BANK0_BASE = {"rp2040": 0x40014000, "rp2350": 0x40028000}
+GPIO_COUNT = {"rp2040": 30, "rp2350": 48}
+#: FUNCSEL values: SIO, PIO0 (PIO1 and PIO2 follow), NULL (the reset value).
+FUNCSEL_SIO, FUNCSEL_PIO0, FUNCSEL_NULL = 5, 6, 31
+#: SM0_CLKDIV; INT in bits 31:16, FRAC in 15:8. 1 << 16 is a divider of 1.
+PIO_SM0_CLKDIV = 0x0C8
+CLKDIV_ONE = 1 << 16
 #: Emulated SRAM: buffers get addresses here.
 SRAM_BASE = 0x20000000
 #: DMA TREQ value meaning "unpaced" (RP2040 0x3f; the same here for both).
@@ -354,12 +363,13 @@ class _SM:
     # stops sharing an instance dict's keys past 30 attributes, and this
     # class has more, which cost the capture tests about 10%.
     __slots__ = (
-        "autopush", "block", "board", "code", "delays", "disable_at", "enabled",
+        "autopush", "block", "board", "clkdiv", "code", "delays", "disable_at", "div",
+        "enabled",
         "in_base", "in_count", "index", "irq_flags", "irq_waiting", "isr",
         "isr_count", "now", "osr", "osr_count", "out_right", "pc", "program",
         "push_thresh", "rx", "rx_depth", "shift_left", "shiftctrl", "side_last",
-        "sideset_gpios", "sidesets", "tx", "tx_depth", "wrap_target", "wrap_top",
-        "x", "y",
+        "side_count", "side_en", "sideset_gpios", "sidesets", "tick0", "tx", "tx_depth",
+        "wrap_target", "wrap_top", "x", "y",
     )
 
     def __init__(self, board: "Board", block: "_PioBlock", index: int) -> None:
@@ -385,12 +395,20 @@ class _SM:
         #: drove on them (None before anything has).
         self.sideset_gpios: list[int] = []
         self.side_last: int | None = None
+        #: PINCTRL.SIDESET_COUNT without the enable bit, and EXECCTRL.SIDE_EN.
+        self.side_count = 0
+        self.side_en = 0
         self.sidesets: list[int | None] = []
         self.irq_flags: frozenset[int] = frozenset()
         self.reset_state()
         self.enabled = False
         self.disable_at: int | None = None
         self.now = 0
+        #: SMn_CLKDIV as written, and its INT: the machine steps on every
+        #: `div`-th system cycle from `tick0`, when it was enabled.
+        self.clkdiv = CLKDIV_ONE
+        self.div = 1
+        self.tick0 = 0
 
     def reset_state(self) -> None:
         self.pc = 0
@@ -458,13 +476,18 @@ class _SM:
             else:
                 self.sidesets.append(side & ((1 << count) - 1))
         self.sideset_gpios = gpios
+        self.side_count, self.side_en = count, side_en
         self.side_last = None
         self.reset_state()
         if gpios:
             # MicroPython's asm_pio_init_gpio(): each pin's value and
             # direction from sideset_init, then FUNCSEL to this PIO -- which
-            # takes the clock pad from the firmware's PWM.
+            # takes the clock pad from the firmware's PWM, or from the SIO
+            # pin an earlier run's put-back made it.
             self.now = self.board.now
+            for gpio in gpios:
+                if gpio in self.board.released:
+                    self.board.pio_retake(self, gpio)
             wave = self.board.wave
             clk = wave.clk_gpio
             takes_clock = clk in gpios and clk not in self.board.pio_pins
@@ -499,12 +522,6 @@ class _SM:
             raise ValueError("sideset_base not within gpio_base range")
         if init is None:
             return 0, 0, [], 0
-        for i in range(len([init] if isinstance(init, int) else init)):
-            gpio = base + ((sideset_base - base + i) & 31)
-            if gpio in self.board.released:
-                raise BoardError(
-                    "GPIO %d was taken back from PIO by a Pin init; side-set onto it "
-                    "again is not emulated" % gpio)
         inits = [init] if isinstance(init, int) else list(init)
         if len(inits) + side_en > 5:
             raise BoardError("SIDESET_COUNT %d is more than 5" % (len(inits) + side_en))
@@ -525,6 +542,23 @@ class _SM:
         drive = self.board.pio_drive
         for i, gpio in enumerate(self.sideset_gpios):
             drive(self, gpio, (value >> i) & 1, self.now)
+
+    def exec_word(self, word: int) -> None:
+        """`pio_sm_exec`: run one instruction now, enabled or not. Only
+        `nop` (`mov y, y`) is emulated: its side-set, if it has one, drives
+        the pins from this cycle, and its delay is ignored."""
+        word &= 0xFFFF
+        if word >> 13 != 5 or self._decode(word) != (_MOV, 2, 0, 2):
+            raise BoardError("exec of 0x%04x: only nop is emulated" % word)
+        count = self.side_count
+        if not self.sideset_gpios or not count:
+            return
+        field_bits = count + self.side_en
+        side = ((word >> 8) & 0x1F) >> (5 - field_bits)
+        if self.side_en and not (side >> count) & 1:
+            return
+        self.now = max(self.now, self.board.now)
+        self._side(side & ((1 << count) - 1))
 
     def _decode(self, word: int) -> tuple:
         op = word >> 13
@@ -605,11 +639,39 @@ class _SM:
     def _next_pc(self) -> None:
         self.pc = self.wrap_target if self.pc == self.wrap_top else self.pc + 1
 
+    def write_clkdiv(self, value: int) -> None:
+        """A CPU write to SMn_CLKDIV: an integer divider only, INT 0 being
+        65536, and not while the machine runs, whose phase would then need
+        the divider's internal count."""
+        if value & 0xFF:
+            raise BoardError("SM%d_CLKDIV 0x%08x: bits 7:0 are reserved" % (self.index, value))
+        if value & 0xFF00:
+            raise BoardError(
+                "SM%d_CLKDIV 0x%08x: a fractional divider (FRAC) is not emulated"
+                % (self.index, value))
+        if self.enabled and value != self.clkdiv:
+            raise BoardError(
+                "SM%d_CLKDIV 0x%08x: changing the divider of a running state machine "
+                "is not emulated" % (self.index, value))
+        self.clkdiv = value
+        self.div = (value >> 16) or 1 << 16
+
     def run(self, until: int) -> None:
         """Execute until `until`, the disable time, or a stall nothing in
-        here can end (an empty TX FIFO, a full RX FIFO with no DMA)."""
+        here can end (an empty TX FIFO, a full RX FIFO with no DMA).
+
+        Each instruction issues on a cycle of the divided clock, `div`
+        system cycles apart from `tick0`, and takes 1 + delay of them; a
+        stall ends, and a `wait` sees its pin, on one of those cycles.
+        The real divider is free-running from its last restart
+        (`pio_sm_init`'s `pio_sm_clkdiv_restart`), so its phase against
+        the enable is not the CPU's to choose; the grid starts at the
+        enable here, a choice no capture can see, since only the time
+        between the machine's own cycles matters to it."""
         wave = self.board.wave
         code = self.code
+        step = self.div
+        tick0 = self.tick0
         # The side-set and PIO-driven-pin checks cost every instruction, so
         # programs without side-set skip them.
         sidesets = self.sidesets if self.sideset_gpios else None
@@ -622,6 +684,10 @@ class _SM:
                     self.disable_at = None
                     return
                 limit = min(limit, self.disable_at)
+            if step != 1:
+                late = (self.now - tick0) % step
+                if late:
+                    self.now += step - late
             if self.now >= limit:
                 return
             ins = code[self.pc]
@@ -642,10 +708,17 @@ class _SM:
                     if ins[2] in wave.uo_bit and wave.clock_rises is not None:
                         self._check_clock_owner(ins[2])
                 t = wave.next_time(ins[2], ins[1], self.now)
+                if step != 1:
+                    # The first divided-clock cycle at which the pin reads it.
+                    while t is not None:
+                        late = (t - tick0) % step
+                        if not late:
+                            break
+                        t = wave.next_time(ins[2], ins[1], t + step - late)
                 if t is None or t >= limit:
                     self.now = limit
                     continue
-                self.now = t + 1 + d
+                self.now = t + (1 + d) * step
                 self._next_pc()
             elif kind == _IN:
                 bits, src = ins[1], ins[2]
@@ -666,12 +739,12 @@ class _SM:
                         self.now = limit
                         continue
                     self.isr, self.isr_count = 0, 0
-                    self.now += 1 + d
+                    self.now += (1 + d) * step
                     self._next_pc()
                     self._push(isr)
                 else:
                     self.isr, self.isr_count = isr, count
-                    self.now += 1 + d
+                    self.now += (1 + d) * step
                     self._next_pc()
             elif kind == _JMP:
                 cond, target = ins[1], ins[2]
@@ -691,7 +764,7 @@ class _SM:
                     take = self.x != self.y
                 else:
                     raise BoardError("jmp condition %d not emulated" % cond)
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 if take:
                     self.pc = target
                 else:
@@ -705,7 +778,7 @@ class _SM:
                 else:
                     self.osr = self.tx.pop(0)
                 self.osr_count = 0
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 self._next_pc()
             elif kind == _OUT:
                 bits, dest = ins[1], ins[2]
@@ -721,12 +794,12 @@ class _SM:
                     self.x = value
                 elif dest == 2:
                     self.y = value
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 self._next_pc()
             elif kind == _PUSH:
                 if ins[2] and self.isr_count < self.push_thresh:
                     # IfFull below the threshold: does nothing, in one cycle.
-                    self.now += 1 + d
+                    self.now += (1 + d) * step
                     self._next_pc()
                     continue
                 if len(self.rx) >= self.rx_depth:
@@ -743,12 +816,12 @@ class _SM:
                 else:
                     word = self.isr
                     self.isr, self.isr_count = 0, 0
-                    self.now += 1 + d
+                    self.now += (1 + d) * step
                     self._next_pc()
                     self._push(word)
                     continue
                 self.isr, self.isr_count = 0, 0
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 self._next_pc()
             elif kind == _MOV:
                 _, dest, mov_op, src = ins
@@ -767,7 +840,7 @@ class _SM:
                     self.isr, self.isr_count = value, 0
                 elif dest == 7:
                     self.osr, self.osr_count = value, 0
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 if dest == 5:
                     self.pc = value & 0x1F
                 else:
@@ -777,7 +850,7 @@ class _SM:
                     self.x = ins[2]
                 else:
                     self.y = ins[2]
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 self._next_pc()
             elif kind == _IRQ:
                 _, clr, wait, flag = ins
@@ -815,7 +888,7 @@ class _SM:
                         self.now = limit
                         continue
                     self.irq_waiting = False
-                self.now += 1 + d
+                self.now += (1 + d) * step
                 self._next_pc()
 
     def read_pins(self, cycle: int, bits: int = 32) -> int:
@@ -1092,6 +1165,9 @@ class Board:
         self.rst_watch: int | None = None
         #: Pads a Pin re-init took back from PIO, and the cycle it did.
         self.released: dict[int, int] = {}
+        #: Earlier stretches, (released, retaken), in which a pad PIO had
+        #: driven was SIO's until a side-set config took it back.
+        self.pio_gaps: dict[int, list[tuple[int, int]]] = {}
         #: Periodic timers (add_timer), in the order they were added.
         self.timers: list[_Timer] = []
         #: More importable modules for run_script, by dotted name (the fake
@@ -1204,6 +1280,25 @@ class Board:
                 rises.append(cycle)
         trace.append((cycle, value))
 
+    def pio_retake(self, sm: _SM, gpio: int) -> None:
+        """`sm`'s side-set config takes back `gpio`, a pad a Pin init took
+        from PIO: FUNCSEL is PIO's again from now. The pad's SIO level now
+        goes into the trace first, so the sideset_init that follows in the
+        same cycle is a rising edge only if it raises the pad."""
+        now = self.now
+        level = self.pad_level(gpio, now)
+        self.pio_gaps.setdefault(gpio, []).append((self.released.pop(gpio), now))
+        trace = self.pio_pins[gpio]
+        if trace[-1][0] > now:
+            raise BoardError(
+                "GPIO %d was driven by PIO at cycle %d, after it was taken back at %d"
+                % (gpio, trace[-1][0], now))
+        if trace[-1][0] == now:
+            trace[-1] = (now, level)
+        else:
+            trace.append((now, level))
+        self.pio_pin_owner[gpio] = sm
+
     def pio_pin(self, gpio: int, cycle: int) -> int:
         """The value PIO drives on `gpio` at `cycle`."""
         trace = self.pio_pins.get(gpio, [])
@@ -1220,7 +1315,12 @@ class Board:
         if not trace or trace[0][0] > cycle:
             return False
         released = self.released.get(gpio)
-        return released is None or cycle < released
+        if released is not None and cycle >= released:
+            return False
+        for since, until in self.pio_gaps.get(gpio, ()):
+            if since <= cycle < until:
+                return False
+        return True
 
     def pad_level(self, gpio: int, cycle: int) -> int:
         """The level on a pad the design does not drive, at `cycle`: PIO's
@@ -1363,6 +1463,8 @@ class Board:
             for sm in block.sms:
                 if addr == block.address(PIO_SM0_SHIFTCTRL + PIO_SM_STRIDE * sm.index):
                     return sm.shiftctrl
+                if addr == block.address(PIO_SM0_CLKDIV + PIO_SM_STRIDE * sm.index):
+                    return sm.clkdiv
         ch, reg = self._dma_reg(addr)
         if ch is not None:
             if reg == DMA_WRITE_ADDR:
@@ -1376,7 +1478,21 @@ class Board:
         for offset, value in zip((PWM_CSR, PWM_DIV, PWM_TOP), self.pwm):
             if addr == self.pwm_base + offset:
                 return value
+        io = IO_BANK0_BASE[self.chip]
+        gpio, reg = divmod(addr - io, 8)
+        if reg == 4 and 0 <= gpio < GPIO_COUNT[self.chip]:
+            return self.funcsel(gpio)
         raise BoardError("mem32 read of unmodelled address 0x%08x" % addr)
+
+    def funcsel(self, gpio: int) -> int:
+        """GPIOn_CTRL.FUNCSEL now: the PIO block whose state machine drives
+        the pad, SIO for a pad a `Pin` mode took, else NULL. A pad the
+        firmware's PWM clocks reads NULL too: the PWM is not modelled."""
+        if self.pio_owns(gpio, self.now):
+            return FUNCSEL_PIO0 + self.pio_pin_owner[gpio].block.index
+        if self.pads.get(gpio, (None,))[0] is not None:
+            return FUNCSEL_SIO
+        return FUNCSEL_NULL
 
     def mem32_write(self, addr: int, value: int) -> None:
         value &= MASK32
@@ -1398,6 +1514,9 @@ class Board:
                     return
                 if addr == shiftctrl | ALIAS_SET:
                     sm.write_shiftctrl(sm.shiftctrl | value)
+                    return
+                if addr == block.address(PIO_SM0_CLKDIV + PIO_SM_STRIDE * sm.index):
+                    sm.write_clkdiv(value)
                     return
             if addr == block.address(PIO_CTRL | ALIAS_CLR):
                 for sm in block.sms:
@@ -1818,11 +1937,11 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
             if unsupported:
                 raise BoardError("StateMachine options not emulated: %s" % unsupported)
             if freq != -1:
-                # rp2_pio.c turns freq into CLKDIV; here every state machine
-                # runs at the system clock, so any freq would be wrong.
+                # rp2_pio.c turns freq into CLKDIV, often with a FRAC part,
+                # which is not emulated: write an integer SMn_CLKDIV instead.
                 raise BoardError(
-                    "StateMachine(freq=%r): the PIO clock divider is not emulated; "
-                    "state machines run at the system clock (freq=-1)" % (freq,)
+                    "StateMachine(freq=%r): turning freq into a clock divider is not "
+                    "emulated; write an integer SMn_CLKDIV instead (freq=-1)" % (freq,)
                 )
             block = board.blocks[id // 4]
             self._sm = block.sms[id % 4]
@@ -1832,6 +1951,8 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
                 side = sideset_base.gpio if isinstance(sideset_base, _Pin) else sideset_base
                 self._sm.load(prog, base, push_thresh, side)
                 self._sm.enabled = False
+                # rp2_pio.c's init sets CLKDIV from freq; -1 is 1.0.
+                self._sm.write_clkdiv(CLKDIV_ONE)
 
         def active(self, value=None):
             sm = self._sm
@@ -1840,7 +1961,7 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
             if value and not sm.enabled:
                 sm.enabled = True
                 sm.disable_at = None
-                sm.now = board.now
+                sm.now = sm.tick0 = board.now
             elif not value:
                 sm.enabled = False
             return sm.enabled
@@ -1870,6 +1991,14 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
                     raise BoardError("get() would block forever: RX FIFO empty, SM stopped")
                 board.advance(board.idle_cycles)
             return sm.rx.pop(0) >> shift
+
+        def exec(self, instr):
+            # rp2_pio.c: a string is assembled with PINCTRL.SIDESET_COUNT
+            # (the enable bit included) and EXECCTRL.SIDE_EN.
+            sm = self._sm
+            if isinstance(instr, str):
+                instr = rp2.asm_pio_encode(instr, sm.side_count + sm.side_en, sm.side_en)
+            sm.exec_word(instr)
 
         def rx_fifo(self):
             return len(self._sm.rx)

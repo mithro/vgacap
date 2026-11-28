@@ -25,6 +25,10 @@ Each behaviour below cites the SDK source it copies (v3.1.1, d485c7a):
   manual-clock pin, which stops the auto clock (`manual_clock.py:76-87`,
   `demoboard.py:317-330`). `tick()` is one firing of that timer.
 - The SDK logs at INFO on stdout (`log.py:44-54`), with the messages above,
+  through one logger per module in `ttboard.log.RPLoggers`, each printing
+  only at or above its `loglevel`; a logger made later starts at
+  `DefaultLogLevel` (`log.py:12-13,40-47,84-88`). `ttboard.log` is
+  importable, so a script can raise the levels and silence it.
   each in its level's ANSI colour (`log.py:23-28,54`, `colors.py:6,23-27,
   33-45`: `Enable = True`, and nothing in the SDK turns it off). A `ui_in`
   pin that reads high when `ASIC_RP_CONTROL` rebuilds the pins gets a WARN
@@ -82,12 +86,38 @@ UIO_GPIOS = tuple(range(25, 33))
 _COLOUR = {DEBUG: 3, INFO: 2, WARN: 3, ERROR: 1}
 
 
+class _Logger:
+    """`ttboard.log.Logger` on RP2 (`log.py:30-47`), as far as its level."""
+
+    def __init__(self, level: int) -> None:
+        self.loglevel = level
+
+
+#: `ttboard.log`, the one the fake's lines go through. Its levels are put
+#: back to the SDK's defaults by every `FakeTT()` (`reset_log`).
+SDK_LOG = types.ModuleType("ttboard.log")
+#: The loggers the SDK's modules make at import, which ttcap's calls reach.
+SDK_LOGGERS = ("ttboard.demoboard", "ttboard.pins.pins", "ttboard.pins.manual_clock")
+
+
+def reset_log() -> None:
+    """The SDK's loggers as a boot leaves them: every one at INFO."""
+    SDK_LOG.DefaultLogLevel = INFO
+    SDK_LOG.RPLoggers = {name: _Logger(INFO) for name in SDK_LOGGERS}
+
+
+reset_log()
+
+
 def log(name: str, text: str, level: int = INFO) -> None:
     """One SDK log line, as `log.py:44-54` prints it once the boot prefix is
     gone (`demoboard.py:182`): `name: ` and the text in its level's colour,
-    bright (`colors.py:23-27,33-45`). DEBUG is below the default level 20
-    (`log.py:12,46`) and prints nothing."""
-    if level >= INFO:
+    bright (`colors.py:23-27,33-45`), if `level` reaches the logger's own
+    (`log.py:46`). DEBUG is below the default level 20 and prints nothing."""
+    loggers = SDK_LOG.RPLoggers
+    if name not in loggers:  # getLogger(), log.py:84-88
+        loggers[name] = _Logger(SDK_LOG.DefaultLogLevel)
+    if level >= loggers[name].loglevel:
         print(f"{name}: \033[3{_COLOUR[level]};1m{text}\033[0m")
 
 
@@ -270,6 +300,7 @@ class FakeTT:
     def __init__(self, mode: int = ASIC_MANUAL_INPUTS, *, pullup: bool = True,
                  switches: int = 0, manual_clock: bool = True, release_ms: int = 0,
                  board=None, shuttle=None) -> None:
+        reset_log()
         self.board = board
         self.shuttle = FakeFPGAMux() if shuttle is None else shuttle
         self.machine = board.modules()["machine"] if board is not None else None
@@ -460,7 +491,7 @@ def sdk_modules(tt: FakeTT) -> dict:
     mode = types.ModuleType("ttboard.mode")
     mode.RPMode = types.SimpleNamespace(SAFE=SAFE, ASIC_RP_CONTROL=ASIC_RP_CONTROL,
                                         ASIC_MANUAL_INPUTS=ASIC_MANUAL_INPUTS)
-    return {"ttboard.mode": mode, "time": mpy_time(tt)}
+    return {"ttboard.mode": mode, "ttboard.log": SDK_LOG, "time": mpy_time(tt)}
 
 
 # -- the FPGA loader -----------------------------------------------------------

@@ -463,3 +463,42 @@ def test_an_empty_file_leaves_no_design():
     board.run_script(LOAD_BODY, globals={"tt": tt})
     assert "Transmission complete, total bytes: 0" in _text(board)
     assert not board.wave.configured
+
+
+# -- the SDK's loggers (ttboard.log) --------------------------------------------
+
+
+def test_raising_every_loggers_level_silences_the_sdk():
+    # log.py at v3.1.1: each module's logger is in RPLoggers and prints only
+    # at or above its loglevel; a logger made later starts at
+    # DefaultLogLevel. Raising both silences the SDK, as the clocked body
+    # does for its run; putting them back makes it print again.
+    board = _design_board()
+    tt = board_sdk(board)
+    assert board.extra_modules["ttboard.log"].RPLoggers  # made at import
+    script = (
+        "import ttboard.log as L\n"
+        "saved = (L.DefaultLogLevel, [(g, g.loglevel) for g in L.RPLoggers.values()])\n"
+        "L.DefaultLogLevel = 99\n"
+        "for g in L.RPLoggers.values():\n"
+        "    g.loglevel = 99\n"
+        "tt.mode = 1\n"
+        "print('quiet')\n"
+        "L.DefaultLogLevel = saved[0]\n"
+        "for g, level in saved[1]:\n"
+        "    g.loglevel = level\n"
+        "tt.mode = 2\n"
+    )
+    quiet, loud = board.run_script(script, globals={"tt": tt}).decode().split("quiet")
+    assert quiet == ""
+    assert "Setting mode to ASIC_MANUAL_INPUTS" in loud
+
+
+def test_a_logger_made_while_the_default_is_raised_starts_silent():
+    board = _design_board()
+    tt = board_sdk(board)
+    log = board.extra_modules["ttboard.log"]
+    log.DefaultLogLevel = 99
+    log.RPLoggers.clear()
+    out = board.run_script("tt.reset_project(True)", globals={"tt": tt})
+    assert out == b""

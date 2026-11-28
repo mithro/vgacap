@@ -19,9 +19,10 @@ import pytest
 
 from ttcap import mp
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
-from ttcap.capture import capture_cfg, load_held_cfg
+from ttcap.capture import capture_cfg, clocked_cfg, clocked_timing, load_held_cfg
 
-SCRIPTS = ["prelude.py", "capture_rp2.py", "throughput.py", "load_held_rp2.py"]
+SCRIPTS = ["prelude.py", "capture_rp2.py", "throughput.py", "load_held_rp2.py",
+           "clocked_rp2.py"]
 
 #: What the board must be able to compile. The unminified capture script was
 #: 25,358 bytes and did not reliably fit.
@@ -97,6 +98,15 @@ def test_the_held_load_script_fits_in_the_board():
 
     assert len(script) < MAX_SCRIPT_BYTES
     compile(script, "load_held_rp2.py", "exec")
+
+
+def test_the_clocked_script_fits_in_the_board():
+    cfg = dict(clocked_cfg(RP2350_DBV3, clocks=4_000_000),
+               **clocked_timing(150_000_000, 500_000).cfg())
+    script = mp.build(cfg, "clocked_rp2.py")
+
+    assert len(script.encode()) < MAX_SCRIPT_BYTES
+    compile(script, "clocked_rp2.py", "exec")
 
 
 def test_every_def_in_the_built_script_locates_back_to_its_file():
