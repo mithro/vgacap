@@ -20,12 +20,13 @@
 9. [How the current format was chosen](#how-the-current-format-was-chosen)
 10. [Fix round 1: what changed](#fix-round-1-what-changed)
 11. [Fix round 2: what changed](#fix-round-2-what-changed)
-12. [Reproducing](#reproducing)
-13. [References](#references)
+12. [Fix round 3: what changed](#fix-round-3-what-changed)
+13. [Reproducing](#reproducing)
+14. [References](#references)
 
 ## Summary
 
-This is the study after its second round of review ("fix round 2"). Round 1 measured what the first round had estimated, and changed the recommendation. Round 2 found that the loop's background plans had written corrupt files, fixed the two causes, ran those plans again with every file read back, and measured memory and a full-pin export. [Fix round 1: what changed](#fix-round-1-what-changed) and [Fix round 2: what changed](#fix-round-2-what-changed) list each change.
+This is the study after its second round of review ("fix round 2"). Round 1 measured what the first round had estimated, and changed the recommendation. Round 2 found that the loop's background plans had written corrupt files, fixed the two causes, ran those plans again with every file read back, and measured memory and a full-pin export. Round 3 compares plans only within the set they ran in, and corrects the memory figures. [Fix round 1](#fix-round-1-what-changed), [Fix round 2](#fix-round-2-what-changed) and [Fix round 3](#fix-round-3-what-changed) list each change.
 
 - **No measured plan meets the budgets on the busy designs.** The busy designs are nyancat, rle_vga and atari2600, where 77-100% of clocks change a pin.
   - No plan keeps the simulation thread within R1's 5% on all three.
@@ -2456,6 +2457,27 @@ What the round found:
 - **R2 without the scan.** vgch2's share falls from 17.6% to 10.1% on nyancat. Planar's falls to 3.5% (nyancat), 1.0% (rle_vga) and 0.8% (atari2600): within the whole 5% budget, and on atari2600 within the 1% bar.
 - **A full-pin FST export** takes the same CPU from either file on nyancat and atari2600, and 12% more from planar on rle_vga.
 - **Raw's read-back first failed through a fault in the harness, not in a file.** Raw's sets have no lean or vgch2 file, and `readback.py` looked for a reference only in the reference set's lean file. It now takes that set's vgch2 file too. Every raw file then read back right.
+
+## Fix round 3: what changed
+
+The independent re-review 2 read fix round 2, at [`101f1f9`](https://github.com/mithro/vgacap/commit/101f1f9). This round answers it. No simulation was run again for it.
+
+- **N6: plans compared across sets.** The same vgch2 writer is 16.7% on nyancat in the background set and 14.0% in the lean set. [R1 within each set](#r1-within-each-set) now gives each set's figures with its load, and each plan over its own set's vgch2. The Summary table, the pros and cons and Recommendations 6 and 7 use only those comparisons. Raw's set has no vgch2, so raw is not compared, and the tables say so. Method states the set effect.
+- **N7: memory included a second model.** bench_tick gives each variant a model of its own. A two-model run is now measured and subtracted, and the second model's own memory is given (16 MiB on rle_vga and atari2600, nothing that shows on nyancat). The ranking is unchanged.
+- **N8: the export.** The planar range starts at 304 MiB. "Writing the FST is most of it" is gone: the reading thread makes libfst's emit calls, so the data cannot split the two. The table gives each source's lowest and highest rep, and planar over vgch2 in each rep.
+- **N9: a withdrawn figure, the lead figure, the audit.**
+  - Raw's cons no longer cite round 1's events figure on colorbars.
+  - The Recommendation leads with round 2's lean figures, and says the loop does not show the 10% bar either way on nyancat.
+  - The round 1 audit is [`sim/audit_round1.py`](../../bench/format-study/sim/audit_round1.py). Run again, it gave the hand-run audit's 150 rows exactly.
+- **N10: the loop tables without round 1's sets.** The stall, hand-over, finish, background-thread, window and three-ways tables now run on round 2's sets alone. Checked with round 1's and the first round's CSVs removed.
+- **Minor 6: robustness.** Still not tested, and still in "What this still misses".
+- **The results archive.** Kept outside the repository, location to follow ([Reproducing](#reproducing)).
+
+What the round found:
+
+- **No pass or fail verdict changed.**
+- **Planar on the simulation thread is cheaper against vgch2 than the Summary showed.** Within its set it costs 0.76 of vgch2 on nyancat, not the 0.93 that mixing sets gave.
+- **Each writer's memory is lower.** vgch2 takes 25-37 MiB, not 26-52, and changelog 127-139 MiB, not 128-155.
 
 ## Reproducing
 
