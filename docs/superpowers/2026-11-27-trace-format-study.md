@@ -2206,8 +2206,8 @@ Pros:
 
 Cons:
 
-- 6.0% on nyancat, over R1, and 4.8% on colorbars, where events costs 1.8%. Its cost is the same whatever the design does.
-- In processes of its own it cost more on nyancat than the first round's shared processes suggested (3.6%).
+- 6.0% on nyancat, over R1, and 4.8% on colorbars, in its own set. Raw's set holds no other writer, so it compares with the others only across sets, where the same writer differs by up to 2.8 points (Method).
+- Its cost varies less with the design than the change-driven writers' do: 2.6-6.0% on the five designs.
 - Its sets ran at about twice the host's normal load (1.8 and 2.3 a CPU, median), so its figures may be high.
 - Its background thread reads 16 bytes a clock. Converted to planar, its R2 share is 12.4% (nyancat), 13.7% (rle_vga), and 3.9-6.3% even on the quiet traces. Stored as `xor6`, it is 23-48%.
 - Stored as `xor6`, it is 10-280 times vgch2 on quiet traces (30.7 MB tomkeddie_a against 0.11).
@@ -2256,7 +2256,7 @@ Cons:
 
 **The recommendation changed in fix round 1, and round 2 refines it.** The first round recommended three things: record with the events writer, store planar in VGCH v2's container, and adopt the lean writer now for about half the cost. Round 1 measured them, and two of the three did not hold:
 
-- the lean writer saves 6-10% on the busy designs, not half (round 2's sets, with every file read back, put it at 9% on rle_vga and within the noise on nyancat and atari2600);
+- the lean writer saves 9% on rle_vga, and on nyancat and atari2600 the loop shows no saving beyond the processes' spread (0.99 and 0.97 of vgch2): not half (round 1's sets, now withdrawn, had given 6-10%);
 - events stored as planar fails R2. It is over the whole 5% budget on nyancat and rle_vga even at its lowest background figure, and it still misses R1 there.
 
 Round 2 re-measured every plan in the loop with files that read back right. The background plans' R1 figures moved by at most 2.5 points, and no verdict changed. vgch2's and lean's were measured again in a set of their own, and lean's saving came out smaller. It added two findings from the format owner's re-review: the job never uses `tracetool info`'s scan, and `vgacap_trace_block_pair` is not inlined.
@@ -2277,7 +2277,7 @@ Round 2 re-measured every plan in the loop with files that read back right. The 
    - Readers do not depend on the level.
 4. **The lean writer: small, safe, not urgent.**
    - It writes vgacap's file byte for byte. In the loop it saves 9% on rle_vga, and on nyancat and atari2600 a saving within the processes' spread (0.99 and 0.97 of vgch2).
-   - So as it stands it does not meet the format owner's bar for merging, 10% on nyancat and rle_vga. The inline change below is what might.
+   - Against the format owner's bar for merging, 10% on nyancat and rle_vga: on rle_vga it does not meet it (9%; its best process 12%). On nyancat the loop does not show it either way, because the spread between processes is larger than 10%. The inline change below is what might meet it.
    - Forcing `vgacap_trace_block_pair` inline as well gave 0.88 (nyancat) and 0.77 (rle_vga) of vgch2 in one replay run (the format owner's `inline-experiment.diff`). That shows the direction, not the size in a simulation.
    - The capture session takes it as its own pull request: lean's slow path plus `block_pair` inline, gated on `test_lean.sh` against all 11 traces, and measured in `bench_tick` against today's writer.
    - The file does not change, so it need not hold the 408-project re-run.
@@ -2467,7 +2467,8 @@ The commands, from a checkout of this branch:
 bench/format-study/run_all.sh          # build, traces, info, lean, writer, writer2, encode, encode2, warm, read, read2, validate, robust, interop, ctr, analyze
 bench/format-study/sim/run_sim.sh      # the first round's Verilator check: build, run (side by side), tick (in one process)
 bench/format-study/sim/run_ticks.sh    # the fix rounds' Verilator sets: main, raw, scope (round 1); bg, bgscope, readback_raw, lean (round 2)
-bench/format-study/sim/run_mem.py      # memory per plan in the loop (round 2)
+bench/format-study/sim/run_mem.py      # memory per plan in the loop (round 2; the two-model run, round 3)
+bench/format-study/sim/audit_round1.py # the round 1 audit: reads back fx1a-fx1d and fx1s into readback-fx1.csv
 bench/format-study/run_export.py       # the full-pin FST export (round 2)
 ```
 
