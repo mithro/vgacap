@@ -7,11 +7,12 @@
 
     run_mem.py [--chunks N] [--cpus 2-21]
 
-For each busy project, bench_tick runs once with the untraced model alone
-and once with the untraced model and one plan, N chunks of 65,536 clocks
-(default 600: about 39 M clocks, so that every plan has filled and handed
-over both buffer sets more than once). A plan's memory is the second
-run's peak RSS minus the first's. Each run is pinned to one CPU of
+For each busy project, bench_tick runs with the untraced model alone, with
+two untraced models, and with the untraced model and one plan, N chunks of
+65,536 clocks (default 600: about 39 M clocks, so that every plan has
+filled and handed over both buffer sets more than once). bench_tick gives
+each variant a model of its own, so a plan's run holds two models: a
+plan's memory is its run's peak RSS minus the two-model run's. Each run is pinned to one CPU of
 --cpus; the runs go 20 at a time. Results to
 $OUT/results/sim/mem.csv (project, variants, max_rss_kib, exit); the
 outputs and stderr under $OUT/sim/mem/.
@@ -70,7 +71,7 @@ def run(job):
 def main() -> int:
     chunks = int(arg("--chunks", "600"))
     cl = cpus(arg("--cpus", "2-21"))
-    jobs = [(p, v, 0, chunks) for p in PROJECTS for v in ["none"] + [f"none,{x}" for x in PLANS]]
+    jobs = [(p, v, 0, chunks) for p in PROJECTS for v in ["none", "none,none"] + [f"none,{x}" for x in PLANS]]
     jobs = [(p, v, cl[i % len(cl)], c) for i, (p, v, _, c) in enumerate(jobs)]
     res = OUT / "results" / "sim" / "mem.csv"
     with ThreadPoolExecutor(len(cl)) as ex:

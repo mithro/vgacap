@@ -664,21 +664,28 @@ memcsv = os.path.join(RES, "sim", "mem.csv")
 if os.path.exists(memcsv):
     mem = {(SHORT[r["project"]], r["variants"]): r for r in csv.DictReader(open(memcsv))}
     MV = ["vgch2", "lean", "events", "evplanar", "planar", "changelog", "raw"]
-    print("### Memory: each plan's peak resident memory over the untraced model's, MiB\n")
-    print("`sim/run_mem.py`: bench_tick with the untraced model alone, and with the untraced model and one plan, "
-          "600 chunks (39 M clocks: every plan hands over both buffer sets more than once); peak RSS (getrusage) of "
-          "the second run minus the first's. One process each, pinned to one CPU. A job holds one plan; at 22 jobs "
-          "a host multiply by 22.\n")
+    print("### Memory: each plan's writer, peak resident memory over a second untraced model's, MiB\n")
+    print("`sim/run_mem.py`: bench_tick, 600 chunks (39 M clocks: every plan hands over both buffer sets more than "
+          "once), with the untraced model alone, with two untraced models, and with the untraced model and one plan. "
+          "bench_tick gives every variant a model of its own, so a plan's run holds two models: its writer's figure "
+          "is that run's peak RSS (getrusage) minus the two-model run's. The second model's own memory (two models "
+          "minus one) is given beside it. One process each, pinned to one CPU. A job holds one model and one plan; "
+          "at 22 jobs a host multiply by 22.\n")
     body = []
+
+    def kib(pj, v):
+        r = mem.get((pj, v))
+        return int(r["max_rss_kib"]) if r and r["exit"] == "0" and r["max_rss_kib"] else None
+
     for pj in [x for x in ORDER if any(k[0] == x for k in mem)]:
-        b = mem.get((pj, "none"))
-        row = [pj, "-" if not b else f"{int(b['max_rss_kib']) / 1024:.0f}"]
+        one, two = kib(pj, "none"), kib(pj, "none,none")
+        row = [pj, "-" if one is None else f"{one / 1024:.0f}",
+               "-" if one is None or two is None else f"{(two - one) / 1024:.0f}"]
         for v in MV:
-            r = mem.get((pj, f"none,{v}"))
-            ok = r and b and r["exit"] == "0" and r["max_rss_kib"] and b["max_rss_kib"]
-            row.append("-" if not ok else f"{(int(r['max_rss_kib']) - int(b['max_rss_kib'])) / 1024:.0f}")
+            r = kib(pj, f"none,{v}")
+            row.append("-" if r is None or two is None else f"{(r - two) / 1024:.0f}")
         body.append(row)
-    table(["project", "untraced model alone"] + MV, body)
+    table(["project", "untraced model alone", "a second untraced model"] + MV, body)
 
 # A full-pin export to FST (run_export.py).
 expcsv = os.path.join(RES, "export", "export.csv")
