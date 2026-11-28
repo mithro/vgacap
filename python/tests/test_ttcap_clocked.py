@@ -180,6 +180,10 @@ def test_an_overclocked_sysclk_finds_the_fastest_divider_whose_h_fits():
     assert t.sample_ns == pytest.approx(80)
     with pytest.raises(ValueError, match="fastest clocked rate at sysclk 600000000 Hz, 10526315 Hz"):
         clocked_timing(600_000_000, 10_800_000)  # 56 cycles' worth, under div 3 x 19
+    # 10.5 MHz: divider 2 would make it in 29 cycles, faster than divider
+    # 3's 20, but needs H 23; divider 3 is the nearest that can be made.
+    t = clocked_timing(600_000_000, 10_500_000)
+    assert (t.pio_div, t.high, t.low) == (3, 15, 1)
 
 
 def test_500_khz_at_fpga_4s_132_mhz_is_exact():
