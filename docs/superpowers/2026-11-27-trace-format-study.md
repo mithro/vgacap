@@ -32,24 +32,26 @@ This is the study after its second round of review ("fix round 2"). Round 1 meas
   - No plan keeps the trace's share of R2 within this study's 1% bar on any of them. The 1% bar is the study's own choice; the spec sets 5% for everything after the simulation.
   - Only planar written on the simulation thread stays within the whole 5% post-simulation budget there, and it misses R1 on all three.
   - [Pass or fail, per plan](#pass-or-fail-per-plan) is the verdict table.
-- **R1, in the Verilator loop.** Each figure is % of the untraced simulation, the median of 4 processes. vgch2 and lean are from round 1's main set; the background plans from round 2's, whose files all read back right; raw from 4 processes of its own. The budget is 5%:
+- **R1, in the Verilator loop.** Each figure is % of the untraced simulation, the median of 4 processes. vgch2 and lean are from round 2's lean set, the background plans from its background set, raw from 4 processes of its own. Every file of every set read back right. The budget is 5%:
 
   | Plan | nyancat | rle_vga | atari2600 | colorbars |
   |---|---:|---:|---:|---:|
-  | vgch2 (current) | 15.4 | 20.5 | 7.9 | 2.7 |
-  | lean (vgch2's file) | 14.1 | 18.5 | 7.4 | 3.2 |
-  | events, stored as events | 8.2 | 7.7 | 3.9 | 3.6 |
-  | events, stored as planar | 8.3 | 8.2 | 4.1 | 3.3 |
-  | changelog, stored as planar | 7.7 | 5.5 | 3.1 | 2.7 |
-  | planar on the simulation thread | 12.8 | 10.7 | 6.0 | 2.8 |
+  | vgch2 (current) | 14.0 | 19.1 | 7.7 | −0.2 |
+  | lean (vgch2's file) | 14.1 | 17.5 | 7.7 | −0.8 |
+  | events, stored as events | 8.3 | 7.5 | 3.9 | 3.6 |
+  | events, stored as planar | 8.8 | 8.1 | 4.1 | 3.3 |
+  | changelog, stored as planar | 7.8 | 5.4 | 3.1 | 2.7 |
+  | planar on the simulation thread | 13.0 | 10.3 | 6.0 | 2.8 |
   | raw | 6.0 | 3.0 | 2.6 | 4.8 |
 
-  - Round 2 moved the background plans by −1.3 to +2.3 points on the busy designs. vgch2, run beside them as the check, moved by −0.5 to +1.2. Every R1 verdict is the same as round 1's ([round 1 against round 2](#round-1-against-round-2-of-the-untraced-model-median-of-the-processes)).
+  - Round 2 moved the background plans by −1.3 to +2.5 points on the busy designs. vgch2, run beside them as the check, moved by −0.6 to +1.3. Every R1 verdict is the same as round 1's ([round 1 against round 2](#round-1-against-round-2-of-the-untraced-model-median-of-the-processes)).
   - Raw's sets ran at about twice the host's normal load (1.8 and 2.3 a CPU, median). Its figures may be high.
-- **The lean writer writes vgacap's file and saves 6-10% on the busy designs.**
+  - colorbars is quiet: its figures are within the noise of zero, and vgch2's and lean's median is below it.
+- **The lean writer writes vgacap's file, and its saving in the loop is small.**
   - It is byte-identical to the published trace on all 11 traces (`cmp`).
-  - In the loop it costs 0.90 (nyancat), 0.90 (rle_vga) and 0.94 (atari2600) of vgch2: each process's ratio, median of 4.
-  - On the two quiet designs the ratio (1.28, 1.10) is a per-variant offset of about 1-2 ns a clock, within the noise. It is not a cost.
+  - In the loop, lean over vgch2: 0.99 [0.93, 1.50] on nyancat, 0.91 [0.88, 0.92] on rle_vga and 0.97 [0.95, 1.03] on atari2600: each process's ratio, median of 4 [lowest, highest].
+  - Only rle_vga shows a clear saving, 9%. On nyancat and atari2600 the processes disagree, and the median is within their spread. Round 1's set gave 0.90, 0.90 and 0.94.
+  - On the two quiet designs the ratio (0.80, 1.01) is a per-variant offset of about 1-2 ns a clock, within the noise.
   - It is small, safe and not urgent. The format owner found that `vgacap_trace_block_pair` is not inlined; forcing it inline gave 0.88 (nyancat) and 0.77 (rle_vga) in one replay run. That is a direction only, not a loop figure.
 - **R2 fails plainly.** A job reads its trace three times: `tracetool info`, `vgacap-sample` and `tracetool uohash`. The trace's share of R2 (%, background at encode2's median), with `tracetool info` as a scan and as a header-only read:
 
@@ -263,6 +265,7 @@ The fix round's loop sets, run by [`sim/run_ticks.sh`](../../bench/format-study/
 | scope (`fx1s`) | 1 | the main set's | not pinned: a systemd scope with `CPUQuota=200%`, as a job runs |
 | bg, fix round 2 (`fx2a` to `fx2d`) | 4 | none, vgch2, events, evplanar, planar, changelog | 2, pinned, as main |
 | bgscope, fix round 2 (`fx2s`) | 1 | the bg set's | as scope |
+| lean, fix round 2 (`fx2la` to `fx2ld`) | 4 | none, vgch2, lean | 2, pinned, as main |
 
 - The projects are nyancat, rle_vga, colorbars, atari2600 and vgadonut.
 - In the main set, the variants' orders are:
@@ -280,14 +283,13 @@ The fix round's loop sets, run by [`sim/run_ticks.sh`](../../bench/format-study/
 - **Fix round 2 re-ran the background plans.** Round 1's main and scope sets wrote corrupt files for events, evplanar, planar and changelog, for two reasons:
   - one stdio buffer was shared by every background writer of a process ([`bg.c`](../../bench/format-study/src/bg.c) had it `static`), so their bytes mixed;
   - the converters wrote the streams in raw byte order, which is port order only in the replay's layout, not in Verilator's.
-  Both are fixed. The bg sets run those plans again, with vgch2 beside them as the reference. Their R1 figures replace round 1's for those four plans; vgch2's and lean's stay round 1's.
+  Both are fixed. The bg sets run those plans again, with vgch2 beside them as the reference. Their R1 figures replace round 1's for those four plans.
+- **Fix round 2 re-ran vgch2 and lean too.** Their files in round 1's main and scope sets read back right, but those sets' other files did not, so no figure is taken from them. The lean set (`fx2la` to `fx2ld`) runs vgch2 and lean alone with the untraced model, every file read back. Its orders are none, vgch2, lean; the reverse; vgch2, none, lean; and lean, none, vgch2.
 - **Every file is read back.** After each pair of sets, [`sim/readback.py`](../../bench/format-study/sim/readback.py) reads every trace written. Each file's full hash, samples and `uo_out` run count must equal lean's (or vgch2's, the same file) from the same process, or [`run_ticks.sh`](../../bench/format-study/sim/run_ticks.sh) fails. Raw's sets, run in round 1 with one background writer a process, were read back against `fx2a`'s vgch2.
 - Raw has a set of its own. Its 32 MiB blocks and its background thread share no process, and so no L3 traffic, with another variant's. That removes the first round's bias (raw's background work fell partly on the other variants).
 - **Stalls.** A thread-CPU clock cannot see a simulation thread that waits for its writer's thread, since a waiting thread uses no CPU. So each chunk also has its wall time. For each variant, the stall measure is the wall time minus the thread CPU, over the untraced model's same difference. The study writers also count their own hand-overs that waited, and the wall time those took. vgacap's writer keeps no such count.
 - **Concurrency.** Two processes a project ran at once, `fx1a` with `fx1b` and then `fx1c` with `fx1d`: 10 processes on 20 CPUs of the second socket. The read and encode benchmarks of this round ran on the first socket at the same time. Fix round 2's bg sets ran the same way, with the FST export timing on the first socket beside them. The paired design cancels most of this; the processes' spread shows what is left.
-- **The first round's sets are kept, as "first round".**
-  - Two CPUs a process: `tick2a` to `tick2d`, 4 processes on 3 projects, 12 processes at once.
-  - One CPU a process: `tick` to `tickG`, 7 processes. There every background thread shared the simulation's core. With a thread-CPU clock that time-sharing is charged to no one; only its cache effects are, and they fall on whichever variant is running.
+- **The first round's sets are no longer in the tables.** They were `tick2a` to `tick2d` (two CPUs a process) and `tick` to `tickG` (one CPU a process). Each process held several of the study's background writers, which shared the one stdio buffer, so their files were corrupt as round 1's were. Their raw results stay in `results/sim/`.
 - **Per-process intervals.** The per-process 95% intervals are a bootstrap over chunks that follow each other, and so are correlated. They are too narrow. The range across the processes is the interval to use.
 
 A third method was tried and dropped. Six whole testbench runs started at once, side by side, each pinned to its own core, with the cores rotated by round ([`sim/run_sim.sh`](../../bench/format-study/sim/run_sim.sh) `run`). The same untraced binary took between 50.9 s and 103.5 s in the same rounds. That spread is ±35%, larger than every effect being measured. It confirms the pilot review's warning. Its raw results are kept (`results/sim/sim.csv`), but no conclusion rests on them.
@@ -317,7 +319,7 @@ The first round measured each background figure once. This round adds three more
 - **Spread.** The same compression work measured up to 2.5 times apart: vgch2 on rle_vga took 6.83 s in the first round and 14.5-17.2 s in encode2, for identical input and output bytes.
 - **Not the cache.** [`warm_cache.sh`](../../bench/format-study/warm_cache.sh) ran zstd1 alone, and after zstd-5 and zstd-1 had read the same block, as the first round's matrix did. Both took the same CPU, and both were close to the first round's figure. So the first round's matrix did not flatter it.
 - **What it tracks.** The spread follows what else ran on the socket. encode2 ran 20 whole-trace encodes at once on the first socket, the raw candidates' 16-bytes-a-clock passes among them, and the CPUs' hyperthread siblings were not reserved. A memory-bound compressor, such as zstd on rle_vga's 1,100-to-1 data, slows the most.
-- **A third estimate.** The loop's own background threads ran beside a real simulation. Scaled to the whole trace, they come out at 0.49-1.04 of encode2's median on the busy traces, lower in all but one case. The furthest are rle_vga's events and planar, about half ([three ways table](#background-cpu-three-ways-s-for-the-whole-trace-the-loops-scaled-against-the-whole-trace-runs)).
+- **A third estimate.** The loop's own background threads ran beside a real simulation. Scaled to the whole trace, they come out at 0.50-1.04 of encode2's median on the busy traces, lower in all but one case. The furthest are rle_vga's events and planar, about half ([three ways table](#background-cpu-three-ways-s-for-the-whole-trace-the-loops-scaled-against-the-whole-trace-runs)).
 - **Provenance.** Four of the first round's encode sets were run by hand, outside `run_pool`: the `runs`, changelog, events-to-planar and raw-to-planar encodes. `run_all.sh` contains them now, but those results were not produced by it. They have no `.done` files, and the events-to-planar `#pass` lines name their files by relative paths. encode2 was run by `run_all.sh`.
 
 Background CPU is compared with the pilot's untraced simulation CPU (`data/pilot_baseline.csv`, from the pilot's [`measurements.md`](https://github.com/mithro/tinytapeout-vga-videos/blob/t20-pilot/docs/reports/2026-11-pilot/measurements.md)). The simulation here ran 60 s per project.
@@ -382,18 +384,21 @@ Both report the samples a reader recovers. The checks have gaps:
 
 ### Memory
 
-Memory was not measured. The writers allocate this much, from the code ([`w_mine.c`](../../bench/format-study/src/w_mine.c), [`bg.c`](../../bench/format-study/src/bg.c), [`trace_write.c`](../../src/trace/trace_write.c)):
+Memory is measured in the loop, not taken from the code. [`sim/run_mem.py`](../../bench/format-study/sim/run_mem.py) runs bench_tick twice for each plan on the three busy designs:
 
-| Writer | Simulation side | Background side |
-|---|---:|---:|
-| vgch2, lean | 2 × 16 MiB | the zstd output bound, about 16 MiB |
-| planar on the simulation thread | 7 streams × 16 MiB × 2 | the zstd output bound |
-| events | 2 × 16 MiB | |
-| events to planar | 2 × 16 MiB | 8 streams × (4 × 16 MiB), for the converter |
-| changelog | 2 × 64 MiB | 8 streams × 64 MiB |
-| raw | 2 × 32 MiB | 8 streams × 32 MiB |
+- once with the untraced model alone;
+- once with the untraced model and that plan.
 
-These are allocations, not resident memory: a buffer's pages are resident only as far as it is filled. The converters' scratch is sized for the worst case the study allowed, not what a block needs. A production writer would size it to the block. At 22 jobs a host these figures matter, and they should be measured before a choice.
+Each run is 600 chunks (39 M clocks), so every plan hands over both buffer sets more than once. The figure is the second run's peak RSS (getrusage) minus the first's. [Memory: each plan's peak resident memory over the untraced model's](#memory-each-plans-peak-resident-memory-over-the-untraced-models-mib) is the table.
+
+- vgch2, lean and events take 26-52 MiB a job.
+- Planar and evplanar take 38-64 MiB.
+- Changelog takes 128-155 MiB, and raw 82-106 MiB. Their converters' scratch is sized for the worst case the study allowed, not for what a block needs.
+- At 22 jobs a host, on the design where each takes most, changelog's peak is about 3.4 GB (rle_vga) against vgch2's 1.1 GB (atari2600).
+
+The full-pin FST export's peak RSS is measured too ([A full-pin export to FST](#a-full-pin-export-to-fst-vgch2s-file-against-planars-median-of-the-reps)). It is 315-369 MiB from planar against 321-867 MiB from vgch2.
+
+The readers' memory in a job (`tracetool info`, `vgacap-sample`, `tracetool uohash`) is not measured.
 
 ### Interop
 
@@ -433,13 +438,15 @@ How to read each group of tables:
   - So the replay ranks the writers. It does not give their cost in a simulation.
   - FST, VCD and LXT2 ran in the `writer` run only. Their ratios to vgch2 are given within that run.
 - **The lean writer.** One table: its file against the published one, by `cmp`, for every trace.
-- **The loop, first round.** Kept as it was, for the record. Its raw figures shared processes with the other variants.
-- **The loop, fix round 1.** These are R1's figures.
-  - The main set has 4 processes a project. The raw set and the scope set follow.
-  - The scope set, one unpinned process a project, agrees with the main set to within 2.1 points on the busy designs (vgch2 on rle_vga: 22.6% against 20.5%). As in the main set, vgch2 and lean cost the most there and planar comes next; the order of the three cheapest varies.
+- **The loop.** These are R1's figures, all from sets whose every file reads back right (the read-back table).
+  - Fix round 2's background set (fx2a-fx2d) has 4 processes a project: vgch2, events, evplanar, planar and changelog.
+  - Its lean set (fx2la-fx2ld) has 4 processes a project: vgch2 and lean.
+  - Raw's set (fx1ra-fx1rd, from fix round 1) has raw alone in each process; its files read back right too.
+  - The scope set (fx2s), one unpinned process a project in a systemd scope, follows.
+  - The first round's sets and fix round 1's main and scope sets are gone from the tables. Their background writers shared one stdio buffer, and their background plans' files fail read-back. Round 1's published figures appear once, in the round 1 against round 2 table.
   - The processes agree on the order but not on the offsets, so the median and the range are both given.
   - vgadonut's loop window is quieter than its whole trace (the window table), so its loop figures understate it.
-  - The stall, finish, background and window tables follow the main set.
+  - The stall, finish, background and window tables follow the same sets. The memory and FST export tables come after them.
 - **Sizes and background CPU.** These cover the whole trace. Sampled measurements are projected (Method). The first round's background figures are single runs; encode2's three runs, the cache test and the loop's own figures follow them.
 - **Readers.** These are trace decode only: no sampler and no hash. The first round's patterns come first, then the readers of a job (read2), then R2 and the per-plan verdicts.
 
@@ -615,151 +622,139 @@ Each published trace replayed, whole and compressed, through the lean writer (vg
 | metaballs | 1,332,139 | 1,332,139 | identical | 1,332,139 | identical |
 | tomkeddie_a | 113,342 | 113,342 | identical | 113,342 | identical |
 
-### Simulation check: the Verilator loop, in one process
+### Simulation check, fix round 2: the background plans again, every file read back
 
-#### First round, two CPUs a process: the simulation thread on one, the writers' threads on either
+#### The background plans: R1's figures for them
 
-Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks (262 M clocks) a process (bench_tick.cpp). As in a job's two-CPU scope. Superseded for R1 by fix round 1's set below; its runs writer is the first prototype, whose blocks split differently from vgch2's. 4 processes (tick2a, tick2b, tick2c, tick2d), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
-
-##### Across the processes: ns per clock, median of the processes' estimates [lowest, highest]
-
-| project | vgch2 | runs | events | changelog | raw | raw_small |
-|---|---:|---:|---:|---:|---:|---:|
-| nyancat | 29.0 [26.1, 31.1] | 15.5 [14.1, 18.5] | 12.9 [11.8, 13.8] | 15.8 [11.9, 20.9] | 7.4 [5.8, 9.7] | 8.1 [6.0, 9.3] |
-| rle_vga | 55.8 [52.9, 61.3] | 34.1 [30.5, 38.4] | 19.7 [16.4, 23.4] | 15.4 [13.7, 19.9] | 7.8 [6.2, 11.3] | 7.9 [6.0, 10.7] |
-| colorbars | 6.6 [5.4, 7.3] | 4.3 [3.5, 10.8] | 3.8 [1.5, 5.0] | 3.8 [2.3, 4.8] | 8.3 [6.3, 9.2] | 8.6 [5.5, 8.7] |
-
-##### The same as % of the untraced model's CPU: median [lowest, highest]; the budget is 5%
-
-| project | vgch2 | runs | events | changelog | raw | raw_small |
-|---|---:|---:|---:|---:|---:|---:|
-| nyancat | 13.9 [13.6, 14.2] | 7.5 [7.1, 8.5] | 6.2 [5.8, 6.6] | 7.1 [6.2, 11.0] | 3.6 [3.0, 4.2] | 3.7 [3.1, 4.9] |
-| rle_vga | 21.3 [21.1, 21.6] | 13.0 [12.1, 13.6] | 7.5 [6.5, 8.3] | 5.9 [5.4, 7.0] | 3.0 [2.4, 4.0] | 3.0 [2.4, 3.8] |
-| colorbars | 3.6 [3.0, 3.9] | 2.4 [1.9, 5.2] | 2.0 [0.8, 2.9] | 2.0 [1.2, 2.8] | 4.3 [3.4, 5.3] | 4.5 [3.0, 5.0] |
-
-##### Each process: estimate [95% bootstrap interval over its chunks], ns per clock
-
-| project | process | untraced ns per clock | vgch2 | runs | events | changelog | raw | raw_small |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | tick2a | 228.8 | 31.1 [28.9, 33.3] | 16.3 [13.9, 18.8] | 13.2 [10.6, 15.7] | 16.3 [13.7, 18.8] | 9.7 [7.5, 12.0] | 7.8 [5.9, 9.9] |
-| nyancat | tick2b | 217.1 | 30.8 [28.9, 32.5] | 18.5 [16.7, 20.3] | 13.8 [12.3, 15.3] | 15.3 [13.6, 17.0] | 8.2 [6.8, 9.7] | 8.4 [6.8, 10.0] |
-| nyancat | tick2c | 189.6 | 26.1 [25.0, 27.3] | 14.7 [13.4, 15.9] | 12.6 [11.4, 13.8] | 20.9 [19.6, 22.1] | 6.5 [5.2, 7.8] | 9.3 [8.2, 10.4] |
-| nyancat | tick2d | 193.1 | 27.2 [25.8, 28.7] | 14.1 [12.7, 15.6] | 11.8 [10.6, 13.0] | 11.9 [10.4, 13.2] | 5.8 [4.7, 6.9] | 6.0 [4.6, 7.3] |
-| rle_vga | tick2a | 269.3 | 57.1 [55.3, 58.9] | 34.2 [32.4, 36.1] | 21.9 [19.8, 23.9] | 16.4 [14.5, 18.3] | 9.2 [7.5, 10.9] | 8.2 [6.6, 10.0] |
-| rle_vga | tick2b | 283.5 | 61.3 [59.4, 63.3] | 38.4 [36.4, 40.3] | 23.4 [22.0, 24.8] | 19.9 [18.1, 21.8] | 11.3 [10.0, 12.8] | 10.7 [9.0, 12.4] |
-| rle_vga | tick2c | 254.7 | 54.4 [53.2, 55.9] | 34.1 [32.5, 35.7] | 17.6 [16.0, 19.2] | 14.4 [12.6, 15.9] | 6.2 [4.3, 7.8] | 7.6 [6.5, 8.7] |
-| rle_vga | tick2d | 251.2 | 52.9 [50.8, 55.1] | 30.5 [28.3, 32.6] | 16.4 [14.9, 18.2] | 13.7 [11.8, 15.6] | 6.4 [4.8, 8.1] | 6.0 [3.8, 8.1] |
-| colorbars | tick2a | 176.3 | 6.5 [5.6, 7.4] | 3.8 [2.7, 4.9] | 3.6 [2.5, 4.8] | 2.9 [1.7, 3.9] | 7.4 [6.3, 8.5] | 8.6 [7.6, 9.5] |
-| colorbars | tick2b | 206.8 | 7.3 [5.2, 9.4] | 10.8 [8.9, 12.7] | 3.9 [2.3, 5.7] | 4.8 [2.8, 6.8] | 9.2 [7.5, 10.9] | 8.7 [6.4, 10.9] |
-| colorbars | tick2c | 173.9 | 6.8 [6.1, 7.6] | 4.7 [3.8, 5.7] | 5.0 [4.0, 6.0] | 4.8 [3.6, 5.9] | 9.2 [8.2, 10.2] | 8.7 [7.9, 9.5] |
-| colorbars | tick2d | 183.4 | 5.4 [3.7, 7.1] | 3.5 [1.9, 5.2] | 1.5 [0.2, 2.9] | 2.3 [0.6, 4.0] | 6.3 [5.0, 7.6] | 5.5 [4.0, 7.1] |
-
-#### First round, one CPU a process: the writers' threads share the simulation's core
-
-Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks (262 M clocks) a process (bench_tick.cpp). The background threads share the simulation's core. The thread CPU clock does not charge their time to the simulation thread; their cache traffic falls on whichever variant is running. 7 processes (tick, tickB, tickC, tickD, tickE, tickF, tickG), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
+As fix round 1's main set, after the two fixes (each background writer its own stdio buffer; the converters' streams in port order). Variants: vgch2 (the reference, and the read-back's), events, evplanar, planar and changelog. After each pair of sets every trace written is read back (sim/readback.py) and must match lean's (the readback table). 4 processes (fx2a, fx2b, fx2c, fx2d), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
 
 ##### Across the processes: ns per clock, median of the processes' estimates [lowest, highest]
 
-| project | vgch2 | runs | events | changelog | raw | raw_small |
-|---|---:|---:|---:|---:|---:|---:|
-| nyancat | 34.9 [16.8, 43.8] | 16.5 [5.1, 21.3] | 15.1 [2.5, 29.6] | 12.9 [11.0, 15.4] | 6.7 [-2.9, 11.9] | 7.8 [-2.5, 12.2] |
-| rle_vga | 52.0 [48.1, 71.0] | 33.9 [30.2, 46.9] | 17.1 [15.6, 26.4] | 15.0 [13.5, 15.1] | 9.8 [5.0, 15.5] | 6.8 [6.0, 17.3] |
-| colorbars | 5.0 [-13.4, 10.1] | 2.9 [-15.9, 6.3] | 2.1 [-16.3, 9.4] | 2.0 [-16.0, 5.1] | 7.2 [-13.8, 11.3] | 7.2 [-12.4, 11.0] |
+| project | vgch2 | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|
+| nyancat | 36.2 [34.0, 43.2] | 18.5 [15.5, 19.3] | 18.9 [14.9, 21.6] | 28.9 [24.5, 30.6] | 16.8 [14.2, 18.4] |
+| rle_vga | 58.3 [54.5, 60.5] | 21.8 [20.0, 24.5] | 23.6 [20.2, 25.5] | 29.6 [26.3, 31.4] | 15.6 [12.7, 17.1] |
+| colorbars | 6.6 [4.1, 9.5] | 7.4 [5.4, 8.5] | 6.8 [5.1, 8.6] | 5.8 [3.5, 6.8] | 5.6 [2.9, 7.2] |
+| atari2600 | 38.1 [35.5, 39.1] | 18.1 [16.0, 19.4] | 19.6 [16.3, 24.0] | 28.0 [26.8, 29.9] | 14.7 [13.2, 16.5] |
+| vgadonut | 2.7 [-0.0, 5.2] | 1.5 [-3.8, 6.4] | 1.2 [-3.5, 5.7] | 1.4 [-1.0, 3.5] | 1.8 [-0.6, 4.2] |
 
 ##### The same as % of the untraced model's CPU: median [lowest, highest]; the budget is 5%
 
-| project | vgch2 | runs | events | changelog | raw | raw_small |
-|---|---:|---:|---:|---:|---:|---:|
-| nyancat | 17.4 [8.5, 19.1] | 8.4 [2.6, 9.1] | 7.8 [1.3, 11.7] | 6.6 [5.8, 7.9] | 3.4 [-1.5, 6.1] | 4.0 [-1.3, 4.8] |
-| rle_vga | 20.2 [19.2, 22.0] | 13.2 [12.0, 14.2] | 6.4 [6.1, 8.0] | 5.6 [5.4, 5.8] | 3.4 [1.9, 5.8] | 2.7 [2.3, 5.2] |
-| colorbars | 2.3 [-6.6, 5.3] | 1.3 [-7.8, 3.1] | 1.1 [-8.0, 4.6] | 1.1 [-7.8, 2.5] | 4.0 [-6.8, 5.9] | 4.1 [-6.1, 5.1] |
+| project | vgch2 | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|
+| nyancat | 16.7 [16.1, 18.6] | 8.3 [7.2, 8.8] | 8.8 [7.0, 9.3] | 13.0 [11.5, 14.0] | 7.8 [6.6, 7.9] |
+| rle_vga | 19.9 [19.9, 21.7] | 7.5 [7.3, 8.8] | 8.1 [7.4, 9.1] | 10.3 [9.6, 10.8] | 5.4 [4.6, 5.9] |
+| colorbars | 3.2 [2.2, 4.5] | 3.6 [2.8, 4.0] | 3.3 [2.7, 4.2] | 2.8 [1.8, 3.2] | 2.7 [1.5, 3.5] |
+| atari2600 | 8.1 [7.7, 8.2] | 3.9 [3.5, 4.1] | 4.1 [3.5, 5.2] | 6.0 [5.8, 6.3] | 3.1 [2.9, 3.5] |
+| vgadonut | 1.0 [-0.0, 1.9] | 0.6 [-1.3, 2.4] | 0.5 [-1.2, 2.1] | 0.5 [-0.3, 1.3] | 0.7 [-0.2, 1.5] |
 
 ##### Each process: estimate [95% bootstrap interval over its chunks], ns per clock
 
-| project | process | untraced ns per clock | vgch2 | runs | events | changelog | raw | raw_small |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | tick | 252.8 | 43.8 [41.6, 46.1] | 21.3 [18.9, 23.7] | 29.6 [27.2, 32.3] | - | 11.7 [9.2, 14.2] | 12.2 [10.0, 14.4] |
-| nyancat | tickB | 195.1 | 23.9 [23.0, 25.0] | 11.8 [10.7, 13.0] | 8.6 [7.2, 9.8] | - | 3.4 [2.3, 4.6] | 4.1 [3.2, 5.1] |
-| nyancat | tickC | 194.5 | 36.5 [35.1, 37.9] | 15.2 [14.0, 16.5] | 12.8 [11.9, 13.8] | - | 6.7 [5.8, 7.7] | 8.1 [6.9, 9.2] |
-| nyancat | tickD | 197.7 | 16.8 [15.7, 18.0] | 5.1 [3.8, 6.3] | 2.5 [1.5, 3.5] | - | -2.9 [-4.0, -1.7] | -2.5 [-3.5, -1.5] |
-| nyancat | tickE | 195.7 | 34.9 [33.3, 36.4] | 17.8 [16.1, 19.5] | 15.5 [13.8, 17.4] | 15.4 [13.8, 17.1] | 6.8 [5.0, 8.5] | 7.5 [6.2, 8.8] |
-| nyancat | tickF | 196.7 | 34.2 [32.6, 35.9] | 18.0 [16.2, 19.7] | 15.3 [13.9, 16.7] | 12.9 [11.2, 14.6] | 11.9 [10.5, 13.2] | 7.8 [6.3, 9.6] |
-| nyancat | tickG | 190.3 | 36.3 [34.9, 37.7] | 16.5 [15.0, 18.1] | 15.1 [13.6, 16.8] | 11.0 [9.3, 12.6] | 6.0 [4.4, 7.6] | 8.5 [7.2, 9.9] |
-| rle_vga | tick | 330.3 | 71.0 [68.6, 73.3] | 46.9 [44.5, 49.2] | 26.4 [23.9, 28.9] | - | 11.3 [9.0, 13.6] | 17.3 [15.1, 19.5] |
-| rle_vga | tickB | 254.3 | 54.7 [52.8, 56.5] | 34.8 [33.0, 36.7] | 19.6 [17.7, 21.7] | - | 14.3 [12.6, 15.9] | 6.8 [5.5, 8.1] |
-| rle_vga | tickC | 254.9 | 56.1 [54.2, 58.0] | 33.9 [32.0, 35.9] | 17.9 [16.3, 19.4] | - | 7.6 [6.2, 8.9] | 6.7 [4.9, 8.5] |
-| rle_vga | tickD | 256.9 | 52.0 [49.8, 53.8] | 31.6 [29.7, 33.5] | 15.8 [14.2, 17.4] | - | 5.0 [3.0, 6.8] | 6.0 [4.5, 7.5] |
-| rle_vga | tickE | 259.8 | 50.7 [48.5, 52.9] | 32.5 [30.0, 34.9] | 15.7 [13.0, 18.3] | 15.1 [12.5, 17.8] | 9.8 [7.2, 12.1] | 11.3 [9.3, 13.5] |
-| rle_vga | tickF | 250.9 | 48.1 [46.1, 50.0] | 30.2 [28.3, 32.0] | 15.6 [14.1, 16.9] | 13.5 [11.6, 15.4] | 5.9 [4.5, 7.2] | 7.9 [6.0, 9.7] |
-| rle_vga | tickG | 267.3 | 51.3 [49.7, 53.0] | 35.4 [33.6, 37.3] | 17.1 [15.2, 19.1] | 15.0 [13.1, 17.2] | 15.5 [13.6, 17.6] | 6.7 [5.1, 8.3] |
-| colorbars | tick | 264.3 | 5.0 [3.4, 6.6] | 3.4 [1.6, 5.2] | 2.3 [0.5, 4.1] | - | 11.1 [9.2, 13.1] | 11.0 [9.1, 12.8] |
-| colorbars | tickB | 178.7 | 3.7 [2.9, 4.6] | 2.9 [1.9, 3.9] | 2.0 [0.9, 3.1] | - | 7.2 [6.2, 8.3] | 8.8 [7.8, 9.6] |
-| colorbars | tickC | 176.4 | 4.0 [3.1, 5.0] | 2.0 [1.1, 2.9] | 1.9 [1.1, 2.7] | - | 6.3 [5.5, 7.1] | 7.2 [6.3, 8.1] |
-| colorbars | tickD | 190.6 | 10.1 [8.8, 11.3] | 2.2 [0.9, 3.6] | 2.1 [1.0, 3.2] | - | 11.3 [9.8, 12.6] | 6.8 [5.6, 8.0] |
-| colorbars | tickE | 203.7 | -13.4 [-14.8, -11.9] | -15.9 [-17.6, -14.3] | -16.3 [-18.1, -14.6] | -16.0 [-17.6, -14.2] | -13.8 [-15.5, -12.3] | -12.4 [-13.9, -11.0] |
-| colorbars | tickF | 181.2 | 6.1 [4.6, 7.6] | 3.3 [1.8, 4.7] | 3.4 [2.3, 4.6] | 2.0 [0.6, 3.5] | 7.0 [5.8, 8.2] | 6.9 [5.4, 8.3] |
-| colorbars | tickG | 205.2 | 9.8 [8.2, 11.3] | 6.3 [4.6, 8.0] | 9.4 [7.8, 11.2] | 5.1 [3.4, 6.7] | 10.1 [8.3, 11.9] | 10.5 [9.0, 11.9] |
+| project | process | untraced ns per clock | vgch2 | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | fx2a | 214.2 | 35.6 [33.5, 37.8] | 15.5 [13.2, 17.9] | 14.9 [12.4, 17.4] | 24.5 [22.1, 26.9] | 14.2 [12.5, 16.0] |
+| nyancat | fx2b | 218.4 | 36.8 [34.8, 38.9] | 19.3 [16.9, 21.8] | 20.1 [17.3, 22.8] | 30.6 [28.1, 33.3] | 16.9 [14.7, 19.0] |
+| nyancat | fx2c | 232.6 | 43.2 [40.8, 46.0] | 19.0 [16.8, 21.1] | 21.6 [18.9, 24.4] | 29.8 [27.6, 32.1] | 18.4 [15.9, 20.8] |
+| nyancat | fx2d | 211.4 | 34.0 [32.1, 35.8] | 17.9 [15.9, 20.0] | 17.6 [15.5, 19.8] | 28.0 [26.2, 29.9] | 16.6 [14.5, 18.8] |
+| rle_vga | fx2a | 273.9 | 54.5 [52.1, 56.9] | 20.0 [17.5, 22.4] | 20.2 [17.2, 22.8] | 26.3 [23.9, 28.9] | 12.7 [10.6, 14.8] |
+| rle_vga | fx2b | 278.9 | 60.5 [57.8, 63.0] | 24.5 [21.9, 27.2] | 25.5 [22.6, 28.4] | 30.2 [27.6, 32.8] | 15.4 [13.2, 17.7] |
+| rle_vga | fx2c | 294.4 | 58.8 [55.5, 62.1] | 22.6 [19.6, 25.5] | 23.3 [20.1, 26.5] | 31.4 [28.6, 34.2] | 15.8 [12.5, 19.0] |
+| rle_vga | fx2d | 290.8 | 57.8 [55.2, 60.6] | 21.1 [18.0, 24.2] | 23.8 [20.7, 27.0] | 29.0 [26.3, 31.7] | 17.1 [13.8, 20.1] |
+| colorbars | fx2a | 212.2 | 9.5 [7.6, 11.5] | 8.5 [6.5, 10.8] | 8.0 [5.8, 10.2] | 6.8 [4.6, 9.0] | 6.2 [4.3, 8.1] |
+| colorbars | fx2b | 201.1 | 5.2 [3.5, 6.9] | 6.9 [5.1, 8.6] | 5.7 [3.6, 7.5] | 4.9 [3.0, 6.7] | 4.9 [3.3, 6.6] |
+| colorbars | fx2c | 189.1 | 4.1 [2.6, 5.6] | 5.4 [3.9, 6.7] | 5.1 [3.5, 6.8] | 3.5 [2.2, 4.7] | 2.9 [1.2, 4.6] |
+| colorbars | fx2d | 208.0 | 8.0 [6.2, 9.9] | 8.0 [5.7, 10.0] | 8.6 [6.4, 10.9] | 6.7 [4.9, 8.4] | 7.2 [5.1, 9.4] |
+| atari2600 | fx2a | 475.6 | 39.1 [35.8, 42.2] | 19.1 [15.7, 22.5] | 18.0 [14.6, 21.6] | 29.9 [26.3, 33.5] | 16.5 [13.4, 19.8] |
+| atari2600 | fx2b | 476.2 | 39.0 [35.5, 42.5] | 19.4 [16.0, 22.8] | 21.3 [17.5, 24.9] | 27.8 [24.0, 31.7] | 15.0 [11.4, 18.3] |
+| atari2600 | fx2c | 461.7 | 37.3 [33.2, 41.2] | 17.1 [13.9, 20.5] | 24.0 [20.1, 27.9] | 28.2 [24.8, 31.6] | 13.2 [9.7, 17.1] |
+| atari2600 | fx2d | 463.5 | 35.5 [32.0, 38.7] | 16.0 [12.6, 19.8] | 16.3 [12.2, 19.8] | 26.8 [23.5, 30.0] | 14.4 [10.7, 18.0] |
+| vgadonut | fx2a | 268.5 | 5.2 [2.8, 7.4] | 6.4 [3.7, 9.2] | 5.7 [3.0, 8.5] | 3.5 [0.9, 6.0] | 2.7 [0.6, 4.8] |
+| vgadonut | fx2b | 263.2 | 4.4 [2.6, 6.3] | 3.0 [0.8, 5.4] | 1.7 [-0.9, 4.0] | 1.2 [-1.2, 3.4] | 0.9 [-0.9, 2.7] |
+| vgadonut | fx2c | 289.2 | -0.0 [-2.6, 2.7] | -3.8 [-6.2, -1.5] | -3.5 [-6.0, -0.9] | -1.0 [-3.2, 1.2] | -0.6 [-3.1, 2.1] |
+| vgadonut | fx2d | 280.6 | 0.9 [-1.4, 3.4] | -0.0 [-2.9, 2.8] | 0.8 [-2.2, 4.1] | 1.6 [-0.8, 4.0] | 4.2 [1.4, 7.0] |
 
-#### Replay against the in-process check, ns per clock
+#### Round 1 against round 2: % of the untraced model, median of the processes
 
-| project | vgch2 replay | vgch2 in-process | runs replay | runs in-process | events replay | events in-process | changelog replay | changelog in-process | raw replay | raw in-process |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | 20.45 | 29.00 | 10.69 | 15.50 | 7.52 | 12.90 | 4.67 | 15.80 | 1.60 | 7.37 |
-| rle_vga | 35.96 | 55.76 | 21.57 | 34.13 | 11.40 | 19.73 | 5.11 | 15.39 | 1.43 | 7.81 |
-| colorbars | 1.96 | 6.64 | 0.91 | 4.28 | 0.82 | 3.78 | 0.73 | 3.84 | 1.85 | 8.28 |
-| atari2600 | 51.03 | - | 27.47 | - | 19.26 | - | 10.84 | - | 1.99 | - |
-| vgadonut | 5.30 | - | 2.76 | - | 1.93 | - | 1.48 | - | 1.75 | - |
+Round 1: the figures fix round 1 published, from its main set (fx1a-fx1d), whose background plans wrote corrupt files (the read-back table); shown only for the comparison. Round 2: fx2a-fx2d, every file read back right. vgch2 ran in both, as the check that the host was alike.
 
-### Simulation check, fix round 1: the Verilator loop, every candidate
+| project | variant | round 1 (%) | round 2 (%) | round 2 lowest (%) | round 2 highest (%) | round 2 minus round 1 (points) |
+|---|---:|---:|---:|---:|---:|---:|
+| nyancat | vgch2 | 15.4 | 16.7 | 16.1 | 18.6 | 1.3 |
+| nyancat | events | 6.3 | 8.3 | 7.2 | 8.8 | 2.1 |
+| nyancat | evplanar | 7.3 | 8.8 | 7.0 | 9.3 | 1.5 |
+| nyancat | planar | 10.5 | 13.0 | 11.5 | 14.0 | 2.5 |
+| nyancat | changelog | 8.0 | 7.8 | 6.6 | 7.9 | -0.2 |
+| rle_vga | vgch2 | 20.5 | 19.9 | 19.9 | 21.7 | -0.6 |
+| rle_vga | events | 7.9 | 7.5 | 7.3 | 8.8 | -0.4 |
+| rle_vga | evplanar | 8.3 | 8.1 | 7.4 | 9.1 | -0.2 |
+| rle_vga | planar | 11.5 | 10.3 | 9.6 | 10.8 | -1.2 |
+| rle_vga | changelog | 6.1 | 5.4 | 4.6 | 5.9 | -0.6 |
+| colorbars | vgch2 | 2.7 | 3.2 | 2.2 | 4.5 | 0.5 |
+| colorbars | events | 1.8 | 3.6 | 2.8 | 4.0 | 1.8 |
+| colorbars | evplanar | 1.7 | 3.3 | 2.7 | 4.2 | 1.6 |
+| colorbars | planar | 2.4 | 2.8 | 1.8 | 3.2 | 0.4 |
+| colorbars | changelog | 2.2 | 2.7 | 1.5 | 3.5 | 0.5 |
+| atari2600 | vgch2 | 7.9 | 8.1 | 7.7 | 8.2 | 0.2 |
+| atari2600 | events | 3.6 | 3.9 | 3.5 | 4.1 | 0.3 |
+| atari2600 | evplanar | 3.8 | 4.1 | 3.5 | 5.2 | 0.3 |
+| atari2600 | planar | 5.6 | 6.0 | 5.8 | 6.3 | 0.3 |
+| atari2600 | changelog | 4.4 | 3.1 | 2.9 | 3.5 | -1.3 |
+| vgadonut | vgch2 | 0.4 | 1.0 | -0.0 | 1.9 | 0.6 |
+| vgadonut | events | -0.1 | 0.6 | -1.3 | 2.4 | 0.6 |
+| vgadonut | evplanar | -0.1 | 0.5 | -1.2 | 2.1 | 0.6 |
+| vgadonut | planar | -0.6 | 0.5 | -0.3 | 1.3 | 1.1 |
+| vgadonut | changelog | -0.1 | 0.7 | -0.2 | 1.5 | 0.8 |
 
-#### The main set: R1's figures
+### Simulation check, fix round 2: vgch2 and lean, every file read back
 
-Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks (262 M clocks) a process (bench_tick.cpp). Two CPUs a process, the simulation thread pinned to the first. Variants: vgch2 (vgacap's writer), lean (vgacap's writer with push2's slow path replaced), events (zstd 1 of the events stream), evplanar (events converted to planar by the real converter), planar (planar written on the simulation thread) and changelog (converted to planar). 4 processes (fx1a, fx1b, fx1c, fx1d), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
+#### vgch2 and lean: R1's figures for them
+
+As the background plans' set, with the variants none, vgch2 and lean only: vgch2's and lean's R1 from sets whose files all read back (round 1's main set, where they ran beside the corrupt background writers, did not). 4 processes (fx2la, fx2lb, fx2lc, fx2ld), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
 
 ##### Across the processes: ns per clock, median of the processes' estimates [lowest, highest]
 
-| project | vgch2 | lean | events | evplanar | planar | changelog |
-|---|---:|---:|---:|---:|---:|---:|
-| nyancat | 37.1 [33.8, 41.7] | 33.2 [30.2, 38.0] | 15.4 [13.2, 17.2] | 18.3 [13.2, 29.0] | 24.9 [22.7, 27.1] | 18.5 [15.7, 22.4] |
-| rle_vga | 60.9 [59.1, 63.6] | 54.5 [52.9, 58.3] | 23.2 [20.4, 24.8] | 24.7 [22.0, 29.6] | 34.0 [29.8, 36.8] | 17.9 [13.0, 22.1] |
-| colorbars | 6.1 [3.3, 9.3] | 7.2 [4.7, 10.7] | 4.0 [2.4, 6.8] | 3.8 [1.7, 7.2] | 5.7 [4.6, 7.0] | 4.9 [3.8, 7.0] |
-| atari2600 | 38.2 [35.2, 40.8] | 36.5 [33.1, 38.4] | 16.9 [15.4, 18.6] | 18.4 [16.1, 20.4] | 27.3 [24.4, 33.0] | 22.1 [17.2, 23.5] |
-| vgadonut | 1.1 [-3.5, 4.4] | 1.7 [-4.7, 4.6] | -0.2 [-7.1, 3.2] | -0.3 [-4.8, 10.4] | -1.8 [-5.5, 2.7] | -0.4 [-3.7, 1.6] |
+| project | vgch2 | lean |
+|---|---:|---:|
+| nyancat | 24.9 [18.5, 28.3] | 26.1 [17.2, 38.2] |
+| rle_vga | 44.8 [42.0, 46.8] | 40.8 [36.9, 43.0] |
+| colorbars | -0.6 [-6.6, 3.8] | -1.6 [-7.9, 3.3] |
+| atari2600 | 31.9 [29.7, 34.7] | 31.9 [29.0, 32.9] |
+| vgadonut | 2.0 [1.3, 4.7] | 2.5 [0.9, 3.5] |
 
 ##### The same as % of the untraced model's CPU: median [lowest, highest]; the budget is 5%
 
-| project | vgch2 | lean | events | evplanar | planar | changelog |
-|---|---:|---:|---:|---:|---:|---:|
-| nyancat | 15.4 [15.0, 16.0] | 14.1 [12.8, 14.6] | 6.3 [5.5, 7.3] | 7.3 [5.3, 13.0] | 10.5 [9.1, 11.0] | 8.0 [6.3, 8.6] |
-| rle_vga | 20.5 [20.0, 20.9] | 18.5 [17.8, 19.0] | 7.9 [6.8, 8.1] | 8.3 [7.4, 9.9] | 11.5 [10.0, 12.0] | 6.1 [4.4, 7.2] |
-| colorbars | 2.7 [1.6, 3.6] | 3.2 [2.2, 4.2] | 1.8 [1.2, 2.6] | 1.7 [0.8, 2.8] | 2.4 [2.1, 3.2] | 2.2 [1.8, 2.7] |
-| atari2600 | 7.9 [7.5, 8.3] | 7.4 [7.3, 7.8] | 3.6 [3.0, 3.9] | 3.8 [3.4, 4.2] | 5.6 [5.2, 6.7] | 4.4 [3.6, 5.2] |
-| vgadonut | 0.4 [-1.1, 1.7] | 0.6 [-1.5, 1.8] | -0.1 [-2.2, 1.2] | -0.1 [-1.5, 3.9] | -0.6 [-1.7, 1.0] | -0.1 [-1.2, 0.6] |
+| project | vgch2 | lean |
+|---|---:|---:|
+| nyancat | 14.0 [9.0, 14.7] | 14.1 [8.4, 21.3] |
+| rle_vga | 19.1 [18.1, 19.7] | 17.5 [15.9, 17.9] |
+| colorbars | -0.2 [-3.6, 2.3] | -0.8 [-4.3, 2.0] |
+| atari2600 | 7.7 [7.6, 8.4] | 7.7 [7.4, 8.1] |
+| vgadonut | 0.9 [0.6, 2.0] | 1.1 [0.4, 1.5] |
 
 ##### Each process: estimate [95% bootstrap interval over its chunks], ns per clock
 
-| project | process | untraced ns per clock | vgch2 | lean | events | evplanar | planar | changelog |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | fx1a | 248.4 | 37.1 [34.3, 39.9] | 31.9 [28.8, 34.8] | 13.7 [10.6, 16.5] | 13.2 [10.0, 16.3] | 22.7 [19.6, 25.8] | 15.7 [13.1, 18.1] |
-| nyancat | fx1b | 260.5 | 41.7 [38.5, 44.8] | 38.0 [34.7, 41.3] | 17.1 [13.7, 20.7] | 21.6 [17.9, 24.8] | 27.1 [23.7, 30.2] | 22.4 [19.6, 25.1] |
-| nyancat | fx1c | 222.6 | 33.8 [31.9, 35.7] | 30.2 [28.0, 32.2] | 13.2 [11.7, 15.0] | 29.0 [27.1, 30.8] | 23.8 [22.0, 25.5] | 16.7 [14.7, 18.6] |
-| nyancat | fx1d | 236.5 | 37.0 [34.4, 39.2] | 34.5 [32.2, 36.8] | 17.2 [15.0, 19.3] | 15.0 [13.1, 16.9] | 25.9 [23.8, 27.8] | 20.2 [17.9, 22.5] |
-| rle_vga | fx1a | 297.7 | 59.5 [56.8, 62.3] | 52.9 [49.6, 55.8] | 20.4 [17.4, 23.3] | 29.6 [26.4, 32.8] | 29.8 [26.5, 33.0] | 13.0 [10.2, 15.4] |
-| rle_vga | fx1b | 297.3 | 62.2 [59.0, 65.3] | 55.0 [51.3, 58.5] | 23.2 [19.9, 26.4] | 22.0 [18.6, 25.2] | 33.5 [30.4, 36.7] | 18.5 [15.9, 21.3] |
-| rle_vga | fx1c | 292.2 | 59.1 [56.5, 62.0] | 54.0 [50.9, 57.2] | 23.1 [20.6, 25.7] | 24.4 [21.9, 27.0] | 34.5 [32.3, 36.8] | 17.2 [14.6, 20.1] |
-| rle_vga | fx1d | 306.0 | 63.6 [61.1, 66.0] | 58.3 [55.8, 60.9] | 24.8 [22.4, 27.0] | 25.0 [22.9, 27.2] | 36.8 [34.8, 39.0] | 22.1 [19.6, 24.5] |
-| colorbars | fx1a | 220.8 | 4.7 [2.6, 6.8] | 6.8 [4.3, 9.3] | 5.3 [2.9, 7.9] | 5.6 [3.2, 8.3] | 7.0 [4.4, 9.6] | 5.6 [3.6, 7.6] |
-| colorbars | fx1b | 230.1 | 7.4 [5.2, 9.6] | 7.6 [4.5, 10.5] | 2.8 [-0.3, 5.8] | 1.9 [-1.5, 4.7] | 4.7 [1.6, 7.6] | 4.2 [1.7, 6.7] |
-| colorbars | fx1c | 256.0 | 9.3 [6.2, 12.0] | 10.7 [7.9, 13.3] | 6.8 [4.5, 9.1] | 7.2 [4.6, 10.0] | 6.6 [4.2, 8.9] | 7.0 [4.3, 9.9] |
-| colorbars | fx1d | 208.5 | 3.3 [1.5, 5.2] | 4.7 [3.0, 6.2] | 2.4 [0.7, 4.3] | 1.7 [0.2, 3.2] | 4.6 [2.9, 6.1] | 3.8 [1.9, 5.6] |
-| atari2600 | fx1a | 489.2 | 40.8 [37.5, 43.9] | 38.4 [34.8, 42.0] | 18.4 [14.7, 21.9] | 20.4 [16.9, 24.1] | 33.0 [29.3, 36.5] | 23.2 [20.0, 26.4] |
-| atari2600 | fx1b | 510.6 | 38.4 [34.7, 42.2] | 38.3 [34.0, 42.4] | 15.4 [11.3, 19.6] | 20.1 [16.2, 23.9] | 29.8 [25.8, 33.7] | 20.9 [17.2, 24.3] |
-| atari2600 | fx1c | 451.5 | 35.2 [32.8, 37.6] | 33.1 [30.5, 35.3] | 15.4 [13.2, 17.6] | 16.6 [14.3, 18.8] | 24.4 [22.3, 26.4] | 23.5 [21.1, 26.1] |
-| atari2600 | fx1d | 472.6 | 37.9 [34.9, 40.9] | 34.8 [31.8, 37.7] | 18.6 [15.6, 21.5] | 16.1 [13.4, 18.7] | 24.7 [22.2, 27.3] | 17.2 [14.1, 20.2] |
-| vgadonut | fx1a | 264.1 | 4.4 [2.1, 6.5] | 4.6 [1.8, 7.3] | 3.2 [0.2, 6.1] | 10.4 [7.6, 13.2] | 2.7 [-0.1, 5.5] | 1.6 [-0.6, 3.8] |
-| vgadonut | fx1b | 287.2 | 3.0 [0.6, 5.4] | 3.4 [0.6, 6.6] | 0.6 [-2.4, 3.4] | 0.7 [-2.5, 3.7] | -0.7 [-3.7, 2.1] | 0.7 [-1.6, 3.1] |
-| vgadonut | fx1c | 281.5 | -0.8 [-3.1, 1.5] | -0.1 [-2.6, 2.5] | -1.0 [-3.1, 1.0] | -1.4 [-3.9, 1.1] | -2.8 [-5.0, -0.7] | -1.5 [-4.1, 1.1] |
-| vgadonut | fx1d | 318.4 | -3.5 [-6.4, -0.7] | -4.7 [-7.6, -2.0] | -7.1 [-10.0, -4.3] | -4.8 [-7.7, -2.3] | -5.5 [-8.1, -2.9] | -3.7 [-6.5, -0.9] |
+| project | process | untraced ns per clock | vgch2 | lean |
+|---|---:|---:|---:|---:|
+| nyancat | fx2la | 192.5 | 28.3 [26.9, 29.7] | 27.3 [26.0, 28.5] |
+| nyancat | fx2lb | 205.9 | 18.5 [16.7, 20.3] | 17.2 [15.4, 18.9] |
+| nyancat | fx2lc | 177.4 | 24.4 [23.2, 25.5] | 24.9 [23.7, 26.0] |
+| nyancat | fx2ld | 179.9 | 25.5 [24.1, 27.1] | 38.2 [36.7, 39.6] |
+| rle_vga | fx2la | 236.4 | 45.2 [43.6, 47.0] | 41.2 [39.6, 42.9] |
+| rle_vga | fx2lb | 244.2 | 46.8 [44.9, 48.8] | 43.0 [40.9, 44.8] |
+| rle_vga | fx2lc | 225.7 | 44.5 [42.8, 46.2] | 40.3 [38.7, 41.9] |
+| rle_vga | fx2ld | 231.7 | 42.0 [40.5, 43.8] | 36.9 [35.1, 38.5] |
+| colorbars | fx2la | 185.7 | -5.0 [-6.4, -3.7] | -6.0 [-7.4, -4.6] |
+| colorbars | fx2lb | 182.4 | -6.6 [-8.1, -5.2] | -7.9 [-9.2, -6.6] |
+| colorbars | fx2lc | 164.3 | 3.7 [2.5, 4.8] | 2.7 [1.7, 3.8] |
+| colorbars | fx2ld | 165.9 | 3.8 [2.6, 5.0] | 3.3 [2.1, 4.4] |
+| atari2600 | fx2la | 393.9 | 31.0 [29.2, 32.9] | 31.9 [29.9, 33.9] |
+| atari2600 | fx2lb | 411.8 | 34.7 [32.4, 37.1] | 32.9 [30.3, 35.2] |
+| atari2600 | fx2lc | 392.4 | 29.7 [28.0, 31.6] | 29.0 [27.0, 31.0] |
+| atari2600 | fx2ld | 431.9 | 32.9 [29.9, 35.9] | 32.0 [28.9, 34.8] |
+| vgadonut | fx2la | 228.9 | 2.7 [1.3, 4.0] | 3.5 [2.1, 4.9] |
+| vgadonut | fx2lb | 231.2 | 4.7 [3.1, 6.3] | 3.1 [1.5, 4.6] |
+| vgadonut | fx2lc | 219.8 | 1.3 [-0.0, 2.6] | 1.8 [0.5, 3.1] |
+| vgadonut | fx2ld | 226.9 | 1.3 [-0.3, 2.8] | 0.9 [-0.4, 2.2] |
 
 #### The lean writer against vgacap's, in the loop: lean over vgch2, each process's ratio, median [lowest, highest]
 
@@ -767,11 +762,87 @@ Both write the same file (the lean writer's table). Each process's lean estimate
 
 | project | lean over vgch2 |
 |---|---:|
-| nyancat | 0.90 [0.86, 0.93] |
-| rle_vga | 0.90 [0.88, 0.92] |
-| colorbars | 1.28 [1.03, 1.43] |
-| atari2600 | 0.94 [0.92, 1.00] |
-| vgadonut | 1.10 [1.06, 1.15] |
+| nyancat | 0.99 [0.93, 1.50] |
+| rle_vga | 0.91 [0.88, 0.92] |
+| colorbars | 0.80 [0.75, 0.86] |
+| atari2600 | 0.97 [0.95, 1.03] |
+| vgadonut | 1.01 [0.65, 1.35] |
+
+Only the busy designs' ratios measure a saving. On the quiet ones a changed clock is rare (colorbars: 3.35% of clocks) and both writers cost a few ns a clock, so the ratio is a per-variant offset of about 1-2 ns a clock, within the noise; vgadonut's per-process estimates include negative ones.
+
+#### Read-back of every trace the loop wrote
+
+`sim/readback.py`: each file read with `fsbench read --patterns validate` (vgch2 and lean with vgacap's reader, the others with the study's), its full hash, samples and uo_out run count against lean's (or vgch2's, the same file) from the same process; raw's sets, which have neither, against fx2a's vgch2. Round 1's main and scope sets (fx1a-fx1d, fx1s) are read back too, as an audit: their background plans' files are the corrupt ones round 2 replaced, and no figure is taken from them. Files that pass, of those written.
+
+| set | variant | files | pass |
+|---|---:|---:|---:|
+| fx1a | changelog | 5 | 0 |
+| fx1a | events | 5 | 0 |
+| fx1a | evplanar | 5 | 0 |
+| fx1a | lean | 5 | 5 |
+| fx1a | planar | 5 | 3 |
+| fx1a | vgch2 | 5 | 5 |
+| fx1b | changelog | 5 | 0 |
+| fx1b | events | 5 | 0 |
+| fx1b | evplanar | 5 | 0 |
+| fx1b | lean | 5 | 5 |
+| fx1b | planar | 5 | 0 |
+| fx1b | vgch2 | 5 | 5 |
+| fx1c | changelog | 5 | 0 |
+| fx1c | events | 5 | 0 |
+| fx1c | evplanar | 5 | 0 |
+| fx1c | lean | 5 | 5 |
+| fx1c | planar | 5 | 2 |
+| fx1c | vgch2 | 5 | 5 |
+| fx1d | changelog | 5 | 0 |
+| fx1d | events | 5 | 0 |
+| fx1d | evplanar | 5 | 0 |
+| fx1d | lean | 5 | 5 |
+| fx1d | planar | 5 | 0 |
+| fx1d | vgch2 | 5 | 5 |
+| fx1ra | raw | 5 | 5 |
+| fx1rb | raw | 5 | 5 |
+| fx1rc | raw | 5 | 5 |
+| fx1rd | raw | 5 | 5 |
+| fx1s | changelog | 5 | 0 |
+| fx1s | events | 5 | 0 |
+| fx1s | evplanar | 5 | 0 |
+| fx1s | lean | 5 | 5 |
+| fx1s | planar | 5 | 2 |
+| fx1s | vgch2 | 5 | 5 |
+| fx2a | changelog | 5 | 5 |
+| fx2a | events | 5 | 5 |
+| fx2a | evplanar | 5 | 5 |
+| fx2a | planar | 5 | 5 |
+| fx2a | vgch2 | 5 | 5 |
+| fx2b | changelog | 5 | 5 |
+| fx2b | events | 5 | 5 |
+| fx2b | evplanar | 5 | 5 |
+| fx2b | planar | 5 | 5 |
+| fx2b | vgch2 | 5 | 5 |
+| fx2c | changelog | 5 | 5 |
+| fx2c | events | 5 | 5 |
+| fx2c | evplanar | 5 | 5 |
+| fx2c | planar | 5 | 5 |
+| fx2c | vgch2 | 5 | 5 |
+| fx2d | changelog | 5 | 5 |
+| fx2d | events | 5 | 5 |
+| fx2d | evplanar | 5 | 5 |
+| fx2d | planar | 5 | 5 |
+| fx2d | vgch2 | 5 | 5 |
+| fx2la | lean | 5 | 5 |
+| fx2la | vgch2 | 5 | 5 |
+| fx2lb | lean | 5 | 5 |
+| fx2lb | vgch2 | 5 | 5 |
+| fx2lc | lean | 5 | 5 |
+| fx2lc | vgch2 | 5 | 5 |
+| fx2ld | lean | 5 | 5 |
+| fx2ld | vgch2 | 5 | 5 |
+| fx2s | changelog | 5 | 5 |
+| fx2s | events | 5 | 5 |
+| fx2s | evplanar | 5 | 5 |
+| fx2s | planar | 5 | 5 |
+| fx2s | vgch2 | 5 | 5 |
 
 #### Raw, in processes of its own
 
@@ -801,72 +872,72 @@ Raw capture with the untraced model only, so that no other variant shares its pr
 
 | project | process | untraced ns per clock | raw |
 |---|---:|---:|---:|
-| nyancat | fx1ra | 247.3 | 15.3 [13.3, 17.4] |
-| nyancat | fx1rb | 250.4 | 14.6 [13.4, 15.9] |
-| nyancat | fx1rc | 281.5 | 12.8 [10.1, 15.2] |
-| nyancat | fx1rd | 317.1 | 19.9 [17.3, 22.4] |
-| rle_vga | fx1ra | 312.6 | 9.2 [6.3, 12.0] |
-| rle_vga | fx1rb | 306.2 | 6.6 [4.1, 9.1] |
-| rle_vga | fx1rc | 384.8 | 13.2 [9.6, 17.3] |
-| rle_vga | fx1rd | 331.6 | 10.0 [7.3, 12.7] |
+| nyancat | fx1ra | 247.3 | 15.3 [13.4, 17.3] |
+| nyancat | fx1rb | 250.4 | 14.6 [13.4, 15.8] |
+| nyancat | fx1rc | 281.5 | 12.8 [10.3, 15.4] |
+| nyancat | fx1rd | 317.1 | 19.9 [17.4, 22.5] |
+| rle_vga | fx1ra | 312.6 | 9.2 [6.5, 12.0] |
+| rle_vga | fx1rb | 306.2 | 6.6 [4.1, 9.0] |
+| rle_vga | fx1rc | 384.8 | 13.2 [9.5, 17.0] |
+| rle_vga | fx1rd | 331.6 | 10.0 [7.4, 12.8] |
 | colorbars | fx1ra | 250.4 | 13.1 [10.5, 15.8] |
-| colorbars | fx1rb | 218.8 | 11.2 [9.4, 13.1] |
-| colorbars | fx1rc | 240.5 | 10.8 [8.8, 12.8] |
-| colorbars | fx1rd | 256.7 | 11.5 [9.1, 14.0] |
-| atari2600 | fx1ra | 520.2 | 11.1 [7.7, 14.4] |
-| atari2600 | fx1rb | 508.6 | 19.4 [16.5, 22.4] |
-| atari2600 | fx1rc | 542.7 | 16.2 [13.0, 19.3] |
-| atari2600 | fx1rd | 546.8 | 10.4 [7.3, 13.6] |
+| colorbars | fx1rb | 218.8 | 11.2 [9.3, 13.2] |
+| colorbars | fx1rc | 240.5 | 10.8 [8.7, 12.8] |
+| colorbars | fx1rd | 256.7 | 11.5 [9.2, 13.8] |
+| atari2600 | fx1ra | 520.2 | 11.1 [7.6, 14.3] |
+| atari2600 | fx1rb | 508.6 | 19.4 [16.3, 22.5] |
+| atari2600 | fx1rc | 542.7 | 16.2 [12.9, 19.3] |
+| atari2600 | fx1rd | 546.8 | 10.4 [7.2, 13.8] |
 | vgadonut | fx1ra | 287.8 | 8.9 [6.8, 10.9] |
-| vgadonut | fx1rb | 294.4 | 9.6 [7.6, 11.9] |
-| vgadonut | fx1rc | 339.6 | 9.4 [6.2, 12.7] |
-| vgadonut | fx1rd | 308.4 | 11.6 [9.5, 13.7] |
+| vgadonut | fx1rb | 294.4 | 9.6 [7.4, 11.7] |
+| vgadonut | fx1rc | 339.6 | 9.4 [6.4, 12.6] |
+| vgadonut | fx1rd | 308.4 | 11.6 [9.4, 13.7] |
 
-#### Unpinned, in a systemd scope with CPUQuota=200%, as a job runs
+#### Fix round 2, unpinned, in a systemd scope with CPUQuota=200%
 
-One process a project, the main set's variants, not pinned: the scheduler places its threads, as for a job. 1 processes (fx1s), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
+One process a project, fix round 2's variants, not pinned, every file read back. 1 processes (fx2s), each with the variants in another order. ns per clock over the untraced model, paired by chunk.
 
 ##### Across the processes: ns per clock, median of the processes' estimates [lowest, highest]
 
-| project | vgch2 | lean | events | evplanar | planar | changelog |
-|---|---:|---:|---:|---:|---:|---:|
-| nyancat | 31.7 [31.7, 31.7] | 28.5 [28.5, 28.5] | 13.6 [13.6, 13.6] | 13.0 [13.0, 13.0] | 22.1 [22.1, 22.1] | 17.3 [17.3, 17.3] |
-| rle_vga | 59.0 [59.0, 59.0] | 49.6 [49.6, 49.6] | 20.6 [20.6, 20.6] | 22.1 [22.1, 22.1] | 28.6 [28.6, 28.6] | 16.2 [16.2, 16.2] |
-| colorbars | 2.5 [2.5, 2.5] | 4.5 [4.5, 4.5] | 14.8 [14.8, 14.8] | 3.3 [3.3, 3.3] | 2.2 [2.2, 2.2] | 3.5 [3.5, 3.5] |
-| atari2600 | 34.0 [34.0, 34.0] | 33.6 [33.6, 33.6] | 16.9 [16.9, 16.9] | 17.1 [17.1, 17.1] | 23.9 [23.9, 23.9] | 13.7 [13.7, 13.7] |
-| vgadonut | 0.6 [0.6, 0.6] | 2.3 [2.3, 2.3] | 0.6 [0.6, 0.6] | 0.8 [0.8, 0.8] | -0.5 [-0.5, -0.5] | -0.5 [-0.5, -0.5] |
+| project | vgch2 | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|
+| nyancat | 31.1 [31.1, 31.1] | 14.5 [14.5, 14.5] | 24.7 [24.7, 24.7] | 24.6 [24.6, 24.6] | 13.7 [13.7, 13.7] |
+| rle_vga | 55.5 [55.5, 55.5] | 20.0 [20.0, 20.0] | 20.2 [20.2, 20.2] | 27.7 [27.7, 27.7] | 15.4 [15.4, 15.4] |
+| colorbars | 5.6 [5.6, 5.6] | 5.6 [5.6, 5.6] | 6.6 [6.6, 6.6] | 4.2 [4.2, 4.2] | 7.5 [7.5, 7.5] |
+| atari2600 | 35.1 [35.1, 35.1] | 15.7 [15.7, 15.7] | 16.0 [16.0, 16.0] | 23.5 [23.5, 23.5] | 16.1 [16.1, 16.1] |
+| vgadonut | -0.3 [-0.3, -0.3] | 1.9 [1.9, 1.9] | 1.0 [1.0, 1.0] | 0.4 [0.4, 0.4] | -0.9 [-0.9, -0.9] |
 
 ##### The same as % of the untraced model's CPU: median [lowest, highest]; the budget is 5%
 
-| project | vgch2 | lean | events | evplanar | planar | changelog |
-|---|---:|---:|---:|---:|---:|---:|
-| nyancat | 15.3 [15.3, 15.3] | 13.7 [13.7, 13.7] | 6.5 [6.5, 6.5] | 6.3 [6.3, 6.3] | 10.6 [10.6, 10.6] | 8.4 [8.4, 8.4] |
-| rle_vga | 22.6 [22.6, 22.6] | 19.0 [19.0, 19.0] | 7.9 [7.9, 7.9] | 8.5 [8.5, 8.5] | 11.0 [11.0, 11.0] | 6.2 [6.2, 6.2] |
-| colorbars | 1.4 [1.4, 1.4] | 2.5 [2.5, 2.5] | 8.0 [8.0, 8.0] | 1.8 [1.8, 1.8] | 1.2 [1.2, 1.2] | 1.9 [1.9, 1.9] |
-| atari2600 | 8.1 [8.1, 8.1] | 7.9 [7.9, 7.9] | 4.0 [4.0, 4.0] | 4.0 [4.0, 4.0] | 5.7 [5.7, 5.7] | 3.3 [3.3, 3.3] |
-| vgadonut | 0.3 [0.3, 0.3] | 1.0 [1.0, 1.0] | 0.2 [0.2, 0.2] | 0.3 [0.3, 0.3] | -0.2 [-0.2, -0.2] | -0.2 [-0.2, -0.2] |
+| project | vgch2 | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|
+| nyancat | 15.6 [15.6, 15.6] | 7.3 [7.3, 7.3] | 12.4 [12.4, 12.4] | 12.4 [12.4, 12.4] | 6.9 [6.9, 6.9] |
+| rle_vga | 20.6 [20.6, 20.6] | 7.4 [7.4, 7.4] | 7.5 [7.5, 7.5] | 10.3 [10.3, 10.3] | 5.7 [5.7, 5.7] |
+| colorbars | 3.0 [3.0, 3.0] | 3.0 [3.0, 3.0] | 3.5 [3.5, 3.5] | 2.2 [2.2, 2.2] | 3.9 [3.9, 3.9] |
+| atari2600 | 8.7 [8.7, 8.7] | 3.9 [3.9, 3.9] | 4.0 [4.0, 4.0] | 5.8 [5.8, 5.8] | 4.0 [4.0, 4.0] |
+| vgadonut | -0.1 [-0.1, -0.1] | 0.8 [0.8, 0.8] | 0.4 [0.4, 0.4] | 0.1 [0.1, 0.1] | -0.4 [-0.4, -0.4] |
 
 ##### Each process: estimate [95% bootstrap interval over its chunks], ns per clock
 
-| project | process | untraced ns per clock | vgch2 | lean | events | evplanar | planar | changelog |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| nyancat | fx1s | 207.6 | 31.7 [29.9, 33.5] | 28.5 [26.9, 30.3] | 13.6 [11.4, 15.7] | 13.0 [11.0, 14.9] | 22.1 [19.9, 24.0] | 17.3 [15.3, 19.2] |
-| rle_vga | fx1s | 261.2 | 59.0 [57.1, 61.1] | 49.6 [47.6, 51.6] | 20.6 [18.2, 23.0] | 22.1 [20.0, 24.2] | 28.6 [26.4, 30.9] | 16.2 [13.9, 18.3] |
-| colorbars | fx1s | 184.2 | 2.5 [1.3, 3.8] | 4.5 [3.0, 6.0] | 14.8 [13.1, 16.5] | 3.3 [1.7, 5.0] | 2.2 [0.6, 3.9] | 3.5 [1.9, 5.1] |
-| atari2600 | fx1s | 422.1 | 34.0 [31.9, 36.4] | 33.6 [31.2, 35.9] | 16.9 [14.1, 19.9] | 17.1 [14.5, 19.9] | 23.9 [21.1, 26.7] | 13.7 [11.2, 16.4] |
-| vgadonut | fx1s | 239.8 | 0.6 [-1.2, 2.5] | 2.3 [0.4, 4.2] | 0.6 [-1.6, 2.9] | 0.8 [-1.3, 2.9] | -0.5 [-2.7, 1.7] | -0.5 [-2.7, 1.7] |
+| project | process | untraced ns per clock | vgch2 | events | evplanar | planar | changelog |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | fx2s | 199.0 | 31.1 [29.4, 33.0] | 14.5 [12.6, 16.4] | 24.7 [23.2, 26.2] | 24.6 [22.4, 26.7] | 13.7 [11.8, 15.7] |
+| rle_vga | fx2s | 268.8 | 55.5 [53.3, 57.7] | 20.0 [17.6, 22.3] | 20.2 [18.3, 22.2] | 27.7 [25.3, 30.4] | 15.4 [12.6, 18.1] |
+| colorbars | fx2s | 189.6 | 5.6 [4.1, 7.3] | 5.6 [3.9, 7.5] | 6.6 [5.1, 8.1] | 4.2 [2.3, 6.0] | 7.5 [5.7, 9.2] |
+| atari2600 | fx2s | 403.6 | 35.1 [32.8, 37.4] | 15.7 [13.2, 18.1] | 16.0 [13.8, 18.3] | 23.5 [21.0, 26.1] | 16.1 [13.3, 18.6] |
+| vgadonut | fx2s | 244.4 | -0.3 [-1.7, 1.3] | 1.9 [0.0, 3.7] | 1.0 [-0.4, 2.5] | 0.4 [-1.6, 2.5] | -0.9 [-2.9, 1.1] |
 
 #### Stalls: wall time the simulation thread spent not running, over the untraced model's
 
-Per process, the sum over chunks of (wall - thread CPU) for the variant minus the same for the untraced model, ns per clock: median of the processes [lowest, highest]. A stall (the simulation thread waiting for its writer's thread) shows here and nowhere in the CPU figures. The next table counts the waits themselves.
+Per process, the sum over chunks of (wall - thread CPU) for the variant minus the same for the untraced model, ns per clock: median of the processes [lowest, highest]. A stall (the simulation thread waiting for its writer's thread) shows here and nowhere in the CPU figures. The next table counts the waits themselves. This table and the next four take the background plans from fix round 2's set (fx2a-fx2d), vgch2 and lean from fix round 2's lean set (fx2la-fx2ld).
 
 | project | vgch2 | lean | events | evplanar | planar | changelog |
 |---|---:|---:|---:|---:|---:|---:|
-| nyancat | 2.00 [0.26, 2.98] | 1.47 [-0.07, 3.31] | 0.67 [-1.27, 3.19] | 2.16 [-2.19, 3.02] | -0.93 [-2.56, -0.39] | 0.88 [-0.92, 2.13] |
-| rle_vga | 2.84 [0.75, 3.92] | 1.94 [-0.07, 5.98] | 0.95 [-1.88, 5.82] | 1.33 [-1.52, 4.38] | -0.11 [-0.37, 4.34] | 0.76 [-0.60, 2.07] |
-| colorbars | 0.12 [-0.32, 0.21] | 0.11 [-0.26, 0.20] | 0.11 [-0.14, 0.65] | 0.11 [-0.19, 0.19] | 0.15 [-0.00, 0.32] | 0.17 [0.06, 0.35] |
-| atari2600 | 2.94 [0.87, 4.36] | 3.04 [1.09, 5.85] | 2.61 [-0.55, 3.87] | 1.97 [-2.07, 3.41] | -0.83 [-1.17, 0.45] | 1.75 [0.18, 3.34] |
-| vgadonut | 0.04 [-0.62, 0.43] | -0.01 [-0.66, 0.30] | 0.13 [-0.12, 0.52] | 0.01 [-0.53, 0.53] | 0.06 [-0.22, 0.44] | 0.04 [-0.63, 0.28] |
+| nyancat | 0.87 [0.78, 1.45] | 1.13 [0.02, 1.21] | 0.57 [-1.64, 1.94] | -0.25 [-2.32, 2.28] | -0.26 [-1.08, 0.05] | 0.07 [-1.89, 1.56] |
+| rle_vga | 1.62 [0.45, 16.34] | 3.84 [0.82, 9.56] | 1.38 [-2.06, 4.46] | 0.65 [-0.96, 4.16] | -0.37 [-1.31, 3.85] | 1.03 [-0.77, 2.03] |
+| colorbars | 0.01 [-0.10, 0.15] | -0.04 [-0.05, 0.02] | 0.28 [0.08, 0.63] | 0.22 [-0.29, 0.62] | 0.04 [-0.19, 0.17] | 0.11 [-0.36, 0.46] |
+| atari2600 | 1.01 [0.01, 28.87] | 0.27 [0.09, 1.27] | 2.28 [-1.31, 2.73] | 1.01 [-0.72, 2.49] | -0.11 [-1.50, 3.00] | 1.20 [0.29, 2.80] |
+| vgadonut | 0.05 [0.02, 0.11] | 0.06 [-0.08, 0.16] | -0.00 [-0.26, 0.27] | 0.09 [-0.28, 0.58] | -0.01 [-0.26, 0.31] | 0.05 [-0.16, 0.24] |
 
 #### Hand-overs that waited: the study writers' own count, summed over the processes
 
@@ -884,20 +955,20 @@ A hand-over waits when the writer's thread still holds the other buffer. vgacap'
 
 | project | vgch2 | lean | events | evplanar | planar | changelog |
 |---|---:|---:|---:|---:|---:|---:|
-| nyancat | 0.036 | 0.036 | 0.007 | 0.012 | 0.024 | 0.040 |
-| rle_vga | 0.008 | 0.010 | 0.005 | 0.014 | 0.009 | 0.059 |
-| colorbars | 0.002 | 0.002 | 0.001 | 0.005 | 0.001 | 0.007 |
-| atari2600 | 0.023 | 0.024 | 0.022 | 0.054 | 0.014 | 0.021 |
-| vgadonut | 0.002 | 0.002 | 0.002 | 0.003 | 0.002 | 0.005 |
+| nyancat | 0.046 | 0.053 | 0.007 | 0.021 | 0.035 | 0.058 |
+| rle_vga | 0.010 | 0.009 | 0.004 | 0.009 | 0.009 | 0.057 |
+| colorbars | 0.003 | 0.003 | 0.001 | 0.009 | 0.001 | 0.007 |
+| atari2600 | 0.031 | 0.027 | 0.028 | 0.068 | 0.017 | 0.028 |
+| vgadonut | 0.003 | 0.003 | 0.001 | 0.002 | 0.001 | 0.003 |
 
 #### Background threads in the loop: CPU s over the 262 M clocks, median of the processes
 
 | project | events | evplanar | planar | changelog |
 |---|---:|---:|---:|---:|
-| nyancat | 1.10 | 3.18 | 0.67 | 3.57 |
-| rle_vga | 0.72 | 6.04 | 0.51 | 5.32 |
-| colorbars | 0.02 | 0.13 | 0.02 | 0.16 |
-| atari2600 | 1.34 | 3.32 | 0.36 | 3.96 |
+| nyancat | 1.02 | 2.65 | 0.62 | 3.05 |
+| rle_vga | 0.59 | 5.13 | 0.41 | 4.94 |
+| colorbars | 0.01 | 0.11 | 0.02 | 0.14 |
+| atari2600 | 1.19 | 3.02 | 0.31 | 3.38 |
 | vgadonut | 0.02 | 0.06 | 0.02 | 0.07 |
 
 #### The loop's window against the whole trace: events bytes per clock (zstd 1)
@@ -911,6 +982,32 @@ The loop runs the first 262 M clocks from reset. Its events stream's compressed 
 | colorbars | 0.000137 | 0.000134 | 1.03 |
 | atari2600 | 0.155 | 0.151 | 1.02 |
 | vgadonut | 0.00207 | 0.0153 | 0.14 |
+
+#### Memory: each plan's peak resident memory over the untraced model's, MiB
+
+`sim/run_mem.py`: bench_tick with the untraced model alone, and with the untraced model and one plan, 600 chunks (39 M clocks: every plan hands over both buffer sets more than once); peak RSS (getrusage) of the second run minus the first's. One process each, pinned to one CPU. A job holds one plan; at 22 jobs a host multiply by 22.
+
+| project | untraced model alone | vgch2 | lean | events | evplanar | planar | changelog | raw |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 11 | 26 | 26 | 26 | 38 | 38 | 128 | 82 |
+| rle_vga | 19 | 49 | 49 | 49 | 60 | 49 | 155 | 105 |
+| atari2600 | 19 | 52 | 51 | 51 | 62 | 64 | 152 | 106 |
+
+#### A full-pin export to FST: vgch2's file against planar's, median of the reps
+
+`run_export.py`: the seven ports to FST (LZ4, libfst's parallel mode), as vgacap-export --no-clk writes them, by the study's export (`fsbench read --patterns export`) from vgch2's file with vgacap's reader and from planar's with the study's; and vgacap-export itself on vgch2's file, which also writes the decoded signals: a calibration, not a pair. Two CPUs a job, the reps interleaved. Process s counts libfst's compressor thread. Read back: the first rep's FST hashes as its source does.
+
+| project | source | reps | process CPU s | wall s | reading thread s | max RSS MiB | FST MB | read back |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | vgch2 | 3 | 447.9 | 287.1 | 202.1 | 704 | 211.7 | same |
+| nyancat | planar | 3 | 448.5 | 282.7 | 211.0 | 369 | 211.7 | same |
+| nyancat | vgacap-export | 3 | 541.0 | 355.2 | - | 686 | 320.6 | - |
+| rle_vga | vgch2 | 3 | 516.2 | 430.0 | 374.9 | 321 | 39.5 | same |
+| rle_vga | planar | 3 | 579.0 | 500.1 | 443.6 | 304 | 39.5 | same |
+| rle_vga | vgacap-export | 3 | 468.9 | 407.1 | - | 321 | 39.5 | - |
+| atari2600 | vgch2 | 3 | 757.5 | 626.3 | 220.6 | 867 | 317.5 | same |
+| atari2600 | planar | 3 | 766.4 | 611.4 | 241.4 | 315 | 317.5 | same |
+| atari2600 | vgacap-export | 3 | 791.3 | 641.8 | - | 864 | 475.5 | - |
 
 ### Simulation check, side by side: whole testbench runs (too noisy, not used)
 
@@ -1057,26 +1154,26 @@ The loop's figure is its background thread's CPU over its 262 M clocks, beside a
 
 | project | candidate | loop, scaled | first round | encode2 lowest | encode2 median | encode2 highest |
 |---|---:|---:|---:|---:|---:|---:|
-| nyancat | events | 6.33 | 7.55 | 5.97 | 6.27 | 6.53 |
-| nyancat | evplanar | 18.33 | 15.32 | 14.54 | 15.99 | 16.05 |
-| nyancat | planar | 3.86 | 3.83 | 4.06 | 4.07 | 4.18 |
-| nyancat | changelog | 20.58 | 18.26 | 20.92 | 22.52 | 23.13 |
-| rle_vga | events | 3.94 | 4.43 | 6.34 | 6.43 | 6.62 |
-| rle_vga | evplanar | 33.20 | 24.14 | 28.06 | 30.06 | 31.97 |
-| rle_vga | planar | 2.78 | 2.39 | 4.38 | 4.41 | 4.64 |
-| rle_vga | changelog | 29.27 | 25.23 | 27.50 | 29.56 | 31.68 |
-| colorbars | events | 0.10 | 0.09 | 0.12 | 0.13 | 0.13 |
-| colorbars | evplanar | 0.72 | 0.89 | 0.54 | 0.55 | 0.56 |
-| colorbars | planar | 0.10 | 0.08 | 0.10 | 0.11 | 0.13 |
-| colorbars | changelog | 0.90 | 0.72 | 0.71 | 0.78 | 0.78 |
-| atari2600 | events | 7.71 | 7.90 | 5.90 | 7.74 | 9.51 |
-| atari2600 | evplanar | 19.15 | 17.89 | 14.22 | 16.74 | 17.72 |
-| atari2600 | planar | 2.09 | 1.82 | 1.87 | 2.86 | 3.16 |
-| atari2600 | changelog | 22.86 | 21.01 | 19.27 | 23.07 | 23.48 |
-| vgadonut | events | 0.26 | 2.04 | 1.95 | 1.97 | 2.47 |
-| vgadonut | evplanar | 0.69 | 6.45 | 5.44 | 5.51 | 5.85 |
+| nyancat | events | 5.86 | 7.55 | 5.97 | 6.27 | 6.53 |
+| nyancat | evplanar | 15.26 | 15.32 | 14.54 | 15.99 | 16.05 |
+| nyancat | planar | 3.59 | 3.83 | 4.06 | 4.07 | 4.18 |
+| nyancat | changelog | 17.63 | 18.26 | 20.92 | 22.52 | 23.13 |
+| rle_vga | events | 3.23 | 4.43 | 6.34 | 6.43 | 6.62 |
+| rle_vga | evplanar | 28.20 | 24.14 | 28.06 | 30.06 | 31.97 |
+| rle_vga | planar | 2.25 | 2.39 | 4.38 | 4.41 | 4.64 |
+| rle_vga | changelog | 27.16 | 25.23 | 27.50 | 29.56 | 31.68 |
+| colorbars | events | 0.08 | 0.09 | 0.12 | 0.13 | 0.13 |
+| colorbars | evplanar | 0.65 | 0.89 | 0.54 | 0.55 | 0.56 |
+| colorbars | planar | 0.09 | 0.08 | 0.10 | 0.11 | 0.13 |
+| colorbars | changelog | 0.80 | 0.72 | 0.71 | 0.78 | 0.78 |
+| atari2600 | events | 6.87 | 7.90 | 5.90 | 7.74 | 9.51 |
+| atari2600 | evplanar | 17.40 | 17.89 | 14.22 | 16.74 | 17.72 |
+| atari2600 | planar | 1.81 | 1.82 | 1.87 | 2.86 | 3.16 |
+| atari2600 | changelog | 19.50 | 21.01 | 19.27 | 23.07 | 23.48 |
+| vgadonut | events | 0.25 | 2.04 | 1.95 | 1.97 | 2.47 |
+| vgadonut | evplanar | 0.68 | 6.45 | 5.44 | 5.51 | 5.85 |
 | vgadonut | planar | 0.21 | 1.28 | 1.44 | 1.46 | 1.58 |
-| vgadonut | changelog | 0.76 | 7.26 | 6.99 | 7.76 | 7.99 |
+| vgadonut | changelog | 0.73 | 7.26 | 6.99 | 7.76 | 7.99 |
 
 #### Re-encoding a published trace to planar: encode2's planar pass, wall s, median of 3
 
@@ -1560,33 +1657,81 @@ Background CPU plus `tracetool info`, `vgacap-sample`'s pass and `tracetool uoha
 | metaballs | 0.3 | 0.5 | 140.2 | 0.3 | 0.3 | 0.4 | 0.4 |
 | tomkeddie_a | 0.4 | 0.6 | 73.6 | 0.5 | 0.5 | 0.5 | 0.5 |
 
+#### With a header-only tracetool info (no scan; the job reads only blocks, clocks and open.slice_*), background at its median: the trace's share of R2, %
+
+| project | vgch2 (zstd 1) | events (zstd 1) | raw xor6 (zstd 1) | planar (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw to planar (zstd 1) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 10.1 | 9.4 | 29.0 | 3.5 | 6.3 | 7.8 | 11.3 |
+| rle_vga | 11.1 | 14.2 | 19.1 | 1.0 | 6.6 | 6.5 | 12.4 |
+| dvd_screensaver | 0.1 | 0.1 | 21.6 | 0.0 | 0.1 | 0.1 | 5.2 |
+| colorbars | 0.2 | 0.3 | 19.5 | 0.1 | 0.2 | 0.3 | 5.5 |
+| mandelbrot | 0.1 | 0.1 | 15.1 | 0.0 | 0.1 | 0.0 | 3.9 |
+| atari2600 | 5.9 | 5.7 | 16.4 | 0.8 | 2.7 | 3.6 | 5.5 |
+| vgadonut | 2.0 | 1.6 | 21.0 | 0.8 | 1.3 | 1.6 | 6.1 |
+| cfib_demo | 0.3 | 0.4 | 24.1 | 0.1 | 0.2 | 0.3 | 5.9 |
+| nyan | 0.7 | 0.6 | 21.9 | 0.1 | 0.2 | 0.2 | 5.2 |
+| metaballs | 0.0 | 0.0 | 20.6 | 0.0 | 0.0 | 0.0 | 5.3 |
+| tomkeddie_a | 0.0 | 0.1 | 21.0 | 0.0 | 0.1 | 0.1 | 5.1 |
+
+#### With a header-only tracetool info (no scan; the job reads only blocks, clocks and open.slice_*), background at its lowest: the trace's share of R2, %
+
+| project | vgch2 (zstd 1) | events (zstd 1) | raw xor6 (zstd 1) | planar (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw to planar (zstd 1) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 9.5 | 9.3 | 28.8 | 3.5 | 5.9 | 6.8 | 10.8 |
+| rle_vga | 9.1 | 13.8 | 18.8 | 0.5 | 5.3 | 5.6 | 10.4 |
+| dvd_screensaver | 0.0 | 0.1 | 21.5 | 0.0 | 0.0 | 0.1 | 4.0 |
+| colorbars | 0.2 | 0.3 | 17.6 | 0.1 | 0.2 | 0.2 | 3.7 |
+| mandelbrot | 0.1 | 0.0 | 13.8 | 0.0 | 0.0 | 0.0 | 2.4 |
+| atari2600 | 5.3 | 5.5 | 13.8 | 0.7 | 2.4 | 3.1 | 4.0 |
+| vgadonut | 1.9 | 1.6 | 19.3 | 0.8 | 1.3 | 1.5 | 4.1 |
+| cfib_demo | 0.3 | 0.4 | 21.6 | 0.1 | 0.2 | 0.3 | 3.8 |
+| nyan | 0.7 | 0.5 | 21.9 | 0.1 | 0.2 | 0.2 | 4.9 |
+| metaballs | 0.0 | 0.0 | 20.5 | 0.0 | 0.0 | 0.0 | 4.9 |
+| tomkeddie_a | 0.0 | 0.1 | 20.5 | 0.0 | 0.1 | 0.1 | 3.3 |
+
+#### With a header-only tracetool info (no scan; the job reads only blocks, clocks and open.slice_*): the reads alone, s for the whole trace
+
+| project | vgch2 (zstd 1) | events (zstd 1) | raw xor6 (zstd 1) | planar (zstd 1) | events to planar (zstd 1) | changelog to planar (zstd 1) | raw to planar (zstd 1) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| nyancat | 19.0 | 31.7 | 64.2 | 10.3 | 9.6 | 9.2 | 9.2 |
+| rle_vga | 34.4 | 58.1 | 52.4 | 0.0 | 0.0 | 0.0 | 0.0 |
+| dvd_screensaver | 0.1 | 0.2 | 39.9 | 0.1 | 0.1 | 0.1 | 0.1 |
+| colorbars | 0.5 | 1.1 | 35.9 | 0.2 | 0.2 | 0.2 | 0.2 |
+| mandelbrot | 0.6 | 0.7 | 139.0 | 0.3 | 0.4 | 0.3 | 0.4 |
+| atari2600 | 19.7 | 34.2 | 66.8 | 3.2 | 3.4 | 3.2 | 3.3 |
+| vgadonut | 7.3 | 10.5 | 82.5 | 4.5 | 4.6 | 4.6 | 4.6 |
+| cfib_demo | 1.0 | 1.8 | 73.7 | 0.6 | 0.6 | 0.6 | 0.6 |
+| nyan | 1.0 | 1.3 | 38.2 | 0.1 | 0.1 | 0.1 | 0.2 |
+| metaballs | 0.1 | 0.2 | 70.6 | 0.1 | 0.1 | 0.1 | 0.1 |
+| tomkeddie_a | 0.1 | 0.2 | 39.5 | 0.1 | 0.1 | 0.1 | 0.1 |
+
 ### Every plan against R1 and R2 together
 
-R1: the simulation thread's cost in the loop (fix round 1, median of the processes), % of the untraced model; the budget is 5%. R2: the trace's share, with tracetool info counting planar streams on their own (the lower figure), background at encode2's median; this study's bar for the trace is 1%, the whole post-simulation budget 5%. Lean writes vgch2's file, so its R2 is vgch2's; raw is from its own processes.
+R1: the simulation thread's cost in the loop (median of the processes; vgch2 and lean from fix round 2's lean set, the background plans from its background set, raw from its own processes), % of the untraced model; the spec's budget is 5%. R2: the trace's share, background at encode2's median, with tracetool info as a scan that counts planar streams on their own, and with a header-only info (no scan). The spec's R2 budget is 5% for everything after the simulation; the 1% bar for the trace's own share is this study's choice, not the spec's. Lean writes vgch2's file, so its R2 is vgch2's.
 
-| plan | nyancat R1 (%) | nyancat R2 (%) | rle_vga R1 (%) | rle_vga R2 (%) | colorbars R1 (%) | colorbars R2 (%) | atari2600 R1 (%) | atari2600 R2 (%) | vgadonut R1 (%) | vgadonut R2 (%) |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| vgch2 (current) | 15.4 | 17.6 | 20.5 | 25.0 | 2.7 | 0.5 | 7.9 | 11.1 | 0.4 | 3.3 |
-| lean (vgch2's file) | 14.1 | 17.6 | 18.5 | 25.0 | 3.2 | 0.5 | 7.4 | 11.1 | 0.6 | 3.3 |
-| events, stored as events | 6.3 | 19.0 | 7.9 | 32.6 | 1.8 | 0.8 | 3.6 | 12.6 | -0.1 | 3.6 |
-| events, stored as planar | 7.3 | 7.4 | 8.3 | 8.2 | 1.7 | 0.2 | 3.8 | 3.3 | -0.1 | 1.5 |
-| changelog, stored as planar | 8.0 | 8.8 | 6.1 | 7.9 | 2.2 | 0.3 | 4.4 | 4.1 | -0.1 | 1.8 |
-| planar written on the simulation thread | 10.5 | 4.5 | 11.5 | 2.5 | 2.4 | 0.1 | 5.6 | 1.3 | -0.6 | 1.0 |
-| raw, stored as planar | 6.0 | 12.4 | 3.0 | 13.7 | 4.8 | 5.6 | 2.6 | 6.0 | 3.2 | 6.3 |
+| plan | nyancat R1 (%) | nyancat R2 (%) | nyancat R2 no scan (%) | rle_vga R1 (%) | rle_vga R2 (%) | rle_vga R2 no scan (%) | colorbars R1 (%) | colorbars R2 (%) | colorbars R2 no scan (%) | atari2600 R1 (%) | atari2600 R2 (%) | atari2600 R2 no scan (%) | vgadonut R1 (%) | vgadonut R2 (%) | vgadonut R2 no scan (%) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| vgch2 (current) | 14.0 | 17.6 | 10.1 | 19.1 | 25.0 | 11.1 | -0.2 | 0.5 | 0.2 | 7.7 | 11.1 | 5.9 | 0.9 | 3.3 | 2.0 |
+| lean (vgch2's file) | 14.1 | 17.6 | 10.1 | 17.5 | 25.0 | 11.1 | -0.8 | 0.5 | 0.2 | 7.7 | 11.1 | 5.9 | 1.1 | 3.3 | 2.0 |
+| events, stored as events | 8.3 | 19.0 | 9.4 | 7.5 | 32.6 | 14.2 | 3.6 | 0.8 | 0.3 | 3.9 | 12.6 | 5.7 | 0.6 | 3.6 | 1.6 |
+| events, stored as planar | 8.8 | 7.4 | 6.3 | 8.1 | 8.2 | 6.6 | 3.3 | 0.2 | 0.2 | 4.1 | 3.3 | 2.7 | 0.5 | 1.5 | 1.3 |
+| changelog, stored as planar | 7.8 | 8.8 | 7.8 | 5.4 | 7.9 | 6.5 | 2.7 | 0.3 | 0.3 | 3.1 | 4.1 | 3.6 | 0.7 | 1.8 | 1.6 |
+| planar written on the simulation thread | 13.0 | 4.5 | 3.5 | 10.3 | 2.5 | 1.0 | 2.8 | 0.1 | 0.1 | 6.0 | 1.3 | 0.8 | 0.5 | 1.0 | 0.8 |
+| raw, stored as planar | 6.0 | 12.4 | 11.3 | 3.0 | 13.7 | 12.4 | 4.8 | 5.6 | 5.5 | 2.6 | 6.0 | 5.5 | 3.2 | 6.3 | 6.1 |
 
 #### Pass or fail, per plan
 
-Busy: nyancat, rle_vga, atari2600. Quiet: colorbars, vgadonut. R2 is checked at the background figure most in its favour (the lowest measured) and at encode2's median; tracetool info counts planar streams on their own.
+Busy: nyancat, rle_vga, atari2600. Quiet: colorbars, vgadonut. R2 is checked at the background figure most in its favour (the lowest measured) and at encode2's median; tracetool info counts planar streams on their own, or (no scan) is header-only. The 1% bar is this study's own, not the spec's.
 
-| plan | R1 at most 5%, busy | R1 at most 5%, quiet | R2 at most 1%, busy, lowest | R2 at most 1%, busy, median | R2 at most 5%, busy, lowest | R2 at most 5%, busy, median | R1 and R2 (1%, lowest), busy |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| vgch2 (current) | no | yes | no | no | no | no | no |
-| lean (vgch2's file) | no | yes | no | no | no | no | no |
-| events, stored as events | no | yes | no | no | no | no | no |
-| events, stored as planar | no | yes | no | no | no | no | no |
-| changelog, stored as planar | no | yes | no | no | no | no | no |
-| planar written on the simulation thread | no | yes | no | no | yes | yes | no |
-| raw, stored as planar | no | yes | no | no | no | no | no |
+| plan | R1 at most 5%, busy | R1 at most 5%, quiet | R2 at most 1%, busy, lowest | R2 at most 1%, busy, median | R2 at most 5%, busy, lowest | R2 at most 5%, busy, median | R2 no scan at most 1%, busy | R2 no scan at most 5%, busy | R1 and R2 (1%, lowest), busy | R1 and R2 (5%, no scan), busy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| vgch2 (current) | no | yes | no | no | no | no | no | no | no | no |
+| lean (vgch2's file) | no | yes | no | no | no | no | no | no | no | no |
+| events, stored as events | no | yes | no | no | no | no | no | no | no | no |
+| events, stored as planar | no | yes | no | no | no | no | no | no | no | no |
+| changelog, stored as planar | no | yes | no | no | no | no | no | no | no | no |
+| planar written on the simulation thread | no | yes | no | no | yes | yes | no | yes | no | no |
+| raw, stored as planar | no | yes | no | no | no | no | no | no | no | no |
 
 ### Truncation and a crash mid-write
 
@@ -1754,6 +1899,11 @@ From `load.log` (`/proc/loadavg` and `vmstat` every 30 s while a stage or a loop
 | loop fx1ra+fx1rb | 09:50 | 09:53 | 11 | 1.27 | 1.80 | 2.09 | 24 | 43 |
 | loop fx1rc+fx1rd | 09:55 | 09:59 | 16 | 1.46 | 2.25 | 2.43 | 10 | 37 |
 | loop fx1s | 10:01 | 10:14 | 50 | 1.22 | 1.81 | 2.07 | 11 | 48 |
+| loop fx2a+fx2b | 02:07 | 02:19 | 24 | 0.99 | 1.42 | 2.30 | 3 | 33 |
+| loop fx2c+fx2d | 02:21 | 02:33 | 23 | 1.01 | 1.39 | 1.97 | 12 | 38 |
+| loop fx2s | 02:36 | 02:46 | 20 | 0.72 | 1.28 | 1.85 | 18 | 48 |
+| loop fx2la+fx2lb | 10:18 | 10:22 | 8 | 0.45 | 0.78 | 1.34 | 45 | 63 |
+| loop fx2lc+fx2ld | 10:24 | 10:28 | 8 | 0.50 | 1.07 | 1.25 | 43 | 66 |
 
 ### Implementation size
 
@@ -1762,8 +1912,8 @@ From `load.log` (`/proc/loadavg` and `vmstat` every 30 s while a stage or a loop
 | vgch2 writer (vgacap src/trace/trace_write.c, blocks.c, trace.h; stream writer) | 633 |
 | vgch2 reader (vgacap src/trace/trace_read.c; stream reader) | 1082 |
 | the study writers: planar, events, runs, changelog, raw (study src/w_mine.c, w_mine.h) | 553 |
-| study container writer + transforms (study src/bg.c, codec.c) | 657 |
-| the study readers: planar, events, raw, and vgch2 and FST drivers (study src/rd.c) | 619 |
+| study container writer + transforms (study src/bg.c, codec.c) | 667 |
+| the study readers: planar, events, raw, and vgch2 and FST drivers (study src/rd.c) | 726 |
 
 Spec text, words: VGCH v2 trace 4056 (docs/trace-format.md + src/stream/reference-stream-format.md).
 
@@ -1787,10 +1937,10 @@ Each file's non-comment lines, whole: the code to review, not the lines that cha
 | vgacap | `python/tests/test_stream_v2.py` | 304 |
 | vgacap | `python/tests/test_roundtrip_c.py` | 76 |
 | tinytapeout-vga-videos | `ttvga/harness/tb.cpp` | 699 |
-| tinytapeout-vga-videos | `ttvga/harness/tracetool.c` | 333 |
+| tinytapeout-vga-videos | `ttvga/harness/tracetool.c` | 306 |
 | tinytapeout-vga-videos | `tests/sim/vgch.py` | 50 |
 | tinytapeout-vga-videos | `scripts/export_tbv1_vectors.py` | 104 |
-| all | 17 files | 6,660 |
+| all | 17 files | 6,633 |
 
 <!-- analyze.py tables: end -->
 
@@ -1830,7 +1980,7 @@ What each costs and buys:
   - Buys: runs at all. Without it no two samples are equal: FST-with-clk, which records `clk`, costs 230-310 ns a clock even on quiet designs (replay).
 - **Run lengths unbounded** (LEB128 up to 64 bits): 1-10 bytes a run, for R3 (a run longer than 2^32 samples).
 - **vgacap's push API** (`push2` as two pushes, each through `vgacap_trace_slow` and `slow_rare`).
-  - The lean writer replaces it with one call a changed clock and writes the same file. In the loop it saves 6-10% on the busy designs (lean over vgch2: 0.90, 0.90, 0.94). On the two quiet ones the ratio (1.28, 1.10) is a per-variant offset of about 1-2 ns a clock, within the noise.
+  - The lean writer replaces it with one call a changed clock and writes the same file. In the loop (lean over vgch2: 0.99 [0.93, 1.50] on nyancat, 0.91 [0.88, 0.92] on rle_vga and 0.97 [0.95, 1.03] on atari2600) it saves 9% on rle_vga; on nyancat and atari2600 the saving is within the processes' spread. On the two quiet ones the ratio (0.80, 1.01) is a per-variant offset of about 1-2 ns a clock, within the noise.
   - `vgacap_trace_block_pair` is `static inline` but compiled out of line, so every pair is a call and a switch. Forcing it inline in the lean writer gave 0.88 (nyancat) and 0.77 (rle_vga) of vgch2 in one replay run (the format owner's finding): a direction, not a loop figure.
   - So the push path is a small part of vgch2's cost. The first round's estimate, about half, was wrong.
 - **zstd level 1.**
@@ -1899,7 +2049,7 @@ Changing the payload also has a cost of its own, which counts against it under R
 Every item rests on a table and a number, or on a concrete property.
 
 - **Busy** means nyancat, rle_vga and atari2600: 77-100% of their clocks change a pin.
-- **Simulation-thread** figures are the loop's medians of 4 processes, unless they say "replay": vgch2 and lean from fix round 1's main set, the background plans from fix round 2's, raw from processes of its own.
+- **Simulation-thread** figures are the loop's medians of 4 processes, unless they say "replay": vgch2 and lean from fix round 2's lean set, the background plans from its background set, raw from processes of its own.
 - **R2 share** is the trace's background CPU plus every read a job makes, as a share of the simulation CPU, with `tracetool info` counting planar streams on their own and the background at encode2's median ([R2 tables](#the-traces-share-of-r2-background-cpu-and-every-read-of-a-job)).
 
 ### vgch2 (current)
@@ -1914,7 +2064,7 @@ Pros:
 
 Cons:
 
-- The most expensive on the simulation thread: 15.4% of the simulation on nyancat, 20.5% on rle_vga and 7.9% on atari2600.
+- The most expensive on the simulation thread: 14.0% of the simulation on nyancat, 19.1% on rle_vga and 7.7% on atari2600.
 - Its R2 share is 17.6% (nyancat), 25.0% (rle_vga) and 11.1% (atari2600): its compressor plus three full decodes a job.
 - The largest file on every busy design: 416 MB nyancat, 597 MB atari2600, 18.4 MB rle_vga. Planar is 54, 9.0 and 0.62 MB (Total bytes table).
 - Opening reads the start of every block: 111 ms on nyancat and 242 ms on rle_vga. Lazy reading of the starts fixes most of that without a format change.
@@ -1929,7 +2079,7 @@ Pros:
 
 Cons:
 
-- It saves only 6-10% on the busy designs (14.1% against 15.4% on nyancat, 18.5% against 20.5% on rle_vga). On colorbars and vgadonut its ratio to vgch2 is an offset within the noise, not a cost.
+- It saves 9% on rle_vga (17.5% against 19.1%). On nyancat (14.1% against 14.0%) and atari2600 (7.7% against 7.7%) the saving is within the processes' spread. On colorbars and vgadonut its ratio to vgch2 is an offset within the noise.
 - Everything vgch2 costs in size, background CPU and reading.
 
 ### planar (a run stream per port, written on the simulation thread)
@@ -1944,7 +2094,7 @@ Pros:
 
 Cons:
 
-- 12.8% (nyancat), 10.7% (rle_vga) and 6.0% (atari2600) of the simulation: over R1 on all three busy designs.
+- 13.0% (nyancat), 10.3% (rle_vga) and 6.0% (atari2600) of the simulation: over R1 on all three busy designs.
 - A merged scan of every port is 1.4-1.8 times vgch2's on the busy traces, because seven streams are merged. With today's merged `tracetool info` planar's R2 gain is mostly lost (15.7% against vgch2's 17.6% on nyancat); a header-only `tracetool info` removes the question (3.5% against 10.1%).
 - A full-pin FST export costs 12% more CPU than from vgch2's file on rle_vga (579 against 516 s), and the same on nyancat and atari2600.
 - Seven streams a block, where `RUNS` has one chunk. Measured as seven zstd frames a block, which is a change of VGCH v2's container.
@@ -1954,12 +2104,12 @@ Cons:
 
 Pros:
 
-- On the simulation thread, close to changelog: 8.2% (nyancat), 7.7% (rle_vga), 3.9% (atari2600).
+- On the simulation thread, close to changelog: 8.3% (nyancat), 7.5% (rle_vga), 3.9% (atari2600).
 - Stored as is, the smallest on the quiet traces: 0.20 MB colorbars, 0.09 MB tomkeddie_a.
 
 Cons:
 
-- Over R1 on nyancat (8.2%) and rle_vga (7.7%), and dearer than changelog on all three busy designs.
+- Over R1 on nyancat (8.3%) and rle_vga (7.5%), and dearer than changelog on all three busy designs.
 - Stored as is, its R2 share is the highest of the run formats: 19.0% (nyancat), 32.6% (rle_vga), because every read decodes every event.
 - Stored as is, it is 2.9 times planar on nyancat (154 against 54 MB) and 25 times on atari2600 (229 against 9.0).
 
@@ -1968,7 +2118,7 @@ Cons:
 Pros:
 
 - Planar's file: 53.8 MB nyancat, 0.66 MB rle_vga, 9.4 MB atari2600.
-- Its simulation-thread cost is events' plus the hand-over: 8.3% (nyancat), 8.2% (rle_vga), 4.1% (atari2600).
+- Its simulation-thread cost is events' plus the hand-over: 8.8% (nyancat), 8.1% (rle_vga), 4.1% (atari2600).
 
 Cons:
 
@@ -1980,7 +2130,7 @@ Cons:
 
 Pros:
 
-- The cheapest raw-compare writer on all three busy designs: 7.7% (nyancat), 5.5% (rle_vga), 3.1% (atari2600), against events' 8.2%, 7.7% and 3.9%.
+- The cheapest raw-compare writer on all three busy designs: 7.8% (nyancat), 5.4% (rle_vga), 3.1% (atari2600), against events' 8.3%, 7.5% and 3.9%.
 - Its writer does the least on the simulation thread: three 8-byte stores a changed clock, and no encoding.
 - Stores planar's file, with all of planar's size and reads.
 
@@ -2049,10 +2199,10 @@ Cons:
 
 **The recommendation changed in fix round 1, and round 2 refines it.** The first round recommended three things: record with the events writer, store planar in VGCH v2's container, and adopt the lean writer now for about half the cost. Round 1 measured them, and two of the three did not hold:
 
-- the lean writer saves 6-10% on the busy designs, not half;
+- the lean writer saves 6-10% on the busy designs, not half (round 2's sets, with every file read back, put it at 9% on rle_vga and within the noise on nyancat and atari2600);
 - events stored as planar fails R2. It is over the whole 5% budget on nyancat and rle_vga even at its lowest background figure, and it still misses R1 there.
 
-Round 2 re-measured the background plans with files that read back right. Their R1 figures moved by at most 2.3 points, and no verdict changed. It added two findings from the format owner's re-review: the job never uses `tracetool info`'s scan, and `vgacap_trace_block_pair` is not inlined.
+Round 2 re-measured every plan in the loop with files that read back right. The background plans' R1 figures moved by at most 2.5 points, and no verdict changed. vgch2's and lean's were measured again in a set of their own, and lean's saving came out smaller. It added two findings from the format owner's re-review: the job never uses `tracetool info`'s scan, and `vgacap_trace_block_pair` is not inlined.
 
 **What the data now supports, in order.**
 
@@ -2069,7 +2219,8 @@ Round 2 re-measured the background plans with files that read back right. Their 
    - Level 3 is smaller than level 1 on nyancat's and atari2600's `RUNS` data, for no more CPU. On rle_vga's it is larger and slower.
    - Readers do not depend on the level.
 4. **The lean writer: small, safe, not urgent.**
-   - It writes vgacap's file byte for byte and saves 6-10% on the busy designs in the loop.
+   - It writes vgacap's file byte for byte. In the loop it saves 9% on rle_vga, and on nyancat and atari2600 a saving within the processes' spread (0.99 and 0.97 of vgch2).
+   - So as it stands it does not meet the format owner's bar for merging, 10% on nyancat and rle_vga. The inline change below is what might.
    - Forcing `vgacap_trace_block_pair` inline as well gave 0.88 (nyancat) and 0.77 (rle_vga) of vgch2 in one replay run (the format owner's `inline-experiment.diff`). That shows the direction, not the size in a simulation.
    - The capture session takes it as its own pull request: lean's slow path plus `block_pair` inline, gated on `test_lean.sh` against all 11 traces, and measured in `bench_tick` against today's writer.
    - The file does not change, so it need not hold the 408-project re-run.
@@ -2091,15 +2242,15 @@ Round 2 re-measured the background plans with files that read back right. Their 
 
    | Capture | R1 nyancat (%) | R1 rle_vga (%) | R1 atari2600 (%) | R2 nyancat (%) | R2 rle_vga (%) | R2 atari2600 (%) |
    |---|---:|---:|---:|---:|---:|---:|
-   | events, converted in the background | 8.3 | 8.2 | 4.1 | 7.4 | 8.2 | 3.3 |
-   | changelog, converted in the background | 7.7 | 5.5 | 3.1 | 8.8 | 7.9 | 4.1 |
-   | planar on the simulation thread | 12.8 | 10.7 | 6.0 | 4.5 | 2.5 | 1.3 |
+   | events, converted in the background | 8.8 | 8.1 | 4.1 | 7.4 | 8.2 | 3.3 |
+   | changelog, converted in the background | 7.8 | 5.4 | 3.1 | 8.8 | 7.9 | 4.1 |
+   | planar on the simulation thread | 13.0 | 10.3 | 6.0 | 4.5 | 2.5 | 1.3 |
 
    - The converter is the gap. It costs 16-30 s of background CPU on the busy traces, against 2.9-4.4 s for compressing planar's streams written directly.
    - A converter near the compressor's own cost would give the converted plans about planar's R2, while keeping their R1. That is the next thing to measure, not a result.
 7. **R1 on the busy designs needs more than a format.**
-   - On rle_vga only raw capture is under 5% (3.0%); changelog is next (5.5%). On atari2600 raw (2.6%), changelog (3.1%), events (3.9%) and events to planar (4.1%) are.
-   - On nyancat nothing measured is under 5%: raw costs 6.0% and changelog 7.7%.
+   - On rle_vga only raw capture is under 5% (3.0%); changelog is next (5.4%). On atari2600 raw (2.6%), changelog (3.1%), events (3.9%) and events to planar (4.1%) are.
+   - On nyancat nothing measured is under 5%: raw costs 6.0% and changelog 7.8%.
    - Raw's figures come from sets run at about twice the host's normal load, so they may be high. Raw's background then costs 12-14% of R2 on nyancat and rle_vga.
 
 **What this still misses, stated plainly.**
@@ -2207,6 +2358,48 @@ What the round found that the first round had wrong:
 - **Raw.** In processes of its own, raw costs 6.0% on nyancat, not 3.6%.
 - **Background CPU.** It varies up to 2.5 times for identical work.
 
+## Fix round 2: what changed
+
+Two reviews read fix round 1, at [`5be4363`](https://github.com/mithro/vgacap/commit/5be4363): the independent re-review, and the format owner's re-review. This round answers them.
+
+The independent re-review's items:
+
+- **N1: one stdio buffer for every background writer of a process.** [`bg.c`](../../bench/format-study/src/bg.c) had the buffer `static`. Each writer now has its own, freed at close, and a write or close error exits with status 2.
+- **N2: the converters' stream order.** The converters wrote planar's streams in raw byte order, not port order. They now take port order from the layout, as the writers do. The study's events files record their layout in the header, so a reader of a Verilator file does not assume the replay's.
+- **N2: no read-back of the loop's files.** [`sim/readback.py`](../../bench/format-study/sim/readback.py) reads every trace a set wrote: full hash, samples and `uo_out` run count, against lean's from the same process. [`run_ticks.sh`](../../bench/format-study/sim/run_ticks.sh) fails if any file differs, and no `|| true` is left in it.
+- **The background plans again.** events, evplanar, planar and changelog ran again: 5 projects, 4 processes each (`fx2a` to `fx2d`), and one unpinned process each (`fx2s`). Every file reads back right.
+- **vgch2 and lean again.** Their files in round 1's sets read back right, but those sets' other files did not. So they ran again in a set of their own (`fx2la` to `fx2ld`), every file read back. No figure in this document now comes from a set with a failed read-back.
+- **I1: evplanar's read-back.** It passes on all 5 projects in every process.
+- **N3: lean's quiet-design ratios.** Stated as an offset within the noise.
+- **N4: lazy open.** The order checks move to seek time, a corrupt `BLKH` can deliver runs before the error, and vgadonut still opens in 112 ms. All three are stated.
+- **N5: `build-study/`.** Removed; the study builds under `tmp/build-study`.
+- **Minor 6: robustness.** Still not tested; stated as unmeasured.
+- **Minor 7: memory.** Measured in the loop ([Memory](#memory)).
+- **Minor 9: a full-pin export of planar.** Timed against vgch2's ([A full-pin export to FST](#a-full-pin-export-to-fst-vgch2s-file-against-planars-median-of-the-reps)).
+- **`origin/main`.** [`711d6b3`](https://github.com/mithro/vgacap/commit/711d6b3) merged.
+
+The format owner's items:
+
+- **The compact results.** The inputs `analyze.py` reads are 79 MB, about 21 MB compressed: too large for the branch, so not committed ([Reproducing](#reproducing)).
+- **28.3 s, not 27.5 s,** for vgch2's merged full scan on nyancat.
+- **The third background estimate.** The loop's scaled figure is not "within about 30%" of encode2's median. Method now gives the measured range, 0.50-1.04 of it on the busy traces.
+- **The lean writer is "small, safe and not urgent".** The owner's `block_pair` inline result (0.88 nyancat, 0.77 rle_vga, one replay run) is noted as a direction only. The capture session takes it as its own PR.
+- **Lazy open's caveat.** A corrupt `BLKH` can deliver runs before the error.
+- **"No dual readers"** applies to `trace_read.c` only: the stream reader keeps v1 and v2. Planar has no plain-stream equivalent yet. Re-encoding the 408 traces costs 2-10 CPU-hours.
+- **`tracetool info`.** The pipeline uses only `blocks`, `clocks` and `open.slice_*`. R2 is given with and without the scan.
+- **Raw's load.** Raw's sets ran at about twice normal load (1.8-2.25 a CPU), so its figures may be high.
+- **The 1% bar** is the study's own, not the spec's.
+
+What the round found:
+
+- **No verdict changed.** Every R1 and R2 pass or fail is as round 1 had it.
+- **The background plans' R1 moved by −1.3 to +2.5 points** on the busy designs. Changelog is now the cheapest of the raw-compare writers on all three busy designs.
+- **vgch2 and lean.** vgch2's R1 is 14.0% (nyancat), 19.1% (rle_vga) and 7.7% (atari2600), within 1.4 points of round 1's. Lean's saving is smaller than round 1 measured: lean over vgch2: 0.99 [0.93, 1.50] on nyancat, 0.91 [0.88, 0.92] on rle_vga and 0.97 [0.95, 1.03] on atari2600, against round 1's 0.90, 0.90 and 0.94.
+- **The background set's first tables counted one set too many.** `analyze.py` took every set whose name began `fx2` as the background set, which took in a two-project smoke set (`fx2smoke`). It now takes `fx2a` to `fx2d` exactly; that moved nyancat's and rle_vga's figures by up to 0.5 points.
+- **R2 without the scan.** vgch2's share falls from 17.6% to 10.1% on nyancat. Planar's falls to 3.5% (nyancat), 1.0% (rle_vga) and 0.8% (atari2600): within the whole 5% budget, and on atari2600 within the 1% bar.
+- **A full-pin FST export** takes the same CPU from either file on nyancat and atari2600, and 12% more from planar on rle_vga.
+- **Raw's read-back first failed through a fault in the harness, not in a file.** Raw's sets have no lean or vgch2 file, and `readback.py` looked for a reference only in the reference set's lean file. It now takes that set's vgch2 file too. Every raw file then read back right.
+
 ## Reproducing
 
 Every table in this document between the markers in [Results](#results) is the output of [`bench/format-study/analyze.py`](../../bench/format-study/analyze.py) over the raw results. [`splice_doc.py`](../../bench/format-study/splice_doc.py) puts it in place. Nothing in those tables is typed by hand except [`data/pilot_baseline.csv`](../../bench/format-study/data/pilot_baseline.csv), the pilot's untraced times.
@@ -2216,7 +2409,7 @@ The commands, from a checkout of this branch:
 ```
 bench/format-study/run_all.sh          # build, traces, info, lean, writer, writer2, encode, encode2, warm, read, read2, validate, robust, interop, ctr, analyze
 bench/format-study/sim/run_sim.sh      # the first round's Verilator check: build, run (side by side), tick (in one process)
-bench/format-study/sim/run_ticks.sh    # the fix rounds' Verilator sets: main, raw, scope (round 1); bg, bgscope, readback_raw (round 2)
+bench/format-study/sim/run_ticks.sh    # the fix rounds' Verilator sets: main, raw, scope (round 1); bg, bgscope, readback_raw, lean (round 2)
 bench/format-study/sim/run_mem.py      # memory per plan in the loop (round 2)
 bench/format-study/run_export.py       # the full-pin FST export (round 2)
 ```
