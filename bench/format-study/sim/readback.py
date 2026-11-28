@@ -10,7 +10,7 @@
 Each DIR is one project's bench_tick output (<tag>/<project>/). Every
 *.trace there is read with `fsbench read --patterns validate`: vgch2.trace
 and lean.trace as VGCH v2, the others as study files. The reference is
-lean.trace in the same DIR, else vgch2.trace there, else lean.trace in
+lean.trace in the same DIR, else vgch2.trace there, else lean.trace or vgch2.trace in
 REFDIR/<project> (a set with neither, such as raw's, against another set
 of the same chunks: every set runs the same clocks from reset). A file
 passes when its full hash, its sample count and its uo_out run count are
@@ -65,7 +65,7 @@ def main() -> int:
               "ref_hash", "ref_samples", "ref_uo_runs", "pass", "error"]
     # Every file's read, in parallel; the checks below then run in order.
     paths = sorted({t for d in dirs for t in d.glob("*.trace")} |
-                   ({ref_dir / d.name / "lean.trace" for d in dirs} if ref_dir else set()))
+                   ({ref_dir / d.name / n for d in dirs for n in ("lean.trace", "vgch2.trace")} if ref_dir else set()))
     paths = [t for t in paths if t.exists()]
     with ThreadPoolExecutor(int(os.environ.get("READBACK_JOBS", "10"))) as ex:
         got = dict(zip(paths, ex.map(lambda t: validate(fsbench, t, t.parent.name), paths)))
@@ -81,8 +81,9 @@ def main() -> int:
                 bad += 1
                 continue
             ref = next((d / n for n in ("lean.trace", "vgch2.trace") if (d / n).exists()), None)
-            if ref is None and ref_dir is not None and (ref_dir / project / "lean.trace").exists():
-                ref = ref_dir / project / "lean.trace"
+            if ref is None and ref_dir is not None:
+                ref = next((ref_dir / project / n for n in ("lean.trace", "vgch2.trace")
+                            if (ref_dir / project / n).exists()), None)
             if ref is None:
                 print(f"readback: {d}: no reference (lean.trace, vgch2.trace or --ref-dir)", file=sys.stderr)
                 bad += 1
