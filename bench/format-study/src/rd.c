@@ -210,6 +210,7 @@ typedef struct {
     const uint8_t *map;
     size_t size;
     int kind, t, c;
+    int off[8], identity;        // the writer's raw-image layout (codec.h)
     sblk_t *b;
     uint64_t nb;
     int rebuilt;
@@ -254,6 +255,12 @@ static void *st_open(const char *path) {
     }
     s->kind = s->map[8]; s->t = s->map[9]; s->c = s->map[10];
     if (s->t == 100) s->t = T_IDENTITY;
+    s->identity = 1;
+    for (int k = 0; k < 8; k++) s->off[k] = k;
+    if (s->map[15] == 'L') {
+        const uint32_t lay = (uint32_t)s->map[12] | (uint32_t)s->map[13] << 8 | (uint32_t)s->map[14] << 16;
+        for (int k = 0; k < 8; k++) { s->off[k] = (int)((lay >> (3 * k)) & 7); s->identity &= s->off[k] == k; }
+    }
     // The index, if the footer is there and agrees; else walk the blocks.
     int ok = 0;
     if (s->size >= 32 && rd32(s->map + s->size - 4) == FS_INDEX_MAGIC) {
@@ -430,6 +437,39 @@ static int st_block(st_rd_t *s, uint64_t i, int port0, out_t *o, port0_t *p0) {
                 }
             }
         }
+        return 0;
+    }
+    if (s->kind == 2 && !s->identity) {   // events, its bytes in another raw layout
+        if (st_decode(s, i, 1u, lens)) return -1;
+        const int *off = s->off, cb = off[7];
+        const uint8_t *p = s->dec[0], *e = p + lens[0];
+        uint64_t cur = 0;
+        for (int k = 0; k < 8; k++)
+            if (k != cb) cur |= (uint64_t)*p++ << (8 * k);
+        // The image in fs.h's order (byte j: port j), as the identity path's.
+        #define PORTS(x) ((((x) >> (8 * off[0])) & 0xff) | (((x) >> (8 * off[1])) & 0xff) << 8 | \
+                          (((x) >> (8 * off[2])) & 0xff) << 16 | (((x) >> (8 * off[3])) & 0xff) << 24 | \
+                          (((x) >> (8 * off[4])) & 0xff) << 32 | (((x) >> (8 * off[5])) & 0xff) << 40 | \
+                          (((x) >> (8 * off[6])) & 0xff) << 48)
+        const unsigned uo = 1u << off[0];
+        uint64_t a = first, last = first;
+        while (p < e && !o->done) {
+            const uint64_t at = last + get_leb(&p);
+            const unsigned m = *p++;
+            uint64_t next = cur;
+            for (unsigned k = 0; k < 8; k++)
+                if (m & (1u << k)) next = (next & ~(0xffull << (8 * k))) | ((uint64_t)*p++ << (8 * k));
+            if (port0) {
+                if (m & uo) { out_run(o, a, (cur >> (8 * off[0])) & 0xff, at - a); a = at; }
+            } else {
+                out_run(o, a, val43(PORTS(cur)), at - a);
+                a = at;
+            }
+            cur = next;
+            last = at;
+        }
+        out_run(o, a, port0 ? ((cur >> (8 * off[0])) & 0xff) : val43(PORTS(cur)), first + ns - a);
+        #undef PORTS
         return 0;
     }
     if (s->kind == 2) {   // events

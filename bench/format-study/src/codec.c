@@ -139,6 +139,15 @@ static inline uint64_t pack_id(uint64_t r) {
     return (r & 0x1ffffffffffull) | ((r >> 7) & (1ull << 41)) | ((r >> 14) & (1ull << 42));
 }
 
+// The planar streams are in port order (fs.h), as the planar writer's
+// (w_mine.c pl_byte): stream j is raw-image byte fs_off[j], and raw byte k
+// is stream stream_of[k] (-1: the clk byte). The replay's layout is the
+// identity; the simulation check's is Verilator's.
+static void planar_map(int map[FS_GROUPS], int stream_of[8]) {
+    for (int k = 0; k < 8; k++) stream_of[k] = -1;
+    for (int j = 0; j < FS_GROUPS; j++) { map[j] = fs_off[j]; stream_of[fs_off[j]] = j; }
+}
+
 int fs_transform(int t, const uint64_t *raw, uint64_t n, uint64_t first_sample, uint8_t **out, size_t *lens,
                  uint64_t *clk_errors) {
     uint64_t bad = 0;
@@ -196,9 +205,10 @@ int fs_transform(int t, const uint64_t *raw, uint64_t n, uint64_t first_sample, 
         const uint64_t noclk = ~(0xffull << (8 * cb));
         uint8_t *p[8];
         uint64_t start[8];
-        int map[8], np = 0;   // stream j holds raw byte map[j]: every byte but the clk byte
-        for (int k = 0; k < 8; k++)
-            if (k != cb) { map[np] = k; p[np] = out[np]; start[np] = 0; np++; }
+        int map[FS_GROUPS], stream_of[8];   // stream j holds raw byte map[j] (port j)
+        planar_map(map, stream_of);
+        const int np = FS_GROUPS;
+        for (int j = 0; j < np; j++) { p[j] = out[j]; start[j] = 0; }
         uint64_t prev = n ? raw[0] & noclk : 0;
         for (uint64_t i = 1; i < n; i++) {
             const uint64_t v = raw[i] & noclk;
@@ -234,16 +244,17 @@ int fs_clog_to_planar(const uint64_t *rec, uint64_t nrec, uint64_t n, uint64_t f
     const uint64_t noclk = ~(0xffull << (8 * cb));
     uint8_t *p[8];
     uint64_t start[8];
-    int map[8], np = 0;
-    for (int k = 0; k < 8; k++)
-        if (k != cb) { map[np] = k; p[np] = out[np]; start[np] = first_sample; np++; }
+    int map[FS_GROUPS], stream_of[8];
+    planar_map(map, stream_of);
+    const int np = FS_GROUPS;
+    for (int j = 0; j < np; j++) { p[j] = out[j]; start[j] = first_sample; }
     uint64_t prev = nrec ? rec[1] & noclk : 0;   // the block's first record: its state
     for (uint64_t r = 1; r < nrec; r++) {
         for (int h = 0; h < 2; h++) {
             const uint64_t s = rec[3 * r] + (uint64_t)h, v = rec[3 * r + 1 + (uint64_t)h] & noclk;
             uint64_t x = v ^ prev;
             while (x) {   // the changed bytes only (the clk byte never is one)
-                const int k = __builtin_ctzll(x) >> 3, j = k < cb ? k : k - 1;
+                const int k = __builtin_ctzll(x) >> 3, j = stream_of[k];
                 if (s != start[j]) {
                     *p[j] = (uint8_t)(prev >> (8 * k));
                     p[j] += 1 + vgacap_leb128_put_inline(p[j] + 1, s - start[j]);
@@ -266,9 +277,9 @@ int fs_events_to_planar(const uint8_t *ev, size_t len, uint64_t n, uint64_t firs
     const int cb = fs_off[7];
     uint8_t *p[8];
     uint64_t start[8];
-    int np = 0;
-    for (int k = 0; k < 8; k++)
-        if (k != cb) { p[np] = out[np]; start[np] = first_sample; np++; }
+    int map[FS_GROUPS], stream_of[8];
+    planar_map(map, stream_of);
+    for (int j = 0; j < FS_GROUPS; j++) { p[j] = out[j]; start[j] = first_sample; }
     const uint8_t *q = ev, *e = ev + len;
     uint64_t prev = 0;
     for (int k = 0; k < 8; k++)   // the snapshot: every byte but the clk byte
@@ -282,7 +293,7 @@ int fs_events_to_planar(const uint8_t *ev, size_t len, uint64_t n, uint64_t firs
         s += d;
         unsigned m = *q++;
         while (m) {
-            const int k = __builtin_ctz(m), j = k < cb ? k : k - 1;
+            const int k = __builtin_ctz(m), j = stream_of[k];
             const uint8_t v = *q++;
             if (s != start[j]) {
                 *p[j] = (uint8_t)(prev >> (8 * k));
@@ -293,15 +304,12 @@ int fs_events_to_planar(const uint8_t *ev, size_t len, uint64_t n, uint64_t firs
             m &= m - 1;
         }
     }
-    int j = 0;
-    for (int k = 0; k < 8; k++) {
-        if (k == cb) continue;
-        *p[j] = (uint8_t)(prev >> (8 * k));
+    for (int j = 0; j < FS_GROUPS; j++) {
+        *p[j] = (uint8_t)(prev >> (8 * map[j]));
         p[j] += 1 + vgacap_leb128_put_inline(p[j] + 1, first_sample + n - start[j]);
         lens[j] = (size_t)(p[j] - out[j]);
-        j++;
     }
-    return np;
+    return FS_GROUPS;
 }
 
 static inline uint64_t clk_of(uint64_t s) { return (s & 1) ? FS_CLK_RAW : 0; }

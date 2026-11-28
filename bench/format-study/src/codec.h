@@ -44,8 +44,10 @@ int fs_events_to_planar(const uint8_t *ev, size_t len, uint64_t n, uint64_t firs
 int fs_untransform(int t, uint8_t *const *in, uint64_t n, uint64_t first_sample, int port, uint64_t *raw);
 
 // ---- the container ("STDY") ---------------------------------------------------------------
-// file:   "FSTUDY01" u8 writer u8 transform u8 comp u8 nstreams u32 reserved, then blocks, then
-//         an index and a footer.
+// file:   "FSTUDY01" u8 writer u8 transform u8 comp u8 nstreams, u24 layout u8 'L' (the
+//         writer's raw-image layout: port k at byte (layout >> 3k) & 7, fs.h's port order; an
+//         events file's bytes are in that raw order; older files have 0 here: the identity),
+//         then blocks, then an index and a footer.
 // block:  u32 "BLK1", u64 first_sample, u64 nsamples, then per stream u32 rawlen, u32 complen,
 //         then the compressed streams in order (zstd frames carry XXH64 checksums;
 //         deflate its Adler-32; LZ4 blocks nothing).

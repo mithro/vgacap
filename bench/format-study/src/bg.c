@@ -220,6 +220,11 @@ static int primary_open(bg_t *g, const char *pfile) {
     hdr[0] = !strcmp(g->writer, "planar") ? 1 : !strcmp(g->writer, "events") ? 2 : !strcmp(g->writer, "raw") ? 3 : 4;
     // Raw capture stored as planar runs is a planar file.
     if (g->pt == T_PLANAR || g->pt == T_CLOG || g->pt == T_EV2PLANAR) { hdr[0] = 1; hdr[1] = T_IDENTITY; }
+    // The raw-image layout (fs_off, 3 bits a port) and 'L': an events file
+    // keeps its bytes in raw order, which is Verilator's in the simulation check.
+    uint32_t lay = 0;
+    for (int k = 0; k < 8; k++) lay |= (uint32_t)fs_off[k] << (3 * k);
+    hdr[4] = (uint8_t)lay; hdr[5] = (uint8_t)(lay >> 8); hdr[6] = (uint8_t)(lay >> 16); hdr[7] = 'L';
     fwrite(hdr, 1, 8, g->pf);
     g->pbytes = 16;
     return 0;

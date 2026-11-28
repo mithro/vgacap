@@ -49,6 +49,7 @@
 #include <string>
 #include <pthread.h>
 #include <sched.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <vector>
 
@@ -284,21 +285,32 @@ int main(int argc, char** argv) {
                         (unsigned long long)chunk, w1 - w0);
         }
     }
-    // The models must have stayed in step: compare their outputs.
+    // The models must have stayed in step: compare their outputs. Any
+    // failure below makes the exit status 1 (run_sim.sh fails the set).
+    int rc = 0;
     for (auto& s : sims)
-        if (s->top->uo_out != sims[0]->top->uo_out || s->top->uio_out != sims[0]->top->uio_out)
+        if (s->top->uo_out != sims[0]->top->uo_out || s->top->uio_out != sims[0]->top->uio_out) {
             std::fprintf(stderr, "bench_tick: %s's model diverged\n", s->name.c_str());
+            rc = 1;
+        }
     const double f0 = thread_ns();
     for (auto& s : sims) {
         char err[512];
         const char* cm = "meta=close\ncapture_after_clock=0\nstatus=ok\nframes=0\n";
         const double fw = wall_ns();
-        if (s->tw && (s->kind == 1 ? vgacap_trace_finish(s->tw, cm, err, sizeof err) : fs_lean_finish(s->tw, cm, err, sizeof err)))
+        if (s->tw && (s->kind == 1 ? vgacap_trace_finish(s->tw, cm, err, sizeof err) : fs_lean_finish(s->tw, cm, err, sizeof err))) {
             std::fprintf(stderr, "bench_tick: %s: %s\n", s->name.c_str(), err);
+            rc = 1;
+        }
         if (s->tw) std::fprintf(stderr, "bench_tick: finish %s: %.3f s wall\n", s->name.c_str(), (wall_ns() - fw) / 1e9);
         if (s->sw) fs_sim_finish(s->sw);
-        if (s->failed) std::fprintf(stderr, "bench_tick: %s: a push failed\n", s->name.c_str());
+        if (s->failed) { std::fprintf(stderr, "bench_tick: %s: a push failed\n", s->name.c_str()); rc = 1; }
     }
     std::fprintf(stderr, "bench_tick: finish %.2f s\n", (thread_ns() - f0) / 1e9);
-    return 0;
+    // The process's peak resident memory: every model and writer together
+    // (memory per plan: a run with none alone against none plus the plan).
+    rusage ru;
+    getrusage(RUSAGE_SELF, &ru);
+    std::fprintf(stderr, "bench_tick: max_rss_kib=%ld\n", ru.ru_maxrss);
+    return rc;
 }
