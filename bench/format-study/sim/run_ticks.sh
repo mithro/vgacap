@@ -3,7 +3,7 @@
 # The in-process sets (docs/superpowers/2026-11-27-trace-format-study.md,
 # Method), one command:
 #
-#   bench/format-study/sim/run_ticks.sh [main] [raw] [scope] [bg] [bgscope] [readback_raw]
+#   bench/format-study/sim/run_ticks.sh [main] [raw] [scope] [bg] [bgscope] [readback_raw] [lean]
 #
 # Fix round 1's sets: main, raw and scope. Fix round 2's: bg and bgscope,
 # the background plans again after the shared-buffer and stream-order fixes.
@@ -22,6 +22,8 @@
 # bg: 4 processes a project (fx2a-fx2d), the variants none, vgch2, events,
 #   evplanar, planar and changelog, as main.
 # bgscope: one process a project (fx2s), those variants, as scope.
+# lean: 4 processes a project (fx2la-fx2ld), none, vgch2 and lean: their R1
+#   from sets whose files all read back (round 1's main set's did not).
 # readback_raw: reads back fix round 1's raw sets (raw's processes held one
 #   background writer each), against fx2a's vgch2.
 # Progress, with an ETA, goes to progress.log once a minute.
@@ -127,6 +129,10 @@ stage_bgscope() {
     stop_watch "$w"
     [ "$rc" = 0 ] || { log "ticks fx2s: failed"; exit 1; }
     readback fx2s
+}
+stage_lean() {
+    pair fx2la none,vgch2,lean fx2lb lean,vgch2,none
+    pair fx2lc vgch2,none,lean fx2ld lean,none,vgch2
 }
 stage_readback_raw() {
     REF_TAG=fx2a readback fx1ra fx1rb fx1rc fx1rd
