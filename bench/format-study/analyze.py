@@ -583,8 +583,9 @@ def sim_stderr(tag, p):
     return out
 
 
-if fx_main:
-    tp = [x for x in ORDER if any(x in tickrep[t] for t in fx_main)]
+LOOP_TAGS = sorted(set(fx2_main) | set(fx2l_main) | set(fx_main))
+if fx2_main or fx_main:
+    tp = [x for x in ORDER if any(x in tickrep[t] for t in LOOP_TAGS)]
     print("### Stalls: wall time the simulation thread spent not running, over the untraced model's\n")
     print("Per process, the sum over chunks of (wall - thread CPU) for the variant minus the same for the untraced "
           "model, ns per clock: median of the processes [lowest, highest]. A stall (the simulation thread waiting "
@@ -947,14 +948,14 @@ if enc2:
             body.append([p, w, "-" if c is None else f"{c:.2f}", "-" if h is None else f"{h:.2f}",
                          "-" if not (c and h) else f"{c / h:.2f}"])
         table(["project", "writer", "cold", "warm", "cold over warm"], body)
-    if fx_main:
+    if fx2_main or fx_main:
         LOOP_CLOCKS = 4000 * 65536
         print("### Background CPU three ways, s for the whole trace: the loop's, scaled, against the whole-trace runs\n")
         print("The loop's figure is its background thread's CPU over its 262 M clocks, beside a running simulation, "
               "scaled to the trace's clocks (median of the processes); the window is representative (the loop's "
               "window table). The first round's and encode2's are the whole trace, in fsbench.\n")
         body = []
-        for p in [x for x in ORDER if any(x in tickrep[t] for t in fx_main)]:
+        for p in [x for x in ORDER if any(x in tickrep[t] for t in LOOP_TAGS)]:
             for v in ("events", "evplanar", "planar", "changelog"):
                 b = [sim_stderr(t, p).get(v, {}).get("bg_s") for t in tags_for(v)]
                 b = [x for x in b if x is not None]
