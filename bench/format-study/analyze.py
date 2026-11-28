@@ -303,6 +303,83 @@ if lean:
     table(["project", "published bytes", "lean bytes", "lean against published", "vgch2 bytes",
            "vgch2 against published"], body)
 
+# Host load per stage and per loop set, from load.log and progress.log (the load table, 7a, and each
+# loop set's load in the within-set tables).
+import datetime
+
+
+def ts(x):
+    return datetime.datetime.strptime(x, "%Y-%m-%dT%H:%M:%SZ")
+
+
+def load_windows():
+    plog, llog = os.path.join(OUT, "progress.log"), os.path.join(OUT, "load.log")
+    if not (os.path.exists(plog) and os.path.exists(llog)):
+        return None
+    samples = []
+    lines = open(llog).read().split("\n")
+    for k in range(len(lines) - 2):
+        if re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", lines[k]):
+            la = lines[k + 1].split()
+            vm = lines[k + 2].split()
+            if len(la) >= 3 and len(vm) >= 15:
+                samples.append((ts(lines[k]), float(la[0]), int(vm[14])))
+    wins = []   # (name, start, end)
+    opened = {}
+    for line in open(plog):
+        parts = line.split(" ", 1)
+        if len(parts) < 2:
+            continue
+        t, msg = ts(parts[0]), parts[1].strip()
+        m = re.match(r"stage (\w+): (\d+) jobs on CPUs", msg)
+        if m:
+            opened[m.group(1)] = t
+            continue
+        m = re.match(r"stage (\w+): done in", msg)
+        if m and m.group(1) in opened:
+            wins.append((m.group(1), opened.pop(m.group(1)), t))
+            continue
+        m = re.match(r"ticks ((?:\S+:\d+ )*\S+:\d+): \d+/\d+ chunks", msg)
+        if m:
+            key = "loop " + "+".join(x.rsplit(":", 1)[0] for x in m.group(1).split())
+            if key not in opened:
+                opened[key] = t
+            opened[key + "#end"] = t
+    for k in list(opened):
+        if k.startswith("loop ") and not k.endswith("#end"):
+            wins.append((k, opened[k], opened[k + "#end"]))
+    return samples, wins
+
+
+LOADWIN = load_windows()
+
+
+def set_load(tags):
+    """A loop set's load per CPU: the lowest and highest of its windows' medians, as text."""
+    if not LOADWIN or not tags:
+        return "-"
+    samples, wins = LOADWIN
+    meds = []
+    for name, a, b in wins:
+        if name.startswith("loop ") and set(name[5:].split("+")) & set(tags):
+            ss = [x[1] / 88 for x in samples if a <= x[0] <= b]
+            if ss:
+                meds.append(statistics.median(ss))
+    if not meds:
+        return "-"
+    return f"{min(meds):.2f}" if len(meds) == 1 else f"{min(meds):.2f}-{max(meds):.2f}"
+
+
+def paired_est(d, v):
+    """tick_one's estimate without its bootstrap: (ns a clock over none, share of none's CPU)."""
+    base_c = d.get("none", {})
+    ks = sorted(set(d.get(v, {})) & set(base_c))
+    if len(ks) < 100:
+        return None
+    diff = sum(d[v][k][0] - base_c[k][0] for k in ks)
+    return diff / sum(base_c[k][1] for k in ks), diff / sum(base_c[k][0] for k in ks)
+
+
 # ---- 3. the simulation check ---------------------------------------------------------------------
 # ---- 3a. the in-process simulation check (bench_tick) -------------------------------------------
 # Replicates: tick, tickB, tickC, tickD: separate processes, each with the
@@ -554,6 +631,74 @@ if fx_scope and not WITHDRAWN:
 if fx2_scope:
     tick_tables("Fix round 2, unpinned, in a systemd scope with CPUQuota=200%", "One process a project, fix round "
                 "2's variants, not pinned, every file read back.", fx2_scope, TICKV=FX2V)
+
+# R1 within each set: the same writer measures differently from one set to another (models a process,
+# load), so plans are compared only with the vgch2 of their own set.
+LOOPSETS = [(n, t, vs) for n, t, vs in [
+    ("background", fx2_main, FX2V), ("lean", fx2l_main, ["vgch2", "lean"]), ("raw", fx_raw, ["raw"]),
+    ("scope", fx2_scope, FX2V)] if t]
+
+
+def set_label(tags):
+    return tags[0] if len(tags) == 1 else f"{tags[0]}-{tags[-1]}"
+
+
+set_pct = {}    # (set name, project, variant) -> (median %, lowest, highest)
+SETDIFF = None  # the largest gap between the round 2 sets' vgch2 on a busy design
+if LOOPSETS:
+    sp = [x for x in ORDER if any(x in tickrep[t] for _, tags, _ in LOOPSETS for t in tags)]
+    for name, tags, vs in LOOPSETS:
+        for pj in sp:
+            for v in vs:
+                e = sorted(r[1] for t in tags if pj in tickrep[t] for r in [paired_est(tickrep[t][pj], v)] if r)
+                if e:
+                    set_pct[(name, pj, v)] = (statistics.median(e), e[0], e[-1])
+    dd = [abs(set_pct[("background", x, "vgch2")][0] - set_pct[("lean", x, "vgch2")][0])
+          for x in ("nyancat", "rle_vga", "atari2600")
+          if ("background", x, "vgch2") in set_pct and ("lean", x, "vgch2") in set_pct]
+    SETDIFF = max(dd) if dd else None
+    print("## R1 within each set\n")
+    vb, vl = set_pct.get(("background", "nyancat", "vgch2")), set_pct.get(("lean", "nyancat", "vgch2"))
+    print("The same writer measures differently from one set to another" + (
+          f": vgch2 is {pct(vb[0], 1)}% of the untraced model on nyancat in the background set (six models a "
+          f"process) and {pct(vl[0], 1)}% in the lean set (three), at different host loads" if vb and vl else "") +
+          ". So each plan is compared only with the vgch2 of its own set. Load per CPU: the lowest and highest of "
+          "the set's windows' medians (the host load table).\n")
+    print("### Each set's R1: % of the untraced model's CPU, median of the processes [lowest, highest]\n")
+    body = []
+    for name, tags, vs in LOOPSETS:
+        for v in vs:
+            row = [name, set_label(tags), set_load(tags), v]
+            for pj in sp:
+                r = set_pct.get((name, pj, v))
+                row.append("-" if not r else f"{pct(r[0], 1)} [{pct(r[1], 1)}, {pct(r[2], 1)}]")
+            body.append(row)
+    table(["set", "processes", "load per CPU", "variant"] + sp, body)
+    SBUSY = [x for x in ("nyancat", "rle_vga", "atari2600") if x in sp]
+    print("### Each plan over its own set's vgch2: each process's ratio of estimates, median [lowest, highest]\n")
+    print("ns per clock over the untraced model, plan over vgch2, process by process. Busy designs only: on the "
+          "quiet ones vgch2's own cost is within the noise of zero, so a ratio to it means nothing. Raw's set "
+          "holds no vgch2, so raw has no ratio within a set.\n")
+    body = []
+    for name, tags, vs in LOOPSETS:
+        for v in vs:
+            if v == "vgch2":
+                continue
+            row = [name, set_label(tags), v]
+            for pj in SBUSY:
+                rs = []
+                for t in tags:
+                    d = tickrep[t].get(pj, {})
+                    a, b = paired_est(d, v), paired_est(d, "vgch2")
+                    if a and b and b[0] > 0:
+                        rs.append(a[0] / b[0])
+                rs.sort()
+                if "vgch2" not in vs:
+                    row.append("no vgch2 in set")
+                else:
+                    row.append("-" if not rs else f"{statistics.median(rs):.2f} [{rs[0]:.2f}, {rs[-1]:.2f}]")
+            body.append(row)
+    table(["set", "processes", "plan"] + [f"{x} over vgch2" for x in SBUSY], body)
 
 # Stalls and wall time, and the background threads, from each process's stderr.
 def sim_stderr(tag, p):
@@ -1224,32 +1369,40 @@ if rd2:
 # ---- 5c. R1 and R2 together, for each plan -------------------------------------------------------------
 if rd2 and fx_pct:
     print("## Every plan against R1 and R2 together\n")
-    print("R1: the simulation thread's cost in the loop (median of the processes; " + (
-          "vgch2 and lean from fix round 2's lean set, the background plans from its background set, "
-          if WITHDRAWN else "vgch2 and lean from fix round 1's main set, the background plans from fix round 2's, ") +
-          "raw from its own processes), % of the untraced "
+    print("R1: the simulation thread's cost in the loop, median of the processes, each plan's from the set it ran "
+          "in (the R1 set columns; vgch2 ran in both of round 2's), % of the untraced "
           "model; the spec's budget is 5%. R2: the trace's share, background at encode2's median, with tracetool "
           "info as a scan that counts planar streams on their own, and with a header-only info (no scan). The "
           "spec's R2 budget is 5% for everything after the simulation; the 1% bar for the trace's own share is "
-          "this study's choice, not the spec's. Lean writes vgch2's file, so its R2 is vgch2's.\n")
-    PLANS = [("vgch2 (current)", "vgch2", "vgch2 (zstd 1)"), ("lean (vgch2's file)", "lean", "vgch2 (zstd 1)"),
-             ("events, stored as events", "events", "events (zstd 1)"),
-             ("events, stored as planar", "evplanar", "events to planar (zstd 1)"),
-             ("changelog, stored as planar", "changelog", "changelog to planar (zstd 1)"),
-             ("planar written on the simulation thread", "planar", "planar (zstd 1)"),
-             ("raw, stored as planar", "raw", "raw to planar (zstd 1)")]
-    lp = [x for x in ORDER if any((x, v) in fx_pct for _, v, _ in PLANS)]
+          "this study's choice, not the spec's. Lean writes vgch2's file, so its R2 is vgch2's. The same writer's R1 differs "
+          "between sets" + (f" by up to {pct(SETDIFF, 1)} points on the busy designs" if SETDIFF is not None else "") +
+          " (R1 within each set), so compare R1 only between rows of the same set.\n")
+    PLANS = [("vgch2 (current)", "vgch2", "vgch2 (zstd 1)", "lean"),
+             ("lean (vgch2's file)", "lean", "vgch2 (zstd 1)", "lean"),
+             ("vgch2 (current)", "vgch2", "vgch2 (zstd 1)", "background"),
+             ("events, stored as events", "events", "events (zstd 1)", "background"),
+             ("events, stored as planar", "evplanar", "events to planar (zstd 1)", "background"),
+             ("changelog, stored as planar", "changelog", "changelog to planar (zstd 1)", "background"),
+             ("planar written on the simulation thread", "planar", "planar (zstd 1)", "background"),
+             ("raw, stored as planar", "raw", "raw to planar (zstd 1)", "raw")]
+    SETTAGS = {n: t for n, t, _ in LOOPSETS}
+    if not set_pct:   # round 2's sets missing: round 1's figures, under one label
+        set_pct = {("round 1", p, v): x for (p, v), x in fx_pct.items()}
+        PLANS = [(a, b, c, "round 1") for a, b, c, _ in PLANS[:2] + PLANS[3:]]
+    lp = [x for x in ORDER if any((sn, x, v) in set_pct for _, v, _, sn in PLANS)]
     body = []
-    for name, v, r2n in PLANS:
-        row = [name]
+    for name, v, r2n, sn in PLANS:
+        tags = SETTAGS.get(sn, [])
+        row = [name, sn if not tags else f"{sn} ({set_label(tags)})", set_load(tags)]
         for p in lp:
-            a = fx_pct.get((p, v))
+            a = set_pct.get((sn, p, v))
             b = r2.get((p, r2n, "info", "median"))
             c = r2.get((p, r2n, "none", "median"))
             row += ["-" if a is None else pct(a[0], 1), "-" if b is None else pct(b[0], 1),
                     "-" if c is None else pct(c[0], 1)]
         body.append(row)
-    table(["plan"] + [f"{p} {r} (%)" for p in lp for r in ("R1", "R2", "R2 no scan")], body)
+    table(["plan", "R1 set", "R1 set's load per CPU"] + [f"{p} {r} (%)" for p in lp for r in ("R1", "R2", "R2 no scan")],
+          body)
     BUSY = [x for x in ("nyancat", "rle_vga", "atari2600") if x in lp]
     QUIET = [x for x in lp if x not in BUSY]
     print("### Pass or fail, per plan\n")
@@ -1261,17 +1414,17 @@ if rd2 and fx_pct:
         return "yes" if vals and all(x is not None and x <= lim for x in vals) else "no"
 
     body = []
-    for name, v, r2n in PLANS:
-        r1b = [fx_pct[(p, v)][0] if (p, v) in fx_pct else None for p in BUSY]
-        r1q = [fx_pct[(p, v)][0] if (p, v) in fx_pct else None for p in QUIET]
+    for name, v, r2n, sn in PLANS:
+        r1b = [set_pct[(sn, p, v)][0] if (sn, p, v) in set_pct else None for p in BUSY]
+        r1q = [set_pct[(sn, p, v)][0] if (sn, p, v) in set_pct else None for p in QUIET]
         lo = [r2[(p, r2n, "info", "lowest")][0] if r2.get((p, r2n, "info", "lowest")) else None for p in BUSY]
         md = [r2[(p, r2n, "info", "median")][0] if r2.get((p, r2n, "info", "median")) else None for p in BUSY]
         ns = [r2[(p, r2n, "none", "median")][0] if r2.get((p, r2n, "none", "median")) else None for p in BUSY]
         both = "yes" if ok(r1b, 0.05) == "yes" and ok(lo, 0.01) == "yes" else "no"
         both5 = "yes" if ok(r1b, 0.05) == "yes" and ok(ns, 0.05) == "yes" else "no"
-        body.append([name, ok(r1b, 0.05), ok(r1q, 0.05), ok(lo, 0.01), ok(md, 0.01), ok(lo, 0.05), ok(md, 0.05),
+        body.append([name, sn, ok(r1b, 0.05), ok(r1q, 0.05), ok(lo, 0.01), ok(md, 0.01), ok(lo, 0.05), ok(md, 0.05),
                      ok(ns, 0.01), ok(ns, 0.05), both, both5])
-    table(["plan", "R1 at most 5%, busy", "R1 at most 5%, quiet", "R2 at most 1%, busy, lowest",
+    table(["plan", "R1 set", "R1 at most 5%, busy", "R1 at most 5%, quiet", "R2 at most 1%, busy, lowest",
            "R2 at most 1%, busy, median", "R2 at most 5%, busy, lowest", "R2 at most 5%, busy, median",
            "R2 no scan at most 1%, busy", "R2 no scan at most 5%, busy",
            "R1 and R2 (1%, lowest), busy", "R1 and R2 (5%, no scan), busy"], body)
@@ -1348,48 +1501,8 @@ if ctr:
            "compress with (s)", "compress without (s)", "bytes the checksums add", "decode the pairs (s)"], body)
 
 # ---- 7a. host load per stage ----------------------------------------------------------------------------
-import datetime
-import re
-
-
-def ts(x):
-    return datetime.datetime.strptime(x, "%Y-%m-%dT%H:%M:%SZ")
-
-
-plog, llog = os.path.join(OUT, "progress.log"), os.path.join(OUT, "load.log")
-if os.path.exists(plog) and os.path.exists(llog):
-    samples = []
-    lines = open(llog).read().split("\n")
-    for k in range(len(lines) - 2):
-        if re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", lines[k]):
-            la = lines[k + 1].split()
-            vm = lines[k + 2].split()
-            if len(la) >= 3 and len(vm) >= 15:
-                samples.append((ts(lines[k]), float(la[0]), int(vm[14])))
-    wins = []   # (name, start, end)
-    opened = {}
-    for line in open(plog):
-        parts = line.split(" ", 1)
-        if len(parts) < 2:
-            continue
-        t, msg = ts(parts[0]), parts[1].strip()
-        m = re.match(r"stage (\w+): (\d+) jobs on CPUs", msg)
-        if m:
-            opened[m.group(1)] = t
-            continue
-        m = re.match(r"stage (\w+): done in", msg)
-        if m and m.group(1) in opened:
-            wins.append((m.group(1), opened.pop(m.group(1)), t))
-            continue
-        m = re.match(r"ticks ((?:\S+:\d+ )*\S+:\d+): \d+/\d+ chunks", msg)
-        if m:
-            key = "loop " + "+".join(x.rsplit(":", 1)[0] for x in m.group(1).split())
-            if key not in opened:
-                opened[key] = t
-            opened[key + "#end"] = t
-    for k in list(opened):
-        if k.startswith("loop ") and not k.endswith("#end"):
-            wins.append((k, opened[k], opened[k + "#end"]))
+if LOADWIN:
+    samples, wins = LOADWIN
     print("## Host load during each stage\n")
     print("From `load.log` (`/proc/loadavg` and `vmstat` every 30 s while a stage or a loop set runs) and "
           "`progress.log` (each stage's start and end). Load per CPU is the 1-minute load over 88; idle is vmstat's. "
