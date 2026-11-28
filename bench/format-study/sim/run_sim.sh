@@ -119,7 +119,7 @@ tick() {
     mkdir -p "$RES"
     for p in $PROJECTS; do
         local o=$S/${TICK_TAG:-tick}/$p; rm -rf "${o:?}"; mkdir -p "$o"
-        local q; q=$(grep -m1 -o -- '--qspi [^ ]*' "$SIMSRC/$p/sim.log" | cut -d' ' -f2 || true)
+        local q; q=$(sed -n 's/.*--qspi \([^ ]*\).*/\1/p' "$SIMSRC/$p/sim.log" | head -1)
         local hz; hz=$(grep -m1 -o -- '--clock-hz [^ ]*' "$SIMSRC/$p/sim.log" | cut -d' ' -f2)
         local qa=(); [ -n "$q" ] && qa=(--qspi "$q")
         # TICK_CPUS entries are a CPU, or "A,B": the simulation thread on A, the writers' threads on A or B.
@@ -138,7 +138,8 @@ tick() {
     done
     if [ "${TICK_SCOPE:-0}" = 1 ]; then log "sim tick: ${#pids[@]} projects, unpinned, each in a scope with CPUQuota=200%"
     else log "sim tick: ${#pids[@]} projects on CPUs ${TCPUS[*]}"; fi
-    wait "${pids[@]}" || true
+    local pid
+    for pid in "${pids[@]}"; do wait "$pid"; done   # each subshell records its run's exit, checked below
     local bad=""
     for p in $PROJECTS; do
         [ "$(cat "$S/${TICK_TAG:-tick}/$p/exit" 2>&1)" = 0 ] || bad="$bad $p"
