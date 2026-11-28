@@ -262,7 +262,8 @@ def main(out):
             # cease executing instructions, except those written directly
             # to SMx_INSTR" (RP2040 3.7, RP2350 11.7), so the forced nop
             # runs and drives the clock low, and the program, now frozen,
-            # cannot raise it again. The other order is wrong: an exec on a
+            # cannot raise it again (not measured on hardware: B10). The
+            # other order is wrong: an exec on a
             # running machine replaces only its next instruction, and the
             # program resumes at its PC (often `nop side 1`) before the
             # disable lands. pico-sdk's pio_sm_init relies on the same rule.
