@@ -11,27 +11,29 @@ review: 2027-05-28
 
 `ttcap capture --mode clocked` loads the bitstream with the clock and reset held ([The held-clock bitstream load](reference-load-held.md)). The board's PIO then makes the project clock itself, `--clocks` rising edges in all. The first `--reset-clocks` of them, 10 unless given, come with `rst_n` low. After each edge the PIO reads `uo_out` once, so sample k is the design's output after rising edge k. The PIO stops the clock, low, whenever the link falls behind, so no sample is lost however slow the link is.
 
-The real clock is the one nearest `--clock-hz` that is not faster. A clock is H + L + 4 PIO cycles, and `ttcap` picks the PIO divider and that cycle count together, so a rate the two can make is made exactly: 500 kHz at a 150 MHz system clock is divider 10 and 30 cycles. `uo_out` is read H + 1 PIO cycles after the rising edge, at least 80 ns after it, so at a 133 MHz system clock the fastest clock is 9.5 MHz, with H 10 and L 0. The nearest-not-faster rule holds only up to the fastest clock: a `--clock-hz` above it, rounded up to a whole hertz, is refused, and the message gives the rate to ask for. At 133 MHz, 9500000 runs and 9500001 is refused.
+The real clock is the one nearest `--clock-hz` that is not faster. A clock is H + L + 4 PIO cycles, and `ttcap` picks the PIO divider and that cycle count together, so a rate the two can make is made exactly: 500 kHz at a 150 MHz system clock is divider 10 and 30 cycles. `uo_out` is read H + 1 PIO cycles after the rising edge, and the read sees the pin level of 2 system clocks earlier, at least 65 ns after the edge, so at a 133 MHz system clock the fastest clock is 9.5 MHz, with H 10 and L 0. The nearest-not-faster rule holds only up to the fastest clock: a `--clock-hz` above it, rounded up to a whole hertz, is refused, and the message gives the rate to ask for. At 133 MHz, 9500000 runs and 9500001 is refused.
 
 The read time is the time from the side-set rising edge to the `in` that reads `uo_out`: (H + 1) PIO cycles. The pin time is the time of the pin level that `in` sees, the read time less the GPIO input synchroniser's 2 system clocks, 15 ns at 133 MHz.
 
-The 80 ns floor was measured on one design and one board: `tt_um_vga_ca` on fpga-4, on 2026-11-28 (+1030), at 7 MHz, divider 1 and a 133 MHz system clock, with `--clock-high` 0 to 15 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-28-clocked-fpga4/)):
+The floor is 65 ns of pin time. The synchroniser's delay is fixed in system clocks, and the design's settling is fixed in nanoseconds, so a floor on the read time moves the pin time into the design's settling window at a lower system clock. At 48 MHz, an 80 ns read-time floor gives H 3, which reads at 83 ns but sees the pin at 42 ns. The 65 ns floor gives H 5 there.
+
+The floor rests on one design and one board: `tt_um_vga_ca` on fpga-4, on 2026-11-28 (+1030), at 7 MHz, divider 1 and a 133 MHz system clock, with `--clock-high` 0 to 15 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-28-clocked-fpga4/)):
 
 | H | Read time | Pin time | Result |
 |---|---|---|---|
-| 0 | 7.5 ns | -7.5 ns | the previous clock's output |
+| 0 | 7.5 ns | before the edge | the previous clock's output |
 | 1-4 | 15.0-37.6 ns | 0.0-22.6 ns | the previous clock's output |
-| 5 | 45.1 ns | 30.1 ns | wrong |
-| 6 | 52.6 ns | 37.6 ns | wrong |
+| 5 | 45.1 ns | 30.1 ns | a mix of the previous and new output |
+| 6 | 52.6 ns | 37.6 ns | a mix of the previous and new output |
 | 7-15 | 60.2-120.3 ns | 45.1-105.3 ns | exact |
 
-For this design on this board, the output starts changing after 37.6 ns of read time and is complete by 60.2 ns. In pin time, that is 22.6 to 45.1 ns. The last wholly wrong read is H 4, and the first exact one is H 7. The 80 ns floor is H 10 at 133 MHz, a read at 82.7 ns, about 68 ns in pin time. The margin is kept because only one design on one board was measured.
+For this design on this board, the output starts changing after 37.6 ns of read time and is complete by 60.2 ns. In pin time, that is 22.6 to 45.1 ns. The last wholly wrong read is H 4, and the first exact one is H 7. At 133 MHz the 65 ns floor is H 10, a read at 82.7 ns, about 68 ns in pin time. The margin is kept because only one design on one board was measured.
 
-The 40 ns floor before it was a design-note choice, never measured. The 25 ns it built on came from frame mode on a different design: `tt_um_vgacal_bars` on fpga-4, with a 25 MHz project clock at a 100 MHz system clock. That page puts the output change at about 25 ns after the rising edge, input synchroniser included: falling+0 was wrong, and falling+1 and rising+0 were exact ([result](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-frame-capture-fpga4/README.md)).
+The floor before it was 80 ns of read time, from the same sweep. The 40 ns floor before that was a design-note choice, never measured. The 25 ns it built on came from frame mode on a different design: `tt_um_vgacal_bars` on fpga-4, with a 25 MHz project clock at a 100 MHz system clock. That page puts the output change at about 25 ns after the rising edge, input synchroniser included: falling+0 was wrong, and falling+1 and rising+0 were exact ([result](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-frame-capture-fpga4/README.md)).
 
 The read point a design needs depends on its clock-to-output path. A design with a slower path can read the previous clock's value at the default H and still report a clean run, because every sample arrives, one clock late. Only a sweep of H against the design's reference shows it. To sweep, run once with each `--clock-high` from 0 to 15 at a rate that is divider 1, such as 7 MHz at a 133 MHz system clock, and compare each capture with the reference.
 
-To read a design t_ns after the edge, give `--clock-high H` with H = ceil(t_ns × sysclk / (1e9 × pio_div)) − 1. For 100 ns at 133 MHz and divider 1, ceil(13.3) − 1 gives H 13, a read at 105.3 ns. No option takes the read time in nanoseconds ([#97](https://github.com/mithro/vgacap/issues/97)).
+To have the read see the pin t_pin_ns after the edge, give `--clock-high H` with H = ceil((t_pin_ns × sysclk + 2e9) / (1e9 × pio_div)) − 1, where t_pin_ns is the pin time and pio_div is the `pio_div=` that the run's first line prints. At divider 1 that is H = ceil(t_pin_ns × sysclk / 1e9 + 2) − 1. For 90 ns of pin time at 133 MHz and divider 1, ceil(11.97 + 2) − 1 gives H 13, a read at 105.3 ns that sees the pin at 90.2 ns. No option takes the pin time in nanoseconds ([#97](https://github.com/mithro/vgacap/issues/97)).
 
 ## What you need
 
@@ -52,9 +54,9 @@ To read a design t_ns after the edge, give `--clock-high H` with H = ceil(t_ns �
 3. In the terminal, read the stats line, which shows `status=ok` and `board_samples=` equal to `--clocks` for a clean run.
 4. In the checkout, run `./build/vgacap-dump bars-clocked.vgacap`, which prints the header, both board records, a line for each chunk of samples, and the total.
 
-`--clocks` must be a multiple of 4, because the board packs four samples to a word. To set `ui_in` for the run, add `--ui-in`, as in [How to set a design's inputs during a capture](how-to-set-ui-in.md). To move the read point within the clock, give H with `--clock-high`, 0 to 15. The clock is then the nearest not faster than `--clock-hz` in which that H fits, and L takes up the rest; a `--clock-hz` above the fastest clock that H allows, rounded up to a whole hertz, is refused. An H that reads `uo_out` under 80 ns after the edge still runs, with a warning printed before the board is loaded, and the header and the board's first record say `below_floor=1`: such a run is a sweep point, not a reference capture. Clocked mode refuses `--seconds`, `--max-bytes`, `--frames`, `--project`, `--design`, `--edge`, `--vga-mode`, `--window-lines`, `--sample-delay`, the `--rle-` options and `--no-stop-clock`. It also refuses `--firmware picosdk`, `--firmware mpy-module` and `--profile rp2040`, all before the board is touched.
+`--clocks` must be a multiple of 4, because the board packs four samples to a word. To set `ui_in` for the run, add `--ui-in`, as in [How to set a design's inputs during a capture](how-to-set-ui-in.md). To move the read point within the clock, give H with `--clock-high`, 0 to 15. The clock is then the nearest not faster than `--clock-hz` in which that H fits, and L takes up the rest; a `--clock-hz` above the fastest clock that H allows, rounded up to a whole hertz, is refused. An H whose read sees the pin under 65 ns after the edge still runs, with a warning printed before the board is loaded, and the header and the board's first record say `below_floor=1`: such a run is a sweep point, not a reference capture. Clocked mode refuses `--seconds`, `--max-bytes`, `--frames`, `--project`, `--design`, `--edge`, `--vga-mode`, `--window-lines`, `--sample-delay`, the `--rle-` options and `--no-stop-clock`. It also refuses `--firmware picosdk`, `--firmware mpy-module` and `--profile rp2040`, all before the board is touched.
 
-After the run, however it ended, the board has the clock stopped, reset released, and its input mode and manual-clock monitor as they were. The load leaves no file behind: it deletes `/_vgacap/held.bin`, then removes `/_vgacap` if it is empty, even an empty `/_vgacap` that was there before the run. The header records the bitstream's name, length and crc32, and the run's clocks, reset clocks, system clock and PIO timing. Its mode is `SELFCLK`, and its `clock_hz` is the real clock.
+Once `ttcap` has finished, however the run ended, the board has the clock stopped, reset released, and its input mode and manual-clock monitor as they were. If ttcap itself is killed, the board finishes the run on its own. It releases reset and leaves the clock pin low on PIO1, but `--ui-in`'s input mode and the manual-clock monitor stay as the capture set them, until the next ttcap capture, `tt.mode = N` or `tt.manual_project_clock.monitoring = True`. The load leaves no file behind: it deletes `/_vgacap/held.bin`, then removes `/_vgacap` if it is empty, even an empty `/_vgacap` that was there before the run. The header records the bitstream's name, length and crc32, and the run's clocks, reset clocks, system clock and PIO timing. Its mode is `SELFCLK`, and its `clock_hz` is the real clock.
 
 ## Check
 
@@ -79,8 +81,8 @@ Clean means all of these: the samples in the file add up to `--clocks` and to th
 | 1 | `--clocks must be more than --reset-clocks`, exit 2 | no clock would come after reset | raise `--clocks` |
 | 1 | `--reset-clocks must be at most`, exit 2 | the reset clocks would fill the buffer and the PIO's FIFO before reset is released | raise `--buf-words` or lower `--reset-clocks` |
 | 1 | `--clock-high must be 0..15`, exit 2 | H is outside the PIO's delay field | give 0 to 15 |
-| 1 | `warning: --clock-high H reads uo_out N ns after the rising edge` | the H given reads under 80 ns after the edge | none for a sweep; leave `--clock-high` out for a reference |
-| 1 | `is above the fastest clocked rate` | above the fastest clock the `--clock-high` H allows, or the 80 ns floor without it | ask for the `--clock-hz` the message gives, or less |
+| 1 | `warning: --clock-high H reads uo_out N ns after the rising edge` | the H given sees the pin under 65 ns after the edge | none for a sweep; leave `--clock-high` out for a reference |
+| 1 | `is above the fastest clocked rate` | above the fastest clock the `--clock-high` H allows, or the 65 ns pin-time floor without it | ask for the `--clock-hz` the message gives, or less |
 | 1 | `is below the slowest clocked rate` | the clock needs a larger PIO divider than there is | raise `--clock-hz` |
 | 1 | `needs the FPGA breakout's RP2350 demo board` | `--profile auto` found an RP2040 | use the FPGA breakout's board |
 | 3 | `not clean: status=error`, exit 1 | the board stopped the run with an `error=` record | read the `error=` line among the board lines |
