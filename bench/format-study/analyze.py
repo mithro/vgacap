@@ -707,12 +707,24 @@ if os.path.exists(expcsv):
                 continue
             med = lambda k: statistics.median(float(r[k]) for r in rs if r[k])
             rb0 = [r for r in rs if r["fst_hash"]]
-            body.append([pj, tool, len(rs), f"{med('process_s'):.1f}", f"{med('wall_s'):.1f}",
+            ps_ = sorted(float(r["process_s"]) for r in rs)
+            body.append([pj, tool, len(rs), f"{med('process_s'):.1f}", f"{ps_[0]:.1f}", f"{ps_[-1]:.1f}",
+                         f"{med('wall_s'):.1f}",
                          "-" if tool == "vgacap-export" else f"{med('reader_thread_s'):.1f}",
                          f"{med('max_rss_kib') / 1024:.0f}", f"{med('fst_bytes') / 1e6:.1f}",
                          "-" if not rb0 else ("same" if all(r["fst_hash"] == r["source_hash"] for r in rb0) else "DIFFERENT")])
-    table(["project", "source", "reps", "process CPU s", "wall s", "reading thread s", "max RSS MiB", "FST MB",
-           "read back"], body)
+    table(["project", "source", "reps", "process CPU s", "process CPU s, lowest rep", "process CPU s, highest rep",
+           "wall s", "reading thread s", "max RSS MiB", "FST MB", "read back"], body)
+    print("### The same export, planar over vgch2 in each rep: process CPU, median [lowest, highest]\n")
+    print("Each rep's planar job over the same rep's vgch2 job, which ran beside it.\n")
+    body = []
+    for pj in [x for x in ORDER if any(k[0] == x for k in ex)]:
+        a = {r["rep"]: float(r["process_s"]) for r in ex.get((pj, "planar"), []) if r["exit"] == "0"}
+        b = {r["rep"]: float(r["process_s"]) for r in ex.get((pj, "vgch2"), []) if r["exit"] == "0"}
+        rs = sorted(a[k] / b[k] for k in a if k in b and b[k] > 0)
+        if rs:
+            body.append([pj, len(rs), f"{statistics.median(rs):.2f} [{rs[0]:.2f}, {rs[-1]:.2f}]"])
+    table(["project", "reps", "planar over vgch2"], body)
 
 simcsv = os.path.join(RES, "sim", "sim.csv")
 if os.path.exists(simcsv):
