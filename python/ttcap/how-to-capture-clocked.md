@@ -15,17 +15,17 @@ The real clock is the one nearest `--clock-hz` that is not faster. A clock is H 
 
 The read time is the time from the side-set rising edge to the `in` that reads `uo_out`: (H + 1) PIO cycles. The pin time is the time of the pin level that `in` sees, the read time less the GPIO input synchroniser's 2 system clocks, 15 ns at 133 MHz.
 
-The 80 ns floor was measured on one design and one board: `tt_um_vga_ca` on fpga-4, on 2026-11-28, at 7 MHz, divider 1 and a 133 MHz system clock, with `--clock-high` 0 to 15 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-28-clocked-fpga4/)):
+The 80 ns floor was measured on one design and one board: `tt_um_vga_ca` on fpga-4, on 2026-11-28 (+1030), at 7 MHz, divider 1 and a 133 MHz system clock, with `--clock-high` 0 to 15 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-28-clocked-fpga4/)):
 
 | H | Read time | Pin time | Result |
 |---|---|---|---|
 | 0 | 7.5 ns | -7.5 ns | the previous clock's output |
-| 1-4 | 15.0-37.6 ns | 0.0-22.6 ns | wrong |
+| 1-4 | 15.0-37.6 ns | 0.0-22.6 ns | the previous clock's output |
 | 5 | 45.1 ns | 30.1 ns | wrong |
 | 6 | 52.6 ns | 37.6 ns | wrong |
 | 7-15 | 60.2-120.3 ns | 45.1-105.3 ns | exact |
 
-The threshold there is between 52.6 and 60.2 ns in read time, and between 37.6 and 45.1 ns in pin time. The 80 ns floor is H 10 at 133 MHz, a read at 82.7 ns, about 67 ns in pin time. The margin is kept because only one design on one board was measured.
+The threshold there is between 52.6 and 60.2 ns in read time, and between 37.6 and 45.1 ns in pin time. The 80 ns floor is H 10 at 133 MHz, a read at 82.7 ns, about 68 ns in pin time. The margin is kept because only one design on one board was measured.
 
 The 40 ns floor before it was a design-note choice, never measured. The 25 ns it built on came from frame mode on a different design: a tt09 bars design with a 25 MHz PWM clock at a 100 MHz system clock. There a read 20 ns after the edge failed, and reads at 30 ns and 40 ns were exact; that threshold includes the input synchroniser ([result](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-frame-capture-fpga4/README.md)).
 
