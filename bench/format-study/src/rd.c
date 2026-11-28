@@ -31,6 +31,11 @@
 //   uohash    tracetool uohash: uo_out over its default first 2^25 clocks,
 //             open included.
 //   (vgacap-export reads every pin: the scan pattern.)
+//   export    the whole trace to an FST file (--out), as vgacap-export
+//             --no-clk writes its ports: the seven ports, 1 ps timescale,
+//             LZ4, libfst's parallel mode; no decoded signals. The row's ns
+//             is the reading thread's CPU; a "#export" line on stdout adds
+//             the process CPU (libfst's compressor thread too) and wall.
 // --kind vgch2lazy reads a VGCH v2 file with the lazy-BLKH copy of vgacap's
 // reader (trace_read_lazy.c, rd_lazy.c).
 #define _GNU_SOURCE
@@ -655,6 +660,66 @@ static int rd_read(rd_t *r, uint64_t from, uint64_t to, int port0, cons_t *c) {
 
 static const char *project_name = "?";
 
+// ---- export: runs to FST ---------------------------------------------------------------------------
+typedef struct {
+    cons_t *c;
+    fstWriterContext *ctx;
+    fstHandle h[FS_GROUPS];
+    uint64_t prev;
+    int started;
+} export_t;
+static int export_fn(void *user, const fs_run_t *r, size_t n) {
+    export_t *x = user;
+    for (size_t i = 0; i < n; i++) {
+        const uint64_t v = r[i].value & ~CLK43;
+        uint64_t d = x->started ? v ^ x->prev : ~0ull;
+        if (!(d & ~CLK43)) continue;
+        fstWriterEmitTimeChange(x->ctx, fs_ps(r[i].first_sample));
+        for (int k = 0; k < FS_GROUPS; k++) {
+            const unsigned lo = INFO_PORTS[k].lo, w = INFO_PORTS[k].width;
+            const uint64_t m = (1ull << w) - 1;
+            if ((d >> lo) & m) fstWriterEmitValueChange32(x->ctx, x->h[k], w, (uint32_t)((v >> lo) & m));
+        }
+        x->started = 1;
+        x->prev = v;
+    }
+    return cons_fn(x->c, r, n);
+}
+static int rd_export(rd_t *r, const char *out, cons_t *c) {
+    static const char *const names[FS_GROUPS] = { "uo_out", "uio_out", "uio_oe", "ui_in", "uio_in", "rst_n", "ena" };
+    export_t x;
+    memset(&x, 0, sizeof x);
+    x.c = c;
+    x.ctx = fstWriterCreate(out, 1);
+    if (!x.ctx) { fprintf(stderr, "fs: fst: cannot create %s\n", out); return -1; }
+    fstWriterSetPackType(x.ctx, FST_WR_PT_LZ4);
+    fstWriterSetParallelMode(x.ctx, 1);
+    fstWriterSetTimescale(x.ctx, -12);
+    fstWriterSetScope(x.ctx, FST_ST_VCD_MODULE, "top", NULL);
+    for (int k = 0; k < FS_GROUPS; k++)
+        x.h[k] = fstWriterCreateVar(x.ctx, FST_VT_VCD_WIRE, FST_VD_IMPLICIT, INFO_PORTS[k].width, names[k], 0);
+    fstWriterSetUpscope(x.ctx);
+    static out_t o;
+    memset(&o, 0, sizeof o);
+    o.from = 0; o.to = UINT64_MAX; o.fn = export_fn; o.user = &x;
+    int rc;
+    if (r->kind == K_VG || r->kind == K_LZ)
+        rc = r->kind == K_VG ? vg_read(r->ctx, 0, UINT64_MAX, export_fn, &x) : fs_lazy_read(r->ctx, 0, UINT64_MAX, export_fn, &x);
+    else {
+        rc = r->kind == K_ST ? st_read(r->ctx, 0, UINT64_MAX, 0, &o, NULL) : fst_read(r->ctx, 0, UINT64_MAX, 0, &o);
+        out_flush(&o);
+    }
+    fstWriterEmitTimeChange(x.ctx, fs_ps(c->samples));
+    fstWriterClose(x.ctx);
+    return rc;
+}
+
+static double process_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
+    return (double)ts.tv_sec * 1e9 + (double)ts.tv_nsec;
+}
+
 static void row(const char *kind, const char *file, const char *pattern, int rep, double ns, const cons_t *c,
                 uint64_t extra) {
     printf("%s,%s,%s,%s,%d,%.0f,%llu,%llu,%016llx\n", project_name, kind, file, pattern, rep, ns,
@@ -669,6 +734,7 @@ int fs_mode_read(int argc, char **argv) {
     int reps = 5, seeks = 20;
     uint64_t window = 420000;
     uint32_t hz = 0;
+    const char *out = NULL;
     for (int i = 1; i + 1 < argc; i += 2) {
         if (!strcmp(argv[i], "--kind")) kind_s = argv[i + 1];
         else if (!strcmp(argv[i], "--project")) project_name = argv[i + 1];
@@ -677,6 +743,7 @@ int fs_mode_read(int argc, char **argv) {
         else if (!strcmp(argv[i], "--seeks")) seeks = atoi(argv[i + 1]);
         else if (!strcmp(argv[i], "--window")) window = strtoull(argv[i + 1], NULL, 0);
         else if (!strcmp(argv[i], "--clock-hz")) hz = (uint32_t)strtoul(argv[i + 1], NULL, 0);
+        else if (!strcmp(argv[i], "--out")) out = argv[i + 1];
         else { fprintf(stderr, "fsbench read: unknown option %s\n", argv[i]); return 2; }
     }
     if (hz) fs_clock_hz = hz;
@@ -718,6 +785,15 @@ int fs_mode_read(int argc, char **argv) {
                     row(kind_s, base, "seek", rep * 1000 + k, fs_thread_ns() - s0, &c, 2 * c0);
                 }
                 continue;   // closed already
+            } else if (!strcmp(pat, "export")) {
+                if (!out || !hz) { fprintf(stderr, "fsbench read: export needs --out and --clock-hz\n"); return 2; }
+                const double s0 = fs_thread_ns(), p0 = process_ns(), w0 = fs_wall_ns();
+                if (rd_export(&r, out, &c)) return 1;
+                const double s1 = fs_thread_ns(), p1 = process_ns(), w1 = fs_wall_ns();
+                row(kind_s, base, pat, rep, s1 - s0, &c, 0);
+                struct stat st;
+                printf("#export,%s,%s,%s,%d,thread_ns=%.0f,process_ns=%.0f,wall_ns=%.0f,fst_bytes=%lld\n", project_name,
+                       kind_s, base, rep, s1 - s0, p1 - p0, w1 - w0, stat(out, &st) ? -1ll : (long long)st.st_size);
             } else if (!strcmp(pat, "info")) {
                 info_t inf;
                 const double s0 = fs_thread_ns();
