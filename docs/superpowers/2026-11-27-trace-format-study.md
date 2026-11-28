@@ -19,51 +19,56 @@
 8. [Recommendation](#recommendation)
 9. [How the current format was chosen](#how-the-current-format-was-chosen)
 10. [Fix round 1: what changed](#fix-round-1-what-changed)
-11. [Reproducing](#reproducing)
-12. [References](#references)
+11. [Fix round 2: what changed](#fix-round-2-what-changed)
+12. [Reproducing](#reproducing)
+13. [References](#references)
 
 ## Summary
 
-This is the study after its first round of review ("fix round 1"). The round measured what the first round had estimated, and changed the recommendation. [Fix round 1: what changed](#fix-round-1-what-changed) lists each change.
+This is the study after its second round of review ("fix round 2"). Round 1 measured what the first round had estimated, and changed the recommendation. Round 2 found that the loop's background plans had written corrupt files, fixed the two causes, ran those plans again with every file read back, and measured memory and a full-pin export. [Fix round 1: what changed](#fix-round-1-what-changed) and [Fix round 2: what changed](#fix-round-2-what-changed) list each change.
 
 - **No measured plan meets the budgets on the busy designs.** The busy designs are nyancat, rle_vga and atari2600, where 77-100% of clocks change a pin.
   - No plan keeps the simulation thread within R1's 5% on all three.
-  - No plan keeps the trace's share of R2 within this study's 1% bar on any of them.
-  - Only planar written on the simulation thread stays within even the whole 5% post-simulation budget there, and it misses R1 on all three.
+  - No plan keeps the trace's share of R2 within this study's 1% bar on any of them. The 1% bar is the study's own choice; the spec sets 5% for everything after the simulation.
+  - Only planar written on the simulation thread stays within the whole 5% post-simulation budget there, and it misses R1 on all three.
   - [Pass or fail, per plan](#pass-or-fail-per-plan) is the verdict table.
-- **R1, in the Verilator loop.** Each figure is % of the untraced simulation, the median of 4 processes; raw is from 4 processes of its own. The budget is 5%:
+- **R1, in the Verilator loop.** Each figure is % of the untraced simulation, the median of 4 processes. vgch2 and lean are from round 1's main set; the background plans from round 2's, whose files all read back right; raw from 4 processes of its own. The budget is 5%:
 
   | Plan | nyancat | rle_vga | atari2600 | colorbars |
   |---|---:|---:|---:|---:|
   | vgch2 (current) | 15.4 | 20.5 | 7.9 | 2.7 |
   | lean (vgch2's file) | 14.1 | 18.5 | 7.4 | 3.2 |
-  | events, stored as planar | 7.3 | 8.3 | 3.8 | 1.7 |
-  | changelog, stored as planar | 8.0 | 6.1 | 4.4 | 2.2 |
-  | planar on the simulation thread | 10.5 | 11.5 | 5.6 | 2.4 |
+  | events, stored as events | 8.2 | 7.7 | 3.9 | 3.6 |
+  | events, stored as planar | 8.3 | 8.2 | 4.1 | 3.3 |
+  | changelog, stored as planar | 7.7 | 5.5 | 3.1 | 2.7 |
+  | planar on the simulation thread | 12.8 | 10.7 | 6.0 | 2.8 |
   | raw | 6.0 | 3.0 | 2.6 | 4.8 |
 
-- **The lean writer writes vgacap's file, but it does not halve the cost.**
+  - Round 2 moved the background plans by −1.3 to +2.3 points on the busy designs. vgch2, run beside them as the check, moved by −0.5 to +1.2. Every R1 verdict is the same as round 1's ([round 1 against round 2](#round-1-against-round-2-of-the-untraced-model-median-of-the-processes)).
+  - Raw's sets ran at about twice the host's normal load (1.8 and 2.3 a CPU, median). Its figures may be high.
+- **The lean writer writes vgacap's file and saves 6-10% on the busy designs.**
   - It is byte-identical to the published trace on all 11 traces (`cmp`).
   - In the loop it costs 0.90 (nyancat), 0.90 (rle_vga) and 0.94 (atari2600) of vgch2: each process's ratio, median of 4.
-  - On the two quiet designs it costs more than vgch2: 1.28 (colorbars) and 1.10 (vgadonut), where both are a few ns a clock.
-  - The first round's "about half" was the study's own `runs` writer, which also split blocks differently. What makes that writer cheaper than vgacap's code is not found. "Half the cost" is a target, not a result.
-- **R2 fails plainly.** A job reads its trace three times: `tracetool info`, `vgacap-sample` and `tracetool uohash`. With all three counted, the trace's share of R2 (%, background at encode2's median) is:
+  - On the two quiet designs the ratio (1.28, 1.10) is a per-variant offset of about 1-2 ns a clock, within the noise. It is not a cost.
+  - It is small, safe and not urgent. The format owner found that `vgacap_trace_block_pair` is not inlined; forcing it inline gave 0.88 (nyancat) and 0.77 (rle_vga) in one replay run. That is a direction only, not a loop figure.
+- **R2 fails plainly.** A job reads its trace three times: `tracetool info`, `vgacap-sample` and `tracetool uohash`. The trace's share of R2 (%, background at encode2's median), with `tracetool info` as a scan and as a header-only read:
 
-  | Plan | nyancat | rle_vga | atari2600 |
-  |---|---:|---:|---:|
-  | vgch2 (current) | 17.6 | 25.0 | 11.1 |
-  | events, stored as planar | 7.4 | 8.2 | 3.3 |
-  | changelog, stored as planar | 8.8 | 7.9 | 4.1 |
-  | planar on the simulation thread | 4.5 | 2.5 | 1.3 |
+  | Plan | nyancat | rle_vga | atari2600 | nyancat, no scan | rle_vga, no scan | atari2600, no scan |
+  |---|---:|---:|---:|---:|---:|---:|
+  | vgch2 (current) | 17.6 | 25.0 | 11.1 | 10.1 | 11.1 | 5.9 |
+  | events, stored as planar | 7.4 | 8.2 | 3.3 | 6.3 | 6.6 | 2.7 |
+  | changelog, stored as planar | 8.8 | 7.9 | 4.1 | 7.8 | 6.5 | 3.6 |
+  | planar on the simulation thread | 4.5 | 2.5 | 1.3 | 3.5 | 1.0 | 0.8 |
 
-  - The first round's recommendation, events stored as planar, is over the 1% bar on all three busy designs, and over the whole 5% on nyancat and rle_vga.
-  - Planar's gain needs `tracetool info` to count each stream on its own. As `tracetool info` is today, one merged scan of every port, planar's share on nyancat is 15.7% against vgch2's 17.6%, and most of the gain is gone.
+  - The job uses none of `tracetool info`'s change counts: it reads only `blocks`, `clocks` and `open.slice_*`. A header-only `tracetool info` removes the scan for every format with no format change. For vgch2 that is the largest free saving found: 30 s (nyancat), 63 s (rle_vga) and 38 s (atari2600) a job.
+  - Planar still has the lowest share without the scan, by less: 3.5% against vgch2's 10.1% on nyancat.
 - **Planar's size and `uo_out` gains stand.**
   - Planar is 54 MB against vgch2's 416 MB on nyancat, 9.0 against 597 on atari2600, and 0.62 against 18.4 on rle_vga.
   - `vgacap-sample`'s pass, which reads `uo_out` and `rst_n`, takes 10.1 s on nyancat against vgch2's 18.3, and 0.04 s on rle_vga against 33.0.
   - vgch2's merged full scan of every port is faster than planar's on 10 of the 11 traces, and ties on nyan: 28.3 s against 49.6 on nyancat.
+  - A full-pin FST export takes the same CPU from either file on nyancat (448 s) and atari2600 (758 against 766 s), and 12% more from planar on rle_vga (579 against 516 s). Writing the FST is most of it.
 - **Background CPU is noisy, and the verdicts do not depend on it.** Identical compression work measured up to 2.5 times apart, with what else ran on the socket. R2 is given at each plan's lowest measured figure and at its median, and every pass or fail is the same at both.
-- **Lazy block starts cut the cost of opening a trace by more than half on the busy traces, with no format change.** Reading block starts only when a seek needs them cuts vgch2's open from 111 to 29 ms on nyancat and from 242 to 97 ms on rle_vga, and a one-frame seek on nyancat from 129 to 51 ms.
+- **Lazy block starts cut the open by more than half on the busy traces, with no format change.** vgch2's open falls from 111 to 29 ms on nyancat and from 242 to 97 ms on rle_vga, and a one-frame seek on nyancat from 129 to 51 ms. vgadonut still opens in 112 ms. The block-order check moves from open to read time, and a corrupt `BLKH` can deliver runs before the error.
 - **The existing formats lose on the simulation thread.**
   - FST written directly costs 4.1-5.1 times vgch2 on the busy designs, measured in the same replay run. A one-frame seek takes 0.6-1.0 s.
   - A cut-short FST is fragile: files cut to 10% or 50% gave no samples, or crashed libfst's reader.
@@ -84,7 +89,7 @@ The requirements come from the design spec, [`2026-11-24-raw-frames-and-hash-met
 | # | Requirement | Source in the spec | Weight | How it is measured here |
 |---|---|---|---|---|
 | R1 | Recording costs at most 5% of simulation wall time, on the simulation thread. That is about 10 ns a clock at the fastest project, so the busiest designs leave little room. | Performance budget, first bullet | must | ns per clock over an untraced run: the replay, and the Verilator loop in one process |
-| R2 | Everything after the simulation, plus the compressor thread, costs at most 5% of the simulation's CPU. The samplers, hashes, PNGs and copies share that 5%, so the trace's own share has to be small. This study counts the trace as passing at 1% or less, with the rest left to the derived outputs. | Performance budget, second bullet | high | the background thread's CPU plus every read of the trace a job makes (`tracetool info`, `vgacap-sample`, `tracetool uohash`), as a share of the pilot's untraced simulation CPU |
+| R2 | Everything after the simulation, plus the compressor thread, costs at most 5% of the simulation's CPU. The samplers, hashes, PNGs and copies share that 5%, so the trace's own share has to be small. This study counts the trace as passing at 1% or less, with the rest left to the derived outputs. That 1% bar is the study's own choice; the spec sets only the 5%. | Performance budget, second bullet | high | the background thread's CPU plus every read of the trace a job makes (`tracetool info`, `vgacap-sample`, `tracetool uohash`), as a share of the pilot's untraced simulation CPU |
 | R3 | The trace is the record. It keeps every pin at both halves of every clock, and the clock bit is regenerated exactly. A run can be longer than 2^32 samples. | What is recorded; The clock in a run-encoded trace; Size and format | must | every reader's runs hash the same as vgacap's reader's (validation table) |
 | R4 | Size. The bulk volume has tens of TB. A raw trace of every run would be 8.5 TB, and runs cut that "by orders of magnitude". Size also sets how long the published archive takes to sync. | Size and format | medium | bytes per clock, and in total for each of the 11 traces |
 | R5 | Read paths. One sequential pass feeds every sampler. That pass is "likely the largest post-simulation cost for busy, fast designs", and it counts against R2. A clock range has to seek to the right block (`--from/--to`, `frames compare`). An export of one pin group reads only that group's data. | Size and format; Reading the trace back; Viewing in GTKWave and Surfer | high (scan), medium (seek, one group) | a full scan to a no-op consumer; each read a job makes; a 420,000-clock window from a fresh open; `uo_out` alone |
@@ -256,6 +261,8 @@ The fix round's loop sets, run by [`sim/run_ticks.sh`](../../bench/format-study/
 | main (`fx1a` to `fx1d`) | 4 | none, vgch2, lean, events, evplanar, planar, changelog | 2, pinned, the simulation thread on the first |
 | raw (`fx1ra` to `fx1rd`) | 4 | none, raw | 2, pinned |
 | scope (`fx1s`) | 1 | the main set's | not pinned: a systemd scope with `CPUQuota=200%`, as a job runs |
+| bg, fix round 2 (`fx2a` to `fx2d`) | 4 | none, vgch2, events, evplanar, planar, changelog | 2, pinned, as main |
+| bgscope, fix round 2 (`fx2s`) | 1 | the bg set's | as scope |
 
 - The projects are nyancat, rle_vga, colorbars, atari2600 and vgadonut.
 - In the main set, the variants' orders are:
@@ -270,9 +277,14 @@ The fix round's loop sets, run by [`sim/run_ticks.sh`](../../bench/format-study/
   - planar: planar written on the simulation thread, then zstd 1 of each stream;
   - changelog: its records converted to planar, then zstd 1;
   - raw: `xor6`, then zstd 1.
+- **Fix round 2 re-ran the background plans.** Round 1's main and scope sets wrote corrupt files for events, evplanar, planar and changelog, for two reasons:
+  - one stdio buffer was shared by every background writer of a process ([`bg.c`](../../bench/format-study/src/bg.c) had it `static`), so their bytes mixed;
+  - the converters wrote the streams in raw byte order, which is port order only in the replay's layout, not in Verilator's.
+  Both are fixed. The bg sets run those plans again, with vgch2 beside them as the reference. Their R1 figures replace round 1's for those four plans; vgch2's and lean's stay round 1's.
+- **Every file is read back.** After each pair of sets, [`sim/readback.py`](../../bench/format-study/sim/readback.py) reads every trace written. Each file's full hash, samples and `uo_out` run count must equal lean's (or vgch2's, the same file) from the same process, or [`run_ticks.sh`](../../bench/format-study/sim/run_ticks.sh) fails. Raw's sets, run in round 1 with one background writer a process, were read back against `fx2a`'s vgch2.
 - Raw has a set of its own. Its 32 MiB blocks and its background thread share no process, and so no L3 traffic, with another variant's. That removes the first round's bias (raw's background work fell partly on the other variants).
 - **Stalls.** A thread-CPU clock cannot see a simulation thread that waits for its writer's thread, since a waiting thread uses no CPU. So each chunk also has its wall time. For each variant, the stall measure is the wall time minus the thread CPU, over the untraced model's same difference. The study writers also count their own hand-overs that waited, and the wall time those took. vgacap's writer keeps no such count.
-- **Concurrency.** Two processes a project ran at once, `fx1a` with `fx1b` and then `fx1c` with `fx1d`: 10 processes on 20 CPUs of the second socket. The read and encode benchmarks of this round ran on the first socket at the same time. The paired design cancels most of this; the processes' spread shows what is left.
+- **Concurrency.** Two processes a project ran at once, `fx1a` with `fx1b` and then `fx1c` with `fx1d`: 10 processes on 20 CPUs of the second socket. The read and encode benchmarks of this round ran on the first socket at the same time. Fix round 2's bg sets ran the same way, with the FST export timing on the first socket beside them. The paired design cancels most of this; the processes' spread shows what is left.
 - **The first round's sets are kept, as "first round".**
   - Two CPUs a process: `tick2a` to `tick2d`, 4 processes on 3 projects, 12 processes at once.
   - One CPU a process: `tick` to `tickG`, 7 processes. There every background thread shared the simulation's core. With a thread-CPU clock that time-sharing is charged to no one; only its cache effects are, and they fall on whichever variant is running.
@@ -305,7 +317,7 @@ The first round measured each background figure once. This round adds three more
 - **Spread.** The same compression work measured up to 2.5 times apart: vgch2 on rle_vga took 6.83 s in the first round and 14.5-17.2 s in encode2, for identical input and output bytes.
 - **Not the cache.** [`warm_cache.sh`](../../bench/format-study/warm_cache.sh) ran zstd1 alone, and after zstd-5 and zstd-1 had read the same block, as the first round's matrix did. Both took the same CPU, and both were close to the first round's figure. So the first round's matrix did not flatter it.
 - **What it tracks.** The spread follows what else ran on the socket. encode2 ran 20 whole-trace encodes at once on the first socket, the raw candidates' 16-bytes-a-clock passes among them, and the CPUs' hyperthread siblings were not reserved. A memory-bound compressor, such as zstd on rle_vga's 1,100-to-1 data, slows the most.
-- **A third estimate.** The loop's own background threads ran beside a real simulation. Scaled to the whole trace, they agree with the whole-trace runs to within about 30% on the busy traces ([three ways table](#background-cpu-three-ways-s-for-the-whole-trace-the-loops-scaled-against-the-whole-trace-runs)).
+- **A third estimate.** The loop's own background threads ran beside a real simulation. Scaled to the whole trace, they come out at 0.49-1.04 of encode2's median on the busy traces, lower in all but one case. The furthest are rle_vga's events and planar, about half ([three ways table](#background-cpu-three-ways-s-for-the-whole-trace-the-loops-scaled-against-the-whole-trace-runs)).
 - **Provenance.** Four of the first round's encode sets were run by hand, outside `run_pool`: the `runs`, changelog, events-to-planar and raw-to-planar encodes. `run_all.sh` contains them now, but those results were not produced by it. They have no `.done` files, and the events-to-planar `#pass` lines name their files by relative paths. encode2 was run by `run_all.sh`.
 
 Background CPU is compared with the pilot's untraced simulation CPU (`data/pilot_baseline.csv`, from the pilot's [`measurements.md`](https://github.com/mithro/tinytapeout-vga-videos/blob/t20-pilot/docs/reports/2026-11-pilot/measurements.md)). The simulation here ran 60 s per project.
@@ -347,7 +359,10 @@ A job reads its trace more than once. This round times each read the derive step
   - raw to planar;
   - events;
   - raw `xor6`.
-- **Lazy block starts.** [`trace_read_lazy.c`](../../bench/format-study/src/trace_read_lazy.c) is vgacap's reader with one change. Its open reads only block 0's start; a seek's binary search reads the starts it needs, when it needs them. That needs no format change.
+- **Lazy block starts.** [`trace_read_lazy.c`](../../bench/format-study/src/trace_read_lazy.c) is vgacap's reader with one change. Its open reads only block 0's start; a seek's binary search reads the starts it needs, when it needs them. That needs no format change. It changes when faults are found:
+  - vgacap's open rejects a file whose block starts are out of order. The lazy reader checks a start only against the neighbours it has read, so the same file now fails at seek or read time, not at open.
+  - A seek's binary search can trust a wrong start it has not checked. The next block's check then fails, but only after that block's runs have reached the caller. So a corrupt `BLKH` can deliver runs before the error.
+  - The gain depends on the design: vgadonut's open still takes 112 ms (the open table).
 - **Validation.** Before any timing, a validate pass hashes every reader's canonical runs (adjacent equal values merged) and its `uo_out` runs. Every format has to match vgacap's reader on the real trace. The `info` pattern's counts also have to match across the formats.
 - **The study's readers check less than vgacap's.** [`rd.c`](../../bench/format-study/src/rd.c) maps the file and decodes LEB128 without bounds checks. It checks that a stream's runs sum to the block only under `FS_CHECK_PLANAR`. vgacap's reader enforces every fault case of the spec. That flatters the study formats' scan figures somewhat. It does not touch the structural gain of reading `uo_out` alone.
 
@@ -363,6 +378,7 @@ Both report the samples a reader recovers. The checks have gaps:
 - They cover 3 projects.
 - The kill test runs the study writers synchronously, through `fsbench encode`. It never kills the double-buffered writer, nor the events-to-planar converter. So R6's "at most two blocks" is not tested for the converter.
 - No test corrupts a file, so the checksums' detection is not exercised.
+- None of these gaps was measured in fix round 2 either. They remain unmeasured.
 
 ### Memory
 
@@ -1804,7 +1820,7 @@ What each costs and buys:
 - **One run stream of whole 43-bit values** (`RUNS`: a 6-byte value, then a LEB128 run).
   - Cost: every change rewrites all 7 ports' bytes. On the busy traces the file is 7.7 (nyancat), 66 (atari2600) and 30 (rle_vga) times planar's.
   - Cost: the bytes to compress are 2.7 (nyancat) to 3.5 (rle_vga) times planar's: 8.1 against 3.0 GB, and 20.2 against 5.8 GB.
-  - Buys: the fastest merged scan of every port, 1.4-1.8 times planar's on the busy traces (`tracetool info` as it is: 27.5 against 49.6 s on nyancat). One stream, so the simplest reader.
+  - Buys: the fastest merged scan of every port, 1.4-1.8 times planar's on the busy traces (`tracetool info` as it is: 28.3 against 49.6 s on nyancat). One stream, so the simplest reader.
   - It is right only if a reader needs every pin, every time.
 - **Packing to 43 bits on the simulation thread** (tb.cpp's `pack_raw` on each changed clock).
   - Cost: one gather of 8 bytes per changed sample, inside the measured slow path.
@@ -1814,8 +1830,9 @@ What each costs and buys:
   - Buys: runs at all. Without it no two samples are equal: FST-with-clk, which records `clk`, costs 230-310 ns a clock even on quiet designs (replay).
 - **Run lengths unbounded** (LEB128 up to 64 bits): 1-10 bytes a run, for R3 (a run longer than 2^32 samples).
 - **vgacap's push API** (`push2` as two pushes, each through `vgacap_trace_slow` and `slow_rare`).
-  - The lean writer replaces it with one call a changed clock and writes the same file. In the loop it saves 6-10% on the busy designs (lean over vgch2: 0.90, 0.90, 0.94), and costs more on the two quiet ones (1.28, 1.10).
-  - So the push path is not where vgch2's cost is. The first round's estimate, about half, was wrong.
+  - The lean writer replaces it with one call a changed clock and writes the same file. In the loop it saves 6-10% on the busy designs (lean over vgch2: 0.90, 0.90, 0.94). On the two quiet ones the ratio (1.28, 1.10) is a per-variant offset of about 1-2 ns a clock, within the noise.
+  - `vgacap_trace_block_pair` is `static inline` but compiled out of line, so every pair is a call and a switch. Forcing it inline in the lean writer gave 0.88 (nyancat) and 0.77 (rle_vga) of vgch2 in one replay run (the format owner's finding): a direction, not a loop figure.
+  - So the push path is a small part of vgch2's cost. The first round's estimate, about half, was wrong.
 - **zstd level 1.**
   - On `RUNS` data, level 3 is smaller than level 1 on nyancat (288 against 413 MB) for 12% less CPU (17.3 against 19.6 s), and on atari2600 (418 against 595 MB) for about the same CPU (20.9 against 21.1 s).
   - On rle_vga's `RUNS` data, level 3 is larger and slower: 26.8 MB in 10.9 s, against 18.4 MB in 6.8 s. It is also larger on colorbars: 0.64 against 0.55 MB.
@@ -1882,7 +1899,7 @@ Changing the payload also has a cost of its own, which counts against it under R
 Every item rests on a table and a number, or on a concrete property.
 
 - **Busy** means nyancat, rle_vga and atari2600: 77-100% of their clocks change a pin.
-- **Simulation-thread** figures are the fix round's loop medians (4 processes; raw in processes of its own), unless they say "replay".
+- **Simulation-thread** figures are the loop's medians of 4 processes, unless they say "replay": vgch2 and lean from fix round 1's main set, the background plans from fix round 2's, raw from processes of its own.
 - **R2 share** is the trace's background CPU plus every read a job makes, as a share of the simulation CPU, with `tracetool info` counting planar streams on their own and the background at encode2's median ([R2 tables](#the-traces-share-of-r2-background-cpu-and-every-read-of-a-job)).
 
 ### vgch2 (current)
@@ -1912,7 +1929,7 @@ Pros:
 
 Cons:
 
-- It saves only 6-10% on the busy designs (14.1% against 15.4% on nyancat, 18.5% against 20.5% on rle_vga), and costs more than vgch2 on colorbars and vgadonut.
+- It saves only 6-10% on the busy designs (14.1% against 15.4% on nyancat, 18.5% against 20.5% on rle_vga). On colorbars and vgadonut its ratio to vgch2 is an offset within the noise, not a cost.
 - Everything vgch2 costs in size, background CPU and reading.
 
 ### planar (a run stream per port, written on the simulation thread)
@@ -1927,21 +1944,22 @@ Pros:
 
 Cons:
 
-- 10.5% (nyancat), 11.5% (rle_vga) and 5.6% (atari2600) of the simulation: over R1 on all three busy designs.
-- A merged scan of every port is 1.4-1.8 times vgch2's on the busy traces, because seven streams are merged. `tracetool info` has to count each stream on its own, or planar's R2 gain is mostly lost (15.7% against vgch2's 17.6% on nyancat).
+- 12.8% (nyancat), 10.7% (rle_vga) and 6.0% (atari2600) of the simulation: over R1 on all three busy designs.
+- A merged scan of every port is 1.4-1.8 times vgch2's on the busy traces, because seven streams are merged. With today's merged `tracetool info` planar's R2 gain is mostly lost (15.7% against vgch2's 17.6% on nyancat); a header-only `tracetool info` removes the question (3.5% against 10.1%).
+- A full-pin FST export costs 12% more CPU than from vgch2's file on rle_vga (579 against 516 s), and the same on nyancat and atari2600.
 - Seven streams a block, where `RUNS` has one chunk. Measured as seven zstd frames a block, which is a change of VGCH v2's container.
-- 7 streams × 16 MiB × 2 of buffers allocated on the simulation side (Memory).
+- Its buffers: 7 streams × 16 MiB × 2 allocated on the simulation side (the memory table gives what is resident).
 
 ### events (one time-ordered change stream)
 
 Pros:
 
-- The cheapest of the raw-compare writers on nyancat: 6.3%, against changelog's 8.0%.
+- On the simulation thread, close to changelog: 8.2% (nyancat), 7.7% (rle_vga), 3.9% (atari2600).
 - Stored as is, the smallest on the quiet traces: 0.20 MB colorbars, 0.09 MB tomkeddie_a.
 
 Cons:
 
-- Over R1 on nyancat (6.3%) and rle_vga (7.9%).
+- Over R1 on nyancat (8.2%) and rle_vga (7.7%), and dearer than changelog on all three busy designs.
 - Stored as is, its R2 share is the highest of the run formats: 19.0% (nyancat), 32.6% (rle_vga), because every read decodes every event.
 - Stored as is, it is 2.9 times planar on nyancat (154 against 54 MB) and 25 times on atari2600 (229 against 9.0).
 
@@ -1950,7 +1968,7 @@ Cons:
 Pros:
 
 - Planar's file: 53.8 MB nyancat, 0.66 MB rle_vga, 9.4 MB atari2600.
-- Its simulation-thread cost is events' plus the hand-over: 7.3% (nyancat), 8.3% (rle_vga), 3.8% (atari2600).
+- Its simulation-thread cost is events' plus the hand-over: 8.3% (nyancat), 8.2% (rle_vga), 4.1% (atari2600).
 
 Cons:
 
@@ -1962,13 +1980,13 @@ Cons:
 
 Pros:
 
-- The cheapest raw-compare writer on rle_vga: 6.1%, against events' 7.9%.
+- The cheapest raw-compare writer on all three busy designs: 7.7% (nyancat), 5.5% (rle_vga), 3.1% (atari2600), against events' 8.2%, 7.7% and 3.9%.
 - Its writer does the least on the simulation thread: three 8-byte stores a changed clock, and no encoding.
 - Stores planar's file, with all of planar's size and reads.
 
 Cons:
 
-- On nyancat it costs more than events (8.0% against 6.3%).
+- Over R1 on nyancat and rle_vga, though rle_vga's lowest process is 4.6%.
 - Its records are 24 bytes a changed clock, so converting them costs more than converting events: R2 8.8% (nyancat) and 7.9% (rle_vga).
 - 2 × 64 MiB of records, and 8 × 64 MiB of converter scratch (Memory).
 
@@ -1983,6 +2001,7 @@ Cons:
 
 - 6.0% on nyancat, over R1, and 4.8% on colorbars, where events costs 1.8%. Its cost is the same whatever the design does.
 - In processes of its own it cost more on nyancat than the first round's shared processes suggested (3.6%).
+- Its sets ran at about twice the host's normal load (1.8 and 2.3 a CPU, median), so its figures may be high.
 - Its background thread reads 16 bytes a clock. Converted to planar, its R2 share is 12.4% (nyancat), 13.7% (rle_vga), and 3.9-6.3% even on the quiet traces. Stored as `xor6`, it is 23-48%.
 - Stored as `xor6`, it is 10-280 times vgch2 on quiet traces (30.7 MB tomkeddie_a against 0.11).
 - 2^21-clock blocks of 32 MiB, double-buffered: 64 MiB a writer.
@@ -2028,48 +2047,60 @@ Cons:
 
 ## Recommendation
 
-**The recommendation has changed since the first round.** The first round recommended three things: record with the events writer, store planar in VGCH v2's container, and adopt the lean writer now for about half the cost. This round measured them, and two of the three do not hold:
+**The recommendation changed in fix round 1, and round 2 refines it.** The first round recommended three things: record with the events writer, store planar in VGCH v2's container, and adopt the lean writer now for about half the cost. Round 1 measured them, and two of the three did not hold:
 
 - the lean writer saves 6-10% on the busy designs, not half;
 - events stored as planar fails R2. It is over the whole 5% budget on nyancat and rle_vga even at its lowest background figure, and it still misses R1 there.
 
+Round 2 re-measured the background plans with files that read back right. Their R1 figures moved by at most 2.3 points, and no verdict changed. It added two findings from the format owner's re-review: the job never uses `tracetool info`'s scan, and `vgacap_trace_block_pair` is not inlined.
+
 **What the data now supports, in order.**
 
-1. **Read block starts lazily (no format change).**
-   - The open falls from 111 to 29 ms on nyancat, from 180 to 55 ms on atari2600 and from 242 to 97 ms on rle_vga. A one-frame seek falls from 129 to 51 ms on nyancat.
+1. **Make `tracetool info` header-only (no format change).**
+   - The pipeline reads only `blocks`, `clocks` and `open.slice_*` from it (`job.py`, `derive.py`). Nothing reads the change counts that make it a full scan.
+   - Without the scan, vgch2's R2 share falls from 17.6% to 10.1% on nyancat, from 25.0% to 11.1% on rle_vga and from 11.1% to 5.9% on atari2600: 30 s, 63 s and 38 s a job. It is the largest saving found that needs no format change.
+   - That change is being made in tinytapeout-vga-videos, outside this study.
+2. **Read block starts lazily (no format change).**
+   - The open falls from 111 to 29 ms on nyancat, from 180 to 55 ms on atari2600 and from 242 to 97 ms on rle_vga. A one-frame seek falls from 129 to 51 ms on nyancat. vgadonut still opens in 112 ms.
    - It is a change to `trace_read.c` alone. The study's copy is [`trace_read_lazy.c`](../../bench/format-study/src/trace_read_lazy.c).
-2. **Choose the zstd level per measured set (no format change).**
+   - It moves the block-order check from open to read time, and a corrupt `BLKH` can deliver runs before the error. So merge it only with the reader's existing fault-case tests passing on it, and one more: a seek that reads a file with a corrupt mid-file `BLKH`.
+   - Three opens a job save about 0.25 s (nyancat) and 0.43 s (rle_vga), against 49-97 s of reads. It is small.
+3. **Choose the zstd level per measured set (no format change).**
    - Level 3 is smaller than level 1 on nyancat's and atari2600's `RUNS` data, for no more CPU. On rle_vga's it is larger and slower.
    - Readers do not depend on the level.
-3. **Do not merge the lean writer for its cost.**
-   - It writes vgacap's file byte for byte and saves 6-10%.
-   - Merge it only if its shape is wanted for itself, or once the gap to the study's prototype is understood.
-4. **If the format changes, store planar, and change it all at once.**
-   - Planar is the only change measured that cuts both the size (7.7-66 times on the busy traces) and the trace's R2 share. Across the three planar-stored plans the share falls to 1.3-8.8% on the busy designs, from vgch2's 11.1-25.0%.
+4. **The lean writer: small, safe, not urgent.**
+   - It writes vgacap's file byte for byte and saves 6-10% on the busy designs in the loop.
+   - Forcing `vgacap_trace_block_pair` inline as well gave 0.88 (nyancat) and 0.77 (rle_vga) of vgch2 in one replay run (the format owner's `inline-experiment.diff`). That shows the direction, not the size in a simulation.
+   - The capture session takes it as its own pull request: lean's slow path plus `block_pair` inline, gated on `test_lean.sh` against all 11 traces, and measured in `bench_tick` against today's writer.
+   - The file does not change, so it need not hold the 408-project re-run.
+5. **If the format changes, store planar, and change it all at once.**
+   - Planar is the only change measured that cuts both the size (7.7-66 times on the busy traces) and the trace's R2 share. Across the three planar-stored plans the share falls to 1.3-8.8% on the busy designs, from vgch2's 11.1-25.0%; without the info scan, to 0.8-7.8% from 5.9-11.1%.
    - It is a new format version, not a variant of VGCH v2:
      - a new header version;
-     - every published trace re-encoded, checked by canonical-run hashes;
-     - one stored layout, with no dual `RUNS` and planar readers, and no "keep both streams" fallback;
+     - every published trace re-encoded, checked by canonical-run hashes; the 408 traces of a full re-run would add 2-10 CPU-hours at 18-86 s each;
+     - one stored layout in `trace_read.c`, with no dual `RUNS` and planar trace readers, and no "keep both streams" fallback;
      - every reader and writer listed under R9 updated in the same change.
-   - `tracetool info` has to count each stream on its own. Today's merged scan would keep most of vgch2's R2 cost: 15.7% against 17.6% on nyancat.
+   - "No dual readers" applies to `trace_read.c` only. VGCH's `version` field belongs to the stream, which board captures share, so the stream reader must still read versions 1 and 2.
+   - Today a plain uncompressed VGCH v2 stream is also a valid trace. Planar has no plain form yet; the spec has to say whether it gets one.
    - The container that was measured stores each stream as a zstd frame of its own, seven a block. VGCH v2 stores one frame a block, so this is a container change too.
      - One frame a block, holding all seven streams, was not measured. It would keep the container, but every read would decompress all seven streams.
      - Seven frames a block keep the `uo_out` gain, at the cost of a reader that streams in time order holding a block's seven streams first.
      - The choice between the two has to be measured before the spec is written.
-   - Each block's first sample in the index is optional. It is a container change as well, and with (1) it is not needed for speed.
-5. **The capture path is not decided by these data.** Neither measured way of producing planar passes both requirements on the busy designs:
+   - Each block's first sample in the index is optional. It is a container change as well, and with (2) it is not needed for speed.
+6. **The capture path is not decided by these data.** No measured way of producing planar passes both requirements on the busy designs:
 
    | Capture | R1 nyancat (%) | R1 rle_vga (%) | R1 atari2600 (%) | R2 nyancat (%) | R2 rle_vga (%) | R2 atari2600 (%) |
    |---|---:|---:|---:|---:|---:|---:|
-   | events, converted in the background | 7.3 | 8.3 | 3.8 | 7.4 | 8.2 | 3.3 |
-   | planar on the simulation thread | 10.5 | 11.5 | 5.6 | 4.5 | 2.5 | 1.3 |
+   | events, converted in the background | 8.3 | 8.2 | 4.1 | 7.4 | 8.2 | 3.3 |
+   | changelog, converted in the background | 7.7 | 5.5 | 3.1 | 8.8 | 7.9 | 4.1 |
+   | planar on the simulation thread | 12.8 | 10.7 | 6.0 | 4.5 | 2.5 | 1.3 |
 
    - The converter is the gap. It costs 16-30 s of background CPU on the busy traces, against 2.9-4.4 s for compressing planar's streams written directly.
-   - A converter near the compressor's own cost would give events-to-planar about planar's R2, while keeping events' R1. That is the next thing to measure, not a result.
-6. **R1 on the busy designs needs more than a format.**
-   - On rle_vga only raw capture is under 5% (3.0%). On atari2600 raw (2.6%), events (3.6%), events to planar (3.8%) and changelog (4.4%) are.
-   - On nyancat nothing measured is under 5%: raw costs 6.0% and events 6.3%.
-   - Raw's background then costs 12-14% of R2 on nyancat and rle_vga.
+   - A converter near the compressor's own cost would give the converted plans about planar's R2, while keeping their R1. That is the next thing to measure, not a result.
+7. **R1 on the busy designs needs more than a format.**
+   - On rle_vga only raw capture is under 5% (3.0%); changelog is next (5.5%). On atari2600 raw (2.6%), changelog (3.1%), events (3.9%) and events to planar (4.1%) are.
+   - On nyancat nothing measured is under 5%: raw costs 6.0% and changelog 7.7%.
+   - Raw's figures come from sets run at about twice the host's normal load, so they may be high. Raw's background then costs 12-14% of R2 on nyancat and rle_vga.
 
 **What this still misses, stated plainly.**
 
@@ -2077,12 +2108,13 @@ Cons:
 - No measured plan keeps the trace's R2 share within this study's 1% on any busy design. Only planar on the simulation thread stays within the whole 5%.
 - So on the busy designs, every measured plan breaks at least one of the two budgets with the trace alone, before any sampler or hash.
 - The background figures behind R2 vary up to 2.5 times with the host's other work. The verdicts hold at both ends of that range.
-- Memory was not measured, only read from the code.
+- R2 leaves out derive's SHA-256 of the trace file, a fourth full read of its bytes.
+- The robustness gaps in Method (the double-buffered writer and the converter never killed, no corruption test) were not measured.
 
 **What would change this recommendation.**
 
-- **The samplers come to need every pin, not `uo_out` and `rst_n`.** Then planar's merged scan, 1.4-1.8 times vgch2's on the busy traces, counts in full. `tracetool info` as it is shows the effect: planar's R2 share is 15.7% against vgch2's 17.6% on nyancat.
-- **A converter near the compressor's cost is measured.** Then events converted in the background is the capture to use.
+- **The samplers come to need every pin, not `uo_out` and `rst_n`.** Then planar's merged scan, 1.4-1.8 times vgch2's on the busy traces, counts in full. A full-pin FST export shows how much: the same CPU from either file on nyancat and atari2600, and 12% more from planar on rle_vga.
+- **A converter near the compressor's cost is measured.** Then a capture converted in the background is the one to use.
 - **Opening the trace directly in GTKWave or Surfer becomes a must.** FST is the only format both read. It costs 4.1-5.1 times vgch2 on the simulation thread for busy designs (same replay run), seeks in 0.6-1.0 s, and a cut-short file gave no samples or crashed libfst's reader. Exporting is still the better route.
 - **The boards adopt `RUNS` as the format note planned.** Keep `RUNS` for the boards' 8- and 12-bit captures, where one value is one port. The simulation trace has no reason to share their chunk.
 - **A design is found whose ports all change together on most clocks.** Planar then stores up to seven pairs where `RUNS` stores one, and its size advantage can turn into a loss. None of the 11 traces does this: at most 13.5% of samples change two or more ports (atari2600, port table).
@@ -2184,7 +2216,9 @@ The commands, from a checkout of this branch:
 ```
 bench/format-study/run_all.sh          # build, traces, info, lean, writer, writer2, encode, encode2, warm, read, read2, validate, robust, interop, ctr, analyze
 bench/format-study/sim/run_sim.sh      # the first round's Verilator check: build, run (side by side), tick (in one process)
-bench/format-study/sim/run_ticks.sh    # the fix round's Verilator sets: main, raw, scope
+bench/format-study/sim/run_ticks.sh    # the fix rounds' Verilator sets: main, raw, scope (round 1); bg, bgscope, readback_raw (round 2)
+bench/format-study/sim/run_mem.py      # memory per plan in the loop (round 2)
+bench/format-study/run_export.py       # the full-pin FST export (round 2)
 ```
 
 The first round's `run_sim.sh tick` was run 11 times, each with `TICK_VARIANTS` in a different order:
@@ -2197,6 +2231,7 @@ Each process's order is in its CSV, `results/sim/<tag>-<project>.csv`, in the va
 Where things go:
 
 - Output goes to `tmp/format-study/`, about 60 GB.
+- The raw results are not in the branch. The inputs `analyze.py` reads (`results/`, `progress.log`, `load.log` and the loop's `stderr.log` files, without the traces) are 79 MB as files, about 21 MB compressed, so they were left out rather than committed; they stay in the worktree's `tmp/format-study/`, to be published beside the traces if wanted.
 - Raw results go to `tmp/format-study/results/<stage>/`.
 - The tables go to `tmp/format-study/results/tables.md`, and into this document.
 - Progress, with an ETA, goes to `progress.log`.
@@ -2205,7 +2240,7 @@ Where things go:
 Inputs and run time:
 
 - `run_sim.sh` and `run_ticks.sh` need each project's sources and job logs, copied from `~ttvga/ttvga/work/<shuttle>/<macro>/` into `tmp/sim/src/`, and a Verilator.
-- `run_all.sh` takes about 3.5 hours on big-storage, at 20-22 jobs at once. `run_ticks.sh` takes about an hour on 20 CPUs.
+- `run_all.sh` takes about 3.5 hours on big-storage, at 20-22 jobs at once. `run_ticks.sh` takes about an hour on 20 CPUs for round 1's sets, and about 40 minutes for round 2's, read-back included. `run_export.py` takes about 35 minutes on 20 CPUs, `run_mem.py` a few minutes.
 
 ## References
 
