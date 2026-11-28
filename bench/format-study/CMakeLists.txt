@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # The trace format study's benchmarks (docs/superpowers/2026-11-27-trace-format-study.md).
 # A project of its own that builds vgacap from this checkout as a subdirectory:
-#   cmake -S bench/format-study -B build-study -DCMAKE_BUILD_TYPE=Release && cmake --build build-study
+#   cmake -S bench/format-study -B tmp/build-study -DCMAKE_BUILD_TYPE=Release && cmake --build tmp/build-study
 # run_all.sh does that.
 cmake_minimum_required(VERSION 3.16)
 project(vgacap_format_study LANGUAGES C)
