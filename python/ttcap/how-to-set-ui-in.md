@@ -42,7 +42,7 @@ The switch comes before the reset, because every mode change rebuilds the firmwa
 
 With `--mode clocked`, step 6 loads the bitstream instead, with the clock held low ([The held-clock bitstream load](reference-load-held.md)). The capture then makes the reset clocks itself, `--reset-clocks` of them, before step 7 ([How to capture one sample per clock from reset](how-to-capture-clocked.md)).
 
-The input mode and the monitor are put back after the capture.
+The input mode and the monitor are put back after the capture, when `ttcap` runs to its end. What a killed `ttcap` leaves in clocked mode is in [If it fails](how-to-capture-clocked.md#if-it-fails) of the clocked how-to.
 
 ## Check
 

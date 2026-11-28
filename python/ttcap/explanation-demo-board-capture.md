@@ -22,7 +22,7 @@ It is for someone who has run `ttcap capture` and wants to know what the board a
 
 The stock firmware runs MicroPython, and `ttcap` drives it through its raw REPL. For each capture, `ttcap` sends a short program from [`mp/`](mp/), with its settings prepended, and the board runs it. So the board needs no capture firmware, and a capture leaves nothing behind but the design it enabled. The program for a stream is [`mp/capture_rp2.py`](mp/capture_rp2.py), joined to the shared [`mp/prelude.py`](mp/prelude.py).
 
-Before every capture through MicroPython, with or without `--ui-in`, `ttcap` turns off the stock firmware's manual-clock monitor, where the board has one, and puts it back afterwards. It also reads `rst_n` back: 0 while it holds reset, then 1 after the release, or the capture fails ([ttcap exit codes and messages](reference-exit-codes.md)).
+Before every capture through MicroPython, with or without `--ui-in`, `ttcap` turns off the stock firmware's manual-clock monitor, where the board has one, and puts it back afterwards, when `ttcap` runs to its end. What a killed `ttcap` leaves in clocked mode is in [If it fails](how-to-capture-clocked.md#if-it-fails) of the clocked how-to. It also reads `rst_n` back: 0 while it holds reset, then 1 after the release, or the capture fails ([ttcap exit codes and messages](reference-exit-codes.md)).
 
 ## The pins and the clock
 
