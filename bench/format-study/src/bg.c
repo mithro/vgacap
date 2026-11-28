@@ -41,6 +41,7 @@ typedef struct {
     // the primary file
     int pt, pc;                  // -1: none
     FILE *pf;
+    char *pfbuf;                 // pf's stdio buffer: this instance's own
     uint64_t *index;             // offset, first_sample pairs
     uint64_t nindex, capindex;
     uint64_t pbytes;
@@ -209,8 +210,11 @@ static uint64_t file_size(const char *p) {
 static int primary_open(bg_t *g, const char *pfile) {
     g->pf = fopen(pfile, "wb");
     if (!g->pf) { perror(pfile); return -1; }
-    static char fbuf[1 << 20];
-    setvbuf(g->pf, fbuf, _IOFBF, sizeof fbuf);
+    // Each instance its own buffer: several bg writers share a process in
+    // bench_tick, and one static buffer under several FILEs mixes their bytes.
+    g->pfbuf = malloc(1 << 20);
+    if (!g->pfbuf) { fprintf(stderr, "fs: out of memory\n"); exit(2); }
+    setvbuf(g->pf, g->pfbuf, _IOFBF, 1 << 20);
     fwrite(FS_FILE_MAGIC, 1, 8, g->pf);
     uint8_t hdr[8] = { 0, (uint8_t)g->pt, (uint8_t)g->pc, 0, 0, 0, 0, 0 };
     hdr[0] = !strcmp(g->writer, "planar") ? 1 : !strcmp(g->writer, "events") ? 2 : !strcmp(g->writer, "raw") ? 3 : 4;
@@ -228,8 +232,10 @@ static void primary_close(bg_t *g) {
     put64(g->pf, ioff);
     put32(g->pf, (uint32_t)g->nindex);
     put32(g->pf, FS_INDEX_MAGIC);
-    fclose(g->pf);
+    if (ferror(g->pf) | fclose(g->pf)) { fprintf(stderr, "fs: writing the primary file failed\n"); exit(2); }
     g->pf = NULL;
+    free(g->pfbuf);
+    g->pfbuf = NULL;
 }
 
 // For the simulation check (w_mine.c fs_sim_create): a background part with
