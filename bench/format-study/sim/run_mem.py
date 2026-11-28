@@ -17,6 +17,7 @@ $OUT/results/sim/mem.csv (project, variants, max_rss_kib, exit); the
 outputs and stderr under $OUT/sim/mem/.
 """
 
+import csv
 import os
 import re
 import subprocess
@@ -75,10 +76,11 @@ def main() -> int:
     with ThreadPoolExecutor(len(cl)) as ex:
         rows = list(ex.map(run, jobs))
     bad = 0
-    with res.open("w") as f:
-        f.write("project,variants,max_rss_kib,exit\n")
+    with res.open("w", newline="") as f:
+        w = csv.writer(f)   # variants hold commas: csv quotes them
+        w.writerow(["project", "variants", "max_rss_kib", "exit"])
         for p, v, kib, rc in rows:
-            f.write(f"{p},{v},{kib},{rc}\n")
+            w.writerow([p, v, kib, rc])
             bad += rc != 0 or not kib
     print(f"run_mem: {len(rows)} runs, {bad} failed; {res}", file=sys.stderr)
     return 1 if bad else 0
