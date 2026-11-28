@@ -70,7 +70,7 @@ This is the study after its second round of review ("fix round 2"). Round 1 meas
   - Planar is 54 MB against vgch2's 416 MB on nyancat, 9.0 against 597 on atari2600, and 0.62 against 18.4 on rle_vga.
   - `vgacap-sample`'s pass, which reads `uo_out` and `rst_n`, takes 10.1 s on nyancat against vgch2's 18.3, and 0.04 s on rle_vga against 33.0.
   - vgch2's merged full scan of every port is faster than planar's on 10 of the 11 traces, and ties on nyan: 28.3 s against 49.6 on nyancat.
-  - A full-pin FST export takes the same CPU from either file on nyancat (448 s) and atari2600 (758 against 766 s), and 12% more from planar on rle_vga (579 against 516 s). Writing the FST is most of it.
+  - A full-pin FST export takes the same CPU from either file on nyancat (448 s) and atari2600 (758 against 766 s), and 12% more from planar on rle_vga (579 against 516 s; 11-15% more in every rep). The reading thread also makes libfst's emit calls, so these data cannot split reading from writing.
 - **Background CPU is noisy, and the verdicts do not depend on it.** Identical compression work measured up to 2.5 times apart, with what else ran on the socket. R2 is given at each plan's lowest measured figure and at its median, and every pass or fail is the same at both.
 - **Lazy block starts cut the open by more than half on the busy traces, with no format change.** vgch2's open falls from 111 to 29 ms on nyancat and from 242 to 97 ms on rle_vga, and a one-frame seek on nyancat from 129 to 51 ms. vgadonut still opens in 112 ms. The block-order check moves from open to read time, and a corrupt `BLKH` can deliver runs before the error.
 - **The existing formats lose on the simulation thread.**
@@ -392,14 +392,16 @@ Memory is measured in the loop, not taken from the code. [`sim/run_mem.py`](../.
 - once with the untraced model alone;
 - once with the untraced model and that plan.
 
-Each run is 600 chunks (39 M clocks), so every plan hands over both buffer sets more than once. The figure is the second run's peak RSS (getrusage) minus the first's. [Memory: each plan's peak resident memory over the untraced model's](#memory-each-plans-peak-resident-memory-over-the-untraced-models-mib) is the table.
+Each run is 600 chunks (39 M clocks), so every plan hands over both buffer sets more than once. bench_tick gives every variant a model of its own, so a plan's run holds two models. A third run, with two untraced models, gives the second model's memory, and each plan's figure is its run's peak RSS minus that run's. [Memory: each plan's writer](#memory-each-plans-writer-peak-resident-memory-over-a-second-untraced-models-mib) is the table.
 
-- vgch2, lean and events take 26-52 MiB a job.
-- Planar and evplanar take 38-64 MiB.
-- Changelog takes 128-155 MiB, and raw 82-106 MiB. Their converters' scratch is sized for the worst case the study allowed, not for what a block needs.
-- At 22 jobs a host, on the design where each takes most, changelog's peak is about 3.4 GB (rle_vga) against vgch2's 1.1 GB (atari2600).
+- The second model costs about 16 MiB on rle_vga and atari2600, which have a QSPI model, and nothing that shows on nyancat.
+- vgch2, lean and events take 24-37 MiB a job.
+- Planar and evplanar take 32-47 MiB.
+- Raw takes 80-92 MiB, and changelog 127-139 MiB. Their converters' scratch is sized for the worst case the study allowed, not for what a block needs.
+- At 22 jobs a host, on the design where each takes most, changelog's writer holds about 3.0 GiB (rle_vga) against vgch2's 0.8 GiB (atari2600).
+- The ranking is the one the first measurement gave, which did not subtract the second model.
 
-The full-pin FST export's peak RSS is measured too ([A full-pin export to FST](#a-full-pin-export-to-fst-vgch2s-file-against-planars-median-of-the-reps)). It is 315-369 MiB from planar against 321-867 MiB from vgch2.
+The full-pin FST export's peak RSS is measured too ([A full-pin export to FST](#a-full-pin-export-to-fst-vgch2s-file-against-planars-median-of-the-reps)). It is 304-369 MiB from planar against 321-867 MiB from vgch2.
 
 The readers' memory in a job (`tracetool info`, `vgacap-sample`, `tracetool uohash`) is not measured.
 
