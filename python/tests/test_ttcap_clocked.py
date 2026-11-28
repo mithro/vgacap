@@ -152,10 +152,23 @@ def test_the_fastest_clock_at_133_mhz_is_9_5_mhz_with_h_10():
     assert (t.pio_div, t.high, t.low) == (1, 10, 0)
     assert t.clock_hz == 9_500_000
     assert t.sample_ns == pytest.approx(11e9 / 133e6)  # 82.7 ns
-    # Up to 13 cycles' worth, 10.23 MHz, still gets the 14 cycles; 13 would read early.
-    assert clocked_timing(133_000_000, 10_230_769).cycles_per_clock == 14
-    with pytest.raises(ValueError, match="fastest clocked rate at sysclk 133000000 Hz, 9500000 Hz"):
-        clocked_timing(133_000_000, 10_230_770)
+    # Re-review R2-1: above ceil(F) is refused, not quietly made at 9.5 MHz
+    # -- 10 MHz as much as 10.24 MHz -- and the message says what to ask.
+    for hz in (9_500_001, 10_000_000, 10_230_769, 10_230_770):
+        with pytest.raises(ValueError, match=r"fastest clocked rate at sysclk 133000000 Hz, "
+                                             r"9500000\.00 Hz: ask for --clock-hz 9500000"):
+            clocked_timing(133_000_000, hz)
+
+
+def test_the_fastest_clock_at_132_mhz_is_asked_for_by_its_rate_rounded_up():
+    # 132 MHz / 14 is 9,428,571.43 Hz (re-review R2-1).
+    t = clocked_timing(132_000_000, 9_428_572)
+    assert (t.pio_div, t.high, t.low) == (1, 10, 0)
+    with pytest.raises(ValueError, match=r"9428571\.43 Hz: ask for --clock-hz 9428572"):
+        clocked_timing(132_000_000, 9_428_573)
+    # Just under F: not faster than asked is the next clock down, 15 cycles.
+    t = clocked_timing(132_000_000, 9_428_571)
+    assert (t.pio_div, t.cycles_per_clock) == (1, 15)
     # The old default at the old fastest rate, H 5 at 14.67 MHz, read garbage.
     with pytest.raises(ValueError, match="fastest"):
         clocked_timing(133_000_000, 14_666_667)
@@ -175,11 +188,18 @@ def test_an_overclocked_sysclk_finds_the_fastest_divider_whose_h_fits():
     # divider 2, neither of which the 4-bit delay holds. Divider 3, H 15,
     # 19 cycles, is the fastest clock there is, and a rate above it is
     # refused, not quietly slowed (re-review R1-1: H and L stay 0..15).
+    # F = 600e6 / 57 = 10,526,315.79 Hz: ceil(F) gets divider 3's 19
+    # cycles, one more is refused, and the integer under F gets 20 cycles
+    # (re-review R2-1).
     t = clocked_timing(600_000_000, 10_526_316)
     assert (t.pio_div, t.high, t.low) == (3, 15, 0)
     assert t.sample_ns == pytest.approx(80)
-    with pytest.raises(ValueError, match="fastest clocked rate at sysclk 600000000 Hz, 10526315 Hz"):
-        clocked_timing(600_000_000, 10_800_000)  # 56 cycles' worth, under div 3 x 19
+    for hz in (10_526_317, 10_800_000):
+        with pytest.raises(ValueError, match=r"fastest clocked rate at sysclk 600000000 Hz, "
+                                             r"10526315\.79 Hz: ask for --clock-hz 10526316"):
+            clocked_timing(600_000_000, hz)
+    t = clocked_timing(600_000_000, 10_526_315)
+    assert (t.pio_div, t.high, t.low) == (3, 15, 1)
     # 10.5 MHz: divider 2 would make it in 29 cycles, faster than divider
     # 3's 20, but needs H 23; divider 3 is the nearest that can be made.
     t = clocked_timing(600_000_000, 10_500_000)
@@ -227,10 +247,9 @@ def test_the_fastest_clock_at_150_mhz_reads_80_ns_after_the_edge():
     t = clocked_timing(150_000_000, 10_000_000)
     assert (t.pio_div, t.high, t.low) == (1, 11, 0)
     assert t.sample_ns == pytest.approx(80)
-    # Anything up to 14 cycles' worth still gets 15; 14 would read early.
-    assert clocked_timing(150_000_000, 10_714_285).cycles_per_clock == 15
+    # One hertz more is refused, not slowed to 10 MHz (re-review R2-1).
     with pytest.raises(ValueError, match="fastest"):
-        clocked_timing(150_000_000, 10_714_286)
+        clocked_timing(150_000_000, 10_000_001)
 
 
 def test_a_clock_below_the_largest_divider_is_refused():
@@ -248,6 +267,11 @@ def test_a_chosen_h_moves_the_read_within_the_nearest_clock_it_fits():
     assert t.clock_hz == SYSCLK / 27
     with pytest.raises(ValueError, match="fastest"):
         clocked_timing(SYSCLK, 10_000_000, high=15)  # 19 cycles at least
+    # With H 15 the fastest clock is 133 MHz / 19, 7 MHz exactly: 1 Hz more
+    # is refused (re-review R2-1).
+    assert clocked_timing(SYSCLK, 7_000_000, high=15).low == 0
+    with pytest.raises(ValueError, match="fastest"):
+        clocked_timing(SYSCLK, 7_000_001, high=15)
     with pytest.raises(ValueError, match="high"):
         clocked_timing(SYSCLK, 5_000_000, high=16)
 

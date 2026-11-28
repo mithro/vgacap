@@ -1540,10 +1540,11 @@ def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> Cl
     `high` sets H instead, for a sweep of the sample point: the clock is the
     nearest not-faster one in which that H leaves L in 0..15, and the floor
     does not apply (`ClockedTiming.below_floor` says when the read is
-    earlier). Refused (`ValueError`): a clock faster than the fastest one
-    that reads `CLOCKED_SAMPLE_NS` late (at sysclks where H would pass 15 at
-    divider 1, a larger divider's), a clock slower than the largest divider
-    makes, and an H that fits no clock.
+    earlier). Refused (`ValueError`): a `clock_hz` above ceil(F), F the
+    fastest clock that reads `CLOCKED_SAMPLE_NS` late (at sysclks where H
+    would pass 15 at divider 1, a larger divider's), so that nearest not
+    faster holds only up to the fastest clock; a clock slower than the
+    largest divider makes; and an H that fits no clock.
     """
     if sysclk_hz <= 0 or clock_hz <= 0:
         raise ValueError(f"sysclk_hz and clock_hz must be positive, got {sysclk_hz}, {clock_hz}")
@@ -1555,14 +1556,18 @@ def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> Cl
         raise ValueError(
             "%d Hz is below the slowest clocked rate at sysclk %d Hz, %.1f Hz"
             % (clock_hz, sysclk_hz, sysclk_hz / (CLOCKED_MAX_DIV * most)))
-    # A rate above the fastest clock there is is refused rather than
-    # quietly slowed to it.
+    # F, the fastest clock there is, is sysclk / P; a rate above ceil(F) is
+    # refused rather than quietly slowed to it, and ceil(F) itself, the
+    # smallest whole rate F is not faster than, gets F (re-review R2-1).
     fastest = _fastest_clock(sysclk_hz, high)
-    if fastest is None or -(-sysclk_hz // clock_hz) < fastest[0] * fastest[1]:
+    product = fastest[0] * fastest[1] if fastest else 0
+    if fastest is None or clock_hz > -(-sysclk_hz // product):
         raise ValueError(
-            "%d Hz is above the fastest clocked rate at sysclk %d Hz, %d Hz, the "
-            "fastest that reads uo_out %d ns after the rising edge"
-            % (clock_hz, sysclk_hz, sysclk_hz // (fastest[0] * fastest[1]) if fastest else 0,
+            "%d Hz is above the fastest clocked rate at sysclk %d Hz, %.2f Hz: ask for "
+            "--clock-hz %d to get it, the fastest that reads uo_out %d ns after the "
+            "rising edge"
+            % (clock_hz, sysclk_hz, sysclk_hz / product if product else 0.0,
+               -(-sysclk_hz // product) if product else 0,
                CLOCKED_SAMPLE_NS if high is None else
                round((high + 1) * 1e9 / sysclk_hz)))
     best = None  # (pio_div, cycles)
