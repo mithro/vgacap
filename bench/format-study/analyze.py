@@ -653,7 +653,8 @@ if LOOPSETS:
                 e = sorted(r[1] for t in tags if pj in tickrep[t] for r in [paired_est(tickrep[t][pj], v)] if r)
                 if e:
                     set_pct[(name, pj, v)] = (statistics.median(e), e[0], e[-1])
-    dd = [abs(set_pct[("background", x, "vgch2")][0] - set_pct[("lean", x, "vgch2")][0])
+    # From the figures as the tables round them, so the note agrees with the table.
+    dd = [abs(round(100 * set_pct[("background", x, "vgch2")][0], 1) - round(100 * set_pct[("lean", x, "vgch2")][0], 1)) / 100
           for x in ("nyancat", "rle_vga", "atari2600")
           if ("background", x, "vgch2") in set_pct and ("lean", x, "vgch2") in set_pct]
     SETDIFF = max(dd) if dd else None
