@@ -11,10 +11,13 @@ docs/superpowers/2026-11-27-trace-format-study.md is printed here, under the sam
 heading, from the CSV files under OUT/results. Nothing is typed in by hand
 except data/pilot_baseline.csv (the pilot's untraced simulation times).
 """
+import contextlib
 import csv
 import glob
+import io
 import os
 import random
+import re
 import statistics
 import sys
 from collections import defaultdict
@@ -399,8 +402,19 @@ def tick_tables(title, note, tags, TICKV=TICKV, out_pct=None):
     return out_est
 
 
+# The sets. Round 1's main and scope sets (fx1a-fx1d, fx1s) and the first round's (tick*) held several
+# background writers a process sharing one stdio buffer: their background plans' files failed read-back
+# (readback-fx1.csv), so once fix round 2's sets (fx2a-fx2d for the background plans, fx2la-fx2ld for
+# vgch2 and lean) are in, no figure is taken from them.
+fx_main = sorted(t for t in tickrep if re.fullmatch(r"fx1[a-d]", t))
+fx_raw = sorted(t for t in tickrep if re.fullmatch(r"fx1r[a-d]", t))
+fx_scope = [t for t in tickrep if t == "fx1s"]
+fx2_main = sorted(t for t in tickrep if re.fullmatch(r"fx2[a-d]", t))
+fx2l_main = sorted(t for t in tickrep if re.fullmatch(r"fx2l[a-d]", t))
+fx2_scope = [t for t in tickrep if t == "fx2s"]
+WITHDRAWN = bool(fx2_main and fx2l_main)
 tick_est = {}
-if tickrep:
+if tickrep and not WITHDRAWN:
     print("## Simulation check: the Verilator loop, in one process\n")
     two = sorted(t for t in tickrep if t.startswith("tick2"))
     one = sorted(t for t in tickrep if t.startswith("tick") and not t.startswith("tick2"))
@@ -430,41 +444,27 @@ if tickrep:
            "events in-process", "changelog replay", "changelog in-process", "raw replay", "raw in-process"], body)
 
 # ---- 3b. fix round 1: the in-process sets that decide R1 -------------------------------------------
-fx_main = sorted(t for t in tickrep if t.startswith("fx1") and not t.startswith("fx1r") and t != "fx1s")
-fx_raw = sorted(t for t in tickrep if t.startswith("fx1r"))
-fx_scope = [t for t in tickrep if t == "fx1s"]
-fx2_main = sorted(t for t in tickrep if t.startswith("fx2") and t != "fx2s")
-fx2_scope = [t for t in tickrep if t == "fx2s"]
 fx_pct = {}      # (project, variant) -> (median %, low, high), the R1 figures
-fx1_pct, fx2_pct = {}, {}
+fx1_pct, fx2_pct, fx2l_pct = {}, {}, {}
 fx_est = {}
 
 
 def tags_for(v):
-    """The sets a variant's figures come from: fix round 2's for the background plans, once it has run."""
+    """The sets a variant's figures come from: fix round 2's (fx2a-fx2d for the background plans,
+    fx2la-fx2ld for vgch2 and lean) once they have run, else round 1's main set."""
+    if WITHDRAWN:
+        return fx2_main if v in BGV else fx2l_main
     return fx2_main if fx2_main and v in BGV else fx_main
 
 
-if fx_main:
-    print("## Simulation check, fix round 1: the Verilator loop, every candidate\n")
-    note = ("Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks "
-            "(262 M clocks) a process (bench_tick.cpp). Two CPUs a process, the simulation thread pinned to the "
-            "first. Variants: vgch2 (vgacap's writer), lean (vgacap's writer with push2's slow path replaced), events "
-            "(zstd 1 of the events stream), evplanar (events converted to planar by the real converter), planar "
-            "(planar written on the simulation thread) and changelog (converted to planar).")
-    if fx2_main:
-        note += (" The files this set's background plans (events, evplanar, planar, changelog) wrote were corrupt "
-                 "(one stdio buffer shared by the process's background writers; the converters' stream order): "
-                 "their R1 figures are fix round 2's set, below, which reads every file back.")
-    fx_est = tick_tables("The main set: R1's figures", note, fx_main, TICKV=FX1V, out_pct=fx1_pct)
-    fx_pct.update(fx1_pct)
-    print("### The lean writer against vgacap's, in the loop: lean over vgch2, each process's ratio, median [lowest, highest]\n")
+def lean_ratio(tags):
+    """Lean over vgch2, each process's ratio of its estimates, by project."""
     print("Both write the same file (the lean writer's table). Each process's lean estimate over its vgch2 estimate, "
           "ns per clock over the untraced model.\n")
     body = []
-    for p in [x for x in ORDER if any(x in tickrep[t] for t in fx_main)]:
+    for p in [x for x in ORDER if any(x in tickrep[t] for t in tags)]:
         rs = []
-        for t in fx_main:
+        for t in tags:
             a, b = tick_one(tickrep[t].get(p, {}), "lean"), tick_one(tickrep[t].get(p, {}), "vgch2")
             if a and b and b[0] > 0:
                 rs.append(a[0] / b[0])
@@ -474,6 +474,22 @@ if fx_main:
     print("Only the busy designs' ratios measure a saving. On the quiet ones a changed clock is rare (colorbars: "
           "3.35% of clocks) and both writers cost a few ns a clock, so the ratio is a per-variant offset of about "
           "1-2 ns a clock, within the noise; vgadonut's per-process estimates include negative ones.\n")
+
+
+if fx_main and WITHDRAWN:
+    with contextlib.redirect_stdout(io.StringIO()):   # round 1's published figures, for the comparison only
+        tick_tables("", "", fx_main, TICKV=FX1V, out_pct=fx1_pct)
+elif fx_main:
+    print("## Simulation check, fix round 1: the Verilator loop, every candidate\n")
+    note = ("Each variant's model in one process, stepped in turn by 65,536-clock chunks, 4,000 chunks "
+            "(262 M clocks) a process (bench_tick.cpp). Two CPUs a process, the simulation thread pinned to the "
+            "first. Variants: vgch2 (vgacap's writer), lean (vgacap's writer with push2's slow path replaced), events "
+            "(zstd 1 of the events stream), evplanar (events converted to planar by the real converter), planar "
+            "(planar written on the simulation thread) and changelog (converted to planar).")
+    fx_est = tick_tables("The main set: R1's figures", note, fx_main, TICKV=FX1V, out_pct=fx1_pct)
+    fx_pct.update(fx1_pct)
+    print("### The lean writer against vgacap's, in the loop: lean over vgch2, each process's ratio, median [lowest, highest]\n")
+    lean_ratio(fx_main)
 if fx2_main:
     print("## Simulation check, fix round 2: the background plans again, every file read back\n")
     note = ("As fix round 1's main set, after the two fixes (each background writer its own stdio buffer; the "
@@ -485,8 +501,9 @@ if fx2_main:
         if k[1] in BGV:
             fx_pct[k] = v
     print("### Round 1 against round 2: % of the untraced model, median of the processes\n")
-    print("Round 1's background plans wrote corrupt files; round 2's read back right. vgch2 ran in both, as the "
-          "check that the host was alike.\n")
+    print("Round 1: the figures fix round 1 published, from its main set (fx1a-fx1d), whose background plans "
+          "wrote corrupt files (the read-back table); shown only for the comparison. Round 2: fx2a-fx2d, every "
+          "file read back right. vgch2 ran in both, as the check that the host was alike.\n")
     body = []
     for pj in [x for x in ORDER if any(x in tickrep[t] for t in fx2_main)]:
         for v in FX2V:
@@ -497,6 +514,18 @@ if fx2_main:
                          "-" if not a else pct(b[0] - a[0], 1)])
     table(["project", "variant", "round 1 (%)", "round 2 (%)", "round 2 lowest (%)", "round 2 highest (%)",
            "round 2 minus round 1 (points)"], body)
+if fx2l_main:
+    print("## Simulation check, fix round 2: vgch2 and lean, every file read back\n")
+    note = ("As the background plans' set, with the variants none, vgch2 and lean only: vgch2's and lean's R1 "
+            "from sets whose files all read back (round 1's main set, where they ran beside the corrupt "
+            "background writers, did not).")
+    tick_tables("vgch2 and lean: R1's figures for them", note, fx2l_main, TICKV=["vgch2", "lean"],
+                out_pct=fx2l_pct)
+    if WITHDRAWN:
+        for k, v in fx2l_pct.items():
+            fx_pct[k] = v
+    print("### The lean writer against vgacap's, in the loop: lean over vgch2, each process's ratio, median [lowest, highest]\n")
+    lean_ratio(fx2l_main)
 rb = []
 for path in sorted(glob.glob(os.path.join(RES, "sim", "readback-*.csv"))):
     rb += list(csv.DictReader(open(path)))
@@ -505,6 +534,8 @@ if rb:
     print("`sim/readback.py`: each file read with `fsbench read --patterns validate` (vgch2 and lean with vgacap's "
           "reader, the others with the study's), its full hash, samples and uo_out run count against lean's (or "
           "vgch2's, the same file) from the same process; raw's sets, which have neither, against fx2a's vgch2. "
+          "Round 1's main and scope sets (fx1a-fx1d, fx1s) are read back too, as an audit: their background "
+          "plans' files are the corrupt ones round 2 replaced, and no figure is taken from them. "
           "Files that pass, of those written.\n")
     body = []
     for tag in sorted({r["tag"] for r in rb}):
@@ -515,7 +546,7 @@ if rb:
 if fx_raw:
     tick_tables("Raw, in processes of its own", "Raw capture with the untraced model only, so that no other "
                 "variant shares its process, its L3 traffic or its turn.", fx_raw, TICKV=["raw"], out_pct=fx_pct)
-if fx_scope:
+if fx_scope and not WITHDRAWN:
     tick_tables("Unpinned, in a systemd scope with CPUQuota=200%, as a job runs", "One process a project, "
                 "the main set's variants, not pinned: the scheduler places its threads, as for a job." +
                 (" Its background plans' files were corrupt, as in the main set; fix round 2's scope set follows."
@@ -558,7 +589,9 @@ if fx_main:
     print("Per process, the sum over chunks of (wall - thread CPU) for the variant minus the same for the untraced "
           "model, ns per clock: median of the processes [lowest, highest]. A stall (the simulation thread waiting "
           "for its writer's thread) shows here and nowhere in the CPU figures. The next table counts the waits "
-          "themselves." + (" This table and the next four take the background plans from fix round 2's set, "
+          "themselves." + (" This table and the next four take the background plans from fix round 2's set "
+                           "(fx2a-fx2d), vgch2 and lean from fix round 2's lean set (fx2la-fx2ld)." if WITHDRAWN else
+                           " This table and the next four take the background plans from fix round 2's set, "
                            "vgch2 and lean from round 1's." if fx2_main else "") + "\n")
     body = []
     for p in tp:
@@ -1171,8 +1204,10 @@ if rd2:
 # ---- 5c. R1 and R2 together, for each plan -------------------------------------------------------------
 if rd2 and fx_pct:
     print("## Every plan against R1 and R2 together\n")
-    print("R1: the simulation thread's cost in the loop (median of the processes; vgch2 and lean from fix round 1's "
-          "main set, the background plans from fix round 2's, raw from its own processes), % of the untraced "
+    print("R1: the simulation thread's cost in the loop (median of the processes; " + (
+          "vgch2 and lean from fix round 2's lean set, the background plans from its background set, "
+          if WITHDRAWN else "vgch2 and lean from fix round 1's main set, the background plans from fix round 2's, ") +
+          "raw from its own processes), % of the untraced "
           "model; the spec's budget is 5%. R2: the trace's share, background at encode2's median, with tracetool "
           "info as a scan that counts planar streams on their own, and with a header-only info (no scan). The "
           "spec's R2 budget is 5% for everything after the simulation; the 1% bar for the trace's own share is "
