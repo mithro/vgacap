@@ -186,6 +186,16 @@ def test_an_overclocked_sysclk_finds_the_fastest_divider_whose_h_fits():
     assert (t.pio_div, t.high, t.low) == (3, 15, 1)
 
 
+
+def test_the_floor_bounds_the_cycles_at_an_overclocked_sysclk():
+    # 8.2 MHz at 400 MHz: divider 2, 25 cycles, 8 MHz. Without the floor
+    # bounding the cycle count, divider 7 with 7 cycles (8.16 MHz) would
+    # win, though the floor's H 4 leaves it L -1, and the H and L check
+    # would refuse the run (re-review R1-1).
+    t = clocked_timing(400_000_000, 8_209_928)
+    assert (t.pio_div, t.high, t.low) == (2, 15, 6)
+
+
 def test_500_khz_at_fpga_4s_132_mhz_is_exact():
     t = clocked_timing(132_000_000, 500_000)
     assert (t.pio_div, t.high, t.low) == (8, 15, 14)
