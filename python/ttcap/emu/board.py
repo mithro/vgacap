@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import bisect
 import builtins
+import contextlib
+import io
 import pathlib
 import sys
 import types
@@ -24,6 +26,8 @@ PIO_STRIDE = 0x100000
 PIO_CTRL = 0x000
 PIO_FDEBUG = 0x008
 PIO_RXF0 = 0x020
+#: IRQ: the block's eight IRQ flags, write-1-to-clear (RP2040 3.7, RP2350 11.7).
+PIO_IRQ = 0x030
 #: SM0_SHIFTCTRL; each further state machine's registers are 0x18 on.
 PIO_SM0_SHIFTCTRL = 0x0D0
 PIO_SM_STRIDE = 0x18
@@ -67,6 +71,11 @@ class Waveform:
     sampler is meant to read it. Pins that are neither the clock nor a
     `uo_out` bit read `constants.get(gpio, 0)` -- e.g. the RP2040's `ui_in`
     pads inside its 12-bit window.
+
+    Once PIO side-set drives the clock pin, the design is clocked by those
+    edges alone: `clock_rises` is then the cycles of its rising edges, and
+    `uo_out` is `uo[n]` from `delay` cycles after the n-th of them (`uo[0]`
+    before the first), however long PIO holds the clock between edges.
     """
 
     def __init__(
@@ -96,13 +105,26 @@ class Waveform:
         #: Set when a script takes the clock pad (machine.Pin(clk, Pin.IN)):
         #: the PWM loses the pad and the clock stops, as measured on fpga-1.
         self.clock_stopped = False
+        #: The PIO-driven clock's rising edges (Board.pio_rises), once PIO
+        #: side-set has taken the clock pin; None while the clock free-runs.
+        self.clock_rises: list[int] | None = None
         self._changes: dict[int, list[int]] = {}
         self._tables: dict[tuple[int, int], tuple[list[int], int]] = {}
+
+    def attach(self, board: "Board") -> None:
+        """Called once by the `Board` this drives the pins of."""
+
+    def rst_changed(self, cycle: int) -> None:
+        """The rst_n pad may read differently from `cycle` on. A plain
+        waveform has no reset, so nothing changes."""
 
     # -- single pins ------------------------------------------------------
 
     def clock_index(self, cycle: int) -> int:
         """The project clock whose `uo_out` is on the pins at `cycle`."""
+        rises = self.clock_rises
+        if rises is not None:
+            return bisect.bisect_right(rises, cycle - self.delay)
         return (cycle - self.delay) // self.period
 
     def value(self, gpio: int, cycle: int) -> int:
@@ -138,6 +160,15 @@ class Waveform:
         bit = self.uo_bit.get(gpio)
         if bit is None:
             return None
+        rises = self.clock_rises
+        if rises is not None:
+            # Only the edges PIO has driven so far are known; past the last
+            # of them the clock is held, so the pin holds too.
+            uo, n, delay = self.uo, self.n, self.delay
+            for i in range(bisect.bisect_right(rises, cycle - delay), len(rises)):
+                if (uo[(i + 1) % n] >> bit) & 1 == want:
+                    return rises[i] + delay
+            return None
         changes = self._change_list(bit)
         if not changes:
             return None
@@ -151,26 +182,159 @@ class Waveform:
 
     # -- the IN window ----------------------------------------------------
 
+    def _table(self, base: int, count: int) -> tuple[list[int], int]:
+        """The window's word for each `uo_out` byte (clock bit clear), and
+        the clock's bit in it (-1 if outside)."""
+        table = []
+        for byte in range(256):
+            word = 0
+            for i in range(count):
+                gpio = base + i
+                bit = self.uo_bit.get(gpio)
+                if bit is not None:
+                    word |= ((byte >> bit) & 1) << i
+                elif gpio != self.clk_gpio:
+                    word |= (self.constants.get(gpio, 0) & 1) << i
+            table.append(word)
+        clk_pos = self.clk_gpio - base if 0 <= self.clk_gpio - base < count else -1
+        self._tables[(base, count)] = (table, clk_pos)
+        return table, clk_pos
+
     def window(self, base: int, count: int, cycle: int) -> int:
         """`count` pins from GPIO `base` up, bit 0 = `base`, at `cycle`."""
         key = (base, count)
         if key not in self._tables:
-            table = []
-            for byte in range(256):
-                word = 0
-                for i in range(count):
-                    gpio = base + i
-                    bit = self.uo_bit.get(gpio)
-                    if bit is not None:
-                        word |= ((byte >> bit) & 1) << i
-                    elif gpio != self.clk_gpio:
-                        word |= (self.constants.get(gpio, 0) & 1) << i
-                table.append(word)
-            clk_pos = self.clk_gpio - base if 0 <= self.clk_gpio - base < count else -1
-            self._tables[key] = (table, clk_pos)
+            self._table(base, count)
         table, clk_pos = self._tables[key]
         word = table[self.uo[self.clock_index(cycle) % self.n]]
         if clk_pos >= 0 and self.value(self.clk_gpio, cycle):
+            word |= 1 << clk_pos
+        return word
+
+
+class ClockedDesign(Waveform):
+    """An exact 8-bit counter on `uo_out`, clocked only by real edges.
+
+    There is no free-running clock: the design counts the rising edges on
+    its clock pad, whoever drives them -- PIO side-set or a CPU `Pin` --
+    and nothing else. On each edge it takes 0 if `rst_n` (GPIO `rst_gpio`,
+    as the pad reads at that cycle) is low, a synchronous reset, else its
+    value plus 1, modulo 256. The value after edge n is on the `uo_out`
+    pins from `settle` cycles after it; `initial` is on them before the
+    first edge, and again after `configure()` (a bitstream load).
+
+    The input synchroniser is not modelled: an `in pins` reads the pads in
+    the cycle it issues.
+    """
+
+    def __init__(
+        self,
+        uo_gpios: Sequence[int],
+        clk_gpio: int,
+        rst_gpio: int,
+        settle: int = 0,
+        constants: dict[int, int] | None = None,
+        initial: int = 0,
+    ) -> None:
+        super().__init__(b"\0", uo_gpios, clk_gpio, period=2, delay=settle, constants=constants)
+        if settle < 0:
+            raise ValueError("settle must not be negative")
+        self.rst_gpio = rst_gpio
+        self.settle = settle
+        self.initial = initial & 0xFF
+        #: Always a list here: the design is clocked only by driven edges.
+        #: Narrower than Waveform's `list[int] | None`; the one write through
+        #: the base type (_SM.__init__, when PIO takes the clock) stores
+        #: board.pio_rises[clk], which attach() made this very list.
+        self.clock_rises: list[int] = []  # pyright: ignore[reportIncompatibleVariableOverride]
+        self.clock_stopped = True  # no PWM: the pad is whatever drives it
+        self.board: Board | None = None
+        #: Edges before this index were clocked into an earlier configuration.
+        self._first = 0
+        #: The value after edge `_first + i`; rst_changed() drops the values
+        #: a later change to the rst_n pad makes stale.
+        self._after: list[int] = []
+        #: False after unconfigure(), until configure().
+        self.configured = True
+
+    def attach(self, board: "Board") -> None:
+        if self.board is not None and self.board is not board:
+            raise BoardError("this ClockedDesign already drives another Board; make one per Board")
+        self.board = board
+        board.pio_rises[self.clk_gpio] = self.clock_rises
+        board.rst_watch = self.rst_gpio
+
+    def _board(self) -> "Board":
+        board = self.board
+        if board is None:
+            raise BoardError("this ClockedDesign has no Board: build a Board with it first")
+        return board
+
+    def rst_changed(self, cycle: int) -> None:
+        """The rst_n pad may read differently from `cycle` on: forget the
+        values of the edges at or after it."""
+        keep = bisect.bisect_left(self.clock_rises, cycle) - self._first
+        if keep < len(self._after):
+            del self._after[max(keep, 0):]
+
+    def configure(self) -> None:
+        """A bitstream load: the registers start again from `initial`."""
+        self._first = len(self.clock_rises)
+        self._after = []
+        self.configured = True
+
+    def unconfigure(self) -> None:
+        """A load that failed after the FPGA's reset: there is no design,
+        so reading `uo_out` is refused until the next `configure()`."""
+        self.configured = False
+
+    def count(self, n: int) -> int:
+        """The counter after the first `n` rising edges."""
+        if not self.configured:
+            raise BoardError(
+                "no design: the last FPGA load failed after its reset cleared the FPGA")
+        first = self._first
+        if n <= first:
+            return self.initial
+        after = self._after
+        if n - first <= len(after):
+            return after[n - first - 1]
+        level, rst, rises = self._board().pad_level, self.rst_gpio, self.clock_rises
+        value = after[-1] if after else self.initial
+        for i in range(first + len(after), n):
+            value = (value + 1) & 0xFF if level(rst, rises[i]) else 0
+            after.append(value)
+        return value
+
+    def count_at(self, cycle: int) -> int:
+        """The counter's value on the `uo_out` pins at `cycle`."""
+        return self.count(self.clock_index(cycle))
+
+    def value(self, gpio: int, cycle: int) -> int:
+        if gpio == self.clk_gpio:
+            return self._board().pad_level(gpio, cycle)
+        bit = self.uo_bit.get(gpio)
+        if bit is not None:
+            return (self.count_at(cycle) >> bit) & 1
+        return self.constants.get(gpio, 0) & 1
+
+    def next_time(self, gpio: int, want: int, cycle: int) -> int | None:
+        if self.value(gpio, cycle) == want:
+            return cycle
+        bit = self.uo_bit.get(gpio)
+        if bit is None:
+            return None  # the clock and constants change only between advances
+        rises, settle = self.clock_rises, self.settle
+        for i in range(bisect.bisect_right(rises, cycle - settle), len(rises)):
+            if (self.count(i + 1) >> bit) & 1 == want:
+                return rises[i] + settle
+        return None
+
+    def window(self, base: int, count: int, cycle: int) -> int:
+        key = (base, count)
+        table, clk_pos = self._tables[key] if key in self._tables else self._table(base, count)
+        word = table[self.count_at(cycle)]
+        if clk_pos >= 0 and self._board().pad_level(self.clk_gpio, cycle):
             word |= 1 << clk_pos
         return word
 
@@ -180,11 +344,23 @@ class Waveform:
 
 
 #: Decoded instruction kinds.
-_WAIT, _IN, _JMP, _PULL, _PUSH, _MOV, _SET, _OUT = range(8)
+_WAIT, _IN, _JMP, _PULL, _PUSH, _MOV, _SET, _OUT, _IRQ = range(9)
 
 
 class _SM:
     """One state machine: registers, FIFOs and the interpreter."""
+
+    # Slots keep attribute access in the interpreter loop fast: CPython 3.13
+    # stops sharing an instance dict's keys past 30 attributes, and this
+    # class has more, which cost the capture tests about 10%.
+    __slots__ = (
+        "autopush", "block", "board", "code", "delays", "disable_at", "enabled",
+        "in_base", "in_count", "index", "irq_flags", "irq_waiting", "isr",
+        "isr_count", "now", "osr", "osr_count", "out_right", "pc", "program",
+        "push_thresh", "rx", "rx_depth", "shift_left", "shiftctrl", "side_last",
+        "sideset_gpios", "sidesets", "tx", "tx_depth", "wrap_target", "wrap_top",
+        "x", "y",
+    )
 
     def __init__(self, board: "Board", block: "_PioBlock", index: int) -> None:
         self.board = board
@@ -205,6 +381,12 @@ class _SM:
         self.shiftctrl = 0
         self.rx_depth = 4
         self.tx_depth = 4
+        #: The GPIOs side-set drives, bit 0 first, and the last value it
+        #: drove on them (None before anything has).
+        self.sideset_gpios: list[int] = []
+        self.side_last: int | None = None
+        self.sidesets: list[int | None] = []
+        self.irq_flags: frozenset[int] = frozenset()
         self.reset_state()
         self.enabled = False
         self.disable_at: int | None = None
@@ -218,10 +400,18 @@ class _SM:
         self.osr_count = 32
         self.rx: list[int] = []
         self.tx: list[int] = []
+        #: An `irq wait` has raised its flag and is waiting for it to clear.
+        self.irq_waiting = False
 
     # -- configuration ----------------------------------------------------
 
-    def load(self, prog: list, in_base: int | None, push_thresh: int | None) -> None:
+    def load(
+        self,
+        prog: list,
+        in_base: int | None,
+        push_thresh: int | None,
+        sideset_base: int | None = None,
+    ) -> None:
         data, execctrl, shiftctrl = prog[0], prog[3], prog[4]
         self.wrap_target = (execctrl >> 7) & 0x1F
         self.wrap_top = (execctrl >> 12) & 0x1F
@@ -246,14 +436,95 @@ class _SM:
                     % (in_base, self.block.index, self.block.base)
                 )
             self.in_base = in_base
-        if prog[7] is not None:
-            raise BoardError("side-set is not emulated")
+        count, side_en, gpios, init = self._sideset_config(prog, execctrl, sideset_base)
         self.program = prog
         self.code = [self._decode(word) for word in data]
-        # With no side-set, bits 12:8 are all delay: idle cycles after the
-        # instruction completes (a stalled instruction's delay waits too).
-        self.delays = [(word >> 8) & 0x1F for word in data]
+        #: The IRQ flags this program's `irq` instructions touch.
+        self.irq_flags = frozenset(ins[3] for ins in self.code if ins[0] == _IRQ)
+        # Bits 12:8 are SIDESET_COUNT bits of side-set at the top -- the
+        # top one the enable bit when EXECCTRL.SIDE_EN is set, and counted
+        # in SIDESET_COUNT -- and delay below them (RP2040 datasheet 3.4.1,
+        # 3.5.1; RP2350 11.4.1, 11.5.1). Delay is idle cycles after the
+        # instruction completes; a stalled instruction's delay waits until
+        # the stall ends.
+        field_bits = count + side_en if count else 0
+        delay_bits = 5 - field_bits
+        self.delays = [(word >> 8) & ((1 << delay_bits) - 1) for word in data]
+        self.sidesets = []
+        for word in data:
+            side = ((word >> 8) & 0x1F) >> delay_bits
+            if not count or (side_en and not (side >> count) & 1):
+                self.sidesets.append(None)
+            else:
+                self.sidesets.append(side & ((1 << count) - 1))
+        self.sideset_gpios = gpios
+        self.side_last = None
         self.reset_state()
+        if gpios:
+            # MicroPython's asm_pio_init_gpio(): each pin's value and
+            # direction from sideset_init, then FUNCSEL to this PIO -- which
+            # takes the clock pad from the firmware's PWM.
+            self.now = self.board.now
+            wave = self.board.wave
+            clk = wave.clk_gpio
+            takes_clock = clk in gpios and clk not in self.board.pio_pins
+            # The firmware's clock on the pad just before PIO takes it.
+            was = wave.value(clk, self.now) if takes_clock else None
+            self._side(init)
+            if takes_clock:
+                wave.clock_stopped = True
+                rises = self.board.pio_rises[clk]
+                if was == 0 and self.board.pio_pins[clk][0][1] == 1:
+                    rises.append(self.now)  # a high sideset_init raises it
+                wave.clock_rises = rises
+
+    def _sideset_config(self, prog: list, execctrl: int, sideset_base: int | None):
+        """(data bits, SIDE_EN, GPIOs, initial value) as rp2_pio.c sets
+        PINCTRL.SIDESET_COUNT: from `sideset_init` only when the
+        StateMachine is given a `sideset_base`."""
+        side_en = (execctrl >> 30) & 1
+        if (execctrl >> 29) & 1:
+            raise BoardError("side-set to pindirs (EXECCTRL.SIDE_PINDIR) is not emulated")
+        init = prog[7]
+        if sideset_base is None:
+            if init is not None and side_en:
+                raise BoardError(
+                    "optional side-set with no sideset_base: MicroPython leaves "
+                    "SIDESET_COUNT 0 with SIDE_EN set, which is not emulated"
+                )
+            # SIDESET_COUNT 0: the side-set bits are all delay.
+            return 0, 0, [], 0
+        base = self.block.base
+        if (base == 0 and sideset_base >= 32) or (base == 16 and sideset_base < 16):
+            raise ValueError("sideset_base not within gpio_base range")
+        if init is None:
+            return 0, 0, [], 0
+        for i in range(len([init] if isinstance(init, int) else init)):
+            gpio = base + ((sideset_base - base + i) & 31)
+            if gpio in self.board.released:
+                raise BoardError(
+                    "GPIO %d was taken back from PIO by a Pin init; side-set onto it "
+                    "again is not emulated" % gpio)
+        inits = [init] if isinstance(init, int) else list(init)
+        if len(inits) + side_en > 5:
+            raise BoardError("SIDESET_COUNT %d is more than 5" % (len(inits) + side_en))
+        value = 0
+        for i, pin_init in enumerate(inits):
+            if not (pin_init >> 1) & 1:
+                raise BoardError("a side-set pin initialised as an input is not emulated")
+            value |= (pin_init & 1) << i
+        # Side-set pins count up from SIDESET_BASE modulo the 32-pin window.
+        gpios = [base + ((sideset_base - base + i) & 31) for i in range(len(inits))]
+        return len(inits), side_en, gpios, value
+
+    def _side(self, value: int) -> None:
+        """Drive the side-set pins with `value` from `self.now` on."""
+        if value == self.side_last:
+            return
+        self.side_last = value
+        drive = self.board.pio_drive
+        for i, gpio in enumerate(self.sideset_gpios):
+            drive(self, gpio, (value >> i) & 1, self.now)
 
     def _decode(self, word: int) -> tuple:
         op = word >> 13
@@ -284,20 +555,50 @@ class _SM:
                 raise BoardError("bad push/pull 0x%04x" % word)
             pull = (word >> 7) & 1
             block_ = (word >> 5) & 1
-            if (word >> 6) & 1:
-                raise BoardError("push iffull / pull ifempty not emulated")
-            return (_PULL if pull else _PUSH, block_)
+            if_ = (word >> 6) & 1
+            if pull:
+                if if_:
+                    raise BoardError("pull ifempty not emulated")
+                return (_PULL, block_)
+            return (_PUSH, block_, if_)
         if op == 5:
             dest, mov_op, src = (word >> 5) & 7, (word >> 3) & 3, word & 7
             if dest in (0, 3, 4) or src in (4, 5):
                 raise BoardError("mov 0x%04x not emulated" % word)
             return (_MOV, dest, mov_op, src)
+        if op == 6:
+            return self._decode_irq(word)
         if op == 7:
             dest, data = (word >> 5) & 7, word & 0x1F
             if dest not in (1, 2):
                 raise BoardError("set destination %d not emulated" % dest)
             return (_SET, dest, data)
         raise BoardError("instruction 0x%04x (opcode %d) not emulated" % (word, op))
+
+    def _decode_irq(self, word: int) -> tuple:
+        """IRQ: bit 6 Clr, bit 5 Wait, bits 4:0 Index. RP2040: Index bit 4
+        is REL, bit 3 reserved. RP2350: bits 4:3 are IdxMode (00 this
+        block, 01 PREV, 10 REL, 11 NEXT), so MicroPython's `rel` (0x10) is
+        REL on both. REL adds the state machine number to the two LSBs,
+        modulo 4."""
+        if word & 0x80:
+            raise BoardError("irq 0x%04x: bit 7 is reserved" % word)
+        clr, wait, index = (word >> 6) & 1, (word >> 5) & 1, word & 0x1F
+        if self.board.chip == "rp2350":
+            mode = index >> 3
+            if mode in (1, 3):
+                raise BoardError(
+                    "irq to the %s PIO block not emulated" % ("previous", "next")[mode >> 1]
+                )
+            rel = mode == 2
+        else:
+            if index & 0x08:
+                raise BoardError("irq index 0x%02x not emulated (bit 3 is reserved)" % index)
+            rel = bool(index & 0x10)
+        flag = index & 7
+        if rel:
+            flag = (flag & 4) | ((flag + self.index) & 3)
+        return (_IRQ, clr, wait, flag)
 
     # -- running ----------------------------------------------------------
 
@@ -309,6 +610,10 @@ class _SM:
         here can end (an empty TX FIFO, a full RX FIFO with no DMA)."""
         wave = self.board.wave
         code = self.code
+        # The side-set and PIO-driven-pin checks cost every instruction, so
+        # programs without side-set skip them.
+        sidesets = self.sidesets if self.sideset_gpios else None
+        driven = self.board.pio_pins
         while self.enabled:
             limit = until
             if self.disable_at is not None:
@@ -321,8 +626,21 @@ class _SM:
                 return
             ins = code[self.pc]
             d = self.delays[self.pc]
+            # Side-set takes effect when the instruction issues, whether or
+            # not it then stalls; a stalled one re-issues with the same value.
+            if sidesets is not None:
+                ss = sidesets[self.pc]
+                if ss is not None and ss != self.side_last:
+                    self._side(ss)
             kind = ins[0]
             if kind == _WAIT:
+                if driven:
+                    if ins[2] in driven:
+                        raise BoardError(
+                            "GPIO %d is driven by PIO; waiting on it is not emulated" % ins[2]
+                        )
+                    if ins[2] in wave.uo_bit and wave.clock_rises is not None:
+                        self._check_clock_owner(ins[2])
                 t = wave.next_time(ins[2], ins[1], self.now)
                 if t is None or t >= limit:
                     self.now = limit
@@ -406,6 +724,11 @@ class _SM:
                 self.now += 1 + d
                 self._next_pc()
             elif kind == _PUSH:
+                if ins[2] and self.isr_count < self.push_thresh:
+                    # IfFull below the threshold: does nothing, in one cycle.
+                    self.now += 1 + d
+                    self._next_pc()
+                    continue
                 if len(self.rx) >= self.rx_depth:
                     if ins[1]:
                         self._rx_stalled()
@@ -456,6 +779,44 @@ class _SM:
                     self.y = ins[2]
                 self.now += 1 + d
                 self._next_pc()
+            elif kind == _IRQ:
+                _, clr, wait, flag = ins
+                bit = 1 << flag
+                block = self.block
+                # State machines run one after another within each
+                # Board.advance(), so a flag one sets or clears would reach
+                # another at the wrong cycle, or out of order: refused.
+                for other in block.sms:
+                    if other is not self and other.enabled and flag in other.irq_flags:
+                        raise BoardError(
+                            "IRQ flag %d is also used by another running state machine "
+                            "(PIO%d SM%d); irq between state machines is not emulated"
+                            % (flag, block.index, other.index)
+                        )
+                if clr:  # Clear: Wait has no effect
+                    block.irq &= ~bit
+                elif not wait:
+                    block.irq |= bit
+                else:
+                    # Raise the flag once, then stall until something else
+                    # clears it; the delay starts after the wait (RP2350
+                    # 11.4.11.2: "halt until the raised flag is lowered
+                    # again", "Delay cycles do not begin until after the
+                    # wait period elapses"). It completes in the cycle it
+                    # sees the flag low. When that is relative to the
+                    # clearing write the datasheet does not settle: 11.1.1
+                    # says an IRQ is "observable to all state machines on
+                    # the next cycle", so silicon may be one cycle later
+                    # than this; a CPU write is not cycle-timed here anyway.
+                    if not self.irq_waiting:
+                        block.irq |= bit
+                        self.irq_waiting = True
+                    if block.irq & bit:
+                        self.now = limit
+                        continue
+                    self.irq_waiting = False
+                self.now += 1 + d
+                self._next_pc()
 
     def read_pins(self, cycle: int, bits: int = 32) -> int:
         """The IN pin group at `cycle`, as `in pins` and `mov x, pins` read
@@ -465,12 +826,41 @@ class _SM:
         wave = self.board.wave
         base = self.block.base
         count = min(bits, self.in_count)  # only these bits can be nonzero
+        if self.board.pio_pins:
+            for gpio in self.board.pio_pins:
+                if base <= gpio < base + 32 and ((gpio - self.in_base) & 31) < count:
+                    raise BoardError(
+                        "GPIO %d is driven by PIO; reading it back is not emulated" % gpio
+                    )
+            if wave.clock_rises is not None:
+                for gpio in wave.uo_bit:
+                    if base <= gpio < base + 32 and ((gpio - self.in_base) & 31) < count:
+                        self._check_clock_owner(gpio)
         low = self.in_base - base  # in_base's index in the window
         first = 32 - low
         if count <= first:
             return wave.window(self.in_base, count, cycle)
         value = wave.window(self.in_base, first, cycle)
         return value | (wave.window(base, count - first, cycle) << first)
+
+    def _check_clock_owner(self, gpio: int) -> None:
+        """Refuse reading `uo_out` pin `gpio` from a state machine other than
+        the one whose side-set clocks the design: state machines run one
+        after another within each Board.advance(), so this one could run
+        ahead of edges the other has not driven yet."""
+        board = self.board
+        clk = board.wave.clk_gpio
+        owner = board.pio_pin_owner.get(clk)
+        if owner is None or clk in board.released:
+            # The CPU clocks the design: its edges land between advances,
+            # never inside the stretch a state machine has run ahead.
+            return
+        if owner is not self:
+            raise BoardError(
+                "GPIO %d is uo_out, clocked by another state machine's side-set "
+                "(PIO%d SM%d); reading it from this one is not emulated"
+                % (gpio, owner.block.index, owner.index)
+            )
 
     def write_shiftctrl(self, value: int) -> None:
         """A CPU write to SMn_SHIFTCTRL. Only IN_COUNT (bits 4:0, RP2350)
@@ -505,6 +895,8 @@ class _PioBlock:
         self.index = index
         self.base = 0
         self.fdebug = 0
+        #: The IRQ register's eight flags.
+        self.irq = 0
         self.programs: list[list] = []
         self.sms = [_SM(board, self, i) for i in range(4)]
 
@@ -602,6 +994,15 @@ _CTRL_FIELDS = {
 # the board
 
 
+class _Timer:
+    """One `Board.add_timer` timer; handles compare by identity."""
+
+    __slots__ = ("due", "period", "callback")
+
+    def __init__(self, due: int, period: int, callback: Callable[[], None]) -> None:
+        self.due, self.period, self.callback = due, period, callback
+
+
 class Board:
     """One emulated demo board.
 
@@ -619,6 +1020,11 @@ class Board:
     `pwm` is the clock pin's PWM slice as (CSR, DIV, TOP) register values;
     the default is the free-running integer divider that makes `wave`'s
     clock exactly (DIV_INT 1, TOP period - 1).
+
+    `pulls` maps GPIOs to the level an external resistor pulls them to,
+    which beats the RP2's own ~50k pull (the demo board's pull-up on
+    `rst_n`, {14: 1}). The clock pad reads 0 when nothing drives it, as
+    fpga-1's did once `Pin(16, Pin.IN)` took it from the PWM.
     """
 
     USB_PIECE = 512
@@ -633,6 +1039,7 @@ class Board:
         max_cycles: int = 2_000_000_000,
         idle_cycles: int = 2_000,
         pwm: tuple[int, int, int] | None = None,
+        pulls: dict[int, int] | None = None,
     ) -> None:
         if chip not in ("rp2040", "rp2350"):
             raise ValueError("chip must be rp2040 or rp2350")
@@ -659,12 +1066,41 @@ class Board:
         self.event_now: int | None = None
         self._dma_queue: list[tuple[str, _Channel]] = []
         self._dma_running = False
-        #: What one `Pin.value()` costs a MicroPython loop, in cycles.
+        #: What one `Pin.value()` read or write costs a MicroPython loop, in
+        #: cycles.
         self.pin_read_cycles = 150
         self.pwm = (1, 1 << 4, wave.period - 1) if pwm is None else tuple(pwm)
+        #: GPIOs PIO drives (side-set): each one's changes as (cycle, value),
+        #: in time order, and the state machine that drives it.
+        self.pio_pins: dict[int, list[tuple[int, int]]] = {}
+        self.pio_pin_owner: dict[int, _SM] = {}
+        #: The cycles at which each of those pins rises (0 to 1); the value
+        #: it was first driven to is not an edge.
+        self.pio_rises: dict[int, list[int]] = {}
+        #: External pulls; see the class docstring.
+        self.pulls = {wave.clk_gpio: 0, **(pulls or {})}
+        #: Pads a script gave a mode or pull: (mode, pull), mode None when
+        #: only the pull was set.
+        self.pads: dict[int, tuple[int | None, int | None]] = {}
+        #: Each pad's SIO output latch (gpio_put), whatever its mode.
+        self.latch: dict[int, int] = {}
+        #: The level SIO gives each configured pad, as (cycle, level) in
+        #: time order; -1 is floating.
+        self.pad_trace: dict[int, list[tuple[int, int]]] = {}
+        #: The design's rst_n GPIO, whose changes it must hear of
+        #: (ClockedDesign.rst_changed), or None.
+        self.rst_watch: int | None = None
+        #: Pads a Pin re-init took back from PIO, and the cycle it did.
+        self.released: dict[int, int] = {}
+        #: Periodic timers (add_timer), in the order they were added.
+        self.timers: list[_Timer] = []
+        #: More importable modules for run_script, by dotted name (the fake
+        #: SDK's `ttboard.*`); parent packages are made as needed.
+        self.extra_modules: dict[str, types.ModuleType] = {}
         gpio = wave.clk_gpio
         slice_num = (gpio >> 1) & 7 if gpio < 32 else 8 + ((gpio >> 1) & 3)
         self.pwm_base = PWM_BASE[chip] + PWM_SLICE_STRIDE * slice_num
+        wave.attach(self)
 
     # -- time ---------------------------------------------------------------
 
@@ -682,12 +1118,218 @@ class Board:
                         sm.now = self.now
                     sm.run(until)
         self.now = until
+        if self.timers:
+            self._fire_timers()
+
+    def add_timer(self, period: int, callback: Callable[[], None]) -> "_Timer":
+        """A periodic `machine.Timer`: `callback()` every `period` cycles.
+        It runs at the end of the advance in which it falls due, not
+        mid-instruction: timer latency is not modelled. Returns the handle
+        `remove_timer` takes."""
+        timer = _Timer(self.now + period, period, callback)
+        self.timers.append(timer)
+        return timer
+
+    def remove_timer(self, timer: "_Timer") -> None:
+        self.timers = [t for t in self.timers if t is not timer]
+
+    def _fire_timers(self) -> None:
+        for timer in list(self.timers):
+            # Due first, so a callback that advances time cannot fire itself.
+            while timer.due <= self.now and any(t is timer for t in self.timers):
+                timer.due += timer.period
+                timer.callback()
 
     @property
     def stop_requested(self) -> bool:
         if self.stop_after_bytes is not None and len(self.output) >= self.stop_after_bytes:
             return True
         return bool(self.stop_when and self.stop_when(self))
+
+    # -- PIO-driven pins ----------------------------------------------------
+
+    def _check_rst_and_clock_owners(self, sm: _SM, other: int) -> None:
+        """Refuse `sm` driving one of the design's clock and rst_n pads while
+        another state machine drives the other: state machines run one after
+        another within each advance, so the clock's samples taken before the
+        other's rst_n drive in the same advance would be stale."""
+        owner = self.pio_pin_owner.get(other)
+        if owner is not None and owner is not sm and other not in self.released:
+            raise BoardError(
+                "rst_n and the clock would be driven by two state machines (the "
+                "other is PIO%d SM%d), which is not emulated; drive both from "
+                "one state machine, or rst_n from the CPU"
+                % (owner.block.index, owner.index)
+            )
+
+    def pio_drive(self, sm: _SM, gpio: int, value: int, cycle: int) -> None:
+        """`sm` drives `gpio` to `value` from `cycle` on."""
+        if gpio in self.released:
+            return  # FUNCSEL is SIO now: PIO's output no longer reaches the pad
+        if self.rst_watch is not None:
+            if gpio == self.rst_watch:
+                self._check_rst_and_clock_owners(sm, self.wave.clk_gpio)
+                self.wave.rst_changed(cycle)
+            elif gpio == self.wave.clk_gpio:
+                self._check_rst_and_clock_owners(sm, self.rst_watch)
+        owner = self.pio_pin_owner.setdefault(gpio, sm)
+        if owner is not sm:
+            raise BoardError(
+                "GPIO %d is already driven by another state machine (PIO%d SM%d)"
+                % (gpio, owner.block.index, owner.index)
+            )
+        trace = self.pio_pins.setdefault(gpio, [])
+        rises = self.pio_rises.setdefault(gpio, [])
+        if trace:
+            last_cycle, last_value = trace[-1]
+            if cycle < last_cycle:
+                raise BoardError("GPIO %d driven back in time (%d < %d)" % (gpio, cycle, last_cycle))
+            if cycle == last_cycle:
+                # Two values in one cycle happen only when a construction's
+                # sideset_init is followed by the first instruction, which
+                # issues in the cycle active(1) is called. On a board the
+                # init value lasts until then, microseconds later, so an
+                # edge into or out of it is real: any rise into it stays and
+                # a rise out of it counts. The pin shows the later value, so
+                # for an OUT_HIGH init driven low in the construction cycle
+                # pio_pin() never shows the high pulse, but pio_rises holds
+                # the rise.
+                trace[-1] = (cycle, value)
+                if value and not last_value:
+                    rises.append(cycle)
+                return
+            if last_value == value:
+                return
+            if value:
+                rises.append(cycle)
+        trace.append((cycle, value))
+
+    def pio_pin(self, gpio: int, cycle: int) -> int:
+        """The value PIO drives on `gpio` at `cycle`."""
+        trace = self.pio_pins.get(gpio, [])
+        i = bisect.bisect_right(trace, (cycle, 1)) - 1
+        if i < 0:
+            raise BoardError("GPIO %d is not driven by PIO at cycle %d" % (gpio, cycle))
+        return trace[i][1]
+
+    # -- CPU-driven pins ----------------------------------------------------
+
+    def pio_owns(self, gpio: int, cycle: int) -> bool:
+        """PIO drives the pad of `gpio` at `cycle`."""
+        trace = self.pio_pins.get(gpio)
+        if not trace or trace[0][0] > cycle:
+            return False
+        released = self.released.get(gpio)
+        return released is None or cycle < released
+
+    def pad_level(self, gpio: int, cycle: int) -> int:
+        """The level on a pad the design does not drive, at `cycle`: PIO's
+        while PIO has it, else what SIO and the pulls make it."""
+        if self.pio_owns(gpio, cycle):
+            return self.pio_pin(gpio, cycle)
+        trace = self.pad_trace.get(gpio)
+        if trace:
+            i = bisect.bisect_right(trace, (cycle, 1)) - 1
+            if i >= 0:
+                level = trace[i][1]
+                if level < 0:
+                    raise BoardError(
+                        "GPIO %d is an input with no pull that nothing drives: it floats" % gpio)
+                return level
+        # Never configured: the pad's reset pull-down, or an external pull.
+        return self.pulls.get(gpio, 0)
+
+    def cpu_read(self, gpio: int) -> int:
+        """`Pin(gpio).value()` now: gpio_get(), the pad whatever drives it."""
+        now = self.now
+        if self.pio_owns(gpio, now):
+            return self.pio_pin(gpio, now)
+        wave = self.wave
+        if self.pads.get(gpio, (None,))[0] != _Pin.OUT and (
+            gpio in wave.uo_bit
+            or gpio in wave.constants
+            or (gpio == wave.clk_gpio and gpio not in self.pad_trace)
+        ):
+            return wave.value(gpio, now)
+        return self.pad_level(gpio, now)
+
+    def _sio_level(self, gpio: int) -> int:
+        mode, pull = self.pads[gpio]
+        if mode == _Pin.OUT:
+            return self.latch.get(gpio, 0)
+        external = self.pulls.get(gpio)
+        if external is not None:
+            return external
+        if pull == _Pin.PULL_UP:
+            return 1
+        if pull == _Pin.PULL_DOWN:
+            return 0
+        return -1
+
+    def _pad_changed(self, gpio: int, before: int | None) -> None:
+        """Record the level SIO now gives `gpio`; a rise on the clock pad,
+        once the design is clocked by edges, is one of its edges."""
+        if self.pio_owns(gpio, self.now):
+            return
+        level = self._sio_level(gpio)
+        trace = self.pad_trace.setdefault(gpio, [])
+        now = self.now
+        if trace and trace[-1][0] == now:
+            trace[-1] = (now, level)
+        elif not trace or trace[-1][1] != level:
+            trace.append((now, level))
+        wave = self.wave
+        if gpio == wave.clk_gpio and wave.clock_rises is not None and before == 0 and level == 1:
+            wave.clock_rises.append(now)
+        if gpio == self.rst_watch:
+            wave.rst_changed(now)
+
+    def _level_before(self, gpio: int) -> int | None:
+        """The clock pad's level just before a CPU change, when that matters."""
+        wave = self.wave
+        if gpio != wave.clk_gpio or wave.clock_rises is None:
+            return None
+        try:
+            return self.pad_level(gpio, self.now)
+        except BoardError:
+            return None
+
+    def pin_init(self, gpio: int, mode: int | None, pull: int | None, value) -> None:
+        """`Pin(gpio, mode, pull, value=...)` / `Pin.init()`, as
+        machine_pin_obj_init_helper() in MicroPython v1.24.0 does it."""
+        if mode not in (None, _Pin.IN, _Pin.OUT):
+            raise BoardError("Pin mode %r is not emulated (only IN and OUT)" % (mode,))
+        if pull not in (None, _Pin.PULL_UP, _Pin.PULL_DOWN):
+            raise BoardError("Pin pull %r is not emulated" % (pull,))
+        wave = self.wave
+        before = self._level_before(gpio)
+        if mode is not None:
+            if mode == _Pin.OUT and (gpio in wave.uo_bit or gpio in wave.constants):
+                raise BoardError(
+                    "GPIO %d is driven by the design (uo_out or a constant); "
+                    "driving it too is contention, not emulated" % gpio)
+            if mode == _Pin.OUT and value is not None:
+                # "set initial output value before configuring mode"
+                self.latch[gpio] = 1 if value else 0
+            # mp_hal_pin_input/output: gpio_set_function(pin, GPIO_FUNC_SIO).
+            if self.pio_owns(gpio, self.now):
+                self.released[gpio] = self.now
+            self.configured_pins.append((gpio, mode))
+            if gpio == wave.clk_gpio:
+                wave.clock_stopped = True
+        else:
+            mode = self.pads.get(gpio, (None,))[0]
+        # "Configure pull (unconditionally because None means no-pull)."
+        self.pads[gpio] = (mode, pull)
+        self._pad_changed(gpio, before)
+
+    def pin_write(self, gpio: int, value) -> None:
+        """`Pin(gpio).value(v)`: gpio_put(), the latch, which reaches the pad
+        only while it is an SIO output."""
+        before = self._level_before(gpio)
+        self.latch[gpio] = 1 if value else 0
+        if gpio in self.pads:
+            self._pad_changed(gpio, before)
 
     # -- memory -------------------------------------------------------------
 
@@ -714,6 +1356,8 @@ class Board:
         for block in self.blocks:
             if addr == block.address(PIO_FDEBUG):
                 return block.fdebug
+            if addr == block.address(PIO_IRQ):
+                return block.irq
             if addr == block.address(PIO_CTRL):
                 return sum(1 << sm.index for sm in block.sms if sm.enabled)
             for sm in block.sms:
@@ -743,6 +1387,9 @@ class Board:
         for block in self.blocks:
             if addr == block.address(PIO_FDEBUG):
                 block.fdebug &= ~value  # write-1-to-clear
+                return
+            if addr == block.address(PIO_IRQ):
+                block.irq &= ~value  # write-1-to-clear
                 return
             for sm in block.sms:
                 shiftctrl = block.address(PIO_SM0_SHIFTCTRL + PIO_SM_STRIDE * sm.index)
@@ -894,13 +1541,28 @@ class Board:
     def modules(self) -> dict[str, types.ModuleType]:
         return _make_modules(self)
 
-    def run_script(self, script: str, name: str = "<stdin>") -> bytes:
-        """Run a built board script to completion; return what it wrote."""
+    def run_script(self, script: str, name: str = "<stdin>",
+                   globals: dict | None = None) -> bytes:
+        """Run a built board script to completion; return what it wrote.
+
+        `globals` are names the REPL already holds (the SDK's `tt`). What
+        anything prints, the fake SDK included, goes out over USB as the
+        script's own writes do."""
         modules = self.modules()
+        for dotted, module in self.extra_modules.items():
+            modules[dotted] = module
+            parts = dotted.split(".")
+            for i in range(len(parts) - 1, 0, -1):
+                parent = ".".join(parts[:i])
+                if parent not in modules:
+                    modules[parent] = types.ModuleType(parent)
+                setattr(modules[parent], parts[i], modules[".".join(parts[: i + 1])])
         real_import = builtins.__import__
 
         def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
             if name in modules:
+                if not fromlist and "." in name:
+                    return modules[name.split(".")[0]]  # `import a.b` binds `a`
                 return modules[name]
             return real_import(name, globals, locals, fromlist, level)
 
@@ -909,7 +1571,11 @@ class Board:
         fake_builtins["bytearray"] = modules["_heap"].bytearray
         fake_builtins["ptr32"] = Ptr32
         namespace = {"__builtins__": fake_builtins, "__name__": "__main__"}
-        exec(compile(script, name, "exec"), namespace)  # noqa: S102 - the board script
+        namespace.update(globals or {})
+        text = io.TextIOWrapper(_UsbRaw(modules["sys"].stdout.buffer), write_through=True,
+                                newline="\r\n")
+        with contextlib.redirect_stdout(text):
+            exec(compile(script, name, "exec"), namespace)  # noqa: S102 - the board script
         return bytes(self.output)
 
 
@@ -918,28 +1584,51 @@ class Board:
 
 
 class _Pin:
-    """machine.Pin: knows its number; configuring the clock pad stops it."""
+    """machine.Pin, as MicroPython v1.24.0's rp2 port has it
+    (ports/rp2/machine_pin.c): a mode takes the pad for SIO, from PIO too;
+    `value()` reads the pad whatever drives it. Configuring the clock pad
+    stops the firmware's PWM clock."""
 
-    IN, OUT = 0, 1
+    IN, OUT, OPEN_DRAIN, ALT = 0, 1, 2, 3
     PULL_UP, PULL_DOWN = 1, 2
     _board: Board
 
-    def __init__(self, gpio: int, mode=None, pull=None, *args, **kwargs) -> None:
+    def __init__(self, gpio: int, *args, **kwargs) -> None:
         self.gpio = gpio
-        if mode is not None:
-            self._board.configured_pins.append((gpio, mode))
-            if gpio == self._board.wave.clk_gpio:
-                self._board.wave.clock_stopped = True
+        if args or kwargs:  # mp_pin_make_new: any argument runs init
+            self.init(*args, **kwargs)
+
+    def init(self, mode=None, pull=None, *, value=None, alt=None) -> None:
+        if alt is not None:
+            raise BoardError("Pin alt= is not emulated")
+        # The pull is set on every init; leaving it out means no pull.
+        self._board.pin_init(self.gpio, mode, pull, value)
 
     def value(self, v=None):
-        if v is not None:
-            raise BoardError("driving pins is not emulated")
         board = self._board
         board.advance(board.pin_read_cycles)
-        return board.wave.value(self.gpio, board.now)
+        if v is not None:
+            board.pin_write(self.gpio, v)
+            return None
+        return board.cpu_read(self.gpio)
+
+    __call__ = value
+
+    def on(self) -> None:
+        self.value(1)
+
+    def off(self) -> None:
+        self.value(0)
+
+    high, low = on, off
+
+    def toggle(self) -> None:
+        board = self._board
+        self.value(0 if board.latch.get(self.gpio, 0) else 1)
 
     def __repr__(self) -> str:
-        return "Pin(GPIO%d, mode=IN)" % self.gpio
+        mode = self._board.pads.get(self.gpio, (None,))[0]
+        return "Pin(GPIO%d, mode=%s)" % (self.gpio, "OUT" if mode == self.OUT else "IN")
 
 
 def _make_modules(board: Board) -> dict[str, types.ModuleType]:
@@ -1073,6 +1762,19 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
 
     select.poll = Poll
 
+    # -- time ---------------------------------------------------------------
+
+    time_mod = types.ModuleType("time")
+    hz = board.sysclk_hz
+    time_mod.ticks_ms = lambda: board.now * 1000 // hz
+    time_mod.ticks_us = lambda: board.now * 1_000_000 // hz
+    time_mod.ticks_cpu = lambda: board.now
+    time_mod.ticks_diff = lambda a, b: a - b
+    time_mod.ticks_add = lambda a, b: a + b
+    time_mod.sleep_ms = lambda ms: board.advance(ms * hz // 1000)
+    time_mod.sleep_us = lambda us: board.advance(us * hz // 1_000_000)
+    time_mod.sleep = lambda s: board.advance(s * hz)
+
     # -- _rp2 ---------------------------------------------------------------
 
     _rp2 = types.ModuleType("_rp2")
@@ -1110,16 +1812,25 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
         PIO.gpio_base = gpio_base
 
     class StateMachine:
-        def __init__(self, id, prog=None, freq=-1, *, in_base=None, push_thresh=None, **kwargs):
+        def __init__(self, id, prog=None, freq=-1, *, in_base=None, push_thresh=None,
+                     sideset_base=None, **kwargs):
             unsupported = [k for k, v in kwargs.items() if v is not None]
             if unsupported:
                 raise BoardError("StateMachine options not emulated: %s" % unsupported)
+            if freq != -1:
+                # rp2_pio.c turns freq into CLKDIV; here every state machine
+                # runs at the system clock, so any freq would be wrong.
+                raise BoardError(
+                    "StateMachine(freq=%r): the PIO clock divider is not emulated; "
+                    "state machines run at the system clock (freq=-1)" % (freq,)
+                )
             block = board.blocks[id // 4]
             self._sm = block.sms[id % 4]
             if prog is not None:
                 block.add(prog)
                 base = in_base.gpio if isinstance(in_base, _Pin) else in_base
-                self._sm.load(prog, base, push_thresh)
+                side = sideset_base.gpio if isinstance(sideset_base, _Pin) else sideset_base
+                self._sm.load(prog, base, push_thresh, side)
                 self._sm.enabled = False
 
         def active(self, value=None):
@@ -1139,6 +1850,7 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
             sm.pc = 0
             sm.isr = sm.isr_count = 0
             sm.osr_count = 32
+            sm.irq_waiting = False
             sm.disable_at = None
 
         def put(self, value, shift=0):
@@ -1264,10 +1976,25 @@ def _make_modules(board: Board) -> dict[str, types.ModuleType]:
         "uctypes": uctypes,
         "sys": sys_mod,
         "select": select,
+        "time": time_mod,
+        "utime": time_mod,
         "rp2": rp2,
         "_rp2": _rp2,
         "_heap": heap_mod,
     }
+
+
+class _UsbRaw(io.RawIOBase):
+    """`print()`'s text, as bytes into the board's USB stdout."""
+
+    def __init__(self, stdout_buffer) -> None:
+        self._out = stdout_buffer
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data) -> int:
+        return self._out.write(data)
 
 
 class Ptr32:
@@ -1321,4 +2048,4 @@ def assemble(build: Callable[[types.ModuleType], object]) -> list:
     return build(Board(wave).modules()["rp2"])
 
 
-__all__ = ["Board", "BoardError", "Waveform", "assemble"]
+__all__ = ["Board", "BoardError", "ClockedDesign", "Waveform", "assemble"]

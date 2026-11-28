@@ -13,30 +13,55 @@ and writes the same chunk stream it would write over USB:
   `StateMachine` and `DMA`.
 * **PIO**: a cycle-level interpreter for the instructions these programs
   use (`wait gpio`, `in` from pins or a register, `out` to a register,
-  `jmp`, `set`, `mov`, `pull`, `push`, `nop`, wrap, delays), with
-  autopush, RX FIFO depth, `RXSTALL` (blocking and dropped nonblocking
-  pushes), pin reads that wrap round the 32-pin window, the RP2350's
-  SHIFTCTRL.IN_COUNT mask, and the RP2350 `wait gpio` index relocation
-  measured on fpga-1. `wait` fast-forwards to the next edge instead of
-  stepping every cycle.
+  `jmp`, `set`, `mov`, `pull`, `push` and `push iffull`, `irq` set, clear
+  and wait, `nop`, wrap, delays), with autopush, RX FIFO depth, `RXSTALL`
+  (blocking and dropped nonblocking pushes), pin reads that wrap round the
+  32-pin window, the RP2350's SHIFTCTRL.IN_COUNT mask, and the RP2350
+  `wait gpio` index relocation measured on fpga-1. `wait` fast-forwards to
+  the next edge instead of stepping every cycle. Side-set (plain or
+  optional, to pin values; not pindirs) drives its pins from the cycle an
+  instruction issues, stalled or not, and `Board.pio_pin()` reads them
+  back cycle by cycle. Once side-set drives the design's clock pin,
+  `uo_out` advances one value per rising edge it drives, and only
+  then. The PIO IRQ register (block + 0x030) is
+  write-1-to-clear from `mem32`.
 * **DMA**: channels with chaining, completion IRQs that call the script's
   own handlers, and the `mem32` register writes the scripts use (re-arming
   `WRITE_ADDR`/`TRANS_COUNT`, and the PIO `CTRL` atomic-clear alias).
 * **Pins** come from a `Waveform`: a project clock of `period` system
   cycles and the design's `uo_out` per project clock, e.g. from
-  `vgacap.synth.frame_samples()` or an Icarus dump of real RTL.
+  `vgacap.synth.frame_samples()` or an Icarus dump of real RTL -- or from
+  a `ClockedDesign`, an exact counter clocked only by the rising edges
+  really driven on its clock pad, reset synchronously by `rst_n`.
+  `machine.Pin` is MicroPython v1.24.0's: `Pin(n, Pin.OUT, value=v)`
+  drives a pad, any mode takes the pad from PIO, `value()` reads the pad
+  whatever drives it, and `Board(pulls=...)` sets the external pulls that
+  beat the RP2's own.
 * **Heap**: `bytearray` is replaced by one that refuses blocks larger than
   the board's largest free block, which is the limit that matters on
   fpga-1 (414 KB free, 142 KB largest block, measured 2026-11-24).
-* **USB**: every byte written to stdout costs `cycles_per_byte` of
-  emulated time, so frames elapse while a frame is being sent, as they do
-  on the board.
+* **USB**: every byte written to stdout, `print()` included, costs
+  `cycles_per_byte` of emulated time, so frames elapse while a frame is
+  being sent, as they do on the board.
+* **Time**: `time` runs on the emulated clock, and `Board.add_timer` runs
+  a periodic callback at the end of the advance it falls due in.
 
-What it does not model: side-set (no program here uses it), IRQ latency (handlers run at the completion cycle), DMA bus
-contention, and the input synchroniser (a fixed delay on every pin alike,
-so it moves nothing relative to anything else).
+What it does not model: IRQ and timer latency (handlers run at the
+completion cycle, timers at the end of an advance), DMA bus contention,
+the input synchroniser (a fixed delay on every pin alike, so it moves
+nothing relative to anything else), the PIO clock divider (state machines
+run at the system clock; any `freq` is refused), and `irq` between state
+machines (state machines run one after another within each step, so a
+flag that two running state machines share is refused). A state machine
+reading back a pin PIO drives, a floating input, and side-set onto a pad a
+`Pin` init took back from PIO are refused, and so are a `ClockedDesign`'s
+`rst_n` and clock driven by two state machines. A pad a `Pin` init took back is
+still refused to `in pins` and `wait`, though the board would let a
+state machine read it. `ClockedDesign.configure()` forgets the design
+before it: `count_at` for a cycle before the load returns `initial`, not
+what the old design held then.
 """
 
-from ttcap.emu.board import Board, BoardError, Waveform
+from ttcap.emu.board import Board, BoardError, ClockedDesign, Waveform
 
-__all__ = ["Board", "BoardError", "Waveform"]
+__all__ = ["Board", "BoardError", "ClockedDesign", "Waveform"]

@@ -20,8 +20,10 @@ https://docs.micropython.org/en/latest/reference/repl.html#raw-mode-and-raw-past
 from __future__ import annotations
 
 import base64
+import binascii
 import builtins
 import contextlib
+import errno
 import io
 import os
 import sys
@@ -39,7 +41,10 @@ def _install_ubinascii() -> None:
     """Make `import ubinascii` work in code the fake boards exec.
 
     MicroPython ships `ubinascii` as a built-in module; CPython does not,
-    so the fakes put a one-function stand-in in `sys.modules`. It is only
+    so the fakes put a stand-in in `sys.modules`: base64 both ways and
+    `crc32`, which MicroPython v1.24.0's rp2 build has in C
+    (`extmod/modbinascii.c:173-184`, `uzlib_crc32`; on because the port's
+    ROM level is EXTRA_FEATURES). It is only
     ever reachable through an `import`, never pre-bound in the board's
     globals -- which is the distinction `RawRepl.upload()` has to respect.
     """
@@ -47,6 +52,7 @@ def _install_ubinascii() -> None:
         module = types.ModuleType("ubinascii")
         module.a2b_base64 = base64.b64decode
         module.b2a_base64 = base64.b64encode
+        module.crc32 = binascii.crc32
         sys.modules["ubinascii"] = module
 
 
@@ -178,6 +184,67 @@ class _StubStdout:
         pass
 
 
+class _FakeFileForReading(io.BytesIO):
+    """A file `FakeBinaryBoard` opened with 'rb', kept in its `readers`."""
+
+    def __init__(self, board: "FakeBinaryBoard", path: str) -> None:
+        super().__init__(board.files[path])
+        self._board = board
+        self._path = path
+        self._reads = 0
+        board.readers.append(self)
+
+    def readinto(self, buffer) -> int:
+        if self._board.on_file_read is not None:
+            self._board.on_file_read(self._path, self._reads)
+        self._reads += 1
+        return super().readinto(buffer)
+
+
+class _FakeFileForWriting:
+    """A file `FakeBinaryBoard` opened with 'wb', committed only by `close()`.
+
+    As littlefs, which the rp2 port mounts at `/` (`ports/rp2/modules/
+    _boot.py` in MicroPython v1.24.0): a new file's entry is committed by the
+    open, empty (`lib/littlefs/lfs2.c:3059-3063`); truncating an existing one
+    only marks the handle dirty (`lfs2.c:3081-3084`); the data and size reach
+    the directory entry when the handle is synced or closed (`lfs2.c:
+    3182-3184,3367-3412`). Until then a reader sees the file as it was.
+    """
+
+    def __init__(self, board: "FakeBinaryBoard", path: str) -> None:
+        self._board = board
+        self._path = path
+        self._writes = 0
+        self._data = bytearray()
+        self.closed = False
+        board.files.setdefault(path, b"")
+        board.writers.append(self)
+
+    def write(self, data) -> int:
+        data = bytes(data)
+        if self._board.on_file_write is not None:
+            stored = self._board.on_file_write(self._path, self._writes, data)
+        else:
+            stored = data
+        self._writes += 1
+        self._data += stored
+        return len(data)
+
+    def close(self) -> None:
+        # A second close is a no-op, as `vfs_lfsx_file.c:180-183` has it.
+        if self.closed:
+            return
+        self.closed = True
+        data = bytes(self._data)
+        if self._board.on_file_close is not None:
+            data = self._board.on_file_close(self._path, data)
+        if data is None:
+            self._board.files.pop(self._path, None)
+        else:
+            self._board.files[self._path] = data
+
+
 class FakeBinaryBoard:
     """An in-memory `ReplLink` that runs raw-REPL commands with a binary stdout.
 
@@ -190,11 +257,57 @@ class FakeBinaryBoard:
 
     `corrupt` is an optional callable taking the stdout `bytearray`; it may
     mutate it in place to simulate a lossy or corrupting link.
+
+    `open()` in the script reaches `files` (path -> bytes), an in-memory
+    stand-in for the board's filesystem, never the host's: modes 'rb' and
+    'wb' only, a missing file raising `OSError(ENOENT)` and a path in `dirs`
+    `OSError(EISDIR)` in either mode (`lfs2.c:3077-3079`), as on a board. A
+    file opened 'wb' changes only when it is closed (`_FakeFileForWriting`).
+    `import os` gets the board's `os`, never the host's: `mkdir` adds to
+    `dirs` (`OSError(EEXIST)` for a path already there, file or directory)
+    and `remove` deletes a file (`OSError(ENOENT)` for one that is not
+    there), and `rmdir` an empty directory (`ENOTEMPTY` for one holding
+    anything, `ENOENT` for one not there), as littlefs does (`lfs2_mkdir_` and `lfs2_remove_` in
+    MicroPython b006887db6's `lib/littlefs/lfs2.c`). With `parents` a
+    file opened 'wb', or a directory made, needs its parent directory in
+    `dirs`, or the root, else `OSError(ENOENT)`: `lfs2_dir_find` fails
+    on the missing parent in `lfs2_file_opencfg_` and `lfs2_mkdir_` alike.
+    Without it, as before, any path can be written.
+    Every handle stays in `readers` or `writers`; `collect()` closes those the script
+    never closed, as the board's GC does when it finalises an unreachable
+    file (`__del__` is close, `extmod/vfs_lfsx_file.c:93-95,207`).
+
+    `on_file_write`, if given, is called as ``on_file_write(path, n, data)``
+    for the `n`-th `write()` (from 0) to a file opened for writing and
+    returns the bytes really stored -- corruption between the REPL and the
+    flash -- or raises. `on_file_close`, if given, is called as
+    ``on_file_close(path, data)`` when such a file is closed and returns what
+    is committed, or None for a file that is then gone; it may raise, as a
+    close that fails. `on_file_read`, if given, is called as
+    ``on_file_read(path, n)`` before the `n`-th `readinto()` of a file opened
+    for reading, and may raise, as a read error.
     """
 
-    def __init__(self, chunk_size: int = 8192, corrupt=None, modules=None) -> None:
+    def __init__(self, chunk_size: int = 8192, corrupt=None, modules=None,
+                 files: dict[str, bytes] | None = None, on_file_write=None,
+                 dirs=(), on_file_close=None, on_file_read=None,
+                 parents: bool = False) -> None:
         self.chunk_size = chunk_size
         self.corrupt = corrupt
+        #: The board's filesystem, path -> contents.
+        self.files: dict[str, bytes] = dict(files or {})
+        #: Paths that are directories.
+        self.dirs: set[str] = set(dirs)
+        #: Whether a new file or directory needs its parent directory.
+        self.parents = parents
+        self.on_file_write = on_file_write
+        self.on_file_close = on_file_close
+        self.on_file_read = on_file_read
+        #: Every handle opened 'wb', closed or not, oldest first.
+        self.writers: list[_FakeFileForWriting] = []
+        #: Every handle opened 'rb', closed or not, oldest first.
+        self.readers: list[_FakeFileForReading] = []
+        _install_ubinascii()
         self.closed = False
         self.commands: list[str] = []
         self._pending = bytearray()
@@ -207,7 +320,7 @@ class FakeBinaryBoard:
             version="3.4.0",
             implementation=types.SimpleNamespace(name="micropython"),
         )
-        self._modules = {"sys": stub_sys}
+        self._modules = {"sys": stub_sys, "os": self._os_module()}
         if modules:
             self._modules.update(modules)
         real_import = builtins.__import__
@@ -222,7 +335,72 @@ class FakeBinaryBoard:
 
         self._builtins = dict(vars(builtins))
         self._builtins["__import__"] = _import
+        self._builtins["open"] = self._open
         self._globals: dict = {"__builtins__": self._builtins}
+
+    def collect(self) -> None:
+        """Finalise every write handle never closed, as a board's GC would."""
+        for writer in self.writers:
+            writer.close()
+
+    def unclosed_writers(self) -> list[str]:
+        """The paths of write handles the script has not closed."""
+        return [w._path for w in self.writers if not w.closed]
+
+    def unclosed_handles(self) -> list[str]:
+        """The paths of all handles, read or write, not closed."""
+        return [f._path for f in self.readers + self.writers if not f.closed]
+
+    def _parent_missing(self, path: str) -> bool:
+        """With `parents`, whether `path`'s directory is not there."""
+        if not self.parents:
+            return False
+        parent = path.rpartition("/")[0]
+        return parent not in ("", "/") and parent not in self.dirs
+
+    def _os_module(self) -> types.ModuleType:
+        """The board's `os`, on `files` and `dirs` (see the class docstring)."""
+        module = types.ModuleType("os")
+
+        def mkdir(path: str) -> None:
+            if path in self.dirs or path in self.files:
+                raise OSError(errno.EEXIST, "EEXIST")
+            if self._parent_missing(path):
+                raise OSError(errno.ENOENT, "ENOENT")
+            self.dirs.add(path)
+
+        def remove(path: str) -> None:
+            if path in self.dirs:
+                raise ValueError("the fake board's os.remove() removes files only")
+            if path not in self.files:
+                raise OSError(errno.ENOENT, "ENOENT")
+            del self.files[path]
+
+        def rmdir(path: str) -> None:
+            if path not in self.dirs:
+                raise OSError(errno.ENOENT, "ENOENT")
+            inside = path.rstrip("/") + "/"
+            if any(p.startswith(inside) for p in [*self.files, *self.dirs]):
+                raise OSError(errno.ENOTEMPTY, "ENOTEMPTY")
+            self.dirs.discard(path)
+
+        module.mkdir = mkdir
+        module.remove = remove
+        module.rmdir = rmdir
+        return module
+
+    def _open(self, path: str, mode: str = "r"):
+        if mode in ("rb", "wb") and path in self.dirs:
+            raise OSError(errno.EISDIR, "EISDIR")
+        if mode == "wb" and path not in self.files and self._parent_missing(path):
+            raise OSError(errno.ENOENT, "ENOENT")
+        if mode == "rb":
+            if path not in self.files:
+                raise OSError(errno.ENOENT, "ENOENT")
+            return _FakeFileForReading(self, path)
+        if mode == "wb":
+            return _FakeFileForWriting(self, path)
+        raise ValueError(f"the fake board's open() has no mode {mode!r}")
 
     def record_write_sizes(self, sink: list[int]) -> None:
         """Append the length of every `sys.stdout.buffer.write()` to `sink`."""

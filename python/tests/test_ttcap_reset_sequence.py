@@ -66,10 +66,26 @@ def test_the_fake_releases_reset_on_a_mode_write_as_the_sdk_did_on_fpga4():
         "from ttboard.mode import RPMode\n"
         "tt.reset_project(True); print(tt.rst_n()); tt.mode = RPMode.ASIC_RP_CONTROL; print(tt.rst_n())")
     assert err == ""
-    assert out.split() == ["ttboard.demoboard:", "Changing", "reset", "to", "output", "mode", "0",
-                           "ttboard.pins.pins:", "Setting", "mode", "to", "ASIC_RP_CONTROL",
-                           "ttboard.pins.manual_clock:", "Enabling", "manual", "clock", "pin",
-                           "monitoring", "1"]
+    # INFO lines are bright green (log.py:54, colors.py:23-45).
+    assert out.splitlines() == [
+        "ttboard.demoboard: \x1b[32;1mChanging reset to output mode\x1b[0m", "0",
+        "ttboard.pins.pins: \x1b[32;1mSetting mode to ASIC_RP_CONTROL\x1b[0m",
+        "ttboard.pins.manual_clock: \x1b[32;1mEnabling manual clock pin monitoring\x1b[0m", "1"]
+
+
+def test_a_switch_held_high_gets_a_warning_then_the_error():
+    tt = FakeTT(switches=0x05)
+    board, repl = connect(tt)
+    out, err = repl.exec("from ttboard.mode import RPMode\ntt.mode = RPMode.ASIC_RP_CONTROL")
+    assert err == ""
+    # pins.py:242-250: WARN (yellow) per pin reading high, then one ERROR (red).
+    assert out.splitlines()[1:4] == [
+        "ttboard.pins.pins: \x1b[33;1mTrying to control ui_in0 but possible contention "
+        "(it is reading HIGH)\x1b[0m",
+        "ttboard.pins.pins: \x1b[33;1mTrying to control ui_in2 but possible contention "
+        "(it is reading HIGH)\x1b[0m",
+        "ttboard.pins.pins: \x1b[31;1mFollowing pins have not be set as outputs owing to "
+        "contention: ui_in0,ui_in2\x1b[0m"]
 
 
 def test_the_fakes_manual_clock_timer_stops_the_pwm():
