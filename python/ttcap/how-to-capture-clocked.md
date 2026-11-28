@@ -13,7 +13,25 @@ review: 2027-05-28
 
 The real clock is the one nearest `--clock-hz` that is not faster. A clock is H + L + 4 PIO cycles, and `ttcap` picks the PIO divider and that cycle count together, so a rate the two can make is made exactly: 500 kHz at a 150 MHz system clock is divider 10 and 30 cycles. `uo_out` is read H + 1 PIO cycles after the rising edge, at least 80 ns after it, so at a 133 MHz system clock the fastest clock is 9.5 MHz, with H 10 and L 0. The nearest-not-faster rule holds only up to the fastest clock: a `--clock-hz` above it, rounded up to a whole hertz, is refused, and the message gives the rate to ask for. At 133 MHz, 9500000 runs and 9500001 is refused.
 
-The 80 ns floor was measured on one design and one board: `tt_um_vga_ca` on fpga-4, on 2026-11-28. Reads up to 53 ns after the edge got wrong values there, and every read from 60 ns on matched the reference; 80 ns is a third more than 60. A design whose outputs settle more slowly needs a later read, so give it a larger `--clock-high`.
+The read time is the time from the side-set rising edge to the `in` that reads `uo_out`: (H + 1) PIO cycles. The pin time is the time of the pin level that `in` sees, the read time less the GPIO input synchroniser's 2 system clocks, 15 ns at 133 MHz.
+
+The 80 ns floor was measured on one design and one board: `tt_um_vga_ca` on fpga-4, on 2026-11-28, at 7 MHz, divider 1 and a 133 MHz system clock, with `--clock-high` 0 to 15 ([result](https://github.com/mithro/tt-vga-capture/tree/main/docs/results/2026-11-28-clocked-fpga4/)):
+
+| H | Read time | Pin time | Result |
+|---|---|---|---|
+| 0 | 7.5 ns | -7.5 ns | the previous clock's output |
+| 1-4 | 15.0-37.6 ns | 0.0-22.6 ns | wrong |
+| 5 | 45.1 ns | 30.1 ns | wrong |
+| 6 | 52.6 ns | 37.6 ns | wrong |
+| 7-15 | 60.2-120.3 ns | 45.1-105.3 ns | exact |
+
+The threshold there is between 52.6 and 60.2 ns in read time, and between 37.6 and 45.1 ns in pin time. The 80 ns floor is H 10 at 133 MHz, a read at 82.7 ns, about 67 ns in pin time. The margin is kept because only one design on one board was measured.
+
+The 40 ns floor before it was a design-note choice, never measured. The 25 ns it built on came from frame mode on a different design: a tt09 bars design with a 25 MHz PWM clock at a 100 MHz system clock. There a read 20 ns after the edge failed, and reads at 30 ns and 40 ns were exact; that threshold includes the input synchroniser ([result](https://github.com/mithro/tt-vga-capture/blob/main/docs/results/2026-11-24-frame-capture-fpga4/README.md)).
+
+The read point a design needs depends on its clock-to-output path. A design with a slower path can read the previous clock's value at the default H and still report a clean run, because every sample arrives, one clock late. Only a sweep of H against the design's reference shows it. To sweep, run once with each `--clock-high` from 0 to 15 at a rate that is divider 1, such as 7 MHz at a 133 MHz system clock, and compare each capture with the reference.
+
+To read a design t_ns after the edge, give `--clock-high H` with H = ceil(t_ns × sysclk / (1e9 × pio_div)) − 1. For 100 ns at 133 MHz and divider 1, ceil(13.3) − 1 gives H 13, a read at 105.3 ns. No option takes the read time in nanoseconds ([#97](https://github.com/mithro/vgacap/issues/97)).
 
 ## What you need
 
