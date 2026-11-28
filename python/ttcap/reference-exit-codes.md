@@ -60,7 +60,7 @@ Message is the start of what `ttcap capture` prints. Exit is the exit code. Caus
 | `--clock-high must be 0..15` | 2 | H is outside the PIO's delay field | give 0 to 15 |
 | `not clean:` | 1 | a clocked capture did not make and send every clock with `status=ok` | read the reasons after the colon |
 | `CLKDIV reads pio_div=` | 1 | the PIO divider a clocked capture's board read back is not the one worked out | capture again with nothing else using the board |
-| `is above the fastest clocked rate` | 1 | `--clock-hz` would read `uo_out` under 80 ns after the edge | ask for the `--clock-hz` the message gives, or less |
+| `is above the fastest clocked rate` | 1 | `--clock-hz` above the fastest clock the `--clock-high` H allows, or the 80 ns floor without it | ask for the `--clock-hz` the message gives, or less |
 | `is below the slowest clocked rate` | 1 | `--clock-hz` needs a larger PIO divider than there is | raise `--clock-hz` |
 
 The `overruns:` and `rx stall:` lines follow the board's closing report in every `--mode` but `clocked`, including after `capture ended:`. A clocked capture prints `not clean:` instead, with every reason, also after `capture ended:` ([How to capture one sample per clock from reset](how-to-capture-clocked.md)). The stream written before them is kept and is still valid. A capture that lost no samples exits 0.
