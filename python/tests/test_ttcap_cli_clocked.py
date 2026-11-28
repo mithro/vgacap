@@ -107,7 +107,8 @@ def test_a_clock_high_under_the_floor_warns_and_still_runs(monkeypatch, capsys, 
     assert cli.main(args) == 0
 
     err = capsys.readouterr().err
-    assert "warning: --clock-high 0 reads uo_out 8 ns after the rising edge" in err
+    assert ("warning: --clock-high 0 reads uo_out 8 ns after the rising edge, which sees "
+            "the pin at -8 ns, under the 65 ns pin-time floor") in err
     assert "a sweep point, not a reference" in err
 
 

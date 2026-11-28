@@ -109,13 +109,21 @@ CLOCKED_MAX_PHASE = 15
 #: PIO cycles of one clock that are not H or L: one each for `nop`, `in`,
 #: `push` and `jmp`.
 CLOCKED_FIXED_CYCLES = 4
-#: The `in` reads uo_out at least this long after the rising edge. Measured
-#: on one design and one board -- tt_um_vga_ca on fpga-4, 2026-11-28, batch
-#: b2, at 133 MHz and 7 MHz: reads up to 38 ns after the edge got the
-#: previous clock's value, 45 and 53 ns were wrong, and from 60 ns on every
-#: sample matched the reference. 80 ns is that 60 ns plus a third. A design
-#: with a slower clock-to-output path needs a later read: a larger H.
-CLOCKED_SAMPLE_NS = 80
+#: The floor is on the pin time: the `in` must see uo_out's pins at least
+#: this long after the rising edge. The `in` reads the GPIO input
+#: synchroniser, which is `CLOCKED_SYNC_CYCLES` system clocks behind the
+#: pins, so the read itself is 2 sysclk later than the pin level it sees.
+#: The synchroniser is fixed in cycles and the design's settling in ns, so
+#: a floor on the read time would drift into the design's window at a lower
+#: sysclk. Measured on one design and one board -- tt_um_vga_ca on fpga-4,
+#: 2026-11-28 (+1030), batch b2, at 133 MHz and 7 MHz: pin times up to 22.6
+#: ns got the previous clock's value, 30.1 and 37.6 ns a mix, and from 45.1
+#: ns on every sample matched the reference. 65 ns keeps a margin over that
+#: one measurement. A design with a slower clock-to-output path needs a
+#: later read: a larger H.
+CLOCKED_PIN_NS = 65
+#: The GPIO input synchroniser's delay, in system clocks.
+CLOCKED_SYNC_CYCLES = 2
 #: The largest integer SMn_CLKDIV (its INT field is 16 bits, 0 meaning
 #: 65536, which is left alone).
 CLOCKED_MAX_DIV = 65535
@@ -1445,10 +1453,16 @@ class ClockedTiming:
         return (self.high + 1) * self.pio_div * 1e9 / self.sysclk_hz
 
     @property
+    def pin_ns(self) -> float:
+        """Nanoseconds from the rising edge to the pin level that read sees:
+        the read time less the synchroniser's `CLOCKED_SYNC_CYCLES`."""
+        return ((self.high + 1) * self.pio_div - CLOCKED_SYNC_CYCLES) * 1e9 / self.sysclk_hz
+
+    @property
     def below_floor(self) -> bool:
-        """The read is under `CLOCKED_SAMPLE_NS` after the edge: only an
-        explicit H for a sweep does that, and the run is a sweep point,
-        not a reference."""
+        """The read sees the pins under `CLOCKED_PIN_NS` after the edge:
+        only an explicit H for a sweep does that, and the run is a sweep
+        point, not a reference."""
         return self.high < _least_high(self.sysclk_hz, self.pio_div)
 
     def cfg(self) -> dict:
@@ -1507,8 +1521,10 @@ def clocked_count_problem(clocks: int, reset_clocks: int, buf_words: int,
 
 def _least_high(sysclk_hz: int, pio_div: int) -> int:
     """The smallest H whose read, H + 1 PIO cycles after the rising edge,
-    is at least `CLOCKED_SAMPLE_NS` after it."""
-    return max(0, -(-CLOCKED_SAMPLE_NS * sysclk_hz // (1_000_000_000 * pio_div)) - 1)
+    sees the pins at least `CLOCKED_PIN_NS` after it: (H + 1) x pio_div -
+    `CLOCKED_SYNC_CYCLES` system clocks, in whole numbers."""
+    return max(0, -(-(CLOCKED_PIN_NS * sysclk_hz + CLOCKED_SYNC_CYCLES * 1_000_000_000)
+                    // (1_000_000_000 * pio_div)) - 1)
 
 
 def _fastest_clock(sysclk_hz: int, high: int | None) -> tuple[int, int] | None:
@@ -1534,14 +1550,14 @@ def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> Cl
     fastest result wins, the smaller divider on a tie. 500 kHz at 150 MHz is
     pio_div 10 with 30 cycles, exactly. H is then half the variable cycles,
     rounded up, so the read is late in the high phase, and never less than
-    puts the read `CLOCKED_SAMPLE_NS` after the edge, which also bounds how
-    few cycles a divider may take.
+    has the read see the pins `CLOCKED_PIN_NS` after the edge, which also
+    bounds how few cycles a divider may take.
 
     `high` sets H instead, for a sweep of the sample point: the clock is the
     nearest not-faster one in which that H leaves L in 0..15, and the floor
     does not apply (`ClockedTiming.below_floor` says when the read is
     earlier). Refused (`ValueError`): a `clock_hz` above ceil(F), F the
-    fastest clock that reads `CLOCKED_SAMPLE_NS` late (at sysclks where H
+    fastest clock whose pin time is `CLOCKED_PIN_NS` (at sysclks where H
     would pass 15 at divider 1, a larger divider's), so that nearest not
     faster holds only up to the fastest clock; a clock slower than the
     largest divider makes; and an H that fits no clock.
@@ -1562,14 +1578,15 @@ def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> Cl
     fastest = _fastest_clock(sysclk_hz, high)
     product = fastest[0] * fastest[1] if fastest else 0
     if fastest is None or clock_hz > -(-sysclk_hz // product):
-        raise ValueError(
-            "%d Hz is above the fastest clocked rate at sysclk %d Hz, %.2f Hz: ask for "
-            "--clock-hz %d to get it, the fastest that reads uo_out %d ns after the "
-            "rising edge"
-            % (clock_hz, sysclk_hz, sysclk_hz / product if product else 0.0,
-               -(-sysclk_hz // product) if product else 0,
-               CLOCKED_SAMPLE_NS if high is None else
-               round((high + 1) * 1e9 / sysclk_hz)))
+        rate = ("%d Hz is above the fastest clocked rate at sysclk %d Hz, %.2f Hz: ask for "
+                "--clock-hz %d to get it, "
+                % (clock_hz, sysclk_hz, sysclk_hz / product if product else 0.0,
+                   -(-sysclk_hz // product) if product else 0))
+        if high is None:
+            raise ValueError(rate + "the fastest whose read sees uo_out's pin at least "
+                             "%d ns after the rising edge" % CLOCKED_PIN_NS)
+        raise ValueError(rate + "the fastest that reads uo_out %d ns after the rising edge"
+                         % round((high + 1) * 1e9 / sysclk_hz))
     best = None  # (pio_div, cycles)
     for pio_div in range(first, CLOCKED_MAX_DIV + 1):
         if best is not None and pio_div * CLOCKED_FIXED_CYCLES > best[0] * best[1]:
@@ -1599,7 +1616,7 @@ def clocked_timing(sysclk_hz: int, clock_hz: int, high: int | None = None) -> Cl
         high = max(_least_high(sysclk_hz, pio_div), (cycles - CLOCKED_FIXED_CYCLES + 1) // 2)
         if high > CLOCKED_MAX_PHASE:
             raise ValueError(
-                f"reading uo_out {CLOCKED_SAMPLE_NS} ns late needs H = {high} at sysclk "
+                f"seeing uo_out's pin {CLOCKED_PIN_NS} ns late needs H = {high} at sysclk "
                 f"{sysclk_hz} Hz, more than {CLOCKED_MAX_PHASE}")
     low = cycles - CLOCKED_FIXED_CYCLES - high
     # The program's delays are 4-bit fields: whatever the search above

@@ -17,6 +17,7 @@ take `pio_div` 8 and 9 at other system clocks.
 from __future__ import annotations
 
 import io
+from fractions import Fraction
 
 import pytest
 from emu_repl import EmuRepl
@@ -25,8 +26,9 @@ from fake_tt import ASIC_MANUAL_INPUTS, ASIC_RP_CONTROL, log
 from ttcap import mp
 from ttcap.boards import RP2040_TT06, RP2350_DBV3
 from ttcap.capture import (
+    CLOCKED_PIN_NS,
     CLOCKED_RESET_CLOCKS,
-    CLOCKED_SAMPLE_NS,
+    CLOCKED_SYNC_CYCLES,
     MODE_SELFCLK,
     CaptureError,
     CaptureRequest,
@@ -39,6 +41,7 @@ from ttcap.capture import (
     recover_clocked,
     run_capture,
     undo_clocked,
+    _least_high,
 )
 from ttcap.emu import Board, ClockedDesign
 from ttcap.repl import RawRepl
@@ -128,12 +131,61 @@ def test_500_khz_at_150_mhz_is_div_10_with_h_and_l_13():
     assert (t.pio_div, t.high, t.low) == (10, 13, 13)
 
 
-def test_the_read_floor_is_80_ns():
-    # R2-HW: batch b2 on fpga-4 (tt_um_vga_ca, 133 MHz, 7 MHz, divider 1)
-    # read the previous clock's value up to H 4 (38 ns), matched nothing at
-    # H 5 (45 ns), was 324 of 4,096 anchor clocks wrong at H 6 (53 ns), and
-    # exact from H 7 (60 ns) on. The floor is 80 ns, a third above that.
-    assert CLOCKED_SAMPLE_NS == 80
+def test_the_floor_is_65_ns_of_pin_time():
+    # R7-1: batch b2 on fpga-4 (tt_um_vga_ca, 133 MHz, 7 MHz, divider 1)
+    # read the previous clock's value up to H 4 (22.6 ns of pin time), a mix
+    # at H 5 and 6, and exact from H 7 (45.1 ns) on. The `in` sees the pin
+    # as it was 2 system clocks earlier, the input synchroniser, so the
+    # floor is on the pin time, which a lower sysclk does not shrink.
+    assert CLOCKED_PIN_NS == 65
+    assert CLOCKED_SYNC_CYCLES == 2
+
+
+@pytest.mark.parametrize("sysclk, div, least", [
+    (133_000_000, 1, 10),
+    (150_000_000, 1, 11),
+    (125_000_000, 1, 10),  # 9 on the 80 ns read-time floor
+    (48_000_000, 1, 5),    # 3 on the 80 ns read-time floor: a 42 ns pin time
+    (133_000_000, 8, 1),
+    (150_000_000, 10, 1),
+    (600_000_000, 3, 13),
+    (200_000_000, 1, 14),  # exactly 65 ns
+])
+def test_the_least_h_is_the_first_whose_pin_time_is_65_ns(sysclk, div, least):
+    assert _least_high(sysclk, div) == least
+
+    def pin_ns(high):  # exact: (H + 1) x div - 2 system clocks
+        return Fraction(((high + 1) * div - 2) * 10**9, sysclk)
+
+    assert pin_ns(least) >= 65
+    assert least == 0 or pin_ns(least - 1) < 65
+    t = ClockedTiming(sysclk_hz=sysclk, pio_div=div, high=least, low=0)
+    assert t.pin_ns == pytest.approx(float(pin_ns(least)))
+    assert not t.below_floor
+    if least:
+        assert ClockedTiming(sysclk_hz=sysclk, pio_div=div, high=least - 1, low=0).below_floor
+
+
+def test_the_floor_follows_the_pin_time_at_48_mhz_and_125_mhz():
+    # 48 MHz: H 5, 9 cycles, F = 5,333,333.33 Hz. H 3, the old default,
+    # reads at 83 ns but sees the pin at 42 ns, in b2's changing window.
+    t = clocked_timing(48_000_000, 5_333_334)
+    assert (t.pio_div, t.high, t.low) == (1, 5, 0)
+    assert t.pin_ns == pytest.approx(125 - 2e9 / 48e6)
+    assert clocked_timing(48_000_000, 5_000_000, high=3).below_floor
+    with pytest.raises(ValueError, match=r"5333333\.33 Hz: ask for --clock-hz 5333334"):
+        clocked_timing(48_000_000, 5_333_335)
+    # 125 MHz: H 10, 14 cycles, F = 8,928,571.43 Hz.
+    t = clocked_timing(125_000_000, 8_928_572)
+    assert (t.pio_div, t.high, t.low) == (1, 10, 0)
+    with pytest.raises(ValueError, match=r"8928571\.43 Hz: ask for --clock-hz 8928572"):
+        clocked_timing(125_000_000, 8_928_573)
+
+
+def test_the_too_fast_message_gives_the_floor_in_pin_time():
+    with pytest.raises(ValueError, match=r"the fastest whose read sees uo_out's pin at least "
+                                         r"65 ns after the rising edge"):
+        clocked_timing(133_000_000, 9_500_001)
 
 
 def test_at_7_mhz_and_133_mhz_only_h_10_and_up_are_references():
@@ -175,45 +227,47 @@ def test_the_fastest_clock_at_132_mhz_is_asked_for_by_its_rate_rounded_up():
 
 
 def test_a_read_exactly_on_the_floor_is_not_below_it():
-    # 150 MHz: H 11 reads 12 cycles, 80 ns, after the edge.
-    t = clocked_timing(150_000_000, 10_000_000)
-    assert (t.pio_div, t.high, t.low) == (1, 11, 0)
-    assert t.sample_ns == pytest.approx(80)
+    # 200 MHz: H 14 reads 15 cycles, 75 ns, after the edge, and sees the
+    # pin 13 cycles, 65 ns, after it. F = 200 MHz / 18.
+    t = clocked_timing(200_000_000, 11_111_112)
+    assert (t.pio_div, t.high, t.low) == (1, 14, 0)
+    assert t.sample_ns == pytest.approx(75)
+    assert t.pin_ns == pytest.approx(65)
     assert not t.below_floor
-    assert clocked_timing(150_000_000, 10_000_000, high=10).below_floor
+    assert clocked_timing(200_000_000, 10_000_000, high=13).below_floor
 
 
 def test_an_overclocked_sysclk_finds_the_fastest_divider_whose_h_fits():
-    # 600 MHz: 80 ns is 48 cycles, so H would be 47 at divider 1 and 23 at
-    # divider 2, neither of which the 4-bit delay holds. Divider 3, H 15,
-    # 19 cycles, is the fastest clock there is, and a rate above it is
-    # refused, not quietly slowed (re-review R1-1: H and L stay 0..15).
-    # F = 600e6 / 57 = 10,526,315.79 Hz: ceil(F) gets divider 3's 19
-    # cycles, one more is refused, and the integer under F gets 20 cycles
-    # (re-review R2-1).
-    t = clocked_timing(600_000_000, 10_526_316)
-    assert (t.pio_div, t.high, t.low) == (3, 15, 0)
-    assert t.sample_ns == pytest.approx(80)
-    for hz in (10_526_317, 10_800_000):
+    # 600 MHz: 65 ns of pin time is 39 cycles and the synchroniser 2 more,
+    # so H would be 40 at divider 1 and 20 at divider 2, neither of which
+    # the 4-bit delay holds. Divider 3, H 13, 17 cycles, is the fastest
+    # clock there is, and a rate above it is refused, not quietly slowed
+    # (re-review R1-1: H and L stay 0..15). F = 600e6 / 51 =
+    # 11,764,705.88 Hz: ceil(F) gets divider 3's 17 cycles, one more is
+    # refused, and the integer under F gets 18 cycles (re-review R2-1).
+    t = clocked_timing(600_000_000, 11_764_706)
+    assert (t.pio_div, t.high, t.low) == (3, 13, 0)
+    assert t.pin_ns == pytest.approx(70 - 2e9 / 600e6)
+    for hz in (11_764_707, 12_000_000):
         with pytest.raises(ValueError, match=r"fastest clocked rate at sysclk 600000000 Hz, "
-                                             r"10526315\.79 Hz: ask for --clock-hz 10526316"):
+                                             r"11764705\.88 Hz: ask for --clock-hz 11764706"):
             clocked_timing(600_000_000, hz)
-    t = clocked_timing(600_000_000, 10_526_315)
-    assert (t.pio_div, t.high, t.low) == (3, 15, 1)
-    # 10.5 MHz: divider 2 would make it in 29 cycles, faster than divider
-    # 3's 20, but needs H 23; divider 3 is the nearest that can be made.
-    t = clocked_timing(600_000_000, 10_500_000)
-    assert (t.pio_div, t.high, t.low) == (3, 15, 1)
+    t = clocked_timing(600_000_000, 11_764_705)
+    assert (t.pio_div, t.high, t.low) == (3, 13, 1)
+    # 11.5 MHz: divider 2 would make it in 27 cycles, faster than divider
+    # 3's 18, but needs H 20; divider 3 is the nearest that can be made.
+    t = clocked_timing(600_000_000, 11_500_000)
+    assert (t.pio_div, t.high, t.low) == (3, 13, 1)
 
 
 
 def test_the_floor_bounds_the_cycles_at_an_overclocked_sysclk():
-    # 8.2 MHz at 400 MHz: divider 2, 25 cycles, 8 MHz. Without the floor
-    # bounding the cycle count, divider 7 with 7 cycles (8.16 MHz) would
-    # win, though the floor's H 4 leaves it L -1, and the H and L check
-    # would refuse the run (re-review R1-1).
-    t = clocked_timing(400_000_000, 8_209_928)
-    assert (t.pio_div, t.high, t.low) == (2, 15, 6)
+    # 11,429,147 Hz at 400 MHz: divider 2, 18 cycles, 11.11 MHz. Without
+    # the floor bounding the cycle count, divider 7 with 5 cycles (11.43
+    # MHz) would win, though the floor's H 3 leaves it L -2, and the H and
+    # L check would refuse the run (re-review R1-1).
+    t = clocked_timing(400_000_000, 11_429_147)
+    assert (t.pio_div, t.high, t.low) == (2, 13, 1)
 
 
 def test_500_khz_at_fpga_4s_132_mhz_is_exact():
@@ -224,29 +278,30 @@ def test_500_khz_at_fpga_4s_132_mhz_is_exact():
 
 @pytest.mark.parametrize("sysclk", [125_000_000, 132_000_000, 133_000_000, 150_000_000])
 @pytest.mark.parametrize("hz", [100, 1_000, 61_234, 400_000, 500_000, 1_000_000, 2_500_000,
-                                4_000_000, 8_000_000, 9_400_000])
-def test_the_clock_is_never_faster_than_asked_and_the_read_at_least_80_ns_late(sysclk, hz):
+                                4_000_000, 8_000_000, 8_900_000])
+def test_the_clock_is_never_faster_than_asked_and_the_pin_time_at_least_65_ns(sysclk, hz):
     t = clocked_timing(sysclk, hz)
     assert t.clock_hz <= hz
     assert 0 <= t.high <= 15 and 0 <= t.low <= 15
-    assert t.sample_ns >= 80
-    # Nearest not faster: no divider and cycle count that reads 80 ns late
-    # makes a clock between this one and the one asked for.
+    assert t.pin_ns >= 65
+    # Nearest not faster: no divider and cycle count whose read sees the
+    # pin 65 ns late makes a clock between this one and the one asked for.
     # For each divider its fastest such clock is the one to compare: the
     # fewest cycles that are not faster, and no fewer than the read needs.
     for div in range(1, 65536):
-        least_high = max(0, -(-80 * sysclk // (1_000_000_000 * div)) - 1)
+        least_high = max(0, -(-(65 * sysclk + 2 * 10**9) // (10**9 * div)) - 1)
         cycles = max(4 + least_high, -(-sysclk // (hz * div)))
         if cycles <= 34 and least_high <= 15:
             rate = sysclk / (div * cycles)
             assert not t.clock_hz < rate <= hz, (div, cycles, rate)
 
 
-def test_the_fastest_clock_at_150_mhz_reads_80_ns_after_the_edge():
-    # 15 cycles: 10 MHz, the read 12 cycles after the edge.
+def test_the_fastest_clock_at_150_mhz_sees_the_pin_67_ns_after_the_edge():
+    # 15 cycles: 10 MHz, the read 12 cycles after the edge, the pin 10.
     t = clocked_timing(150_000_000, 10_000_000)
     assert (t.pio_div, t.high, t.low) == (1, 11, 0)
     assert t.sample_ns == pytest.approx(80)
+    assert t.pin_ns == pytest.approx(200 / 3)
     # One hertz more is refused, not slowed to 10 MHz (re-review R2-1).
     with pytest.raises(ValueError, match="fastest"):
         clocked_timing(150_000_000, 10_000_001)
@@ -276,13 +331,13 @@ def test_a_chosen_h_moves_the_read_within_the_nearest_clock_it_fits():
         clocked_timing(SYSCLK, 5_000_000, high=16)
 
 
-def test_an_h_under_the_80_ns_floor_is_a_marked_sweep_point(tmp_path):
+def test_an_h_under_the_pin_time_floor_is_a_marked_sweep_point(tmp_path):
     # Review M2: allowed, for the H sweep, but said so in the opening
     # record and the desc; still clean, since the run did what was asked.
     assert not clocked_timing(SYSCLK, 7_000_000).below_floor
     assert clocked_timing(SYSCLK, 7_000_000, high=0).below_floor  # 7.5 ns
-    assert clocked_timing(SYSCLK, 7_000_000, high=6).below_floor  # 53 ns: read wrong on fpga-4
-    assert not clocked_timing(SYSCLK, 7_000_000, high=10).below_floor  # 83 ns
+    assert clocked_timing(SYSCLK, 7_000_000, high=6).below_floor  # 38 ns pin: wrong on fpga-4
+    assert not clocked_timing(SYSCLK, 7_000_000, high=10).below_floor  # 68 ns pin
     rig = Rig(tmp_path)
     stats, data = rig.run(clock_hz=7_000_000, clock_high=0, clocks=16, reset_clocks=2)
     assert stats.clean, stats.format()
@@ -686,6 +741,48 @@ def test_the_manual_clock_timer_firing_mid_run_fails_loudly(tmp_path):
     assert fired
     assert "error=clock pad was taken from PIO1 mid-run" in stats.messages
     assert stats.status == "error" and not stats.clean
+
+
+def test_the_clock_pad_taken_during_the_reset_clocks_stops_before_release(tmp_path):
+    # Review nit 7: clocked_rp2.py checks the pad before releasing reset,
+    # so a pad the SDK took during the reset clocks never sees rst_n go high.
+    rig = Rig(tmp_path)
+    tt = rig.link.tt
+    fired = []
+
+    def press():
+        if tt.board.blocks[1].sms[0].enabled and rig.level(RST) == 0 and not fired:
+            fired.append(rig.board.now)
+            tt.clock_project_once()  # takes the pad to SIO
+
+    rig.board.add_timer(500, press)
+    stats, _ = rig.run(clocks=4000, reset_clocks=80, buf_words=16)
+    assert fired
+    assert "error=clock pad is not on PIO1 before reset release" in stats.messages
+    assert stats.status == "error" and not stats.clean
+
+
+def test_ctrl_c_mid_stream_then_recover_clocked_puts_everything_back(tmp_path, monkeypatch):
+    # Review nit 6, from the reviewer's probe: an operator's Ctrl-C after
+    # two chunks, then the CLI's recovery.
+    rig = Rig(tmp_path, mode=ASIC_MANUAL_INPUTS)
+    before = rig.link.tt.manual_project_clock.monitoring
+    original = ClockedSession._start_stream
+
+    def stream_then_ctrl_c(self):
+        chunks = original(self)
+        yield next(chunks)
+        yield next(chunks)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(ClockedSession, "_start_stream", stream_then_ctrl_c)
+    with pytest.raises(KeyboardInterrupt) as info:
+        rig.run(clocks=4000, reset_clocks=10, buf_words=16, ui_in=3)
+    monkeypatch.undo()
+    assert recover_clocked(rig.repl, info.value)
+    assert rig.level(RST) == 1 and rig.level(CLK) == 0
+    assert rig.link.tt.mode == ASIC_MANUAL_INPUTS
+    assert rig.link.tt.manual_project_clock.monitoring is before
 
 
 def test_an_sdk_print_during_the_stream_is_silenced(tmp_path):

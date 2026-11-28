@@ -49,7 +49,7 @@ from vgacap.modes import MODES
 from .capture import (
     CAPTURE_MODES,
     CLOCKED_RESET_CLOCKS,
-    CLOCKED_SAMPLE_NS,
+    CLOCKED_PIN_NS,
     CLOCKED_SCRIPT,
     DEFAULT_BUF_WORDS,
     DEFAULT_PIO,
@@ -772,13 +772,14 @@ def capture(
 
 
 def _warn_below_floor(timing) -> None:
-    """Say, before the board is loaded, that an H under the read floor
-    (`CLOCKED_SAMPLE_NS`) makes this run a sweep point."""
+    """Say, before the board is loaded, that an H under the pin-time floor
+    (`CLOCKED_PIN_NS`) makes this run a sweep point."""
     if timing.below_floor:
         print(
-            "warning: --clock-high %d reads uo_out %d ns after the rising edge, under "
-            "the %d ns floor: this run is a sweep point, not a reference"
-            % (timing.high, round(timing.sample_ns), CLOCKED_SAMPLE_NS),
+            "warning: --clock-high %d reads uo_out %d ns after the rising edge, which "
+            "sees the pin at %d ns, under the %d ns pin-time floor: this run is a "
+            "sweep point, not a reference"
+            % (timing.high, round(timing.sample_ns), round(timing.pin_ns), CLOCKED_PIN_NS),
             file=sys.stderr,
         )
 
@@ -1284,9 +1285,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="clocked mode: H, the PIO delay of the clock's high phase, 0..15, "
         "which sets how long after the rising edge uo_out is read (default: "
-        "the shortest wait of at least %d ns, or the middle of the clock "
-        "when that is later; a design slower than tt_um_vga_ca on fpga-4 "
-        "needs more)" % CLOCKED_SAMPLE_NS,
+        "the shortest wait whose read sees the pin at least %d ns after the "
+        "edge, the read being 2 system clocks later than the pin level it "
+        "sees, or the middle of the clock when that is later; a design "
+        "slower than tt_um_vga_ca on fpga-4 needs more)" % CLOCKED_PIN_NS,
     )
 
     reboot_parser = subparsers.add_parser(
